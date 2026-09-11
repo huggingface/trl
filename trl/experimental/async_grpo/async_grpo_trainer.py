@@ -14,8 +14,12 @@
 
 
 import contextvars
+import itertools
+import json
 import math
+import os
 import queue
+import shutil
 import textwrap
 import threading
 import time
@@ -26,15 +30,29 @@ from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
+from accelerate import Accelerator
 from accelerate.logging import get_logger
+from accelerate.utils import broadcast_object_list, is_peft_model
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import get_config_model_id, is_trackio_available, nanmax, nanmin, pad, patch_chunked_lm_head
+from ...trainer.utils import (
+    compute_flops_per_token,
+    compute_mfu,
+    create_model_from_path,
+    get_config_model_id,
+    is_trackio_available,
+    nanmax,
+    nanmin,
+    pad,
+    patch_chunked_lm_head,
+)
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
@@ -43,6 +61,9 @@ from .weight_transfer import WeightTransferClient
 
 logger = get_logger(__name__)
 
+if is_peft_available():
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+
 if is_trackio_available():
     import trackio
 
@@ -50,6 +71,36 @@ if is_trackio_available():
 # completions, and additional arguments from the trainer (refer to the trainer's source for details). To ensure forward
 # compatibility, it should accept **kwargs.
 RewardFunc = Callable[..., list[float]]
+
+# One logged value is either a float or a `(numerator, denominator)` pair; see `_reduce_metric`.
+MetricValue = float | tuple[float, float]
+
+
+def _reduce_metric(key: str, values: list[MetricValue]) -> float:
+    """Reduce one logging window into the number that gets logged.
+
+    The value's shape and the key's suffix declare the reduction, so nothing has to be registered or configured:
+
+    - `(numerator, denominator)` pairs are a rate, reduced as Σnum / Σden. A rate is never stored *as* a rate, which is
+      what makes a mean-of-ratios impossible — the defect that made `training_tok/s` unusable.
+    - a `total` word in the name is a counter, summed over the window (producers push deltas).
+    - a `max` or `min` word is an extremum. Matching whole words rather than a suffix keeps the upstream spellings
+      (`completions/max_length`, `clip_ratio/high_max`) working alongside this trainer's own (`row_tokens_max`).
+    - anything else is a gauge, and its window mean is meaningful.
+
+    A key must always be logged with the same shape, since the reduction is picked from the first value seen.
+    """
+    if isinstance(values[0], tuple):
+        numerator, denominator = (sum(v) for v in zip(*values, strict=True))
+        return numerator / denominator if denominator else float("nan")
+    words = key.split("/")[-1].split("_")
+    if "total" in words:
+        return sum(values)
+    if "max" in words:
+        return max(values)
+    if "min" in words:
+        return min(values)
+    return sum(values) / len(values)
 
 
 class _SupportsReset(Protocol):
@@ -60,7 +111,8 @@ EnvironmentFactory = Callable[[], _SupportsReset]
 
 
 class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncGRPOTrainer`].
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to
+    [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
     `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
@@ -72,9 +124,14 @@ class RolloutWorkerProtocol(Protocol):
             structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
             default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
             an in-process worker uses `queue.Queue`.
+        metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
+            Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
+            like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
+            for a rate — so draining it is an append. A worker that measures nothing exposes an empty queue.
     """
 
     rollout_buffer: queue.Queue | MPQueue
+    metrics_queue: queue.Queue | MPQueue
 
     def start(self) -> None:
         """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
@@ -94,7 +151,8 @@ class RolloutWorkerProtocol(Protocol):
 
 
 class WeightTransferProtocol(Protocol):
-    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to [`AsyncGRPOTrainer`].
+    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
+    [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     The default [`WeightTransferClient`] streams the trainer's weights into the vLLM server over NCCL. Implement this
     protocol to plug in a different sync mechanism, or pass a no-op implementation to disable trainer-side weight sync
@@ -136,8 +194,28 @@ class StepIntervalCallback(TrainerCallback):
             self.fn()
 
 
-class _InitialWeightSyncCallback(TrainerCallback):
-    """Idempotent: NCCL group setup + cold weight sync to vLLM on train begin."""
+class _OptimizerTimeCallback(TrainerCallback):
+    """Times the optimizer step, which `training_step` cannot see.
+
+    Without it, clip + step + zero_grad land in the same unmeasured gap as the rollout-queue wait and get read as
+    starvation. Covers `optimizer.step()` only, not the gradient clipping that precedes it.
+    """
+
+    def __init__(self, trainer: "AsyncGRPOTrainer"):
+        self._trainer = trainer
+        self._t0 = None
+
+    def on_pre_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self._t0 = time.perf_counter()
+
+    def on_optimizer_step(self, _args, _state, _control, **_kwargs):
+        self._trainer._step_optimizer_s += time.perf_counter() - self._t0
+
+
+class _TrainBeginCallback(TrainerCallback):
+    """Idempotent train-begin setup: NCCL group setup + cold weight sync to vLLM, then start the rollout worker.
+    The weight sync must complete before the worker starts, which the ordering here guarantees.
+    """
 
     def __init__(self, trainer: "AsyncGRPOTrainer"):
         self._trainer = trainer
@@ -150,19 +228,6 @@ class _InitialWeightSyncCallback(TrainerCallback):
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
-
-
-class _StartRolloutWorkerCallback(TrainerCallback):
-    """Idempotent: starts the rollout worker. Must be registered AFTER `_InitialWeightSyncCallback`."""
-
-    def __init__(self, trainer: "AsyncGRPOTrainer"):
-        self._trainer = trainer
-        self._fired = False
-
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
-        if self._fired:
-            return
-        self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
 
@@ -183,7 +248,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, _args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        reached = torch.tensor(int(len(self._trainer._trained_groups) >= self._target), device=acc.device)
+        trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
+        reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
 
@@ -235,6 +301,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         model_version_fn,
         check_health_fn,
         stale_after_s,
+        metrics,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
@@ -243,11 +310,26 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         self.model_version_fn = model_version_fn
         self.check_health_fn = check_health_fn
         self.stale_after_s = stale_after_s
+        # The trainer's metric sink, shared by reference. This dataset lives in the main process (`num_workers=0`,
+        # `dispatch_batches=True`), which is also the only process where the queue wait is real, so its metrics need no
+        # communication at all — they are appended straight into the sink the trainer reduces in `log()`.
+        self.metrics = metrics
+        # Blocking-get time, accumulated here and flushed by `training_step` at the optimizer-step boundary — the only
+        # place that knows when a step's worth of waiting is done.
+        self.wait_s = 0.0
         self.max_staleness = max_staleness
         self.poll_interval_s = poll_interval_s
         self.report_to = report_to or []
         self._trace_buf: list = []
+        # Traces exist to be read, not to cover the run: a handful per sampled policy version is enough to eyeball
+        # what the generator produced. Both numbers are therefore per *policy version* — `_traces_per_log` samples,
+        # once every `_trace_log_interval` versions. Flushing every `_trace_log_interval` *samples* instead fired
+        # ~60x per optimizer step at 484 samples/step, and since trackio writes a `metrics` row for every `log()`
+        # call — empty, because the payload is all traces — the real per-step metrics ended up buried under ~60x
+        # their own number of `{}` rows, which is what made the dashboard slow to query.
+        self._traces_per_log = 8
         self._trace_log_interval = 8
+        self._last_traced_version = -1
         # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
         # slow trackio backend never blocks sample delivery.
         self._trace_queue: queue.Queue = queue.Queue(maxsize=4)
@@ -270,25 +352,44 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 except queue.Empty:
                     # Returning here would broadcast None through accelerate's dispatch loop.
                     self.check_health_fn(self.stale_after_s)
-            queue_wait_time_s = time.time() - t0
-            if queue_wait_time_s > 1.0:
-                logger.info(f"waited {queue_wait_time_s:.1f}s for sample (qsize={self.queue.qsize()})")
+            now = time.time()
+            wait_s = now - t0
+            self.wait_s += wait_s
+            if wait_s > 1.0:
+                logger.info(f"waited {wait_s:.1f}s for sample (qsize={self.queue.qsize()})")
 
-            staleness = self.model_version_fn() - sample.model_version
+            version = self.model_version_fn()
+            staleness = version - sample.model_version
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
+                self.metrics["sample/dropped_stale_total"].append(1.0)
                 continue  # drop stale, pull next
 
-            self._trace_buf.append(sample)
-            if len(self._trace_buf) >= self._trace_log_interval:
-                try:
-                    # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
-                    self._trace_queue.put_nowait(
-                        (self._trace_buf, self.model_version_fn(), contextvars.copy_context())
-                    )
-                except queue.Full:
-                    pass
-                self._trace_buf = []
+            # Three different views of the same queue, and they must not be confused with each other:
+            #   `sample/rollout_queue_size`  how many scored samples are in it, counted where the TRAINER consumes
+            #                                them rather than where the worker filled it
+            #   `sample/time_in_queue_s`     how long THIS sample sat in it — its own idle time, and the seconds
+            #                                half of its off-policyness
+            #   `perf/rollout_wait_s`        how long the TRAINER sat blocked because the queue was empty
+            # An empty queue with the trainer waiting is generation-bound; a full queue with no wait is trainer-bound
+            # (and then `rollout/backpressure_s` is what generation lost to it).
+            self.metrics["sample/rollout_queue_size"].append(float(self.queue.qsize()))
+            if sample.enqueued_at is not None:
+                self.metrics["sample/time_in_queue_s"].append(now - sample.enqueued_at)
+            # Freshness
+            self.metrics["sample/staleness_mean"].append(float(staleness))
+            self.metrics["sample/staleness_max"].append(float(staleness))
+
+            if version % self._trace_log_interval == 0 and version != self._last_traced_version:
+                self._trace_buf.append(sample)
+                if len(self._trace_buf) >= self._traces_per_log:
+                    try:
+                        # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
+                        self._trace_queue.put_nowait((self._trace_buf, version, contextvars.copy_context()))
+                    except queue.Full:
+                        pass
+                    self._trace_buf = []
+                    self._last_traced_version = version
 
             yield {
                 "input_ids": sample.input_ids,
@@ -296,7 +397,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "old_log_probs": sample.old_log_probs,
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
-                "metrics": {**sample.metrics, "queue_wait_time_s": queue_wait_time_s},
+                "metrics": sample.metrics,  # per-sample rewards; aggregated by the collator, never sent to the model
             }
 
 
@@ -371,12 +472,15 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
             Number of DP ranks; the number of rows (one per rank) in each micro-batch.
         token_budget (`int`):
             Maximum real tokens packed into a single row (one rank's forward).
+        metrics (`dict`):
+            The trainer's metric sink, appended to when a sample is dropped for exceeding the budget.
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int):
+    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
         self.dataset = dataset
         self.num_processes = num_processes
         self.token_budget = token_budget
+        self.metrics = metrics  # the trainer's sink, for the drop counter below
 
     def __iter__(self):
         rows = [[] for _ in range(self.num_processes)]
@@ -391,6 +495,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
                 )
+                self.metrics["batch/dropped_oversize_total"].append(1.0)
                 continue
             fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
             if not fits:
@@ -431,6 +536,10 @@ class DataCollatorForRollout(DataCollatorMixin):
             Token id used to pad `input_ids`.
         num_processes (`int`, *optional*, defaults to `1`):
             Number of DP ranks; the micro-batch is packed into this many rows.
+        metrics (`dict[str, list]`, *optional*):
+            The trainer's metric sink, appended to with this micro-batch's sample and packing metrics.
+        token_budget (`int`, *optional*, defaults to `0`):
+            Per-row token cap of the planner, or `0` when batching by fixed sample count.
     """
 
     pad_token_id: int
@@ -438,6 +547,10 @@ class DataCollatorForRollout(DataCollatorMixin):
     return_tensors: str = "pt"
     # Distinct prompt-group ids, it counts exactly the prompt-groups that get trained
     groups_trained: set[int] = field(default_factory=set)
+    # The trainer's metric sink, shared by reference (like `groups_trained`).
+    metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
+    # Per-row token cap of the planner,
+    token_budget: int = 0
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
@@ -475,27 +588,16 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        global_n_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
-        global_n_tokens = torch.full((self.num_processes,), float(global_n_tokens), dtype=torch.float32)
+        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
-        # Per-sample metrics grouped per rank, as a dict of 2D tensors (one row per rank) so that Accelerate's
-        # recursive broadcast (dispatch_batches=True) can scatter them — it traverses nested dicts of tensors but
-        # chokes on plain Python floats. Rows are padded with NaN so padded slots are ignored by the nan-aware
-        # aggregation in `compute_loss`.
-        metrics = (
-            {
-                key: pad(
-                    [
-                        torch.tensor([example["metrics"].get(key, 0.0) for example in group], dtype=torch.float32)
-                        for group in groups
-                    ],
-                    padding_value=float("nan"),
-                )
-                for key in all_examples[0]["metrics"]
-            }
-            if all_examples[0]["metrics"]
-            else {}
-        )
+        sample_tokens = [len(example["input_ids"]) for example in all_examples]
+        n_forward_tokens = sum(sample_tokens)
+        mean_seq_len = n_forward_tokens / len(all_examples)
+        global_n_forward_tokens = torch.full((self.num_processes,), float(n_forward_tokens), dtype=torch.float32)
+        mean_seq_len_t = torch.full((self.num_processes,), float(mean_seq_len), dtype=torch.float32)
+
+        self._log_metrics(groups=groups, all_examples=all_examples, padded=attention_mask)
 
         return {
             "input_ids": input_ids,
@@ -505,8 +607,299 @@ class DataCollatorForRollout(DataCollatorMixin):
             "position_ids": position_ids,
             "advantages": advantages,
             "global_n_tokens": global_n_tokens,
-            "metrics": metrics,
+            "global_n_forward_tokens": global_n_forward_tokens,
+            "mean_seq_len": mean_seq_len_t,
         }
+
+    def _log_metrics(
+        self, groups: list[list[dict[str, Any]]], all_examples: list[dict[str, Any]], padded: torch.Tensor
+    ) -> None:
+        """Append this micro-batch's sample and packing metrics straight into the trainer's sink.
+
+        Rank 0 holds the whole micro-batch, so the per-sample rewards can be aggregated here instead of being packed
+        into NaN-padded tensors, broadcast to every rank and reduced back — which is what this trainer used to do to
+        compute a number rank 0 already had.
+        """
+        # A training row's tokens split in two: those the loss is taken over (`completion_mask == 1`) and those merely
+        # forwarded — the prompt, tool results, and any tail a realign demoted to context. FLOPs are spent on both, so
+        # both are worth a number, and their ratio is what says how much of the forward earns no gradient.
+        forwarded = [len(example["input_ids"]) for example in all_examples]
+        trained = [sum(example["completion_mask"]) for example in all_examples]
+        self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
+        self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
+        self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
+        self.metrics["batch/masked_token_frac"].append((sum(forwarded) - sum(trained), sum(forwarded)))
+
+        # Per-sample rewards, nan-aware: a reward func may return None for an unscorable sample, and a sample for which
+        # every func returned None carries NaN rather than a misleading 0.
+        # Union of keys, not the first sample's: `tools/*` is stamped per group, so a micro-batch mixes samples that
+        # have those keys with samples that do not. Each key averages over the samples that carry it.
+        keys = dict.fromkeys(key for example in all_examples for key in example["metrics"])
+        for key in keys:
+            values = [example["metrics"][key] for example in all_examples if key in example["metrics"]]
+            valid = [v for v in values if not math.isnan(v)]
+            self.metrics[key].append(sum(valid) / len(valid) if valid else float("nan"))
+
+        # Packing quality. `row_imbalance` is what the Σ Lᵢ²-balancing planner exists to keep near 1.0: attention is
+        # O(L²), so it is Σ Lᵢ² and not the token count that predicts which rank stalls the gradient all-reduce.
+        row_tokens = [sum(len(example["input_ids"]) for example in group) for group in groups]
+        squared_loads = [sum(len(example["input_ids"]) ** 2 for example in group) for group in groups]
+        self.metrics["batch/samples_per_row"].append(len(all_examples) / len(groups))
+        self.metrics["batch/row_tokens_mean"].append(sum(row_tokens) / len(row_tokens))
+        self.metrics["batch/row_tokens_max"].append(float(max(row_tokens)))
+        self.metrics["batch/row_imbalance"].append(max(squared_loads) / (sum(squared_loads) / len(squared_loads)))
+        if self.token_budget:
+            self.metrics["batch/row_fill_frac"].append((sum(row_tokens), self.token_budget * len(row_tokens)))
+        # Inter-rank padding, added so the batch is rectangular for the dispatcher. It costs broadcast bytes only:
+        # `compute_loss` strips it before the forward, so no FLOPs are spent on it.
+        self.metrics["batch/pad_frac"].append((padded.numel() - int(padded.sum()), padded.numel()))
+
+
+def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch.nn.Parameter]]:
+    """Yield `(name, param)` for every parameter the vLLM server receives, under its base-checkpoint name.
+
+    The weight manifest built once in `__init__` and the stream sent by `_streaming_iter` must agree
+    element-for-element — the server sizes its receive buffers from the manifest — so both walk this generator rather
+    than each re-deriving the name cleanup. Parameters are yielded as-is: `DTensor.shape` is the global shape, so
+    building the manifest costs no all-gather.
+    """
+    is_peft = is_peft_model(model)
+    for name, param in model.named_parameters():
+        # Frozen parameters (a VLM's vision tower) never change, so they are never sent. Under PEFT the filter is
+        # inverted: the trainable parameters are the adapter tensors vLLM never sees, and it is the frozen base
+        # weights that move once the adapter has been merged into them.
+        if not is_peft and not param.requires_grad:
+            continue
+        # DDP/FSDP1 wrapping and gradient checkpointing, avoids vllm module not exist error
+        name = name.removeprefix("module.").replace("_checkpoint_wrapped_module.", "")
+        # When using PEFT, we need to recover the original parameter name
+        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+        # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
+        if is_peft and model.prefix in name:
+            continue
+        # When module to save, remove its prefix and discard the original module
+        if "original_module" in name:
+            continue
+        name = name.replace("modules_to_save.default.", "")
+        yield name, param
+
+
+# Ranks vLLM builds stacked LoRA buffers for. Any other value crashes engine construction.
+VLLM_LORA_RANKS = (1, 8, 16, 32, 64, 128, 256, 320, 512)
+
+
+def round_lora_rank(adapter_rank: int) -> int:
+    """
+    Round a LoRA rank up to the smallest `max_lora_rank` vLLM accepts.
+
+    `max_lora_rank` is a capacity bound rather than the served rank, so an `r=4` adapter is served correctly under `8`.
+
+    Args:
+        adapter_rank (`int`):
+            Rank of the adapter to serve.
+
+    Returns:
+        `int`:
+            Smallest value in `VLLM_LORA_RANKS` greater than or equal to `adapter_rank`.
+
+    Examples:
+
+    ```python
+    >>> round_lora_rank(4)
+    8
+    ```
+    """
+    for rank in VLLM_LORA_RANKS:
+        if rank >= adapter_rank:
+            return rank
+    raise ValueError(
+        f"LoRA rank {adapter_rank} is larger than the largest rank vLLM can serve ({VLLM_LORA_RANKS[-1]}). Lower `r` "
+        f"(and `rank_pattern`) to sync the adapter to vLLM, or sync merged weights instead."
+    )
+
+
+def validate_lora_for_vllm_sync(model: "PeftModel") -> "LoraConfig":
+    """
+    Return the active adapter's config, checking it can be served as a plain vLLM LoRA adapter.
+
+    vLLM's LoRA manager only knows about `lora_A` / `lora_B` deltas on a fixed set of linear layers. Anything else a
+    PEFT config can express — fully-trained modules, DoRA magnitudes, trained biases, fused-MoE parameter LoRA — has no
+    home in the adapter checkpoint vLLM loads, and is silently ignored (or worse, misread) at serving time. Every such
+    config is rejected here so the caller can fall back to syncing merged weights, which handles all of them.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model whose active adapter is checked.
+
+    Returns:
+        [`~peft.LoraConfig`]:
+            Config of the single active adapter.
+    """
+    if len(model.active_adapters) != 1:
+        raise ValueError(
+            f"Adapter-only vLLM sync serves a single adapter, but {len(model.active_adapters)} are active "
+            f"({model.active_adapters}). Activate one adapter, or sync merged weights instead."
+        )
+    peft_config = model.peft_config[model.active_adapters[0]]
+    if not isinstance(peft_config, LoraConfig):
+        raise ValueError(
+            f"Adapter-only vLLM sync supports LoRA adapters only, got `{type(peft_config).__name__}`. Sync merged "
+            f"weights instead."
+        )
+    if peft_config.modules_to_save:
+        raise ValueError(
+            f"`modules_to_save={peft_config.modules_to_save}` cannot ride in a LoRA adapter: those modules are "
+            f"fully trained, not a low-rank delta, so vLLM would keep serving the base checkpoint's copy. Sync "
+            f"merged weights instead."
+        )
+    if peft_config.use_dora:
+        raise ValueError(
+            "DoRA adapters are not servable by vLLM: the magnitude vector has no slot in the adapter format. Sync "
+            "merged weights instead."
+        )
+    if peft_config.bias != "none":
+        raise ValueError(
+            f"`bias='{peft_config.bias}'` trains bias terms, which are not part of a LoRA adapter and would be "
+            f"dropped on the way to vLLM. Use `bias='none'`, or sync merged weights instead."
+        )
+    if peft_config.target_parameters:
+        raise ValueError(
+            f"`target_parameters={peft_config.target_parameters}` (fused-MoE parameter LoRA) needs the adapter to be "
+            f"declared with `is_3d_lora_weight=True` against a server started with "
+            f"`--enable-mixed-moe-lora-format`. vLLM does not inspect the checkpoint, so a wrong declaration loads "
+            f"the weights into the wrong stacked buffers and silently produces garbage. Sync merged weights instead."
+        )
+    target_modules = peft_config.target_modules or []
+    if isinstance(target_modules, str):  # a regex matching module names, rather than a collection of them
+        target_modules = [target_modules]
+    if any("lm_head" in module or "embed_tokens" in module for module in target_modules):
+        raise ValueError(
+            f"`target_modules={peft_config.target_modules}` targets the head or the embeddings. vLLM restricts LoRA "
+            f"on those layers and drops the head delta from `prompt_logprobs` entirely "
+            f"(https://github.com/vllm-project/vllm/issues/51594), so the trainer and the server would disagree on "
+            f"every logprob. Sync merged weights instead."
+        )
+    return peft_config
+
+
+def save_lora_adapter(model: "PeftModel", accelerator: Accelerator, adapter_name: str, dest_dir: str) -> None:
+    """
+    Save one PEFT adapter to `dest_dir`, gathering sharded parameters as needed.
+
+    This is a collective: every process must call it, not only the main one, because materializing a sharded parameter
+    all-gathers across ranks.
+
+    `dest_dir` is named after the adapter and holds `adapter_config.json` at its root, the layout vLLM's filesystem
+    LoRA resolver expects when it serves `<cache_dir>/<adapter_name>`. It is published with an atomic rename, so a
+    server reading it over a shared filesystem never observes a half-flushed adapter.
+
+    Args:
+        model ([`~peft.PeftModel`]):
+            PEFT model holding the adapter.
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator whose device sharded parameters are gathered on.
+        adapter_name (`str`):
+            Name of the adapter to save.
+        dest_dir (`str`):
+            Directory the adapter is published to. Replaced if it already exists.
+    """
+    state_dict = {
+        name: param for name, param in model.state_dict().items() if "lora_" in name and f".{adapter_name}." in name
+    }
+    materialized = {}
+    for name, param in state_dict.items():
+        # With `fsdp_offload_params`, the local shard lives on CPU; the all-gather needs it on device.
+        if param.is_cpu:
+            param = param.to(accelerator.device)
+        if isinstance(param, DTensor):  # FSDP2
+            param = param.full_tensor()
+        materialized[name] = param.detach().cpu()
+
+    if not accelerator.is_main_process:
+        return
+    # Staged under a dot-prefixed name: `dest_dir`'s parent is an adapter namespace, so a plain `<name>.tmp` sibling
+    # would be a half-written adapter sitting in it, and a crash mid-save would leak one there permanently.
+    tmp_dir = os.path.join(os.path.dirname(dest_dir), f".{os.path.basename(dest_dir)}.tmp")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    model.save_pretrained(tmp_dir, selected_adapters=[adapter_name], state_dict=materialized, safe_serialization=True)
+    # PEFT nests every adapter but `"default"` in a subdirectory, while vLLM expects `adapter_config.json` at the root
+    # of the path it is handed.
+    saved_dir = tmp_dir if adapter_name == "default" else os.path.join(tmp_dir, adapter_name)
+    shutil.rmtree(dest_dir, ignore_errors=True)
+    os.rename(saved_dir, dest_dir)  # atomic within one filesystem
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def select_adapter_sync(server_info: dict, model: "PeftModel", args: AsyncGRPOConfig) -> bool:
+    """
+    Decide whether weight syncs push the adapter alone instead of merged base weights.
+
+    A pure function of what the server reported and what is about to be trained, so it can be tested with the dict
+    `/server_info` returns rather than with a server. Anything vLLM's adapter format cannot express falls back to the
+    merged path with a warning. A server that is merely misconfigured — too low a rank, too few adapter slots — raises
+    instead, rather than silently syncing 100x the bytes its launch line asked for.
+
+    Args:
+        server_info (`dict`):
+            The server's resolved `vllm_config`, as returned by [`VLLMClient.get_server_info`]. Only `lora_config` and
+            `parallel_config.data_parallel_size` are read.
+        model ([`~peft.PeftModel`]):
+            The PEFT-wrapped model about to be trained.
+        args ([`AsyncGRPOConfig`]):
+            The training arguments; `max_staleness` sets how many adapter versions the server must hold at once.
+
+    Returns:
+        `bool`:
+            Whether syncs should push only the adapter.
+    """
+    # `lora_config` is `None` unless the server was started with `--enable-lora`, making it the capability probe.
+    server_lora_config = server_info["lora_config"]
+    if server_lora_config is None:
+        logger.warning(
+            "Training a PEFT model against a vLLM server started without `--enable-lora`: every weight sync has "
+            "to merge the adapter into the base model and push the full weights. Restart the server with "
+            "`--enable-lora --max-lora-rank <r>` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment to "
+            "push only the adapter instead (~1% of the bytes)."
+        )
+        return False
+
+    # `/v1/load_lora_adapter` reaches only the data-parallel replica that answered it, leaving the others on
+    # the base model. The merged path has no such problem, so hand data-parallel servers to it.
+    if server_info["parallel_config"]["data_parallel_size"] > 1:
+        logger.warning(
+            "Falling back to merged-weight vLLM sync: the server runs with `--data-parallel-size > 1`, where a "
+            "loaded adapter reaches only the replica that received the request."
+        )
+        return False
+
+    try:
+        peft_config = validate_lora_for_vllm_sync(model)
+    except ValueError as error:
+        logger.warning(f"Falling back to merged-weight vLLM sync. {error}")
+        return False
+
+    # `rank_pattern` can lift individual modules above the base `r`.
+    adapter_rank = max([peft_config.r, *peft_config.rank_pattern.values()])
+    if server_lora_config["max_lora_rank"] < adapter_rank:
+        raise ValueError(
+            f"The adapter has rank {adapter_rank}, but the vLLM server was started with `--max-lora-rank "
+            f"{server_lora_config['max_lora_rank']}`. Restart it with `--max-lora-rank "
+            f"{round_lora_rank(adapter_rank)}`."
+        )
+    # `max_staleness` bounds how many policies back a sample may still be consumed from, so `max_staleness + 1`
+    # adapters can be named by in-flight requests at once. Each sync loads the new version before unloading the one
+    # that just fell out of that window, so the server briefly holds one more — and vLLM does not reject the extra
+    # load, it silently evicts the oldest still-servable adapter.
+    min_loras = args.max_staleness + 2
+    if server_lora_config["max_loras"] < min_loras:
+        raise ValueError(
+            f"The vLLM server was started with `--max-loras {server_lora_config['max_loras']}`, but "
+            f"`max_staleness={args.max_staleness}` lets requests still name {min_loras - 1} distinct policy "
+            f"versions, and each sync loads the next one before unloading the oldest. Restart the server with "
+            f"`--max-loras {min_loras}`, or lower `max_staleness`."
+        )
+    return True
 
 
 class AsyncGRPOTrainer(_BaseTrainer):
@@ -539,8 +932,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
             repo on huggingface.co, or a path to a *directory* containing model weights saved using
             [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            using [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the
-            model on the vLLM server used for generation.
+            with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
+            vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
+            models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise. The
+            model name is also used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
@@ -561,7 +956,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
             process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
             trainer's GPU.
-        args ([`AsyncGRPOConfig`], *optional*):
+        args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
@@ -588,6 +983,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped. When the vLLM server was
+            started with `--enable-lora`, a LoRA adapter is synced to it as an adapter rather than as merged weights;
+            see the LoRA section of the AsyncGRPO documentation.
         tools (list of `Callable`, *optional*):
             A list of callable tool functions (sync or async) that the model can invoke during generation. Each tool
             should be a standard Python function with properly type-hinted arguments and return values, and a
@@ -648,6 +1047,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
@@ -666,12 +1066,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Model
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_init_kwargs.setdefault("dtype", args.dtype)
+        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
-        model = AutoModelForCausalLM.from_pretrained(
+        model = create_model_from_path(
             model,
             device_map=None,
-            dtype=torch.float32,
             attn_implementation="kernels-community/flash-attn3",
             **model_init_kwargs,
         )
@@ -685,6 +1086,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
         self.router_aux_loss_coef = args.router_aux_loss_coef
 
+        self._is_vlm = text_config is not model.config
+        if self._is_vlm:
+            # Train the text model only. It is located through the text config, since module names differ across
+            # architectures (`model.language_model` for Qwen-VL and Gemma 3, `model.text_model` for SmolVLM).
+            text_model = next(
+                module
+                for module in model.modules()
+                if isinstance(module, PreTrainedModel) and module is not model and module.config is text_config
+            )
+            model.requires_grad_(False)
+            text_model.requires_grad_(True)
+            model.get_output_embeddings().requires_grad_(True)
+
         patch_chunked_lm_head(
             model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
         )
@@ -692,10 +1106,56 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
+
+        # PEFT. Placed after `patch_chunked_lm_head`, which patches the bare `lm_head` and would otherwise have to
+        # traverse `base_model.model` to find it.
+        if peft_config is not None:
+            if not is_peft_available():
+                raise ImportError(
+                    "You passed `peft_config` but the `peft` library is not installed. "
+                    "Install it with `pip install trl[peft]`."
+                )
+            if not isinstance(peft_config, PeftConfig):
+                raise TypeError(
+                    f"`peft_config` must be a `peft.PeftConfig` instance (e.g. `peft.LoraConfig`), "
+                    f"got {type(peft_config).__name__}."
+                )
+            if is_peft_model(model):
+                raise ValueError(
+                    "You passed a `PeftModel` instance together with a `peft_config` to the trainer. Please first merge "
+                    "and unload the existing adapter, save the resulting base model, and then pass that base model along "
+                    "with the new `peft_config` to the trainer."
+                )
+            # Unlike `GRPOTrainer`, no `autocast_adapter_dtype=False` branch (it works around a DeepSpeed ZeRO-3
+            # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
+            model = get_peft_model(model, peft_config)
+
+        # `patch_chunked_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
+        # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
+        # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
+        # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
+        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        if is_peft_model(model):
+            from peft.tuners.tuners_utils import BaseTunerLayer
+
+            if isinstance(model.get_output_embeddings(), BaseTunerLayer):
+                raise ValueError(
+                    "`AsyncGRPOTrainer` does not support a PEFT adapter on `lm_head`: its chunked log-probability "
+                    "computation reads the head's base weight and would silently ignore the adapter. Remove `lm_head` "
+                    "from `target_modules`."
+                )
+
+        # NOTE: See https://github.com/huggingface/transformers/issues/42489
+        if is_peft_model(model) and args.gradient_checkpointing:
+            model.enable_input_require_grads()
 
         # Reward functions
         if reward_funcs is None:
@@ -715,13 +1175,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "`environment` column to route each example to its environment. Provide a dataset, or pass a "
                     "single environment factory."
                 )
-            if self.args.max_steps <= 0:
+            if args.max_steps <= 0:
                 raise ValueError(
                     "When training without a `train_dataset` (the environment owns the data and returns the prompt "
                     "from `reset()`), `max_steps` must be set to a positive value to define the training length. Set "
                     "it via `AsyncGRPOConfig(max_steps=...)`."
                 )
-            num_placeholder_rows = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+            num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
         # Initialize the Trainer
@@ -742,6 +1202,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        # Tracks restart to match `num_train_epochs`
+        self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
@@ -764,22 +1226,49 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
 
         # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
-        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step.
+        # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
+        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # loop's own scheduling capacity and hang the trainer forever on an empty queue.
         if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = self.args.max_staleness * samples_per_step
+            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
                 f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
-        # Initialize the metrics
+        # The base Trainer's data-skip replay loop doesn't apply to AsyncGRPO's live rollout queue;
+        # force it off regardless of what the user passed.
+        if not self.args.ignore_data_skip:
+            logger.warning(
+                "`ignore_data_skip` is forced to `True` for AsyncGRPO because the base Trainer's skip-and-replay "
+                "loop does not apply to a live rollout queue."
+            )
+        self.args.ignore_data_skip = True
+
+        # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        self._train_tokens_start_time = None
-        # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
-        self._step = 0
         self._current_train_step_time = 0.0
         self._last_step_end_time = None
+        self._rollout_dataset = None
+        # Accumulated across one optimizer step's micro-batches, flushed by `_log_step_metrics`.
+        self._step_forward_s = 0.0
+        self._step_optimizer_s = 0.0
+        self._step_microbatches = 0
+        self._step_forward_tokens = 0.0
+        self._step_trained_tokens = 0.0
+        self._step_seq_len_weighted = 0.0
+        self._step_samples = 0.0
+        self._last_groups_trained = 0
         self.model_version = 0
+        # Adapter-only vLLM sync is derived from a PEFT model plus a server started with `--enable-lora`, rather
+        # than configured. Rank 0 probes and broadcasts the answer below.
+        self._lora_sync = False
+        self._lora_name = "trl-policy"
+        # Absolute: the path is resolved by the *server's* process, which has its own working directory and may not
+        # be on this machine. vLLM reads a path it cannot resolve as a Hub repo id, failing deep inside the engine.
+        self._lora_dir = os.path.abspath(os.path.join(self.args.output_dir, ".vllm_lora"))
+        # Captured once, so a trainer that later activates another adapter does not ship that one as the policy.
+        self._adapter_name = model.active_adapters[0] if is_peft_model(model) else None
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
             # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
@@ -787,27 +1276,33 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
 
             if weight_transfer is not None:
-                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism).
+                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
+                # entirely, so the server is not probed and adapter sync stays off.
                 self.weight_transfer = weight_transfer
             else:
-                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                # DTensor.shape returns the global shape without triggering any all-gather.
-                weight_names, weight_dtype_names, weight_shapes = [], [], []
-                for name, param in model.named_parameters():
-                    # DDP/FSDP1 wrapping, avoids vllm module not exist error
-                    name = name.removeprefix("module.")
-                    weight_names.append(name)
-                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                    weight_shapes.append(list(param.shape))
-                self.weight_transfer = WeightTransferClient(
-                    vllm_client=self.vllm_client,
-                    weight_update_info={
-                        "names": weight_names,
-                        "dtype_names": weight_dtype_names,
-                        "shapes": weight_shapes,
-                        "packed": True,
-                    },
-                )
+                if is_peft_model(model):
+                    self._lora_sync = self._init_lora_sync(model)
+                if self._lora_sync:
+                    # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
+                    # group to build and no manifest to collect.
+                    self.weight_transfer = None
+                else:
+                    # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
+                    # DTensor.shape returns the global shape without triggering any all-gather.
+                    weight_names, weight_dtype_names, weight_shapes = [], [], []
+                    for name, param in _iter_vllm_named_params(model):
+                        weight_names.append(name)
+                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                        weight_shapes.append(list(param.shape))
+                    self.weight_transfer = WeightTransferClient(
+                        vllm_client=self.vllm_client,
+                        weight_update_info={
+                            "names": weight_names,
+                            "dtype_names": weight_dtype_names,
+                            "shapes": weight_shapes,
+                        },
+                        weight_sync_timeout=self.args.weight_sync_timeout,
+                    )
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
@@ -815,6 +1310,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=get_config_model_id(model.config),
+                    lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
@@ -826,6 +1322,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     vllm_server_url=self.args.vllm_server_base_url,
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
+                    top_p=self.args.top_p,
+                    top_k=self.args.top_k,
+                    min_p=self.args.min_p,
+                    repetition_penalty=self.args.repetition_penalty,
                     request_timeout=self.args.request_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
@@ -841,12 +1341,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.vllm_client = None
             self.weight_transfer = None
 
-        # Add callbacks. Registration order matters: weight sync first, then worker start.
-        self.add_callback(_InitialWeightSyncCallback(self))
-        self.add_callback(_StartRolloutWorkerCallback(self))
+        # Every rank must agree on the sync mode: one arm runs a collective adapter save, the other a collective
+        # parameter gather, and a split decision hangs both.
+        self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
+
+        # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
+        self.add_callback(_OptimizerTimeCallback(self))
+        self.add_callback(_TrainBeginCallback(self))
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
+        self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
         if self._epoch_stop_groups is not None:
             self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
+
+    def _init_lora_sync(self, model: "PeftModel") -> bool:
+        """Probe the server and decide the sync mode. Main process only; the decision itself is [`select_adapter_sync`]."""
+        self.vllm_client.wait_for_server_ready()
+        lora_sync = select_adapter_sync(self.vllm_client.get_server_info(), model, self.args)
+        if lora_sync:
+            logger.info(
+                f"Adapter-only vLLM sync enabled: syncs publish the '{self._adapter_name}' adapter as "
+                f"'{self._lora_name}-v{{N}}' from {self._lora_dir}, which the vLLM server must be able to read."
+            )
+        return lora_sync
 
     def get_train_dataloader(self) -> DataLoader:
         num_processes = self.accelerator.num_processes
@@ -856,9 +1372,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 model_version_fn=lambda: self.model_version,
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
+                metrics=self._metrics["train"],
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
+            # Kept so `_log_step_metrics` can flush the queue wait at the optimizer-step boundary, which is the only
+            # place that knows a step's worth of waiting is over.
+            self._rollout_dataset = dataset
             # Default the token budget to the vLLM server's max_model_len (the cap on prompt + completion), so no
             # rollout sample can exceed it. Wait for the server like weight sync does, so a still-loading vLLM doesn't
             # fail training here.
@@ -870,7 +1390,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
             # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
             if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget)
+                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
             else:
                 dataset = FixedCountBatcher(
                     dataset, num_processes, self.args.per_device_train_batch_size * num_processes
@@ -886,7 +1406,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 dataset,
                 batch_size=1,
                 collate_fn=DataCollatorForRollout(
-                    self.processing_class.pad_token_id, num_processes, groups_trained=self._trained_groups
+                    self.processing_class.pad_token_id,
+                    num_processes,
+                    groups_trained=self._trained_groups,
+                    metrics=self._metrics["train"],
+                    # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
+                    # construct the collator (and never use it) while `token_budget` is still `None`.
+                    token_budget=max(self.args.token_budget or 0, 0),
                 ),
                 num_workers=0,
                 # NOTE(@aminediro):
@@ -909,7 +1435,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "position_ids",
                 "advantages",
                 "global_n_tokens",
-                "metrics",
+                "global_n_forward_tokens",
+                "mean_seq_len",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -966,43 +1493,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
             valid_mask = completion_mask > 0
             local_count = valid_mask.sum().float()
 
-            local_ratio_sum = (
-                coef_1[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
-            )
+            # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
+            local_ratio_sum = coef_1[valid_mask].sum()
             # Approx KL: http://joschu.net/blog/kl-approx.html
-            local_kl_sum = (
-                ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-
-            local_entropy_sum = (
-                entropy[valid_mask].sum() if valid_mask.any() else torch.zeros((), device=completion_mask.device)
-            )
+            local_kl_sum = ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+            local_entropy_sum = entropy[valid_mask].sum()
 
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-            local_low_clip_sum = (
-                is_low_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-            local_high_clip_sum = (
-                is_high_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-            local_region_clip_sum = (
-                is_region_clipped[valid_mask].float().sum()
-                if valid_mask.any()
-                else torch.zeros((), device=completion_mask.device)
-            )
-
-            # Per-rank clip fractions, gathered below to report the cross-rank saturation extrema.
-            local_low_clip_mean = local_low_clip_sum / local_count.clamp(min=1.0)
-            local_high_clip_mean = local_high_clip_sum / local_count.clamp(min=1.0)
+            local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
+            local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
+            local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
 
             # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
             stats = torch.stack(
@@ -1033,82 +1536,118 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
-            # Cross-rank saturation extrema, mirroring GRPOTrainer's clip_ratio/low_min and clip_ratio/high_max:
-            # the smallest per-rank low-clip and largest per-rank high-clip fractions across ranks.
-            gathered_low_clip = self.accelerator.gather(local_low_clip_mean)
-            gathered_high_clip = self.accelerator.gather(local_high_clip_mean)
-            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
+            seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
+            n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
+            num_seq = int(n_completions)
+            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+
+            def seg_sum(vals):  # per-completion segment sum over the packed row
+                return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
+
+            seq_tokens = seg_sum(comp_mask)
+            seq_low = seg_sum(is_low_clipped[0].float() * comp_mask)
+            seq_high = seg_sum(is_high_clipped[0].float() * comp_mask)
+            per_seq_low = seq_low / seq_tokens  # NaN for a completion with no valid tokens; ignored by nan-aware min
+            per_seq_high = seq_high / seq_tokens
+            gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))
+            gathered_high_max = self.accelerator.gather(nanmax(per_seq_high))
+            self._metrics["train"]["clip_ratio/low_min"].append(nanmin(gathered_low_min).item())
+            self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
             if self.aux_loss_enabled:
                 gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
                 self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
-            # Logging metrics from the rollout worker (reward, reward_std, etc.).
-            # inputs["metrics"] is a dict keyed by metric name; each value is this rank's row of per-sample values,
-            # NaN-padded (the nan-aware aggregation below ignores both padding and unscorable samples).
-            sample_metrics = inputs["metrics"]  # dict[str, Tensor(shape=[1, n_samples_local])]
-            keys = list(sample_metrics.keys())
-            device = completion_mask.device
-            n_samples = (position_ids == 0).sum().to(torch.float32)
-            if keys:
-                # nan-aware per key: unscorable samples carry NaN, so a plain .sum() would poison the whole metric.
-                local_sums = torch.stack([torch.nansum(sample_metrics[k].to(device)) for k in keys])
-                local_counts = torch.stack(
-                    [(~torch.isnan(sample_metrics[k].to(device))).sum().to(torch.float32) for k in keys]
-                )
-                stats = torch.cat([local_sums, local_counts])
-                stats = self.accelerator.reduce(stats, reduction="sum")
-                n = len(keys)
-                global_sums, global_counts = stats[:n], stats[n:]
-                for k, global_sum, global_count in zip(keys, global_sums, global_counts, strict=True):
-                    metric = (global_sum / global_count).item() if global_count > 0 else float("nan")
-                    self._metrics["train"][k].append(metric)
-
-            length_stats = torch.stack([completion_mask.sum().float(), n_samples])
-            length_stats = self.accelerator.reduce(length_stats, reduction="sum")
-            self._metrics["train"]["completions/mean_length"].append((length_stats[0] / length_stats[1]).item())
-
-            # Training throughput: completion tokens consumed by this training step per second.
-            now = time.time()
-            if self._train_tokens_start_time is not None:
-                train_elapsed = now - self._train_tokens_start_time
-                if train_elapsed > 0:
-                    self._metrics["train"]["training_tok/s"].append(global_n_tokens.item() / train_elapsed)
-            self._train_tokens_start_time = now
-
-            self._metrics["train"]["forward_time_s"].append(self._last_forward_time_s)
-            # NOTE: in dynamic mbs setup, we would need to agg across DP ranks.
-            self._metrics["train"]["train_seq_len"].append(float(position_ids.max() + 1))
+        # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
+        # `training_step`. The counts are batch-wide (the collator broadcasts one value per rank), so they are read off
+        # rank-local inputs without a collective. Sample rewards and packing metrics are NOT gathered here — rank 0
+        # already logged them in the collator.
+        n_forward_tokens = float(inputs["global_n_forward_tokens"][0])
+        mean_seq_len = float(inputs["mean_seq_len"][0])
+        self._step_forward_tokens += n_forward_tokens
+        self._step_trained_tokens += float(global_n_tokens)
+        self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
+        self._step_samples += n_forward_tokens / mean_seq_len
+        self._step_forward_s += self._last_forward_time_s
         return loss
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)
-        self._step += 1
-        time_after = time.perf_counter()
-        self._current_train_step_time += time_after - time_before
-        if self._step % self.current_gradient_accumulation_steps == 0:
-            self._metrics["train"]["step_time"].append(self._current_train_step_time)
-            self._current_train_step_time = 0.0
-            # Async-only end-to-end latency: unlike the fwd+bwd-only `step_time`, this also covers the optimizer
-            # step, weight sync, and rollout-queue waits.
-            if self._last_step_end_time is not None:
-                self._metrics["train"]["iteration_time_s"].append(time_after - self._last_step_end_time)
-            self._last_step_end_time = time_after
+        self._step_microbatches += 1
+        self._current_train_step_time += time.perf_counter() - time_before
         return output
+
+    def _log_step_metrics(self) -> None:
+        """Flush one optimizer step's worth of accounting: the time budget, what the batch held, and throughput.
+
+        Called from `on_step_end`, i.e. after `optimizer.step()`, so `perf/optimizer_s` covers this step.
+        """
+        time_after = time.perf_counter()
+        metrics = self._metrics["train"]
+        fwd_bwd_s = self._current_train_step_time
+        # The first step has no predecessor, so there is nothing to measure between yet.
+        step_s = time_after - self._last_step_end_time if self._last_step_end_time is not None else None
+
+        metrics["perf/fwd_bwd_s"].append(fwd_bwd_s)
+        metrics["perf/fwd_s"].append(self._step_forward_s)
+        metrics["perf/optimizer_s"].append(self._step_optimizer_s)
+        metrics["batch/microbatches_per_step"].append(float(self._step_microbatches))
+        metrics["batch/forwarded_tokens_per_step"].append(self._step_forward_tokens)
+        metrics["batch/trained_tokens_per_step"].append(self._step_trained_tokens)
+        metrics["batch/samples_per_step"].append(self._step_samples)
+        if step_s is not None:
+            metrics["perf/step_s"].append(step_s)
+
+        if self.accelerator.is_main_process:
+            metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)
+            self._rollout_dataset.wait_s = 0.0
+            metrics["batch/groups_per_step"].append(float(len(self._trained_groups) - self._last_groups_trained))
+            self._last_groups_trained = len(self._trained_groups)
+
+        # Throughput and MFU are reported on TWO bases, because for async RL one number cannot answer both questions.
+        ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
+        ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
+        if self._step_forward_tokens > 0:
+            mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
+            world_size = self.accelerator.num_processes
+            metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
+            metrics["perf/mfu_fwd_bwd"].append(
+                compute_mfu(flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size)
+            )
+            if step_s is not None:
+                metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
+                metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
+                metrics["perf/mfu_wall_clock"].append(
+                    compute_mfu(flops_per_token, self._step_forward_tokens / step_s, world_size)
+                )
+
+        self._last_step_end_time = time_after
+        self._current_train_step_time = 0.0
+        self._step_forward_s = 0.0
+        self._step_optimizer_s = 0.0
+        self._step_microbatches = 0
+        self._step_forward_tokens = 0.0
+        self._step_trained_tokens = 0.0
+        self._step_seq_len_weighted = 0.0
+        self._step_samples = 0.0
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        # Average the metrics
+        if self.accelerator.is_main_process and self.rollout_worker:
+            while True:
+                try:
+                    for key, value in self.rollout_worker.metrics_queue.get_nowait().items():
+                        # NOTE(@aminediro): we might be filling train metrics dict even in eval mode
+                        self._metrics["train"][key].append(value)
+                except queue.Empty:
+                    break
+
         metrics = {}
         for key, val in self._metrics[mode].items():
-            # Filter out NaN values before averaging. A reward function that returns None for all samples
-            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
-            # would let a single NaN contaminate valid data from other batches. Only return None when no
-            # valid values remain (e.g. JSON loggers crash on float NaN).
-            valid = [v for v in val if not math.isnan(v)]
-            metrics[key] = sum(valid) / len(valid) if valid else None
+            valid = [v for v in val if isinstance(v, tuple) or not math.isnan(v)]
+            metrics[key] = _reduce_metric(key, valid) if valid else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
@@ -1123,15 +1662,44 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Iterate parameters one at a time. For FSDP2 (DTensor), full_tensor() all-gathers just this parameter across
         # FSDP ranks, then frees it once the generator advances — avoiding materializing the full model in memory.
         device = self.accelerator.device
-        for name, param in self.model.named_parameters():
-            name = name.removeprefix("module.")  # DDP/FSDP1 wrapping
+        for name, param in _iter_vllm_named_params(self.accelerator.unwrap_model(self.model)):
             full = param.full_tensor() if isinstance(param, DTensor) else param.detach()
             if full.device != device:
                 full = full.to(device)
             yield name, full
 
     def _sync_weight(self):
+        """Publish the current policy to vLLM, then bump the version the rollout worker requests.
+
+        Dispatches to the sync mode picked at init, logging `perf/weight_sync_*` for both here so they stay comparable.
+        """
         t0 = time.time()
+        if self._lora_sync:
+            t_pause, t_barrier, t_transfer = self._sync_weight_lora(t0)
+        else:
+            t_pause, t_barrier, t_transfer = self._sync_weight_merged(t0)
+        weight_sync_s = time.time() - t0
+        # log the three phases  of weight sync
+        self._metrics["train"]["perf/weight_sync_s"].append(weight_sync_s)
+        self._metrics["train"]["perf/weight_sync_pause_s"].append(t_pause - t0)
+        self._metrics["train"]["perf/weight_sync_barrier_s"].append(t_barrier - t_pause)
+        self._metrics["train"]["perf/weight_sync_transfer_s"].append(t_transfer - t_barrier)
+        logger.info(f"Weight sync: done. Total {weight_sync_s:.1f}s")
+
+    def _sync_weight_merged(self, t0: float) -> tuple[float, float, float]:
+        """Fold the adapter, if any, into the base weights and stream every parameter to vLLM over NCCL.
+
+        Args:
+            t0 (`float`):
+                When the sync started, for the phase log lines.
+
+        Returns:
+            `tuple[float, float, float]`:
+                The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
+        """
+        # Under DDP `self.model` is the wrapper, which exposes none of the PEFT API used below.
+        model = self.accelerator.unwrap_model(self.model)
+
         logger.info("Weight sync: pausing vLLM...")
         if self.accelerator.is_main_process and self.weight_transfer:
             self.weight_transfer.pause()
@@ -1142,12 +1710,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        if self.accelerator.is_main_process and self.weight_transfer:
-            self.weight_transfer.send_weights(self._streaming_iter())
-        else:
-            # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-            for _ in self._streaming_iter():
-                pass
+        # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
+        # `finally` is not optional: leaving it merged would train merged weights from the next step on.
+        if is_peft_model(model):
+            model.merge_adapter()
+        try:
+            if self.accelerator.is_main_process and self.weight_transfer:
+                self.weight_transfer.send_weights(self._streaming_iter())
+            else:
+                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
+                for _ in self._streaming_iter():
+                    pass
+        finally:
+            if is_peft_model(model):
+                model.unmerge_adapter()
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
@@ -1159,11 +1735,108 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.model_version += 1
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
-        weight_sync_time_s = time.time() - t0
-        self._metrics["train"]["weight_sync_time_s"].append(weight_sync_time_s)
-        logger.info(f"Weight sync: done. Total {weight_sync_time_s:.1f}s")
+        return t_pause, t_barrier, t_transfer
+
+    def _sync_weight_lora(self, t0: float) -> tuple[float, float, float]:
+        """Publish the trained adapter to vLLM under a fresh versioned name, moving no base weight.
+
+        Each sync publishes `{lora_name}-v{N}` instead of overwriting the previous adapter in place, because
+        `load_inplace=True` makes the server re-read the adapter from disk on every request
+        (https://github.com/vllm-project/vllm/pull/41482) and vLLM keys its prefix cache on the adapter name alone
+        (https://github.com/vllm-project/vllm/issues/42125), so an in-place swap would serve the previous policy's KV
+        blocks. A new name is a fresh cache namespace, so no `reset_prefix_cache()` is needed.
+
+        Args:
+            t0 (`float`):
+                When the sync started, for the phase log lines.
+
+        Returns:
+            `tuple[float, float, float]`:
+                The pause, barrier and transfer phase marks, which [`_sync_weight`] turns into metrics.
+        """
+        version = self.model_version + 1
+        adapter_dir = os.path.join(self._lora_dir, f"{self._lora_name}-v{version}")
+        # Under DDP `self.model` is the wrapper, which does not expose `save_pretrained`.
+        model = self.accelerator.unwrap_model(self.model)
+
+        logger.info("Weight sync: pausing vLLM...")
+        if self.accelerator.is_main_process:
+            self.vllm_client.pause()
+        t_pause = time.time()
+        logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
+
+        self.accelerator.wait_for_everyone()
+        t_barrier = time.time()
+
+        logger.info(f"Weight sync: transferring adapter... (barrier took {t_barrier - t_pause:.1f}s)")
+        # Every rank calls this, not just rank 0: materializing a sharded adapter parameter is a collective, even
+        # though only the main process writes the files.
+        save_lora_adapter(model, self.accelerator, self._adapter_name, adapter_dir)
+        t_transfer = time.time()
+
+        self.accelerator.wait_for_everyone()
+
+        logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
+        if self.accelerator.is_main_process:
+            # The adapter has to exist on the server BEFORE the version moves below: the rollout worker derives the
+            # adapter it requests from `model_version`, so bumping first would name one that is not loaded yet.
+            self.vllm_client.load_lora_adapter(f"{self._lora_name}-v{version}", adapter_dir)
+            self.vllm_client.resume()
+            stale_version = version - (self.args.max_staleness + 1)
+            if stale_version > 0:
+                self.vllm_client.unload_lora_adapter(f"{self._lora_name}-v{stale_version}")
+            # The files outlive the unload by one sync: vLLM resolves `lora_path` lazily inside the engine, where
+            # a missing directory is not a 404 but a fatal `HFValidationError`.
+            if stale_version > 1:
+                stale_dir = f"{self._lora_name}-v{stale_version - 1}"
+                shutil.rmtree(os.path.join(self._lora_dir, stale_dir), ignore_errors=True)
+            self.model_version = version
+            if self.rollout_worker:
+                self.rollout_worker.update_model_version(self.model_version)
+        return t_pause, t_barrier, t_transfer
+
+    def _save_checkpoint(self, model, trial):
+        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            trained = self._trained_groups
+            first_untrained = next(g for g in itertools.count() if g not in trained)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
+            # republish a different adapter under a name a still-running server already holds.
+            rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+                json.dump(rollout_state, f)
+        super()._save_checkpoint(model, trial)
 
     def _inner_training_loop(self, *args, **kwargs):
+        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # Skipped for IterableDataset since len() isn't available on streaming datasets.
+        # Always reset first so a stale value from a prior train() call is never carried over.
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
+            self._groups_before_resume = 0
+            resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
+            if resume_from_checkpoint is not None:
+                rollout_state_file = os.path.join(resume_from_checkpoint, "rollout_state.json")
+                # IterableDataset is skipped deliberately: streaming datasets have no len() and can't be repositioned.
+                if not os.path.isfile(rollout_state_file):
+                    logger.warning(
+                        "rollout_state.json not found in the checkpoint; "
+                        "the rollout worker will restart from prompt 0."
+                    )
+                elif not isinstance(self.train_dataset, Dataset):
+                    logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
+                else:
+                    with open(rollout_state_file) as f:
+                        rollout_state = json.load(f)
+                    self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
+                    self._groups_before_resume = rollout_state["prompt_index"]
+                    # Older checkpoints predate this field; resuming from one restarts numbering at v1, which is
+                    # only safe against a freshly started server.
+                    self.model_version = rollout_state.get("model_version", 0)
+                    self.rollout_worker.update_model_version(self.model_version)
         try:
             return super()._inner_training_loop(*args, **kwargs)
         finally:

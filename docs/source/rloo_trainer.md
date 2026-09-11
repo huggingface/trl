@@ -120,9 +120,9 @@ $$
 In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1 \\) and this reduces to standard REINFORCE.
 
 > [!NOTE]
-> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\). 
+> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\).
 >
-> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy. 
+> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy.
 >
 > In contrast, [GRPO](grpo_trainer) adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\), so its gradient flows through both the ratio term and the KL penalty.
 
@@ -145,6 +145,7 @@ While training and evaluating, we record the following metrics:
 - `reward_std`: The standard deviation of summed rewards across functions (weighted by `reward_weights`), computed over the full batch.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of sequence probabilities where the RLOO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \quad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)} \\). A higher value means more samples are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
@@ -184,7 +185,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -252,7 +256,10 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1 &
 
 wait
 ```
@@ -537,7 +544,7 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 RLOO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
@@ -550,18 +557,18 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
 ### Quick Start
 
-Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/rloo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/rloo_visual_math/rloo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
 accelerate launch \
   --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/rloo_vlm.py \
+  examples/rloo_visual_math/rloo_visual_math.py \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir rloo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \

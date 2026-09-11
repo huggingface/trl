@@ -118,11 +118,13 @@ class SSDTrainer(_BaseTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SSDConfig(f"{model_name}-SSD")
+        model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -159,6 +161,7 @@ class SSDTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -173,6 +176,10 @@ class SSDTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
@@ -460,6 +467,12 @@ class SSDTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
         completion_lengths = completion_mask.sum(dim=1).float()
         agg_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         self._metrics[mode]["completions/mean_length"].append(agg_lengths.mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_lengths.min().item())
         self._metrics[mode]["completions/max_length"].append(agg_lengths.max().item())

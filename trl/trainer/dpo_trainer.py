@@ -14,6 +14,7 @@
 
 import contextlib
 import json
+import math
 import os
 import textwrap
 from collections import defaultdict
@@ -48,6 +49,7 @@ from transformers.utils import is_peft_available
 
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
 from ..import_utils import is_liger_kernel_available
+from ..losses import FusedLinearDPOLoss
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -67,10 +69,6 @@ from .utils import (
 )
 
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
-
-
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
@@ -78,15 +76,6 @@ if is_peft_available():
 
 
 logger = get_logger(__name__)
-
-
-FLASH_ATTENTION_VARIANTS = {
-    "flash_attention_2",
-    "flash_attention_3",
-    "kernels-community/flash-attn2",
-    "kernels-community/flash-attn3",
-    "kernels-community/vllm-flash-attn3",
-}
 
 
 @dataclass
@@ -571,8 +560,10 @@ class DPOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
@@ -595,7 +586,7 @@ class DPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
 
         # Handle pad token for processors or tokenizers
@@ -610,6 +601,11 @@ class DPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -640,31 +636,32 @@ class DPOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during DPO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during DPO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
+            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
+                and default_config.target_parameters
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -748,6 +745,10 @@ class DPOTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
+            # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+            # configs.
+            model.config.pad_token_id = self._tokenizer.pad_token_id
+            model.generation_config.pad_token_id = self._tokenizer.pad_token_id
             data_collator = DataCollatorForPreference(
                 pad_token_id=self._tokenizer.pad_token_id,
                 max_length=args.max_length,
@@ -769,6 +770,15 @@ class DPOTrainer(_BaseTrainer):
         self.ld_alpha = args.ld_alpha
         self.f_divergence_type = args.f_divergence_type
         self.f_alpha_divergence_coef = args.f_alpha_divergence_coef
+        # The f-DPO reparameterization leaves a β·log Z(x) term that only cancels in the chosen-rejected reward
+        # difference, so the other losses have no valid f-divergence generalization.
+        f_divergence_loss_types = {"sigmoid", "sigmoid_norm", "hinge", "ipo", "exo_pair", "robust", "discopop", "sft"}
+        if self.f_divergence_type != "reverse_kl" and not set(self.loss_types) <= f_divergence_loss_types:
+            raise ValueError(
+                f"`f_divergence_type='{self.f_divergence_type}'` is only supported for the following loss types: "
+                f"{sorted(f_divergence_loss_types)}. You provided {self.loss_types}. Use the default "
+                "`f_divergence_type='reverse_kl'` with these losses."
+            )
         self.label_smoothing = args.label_smoothing
         self.use_weighting = args.use_weighting
         if self.use_weighting and any(loss_type in {"aot", "aot_unpaired"} for loss_type in self.loss_types):
@@ -799,6 +809,12 @@ class DPOTrainer(_BaseTrainer):
                 raise NotImplementedError(
                     "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
                     "please open a feature request at https://github.com/huggingface/trl/issues."
+                )
+            if self.f_divergence_type != "reverse_kl":
+                raise ValueError(
+                    "`use_liger_kernel=True` is incompatible with a non-default `f_divergence_type`. The Liger fused "
+                    "DPO loss always uses the standard reverse-KL parameterization, so the requested divergence would "
+                    "be silently ignored. Either set `f_divergence_type='reverse_kl'`, or set `use_liger_kernel=False`."
                 )
             if compute_metrics is not None:
                 raise ValueError(
@@ -836,7 +852,12 @@ class DPOTrainer(_BaseTrainer):
                         "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
                         "`use_liger_kernel=False`."
                     )
-            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
+            self.liger_loss = FusedLinearDPOLoss(
+                beta=args.beta,
+                loss_type=self.loss_types[0],
+                label_smoothing=self.label_smoothing,
+                discopop_tau=args.discopop_tau,
+            )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
             self._forward_redirection = _ForwardRedirection()
@@ -923,6 +944,14 @@ class DPOTrainer(_BaseTrainer):
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
+
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction. `ParallelismConfig.tp_size` requires accelerate 1.10.0.
+        if Version(accelerate.__version__) >= Version("1.10.0") and self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1364,7 +1393,7 @@ class DPOTrainer(_BaseTrainer):
 
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         avg_chosen_logits = self.accelerator.gather_for_metrics(chosen_logits_mean).mean().item()
@@ -1431,7 +1460,7 @@ class DPOTrainer(_BaseTrainer):
             # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
             # reference model does not materialize router logits and compute a discarded MoE aux loss.
             ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
-            # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+            # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
@@ -1465,13 +1494,13 @@ class DPOTrainer(_BaseTrainer):
             chosen_scores = chosen_logratios
             rejected_scores = rejected_logratios
         elif self.f_divergence_type == "forward_kl":
-            # f'(t) = 1 - 1/t  -> drop constant -> -exp(-logratio)
-            chosen_scores = -torch.exp(-chosen_logratios)
-            rejected_scores = -torch.exp(-rejected_logratios)
+            # f'(t) = 1 - 1/t
+            chosen_scores = 1 - torch.exp(-chosen_logratios)
+            rejected_scores = 1 - torch.exp(-rejected_logratios)
         elif self.f_divergence_type == "js_divergence":
-            # f'(t) = log(2t/(t+1)) -> drop log 2
-            chosen_scores = F.logsigmoid(chosen_logratios)
-            rejected_scores = F.logsigmoid(rejected_logratios)
+            # f'(t) = log(2t/(t+1)) = log 2 + logsigmoid(log t)
+            chosen_scores = math.log(2) + F.logsigmoid(chosen_logratios)
+            rejected_scores = math.log(2) + F.logsigmoid(rejected_logratios)
         elif self.f_divergence_type == "alpha_divergence":
             # alpha-divergence: f'(t) = (t^(α-1) - 1)/(α-1)
             if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:  # limit case f'(t) -> log(t), fall back to reverse_kl
@@ -1486,8 +1515,8 @@ class DPOTrainer(_BaseTrainer):
                 clamp_max = {torch.float16: 11.0, torch.bfloat16: 80.0, torch.float32: 80.0}[dtype]
                 t_chosen_float = torch.clamp(t_chosen.float(), max=clamp_max)
                 t_rejected_float = torch.clamp(t_rejected.float(), max=clamp_max)
-                chosen_scores = torch.exp(t_chosen_float).to(dtype) * coef
-                rejected_scores = torch.exp(t_rejected_float).to(dtype) * coef
+                chosen_scores = (torch.exp(t_chosen_float) - 1.0).to(dtype) * coef
+                rejected_scores = (torch.exp(t_rejected_float) - 1.0).to(dtype) * coef
         else:
             raise ValueError(f"Unknown f_divergence_type: {self.f_divergence_type}")
 
@@ -1515,7 +1544,7 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
 
             elif loss_type == "exo_pair":
-                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
+                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856 (Eq. 16)
                 # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
                 # p_rh = [(1−ε), ε]; expanded KL gives the weighted logsigmoid form below
                 epsilon = torch.tensor(self.label_smoothing, device=device)
@@ -1528,8 +1557,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
             elif loss_type == "nca_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = (
                     -F.logsigmoid(chosen_rewards)
                     - 0.5 * F.logsigmoid(-chosen_rewards)
@@ -1542,8 +1571,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (clean_loss_term - flipped_loss_term) / (1 - 2 * self.label_smoothing)
 
             elif loss_type == "bco_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
 
             elif loss_type == "sppo_hard":
@@ -1551,8 +1580,8 @@ class DPOTrainer(_BaseTrainer):
                 # estimated using the PairRM score. The probability calculation is conducted outside of the trainer
                 # class. The version described here is the hard probability version, where P in Equation (4.7) of
                 # Algorithm 1 is set to 1 for the winner and 0 for the loser.
-                winner_margin_error = (chosen_scores - 0.5 / self.beta) ** 2
-                loser_margin_error = (rejected_scores + 0.5 / self.beta) ** 2
+                winner_margin_error = (chosen_logratios - 0.5 / self.beta) ** 2
+                loser_margin_error = (rejected_logratios + 0.5 / self.beta) ** 2
                 per_sequence_loss = winner_margin_error + loser_margin_error
 
             elif loss_type == "aot":
@@ -1588,7 +1617,7 @@ class DPOTrainer(_BaseTrainer):
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
                 losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_rejected = 1 - torch.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":
@@ -1662,7 +1691,7 @@ class DPOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions
