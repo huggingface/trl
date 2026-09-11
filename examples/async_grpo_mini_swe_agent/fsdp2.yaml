@@ -1,0 +1,21 @@
+# FSDP2 for the trainer. `num_processes` is set on the `accelerate launch` command line from the Job's GPU count.
+#
+# `SHARDED_STATE_DICT`, not `FULL_STATE_DICT`: with FSDP2 + PEFT the full-state-dict path checkpoints only rank 0's
+# shard of each adapter tensor, so a resume silently reverts every other rank's half
+# (https://github.com/huggingface/accelerate/pull/4206). The sharded path handles DTensor natively.
+compute_environment: LOCAL_MACHINE
+distributed_type: FSDP
+fsdp_config:
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_reshard_after_forward: false
+  fsdp_state_dict_type: SHARDED_STATE_DICT
+  fsdp_version: 2
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+use_cpu: false

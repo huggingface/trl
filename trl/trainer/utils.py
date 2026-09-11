@@ -654,8 +654,11 @@ def print_prompt_completions_sample(
                     if reasoning:
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
-                    if "content" in msg:
+                    if msg.get("content"):
                         t.append(msg["content"])
+                    for tool_call in msg.get("tool_calls") or []:
+                        function = tool_call.get("function", tool_call)
+                        t.append(f"\n{function['name']}({function['arguments']})", style="bold blue")
                 elif "name" in msg and "args" in msg:
                     # Tool call
                     t.append(f"{role.upper()}\n", style="bold red")

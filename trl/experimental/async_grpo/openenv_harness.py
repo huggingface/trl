@@ -162,22 +162,23 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         return result
 
     async def _run_loops(self, stop_event) -> None:
+        def _close(session):
+            try:
+                session.close()
+            except Exception:
+                logger.warning("closing in-flight harness session failed", exc_info=True)
+
         async def _close_live_sessions_on_stop() -> None:
             await stop_event.wait()
-
-            def _close(session):
-                try:
-                    session.close()
-                except Exception:
-                    logger.warning("closing in-flight harness session on stop failed", exc_info=True)
-
             # TODO(@openenv): make session.close() awaitable so this cancels on the event loop, not a thread each.
             await asyncio.gather(*(asyncio.to_thread(_close, session) for session in list(self._live_sessions)))
 
         try:
             await asyncio.gather(super()._run_loops(stop_event), _close_live_sessions_on_stop())
         finally:
-            self._session_pool.shutdown(wait=True)
+            for session in list(self._live_sessions):
+                _close(session)
+            self._session_pool.shutdown(wait=False, cancel_futures=True)
 
     def _run_session(self, prompt, group_id=0):
         """Drive one OpenEnv session to completion, on a pool thread.
@@ -334,8 +335,8 @@ def _turns_from_trace(
     entries: list[TraceEntry], tokenizer, train_turn_fn: Callable[[HarnessTurn], bool] | None = None
 ) -> list[TurnRecord]:
     """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns (`entries`, already selected by the
-    loop's `agent_turn_fn`). Re-tokenize each request's messages (passing its `tools` so the prompt matches what the
-    upstream rendered); ids + logprobs come from the capture.
+    loop's `agent_turn_fn`). Re-tokenize each request's messages (passing its `tools` and `chat_template_kwargs` so the
+    prompt matches what the upstream rendered); ids + logprobs come from the capture.
 
     By default every agent turn is trained. Which turns to reinforce beyond that is the CALLER's policy: pass
     `train_turn_fn(turn: HarnessTurn) -> bool` to narrow it, e.g. `has_tool_call` to train only turns that took an
@@ -353,6 +354,7 @@ def _turns_from_trace(
             add_generation_prompt=True,
             tokenize=True,
             return_dict=False,
+            **(request.get("chat_template_kwargs") or {}),
         )
         turns.append(TurnRecord(prompt_ids, _trace_output_ids(entry), entry.get("per_token_logps") or []))
     return turns
