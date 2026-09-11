@@ -105,8 +105,6 @@
     title: Async Distillation
   - local: async_grpo_trainer
     title: Asynchronous GRPO
-  - local: bco_trainer
-    title: BCO
   - local: bema_for_reference_model
     title: BEMA for Reference Model
   - local: cpo_trainer
