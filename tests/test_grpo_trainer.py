@@ -429,7 +429,9 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def _assert_chunked_loss_matches_full_logits(self, trainer, inputs, loss_rtol=1e-4, grad_atol=5e-4):
+    def _assert_chunked_loss_matches_full_logits(
+        self, trainer, inputs, loss_rtol=1e-4, grad_atol=5e-4, cosine_min=0.999
+    ):
         """Compare the streamed-projection and full-logits loss paths on the same generated batch."""
         # If the chunked path accidentally calls the LM-head module, it materializes the full logits tensor before
         # the streamed projection gets a chance to save memory.
@@ -457,7 +459,7 @@ class TestGRPOTrainer(TrlTestCase):
         chunked_grad = torch.cat([grad.flatten() for grad in chunked_grads.values()])
         full_grad = torch.cat([grad.flatten() for grad in grads.values()])
         torch.testing.assert_close(chunked_grad.norm(), full_grad.norm(), rtol=1e-3, atol=1e-5)
-        assert torch.nn.functional.cosine_similarity(chunked_grad, full_grad, dim=0) > 0.999
+        assert torch.nn.functional.cosine_similarity(chunked_grad, full_grad, dim=0) > cosine_min
 
         release_memory(trainer.model, trainer)
 
@@ -507,11 +509,11 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
 
-        # VESPO's sequence weights amplify the small log-probability difference from streamed GEMM reductions.
-        loss_rtol = 1e-3 if loss_type == "vespo" else 1e-4
         # LUSPO/VESPO exponentiate a sequence-level sum of per-token log-probabilities, so a per-token streamed-GEMM
         # discrepancy compounds linearly over `max_completion_length` instead of averaging out like the other losses.
-        grad_atol = 5e-4 * training_args.max_completion_length if loss_type in {"luspo", "vespo"} else 5e-4
+        amplifies = loss_type in {"luspo", "vespo"}
+        loss_rtol = 2e-4 * training_args.max_completion_length if amplifies else 1e-4
+        grad_atol = 5e-4 * training_args.max_completion_length if amplifies else 5e-4
         self._assert_chunked_loss_matches_full_logits(trainer, inputs, loss_rtol=loss_rtol, grad_atol=grad_atol)
 
     @require_liger_kernel
@@ -541,7 +543,9 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.model.train()
         trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        self._assert_chunked_loss_matches_full_logits(trainer, inputs)
+        # Chunking over tokens as well as vocabulary adds a second axis of streamed-GEMM rounding noise, so the
+        # aggregate cosine similarity is a bit looser here than the single-token-chunk case above.
+        self._assert_chunked_loss_matches_full_logits(trainer, inputs, cosine_min=0.995)
 
     @require_liger_kernel
     def test_chunked_logps_honor_output_multiplier_and_empty_completion(self):
