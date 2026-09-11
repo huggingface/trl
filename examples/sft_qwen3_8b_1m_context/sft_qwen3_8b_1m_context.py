@@ -29,9 +29,7 @@ attention is computed as a ring. One book-length sequence per step, 373 s/step, 
 Gradient checkpointing runs with `offload`, which holds each checkpointed layer's input in pinned host
 memory. That is what keeps an 8B model inside 80 GB at this length.
 
-accelerate launch \
-    --config_file examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml \
-    examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
+torchrun --nproc_per_node 8 examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
 
 Swapping the model: context parallelism expresses only full causal attention, so models with
 sliding-window or linear attention layers are refused. That rules out gpt-oss, Gemma 3/4, Mistral, and
@@ -42,6 +40,7 @@ import inspect
 
 import torch
 import transformers
+from accelerate import ParallelismConfig
 from datasets import Dataset, load_dataset
 
 from trl import SFTConfig, SFTTrainer
@@ -95,6 +94,10 @@ def main():
         # `layers x sequence x hidden` bytes of GPU memory for a slower step.
         gradient_checkpointing_kwargs={"offload": True},
         bf16=True,
+        # Context parallelism runs on top of FSDP2; the whole node forms one context-parallel group.
+        fsdp=True,
+        fsdp_config={"fsdp_version": 2, "cpu_ram_efficient_loading": True},
+        parallelism_config=ParallelismConfig(cp_size=8),
         # A base model used far beyond its trained context needs RoPE scaling: without it, loss at 1M
         # starts around 10.6 instead of 4.4. In Transformers v5 `rope_theta` lives inside
         # `rope_parameters`, so the override has to carry it.

@@ -75,7 +75,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 
 ```bash
 # Terminal 2: training on GPU 1
-CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
+CUDA_VISIBLE_DEVICES=1 python train_async_grpo.py
 ```
 
 ## Vision-language models

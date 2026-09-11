@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import importlib
+import importlib.resources as resources
+import subprocess
+import sys
 from argparse import Namespace
 
 from .base import Command, CommandContext
@@ -33,7 +36,7 @@ def _subtract_subsequence(lst: list[str], subseq: list[str]) -> list[str]:
 
 class TrainingCommand(Command):
     """
-    Generic CLI command that launches a training script with accelerate.
+    Generic CLI command that launches a training script with torchrun.
 
     The script `trl/scripts/<name>.py` must expose a `make_parser()` function.
 
@@ -49,8 +52,8 @@ class TrainingCommand(Command):
         subparsers.add_parser(self.name, help=self.help_text, add_help=False)
 
     def run(self, args: Namespace, context: CommandContext) -> int:
-        from ..accelerate_config import resolve_accelerate_config_argument
-        from ..accelerate_launcher import launch_training_script
+        import torch
+        from torch.distributed.run import parse_args, run
 
         module = importlib.import_module(f"...scripts.{self.name}", package=__package__)
         all_args = context.argv_after(self.name)
@@ -61,12 +64,17 @@ class TrainingCommand(Command):
         *_, config_remaining, cli_remaining = parser.parse_args_and_config(
             all_args, return_remaining_strings=True, separate_remaining_strings=True
         )
-        launch_args = resolve_accelerate_config_argument(config_remaining + cli_remaining)
+        # Arguments the training script does not know are torchrun's (e.g. `--nproc_per_node 4`).
+        launch_args = config_remaining + cli_remaining
         training_script_args = _subtract_subsequence(all_args, cli_remaining)
+        training_script = str(resources.files("trl.scripts").joinpath(f"{self.name}.py"))
 
-        launch_training_script(
-            script_name=f"{self.name}.py",
-            launch_args=launch_args,
-            training_script_args=training_script_args,
-        )
+        nproc_per_node = max(torch.accelerator.device_count(), 1)
+        if not launch_args and nproc_per_node == 1:
+            # A single process needs no rendezvous: run the script as `python script.py` would.
+            subprocess.run([sys.executable, training_script, *training_script_args], check=True)
+            return 0
+        if "--nproc_per_node" not in launch_args:
+            launch_args = ["--nproc_per_node", str(nproc_per_node), *launch_args]
+        run(parse_args([*launch_args, training_script, *training_script_args]))
         return 0
