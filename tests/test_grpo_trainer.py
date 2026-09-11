@@ -1952,6 +1952,60 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_bias_correction_kl_uses_the_per_token_ratio_at_sequence_level(self):
+        # Regression test for #6586. The KL term is per-token, so its importance sampling correction must use the
+        # per-token ratio even when importance_sampling_level="sequence"; broadcasting the sequence-level weight onto
+        # the per-token KL gives a different gradient. With zero advantages the loss is the KL term alone, so it must
+        # not depend on the importance sampling level.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            loss_type="grpo",
+            importance_sampling_level="sequence",
+            beta=0.1,
+            use_bias_correction_kl=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.eval()
+
+        device = next(trainer.model.parameters()).device
+        batch_size, prompt_len, completion_len = 2, 3, 4
+        prompt_ids = torch.randint(1, 1000, (batch_size, prompt_len), device=device)
+        completion_ids = torch.randint(1, 1000, (batch_size, completion_len), device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_mask = torch.ones_like(completion_ids)
+        with torch.no_grad():
+            per_token_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                torch.cat([prompt_ids, completion_ids], dim=1),
+                torch.cat([prompt_mask, completion_mask], dim=1),
+                completion_len,
+            )
+        # Per-token log-ratios that cancel out over each sequence: the sequence-level ratio is exactly 1, so a
+        # sequence-level correction leaves the KL term unchanged while the per-token correction does not.
+        log_ratio = torch.tensor([[0.5, -0.5, 0.5, -0.5]] * batch_size, device=device)
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": torch.zeros(batch_size, device=device),
+            "old_per_token_logps": per_token_logps - log_ratio,
+            "ref_per_token_logps": per_token_logps + 1.0,
+        }
+
+        sequence_level_loss = trainer._compute_loss(trainer.model, inputs)
+        trainer.importance_sampling_level = "token"
+        token_level_loss = trainer._compute_loss(trainer.model, inputs)
+
+        torch.testing.assert_close(sequence_level_loss, token_level_loss)
+
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
         # broadcasting (when it returns a single value) or failing later with an opaque shape error.
