@@ -382,6 +382,9 @@ def main() -> None:
     p.add_argument("--gradient-accumulation-steps", type=int, default=16)
     p.add_argument("--learning-rate", type=float, default=1e-5)
     p.add_argument("--lora-rank", type=int, default=32)
+    p.add_argument(
+        "--lora-target-modules", default="all-linear"
+    )  # or e.g. q_proj,k_proj,v_proj,o_proj for a smaller adapter
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--max-turn-tokens", type=int, default=4096)  # per model call; the context is bounded by vLLM
     p.add_argument("--enable-thinking", action="store_true")  # Qwen3 hybrid models think before every command
@@ -466,7 +469,15 @@ def main() -> None:
         rollout_worker=worker,
         # Plain LoRA on the linear layers: anything else (`modules_to_save`, DoRA, trained biases) cannot be served
         # as a vLLM adapter and would fall back to syncing the merged weights.
-        peft_config=LoraConfig(r=args.lora_rank, lora_alpha=2 * args.lora_rank, target_modules="all-linear"),
+        peft_config=LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=2 * args.lora_rank,
+            target_modules=(
+                args.lora_target_modules
+                if args.lora_target_modules == "all-linear"
+                else args.lora_target_modules.split(",")
+            ),
+        ),
     )
 
     # Checkpoints live in `output_dir`, so a restarted job continues instead of starting over.
