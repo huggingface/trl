@@ -12,5 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
-from .grpo_with_replay_buffer_trainer import GRPOWithReplayBufferTrainer, ReplayBuffer
+import sys
+from typing import TYPE_CHECKING
+
+from .._lazy_module import _LazyModule
+
+
+_import_structure = {
+    "dpo_loss": ["FusedLinearDPOLoss"],
+    "grpo_loss": ["FusedLinearGRPOLoss"],
+    "jsd_loss": ["FusedLinearJSDLoss"],
+}
+
+
+if TYPE_CHECKING:
+    from .dpo_loss import FusedLinearDPOLoss
+    from .grpo_loss import FusedLinearGRPOLoss
+    from .jsd_loss import FusedLinearJSDLoss
+
+
+else:
+    sys.modules[__name__] = _LazyModule(__name__, __file__, _import_structure, module_spec=__spec__)
