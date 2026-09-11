@@ -1,0 +1,46 @@
+name: Probe runner GPUs
+
+# Temporary probe: reports how many GPUs each runner group actually exposes, to decide whether the slow tests
+# multi-GPU job can raise CUDA_VISIBLE_DEVICES above "0,1" and run the tests gated on 3 accelerators.
+# Delete this workflow once the question is answered.
+
+on:
+  push:
+    branches: [probe-runner-gpus]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Probe ${{ matrix.group }}
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [aws-g5-12xlarge-cache, aws-g6e-4xlarge]
+    runs-on:
+      group: ${{ matrix.group }}
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all --shm-size "16gb"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Hardware exposed to the container
+        run: |
+          nvidia-smi --query-gpu=index,name,memory.total --format=csv
+          python -c "import torch; print('unmasked device_count:', torch.cuda.device_count())"
+          echo "nproc: $(nproc)"
+          python -c "import os; print('sched_getaffinity:', len(os.sched_getaffinity(0)))"
+          python -c "import psutil; print('physical cores:', psutil.cpu_count(logical=False))" || echo "psutil absent"
+
+      - name: Control, a mask of one device must report one
+        env:
+          CUDA_VISIBLE_DEVICES: "0"
+        run: |
+          python -c "import torch; print('device_count under CUDA_VISIBLE_DEVICES=0:', torch.cuda.device_count())"
+
+      - name: What the slow tests multi-GPU job sees today
+        env:
+          CUDA_VISIBLE_DEVICES: "0,1"
+        run: |
+          python -c "import torch; print('device_count under CUDA_VISIBLE_DEVICES=0,1:', torch.cuda.device_count())"
