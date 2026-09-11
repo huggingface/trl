@@ -1258,6 +1258,28 @@ class TestDistillationTrainer(TrlTestCase):
 
 @require_vision
 class TestDistillationTrainerVLM(TrlTestCase):
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_text_only_dataset_with_tools_keeps_vision_parameters_trainable(self):
+        # Tools can introduce images after initialization even if the dataset contains only text.
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = DistillationTrainer(
+            model=model_id,
+            teacher_model=model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        assert vision_parameter_names
+        assert all(trainer.model.get_parameter(name).requires_grad for name in vision_parameter_names)
+
     @pytest.mark.parametrize(
         "model_id",
         [

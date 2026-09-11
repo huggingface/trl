@@ -694,7 +694,7 @@ class DistillationTrainer(_BaseTrainer):
         if train_dataset is not None:
             dataset_columns = get_dataset_column_names(train_dataset)
             has_vision_data = not {"image", "images"}.isdisjoint(dataset_columns)
-            if self._is_vlm and not has_vision_data:
+            if self._is_vlm and not has_vision_data and not self.tools:
                 freeze_non_language_model_parameters(model)
 
         super().__init__(
