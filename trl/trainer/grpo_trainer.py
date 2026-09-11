@@ -3193,9 +3193,10 @@ class GRPOTrainer(_BaseTrainer):
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
-            # Importance sampling correction for the KL divergence
+            # Importance sampling correction for the KL divergence. The KL is per-token, so the correction uses the
+            # per-token ratio π_θ/π_old regardless of `importance_sampling_level`.
             if self.args.use_bias_correction_kl:
-                per_token_kl = per_token_kl * coef_1
+                per_token_kl = per_token_kl * torch.exp(log_ratio)
 
         # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
         # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
