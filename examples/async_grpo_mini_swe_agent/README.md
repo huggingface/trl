@@ -57,7 +57,7 @@ The trainer needs `HF_TOKEN` in its environment to create sandboxes. `--max-infl
 The trainer and the vLLM server run in two Jobs on two machines. The adapter travels through a [Storage Bucket](https://huggingface.co/docs/hub/storage-buckets) both Jobs mount at `/lora`: the trainer writes `trl-policy-vN` into it, the server reads it off its own mount. `lora_proxy.py` runs next to the trainer to add the bearer token the Job's exposed port requires, and retries the adapter load for the few seconds the server's mount takes to see a new directory. The setup is the one measured in [huggingface/trl#7017](https://github.com/huggingface/trl/pull/7017)'s bucket experiments.
 
 ```sh
-./run_all.sh            # bucket, vLLM Job (h200x2), wait for /health, trainer Job (h200x4)
+./run_all.sh            # bucket, vLLM Job (h200, one GPU), wait for /health, trainer Job (h200x4)
 ./run_all.sh --wait     # ...and cancel the vLLM Job when the trainer finishes
 ./stop.sh               # cancel both now
 ```
@@ -65,7 +65,7 @@ The trainer and the vLLM server run in two Jobs on two machines. The adapter tra
 Everything is an environment variable with a default:
 
 ```sh
-MODEL=Qwen/Qwen3-32B VLLM_FLAVOR=h200x2 TRAIN_FLAVOR=h200x4 ./run_all.sh
+MODEL=Qwen/Qwen3-32B VLLM_REPLICAS=2 TRAIN_FLAVOR=h200x4 ./run_all.sh   # replicas are single-GPU: a failed adapter load hangs a tensor-parallel vLLM
 TRAIN_ARGS="--max-steps 200 --num-generations 8 --max-inflight 64" ./run_all.sh
 RUN_TAG=r32 ./run_all.sh          # names the bucket directory and the trackio run; rerun to resume
 TRL_REF=main ./run_all.sh         # the trl revision the trainer Job installs

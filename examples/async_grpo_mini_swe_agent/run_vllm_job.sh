@@ -14,7 +14,10 @@ set -euo pipefail
 BUCKET=${BUCKET:-aminediroHF/async-grpo-mini-swe-agent}
 MODEL=${MODEL:-Qwen/Qwen3-32B}
 VLLM_TAG=${VLLM_TAG:-v0.27.1}
-FLAVOR=${VLLM_FLAVOR:-h200x2}
+# One GPU per replica. With tensor parallelism, a `/v1/load_lora_adapter` that fails on a worker (the bucket mount
+# has not seen the new adapter yet, which happens on every sync) leaves vLLM 0.27.1's engine hung; a single-GPU
+# engine answers 404 and the proxy retries. Scale with `VLLM_REPLICAS`, not with the flavor.
+FLAVOR=${VLLM_FLAVOR:-h200}
 TIMEOUT=${VLLM_TIMEOUT:-8h}
 # Prompt + completion. An agent trajectory re-sends the whole conversation every turn, and tool outputs run up to
 # 10k characters each, so this is what bounds how many steps a rollout can take.
