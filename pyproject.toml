@@ -91,7 +91,7 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.19.1,<=0.28.0",
+    "vllm>=0.19.1,<=0.29.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
