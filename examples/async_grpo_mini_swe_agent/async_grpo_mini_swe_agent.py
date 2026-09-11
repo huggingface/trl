@@ -333,6 +333,7 @@ class MiniSWEAgentSessionFactory(ResourceSessionFactory):
             image=instance_image(instance),
             flavor=self.flavor,
             idle_timeout=self.agent_timeout + self.eval_timeout,
+            start_timeout=600,  # a cold pull of the largest SWE-Gym images (8 GB compressed) outlasts the default 120 s
         )
         try:
             model = TracingModel(
