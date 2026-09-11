@@ -12,7 +12,7 @@ The [`experimental.bco.BCOTrainer`] supports both [conversational](dataset_forma
 
 ## Expected model format
 
-The BCO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that expects `AutoModelForCausalLMWithValueHead` for the value function.
+The BCO trainer expects a model of `AutoModelForCausalLM`.
 
 ## Using the `BCOTrainer`
 
@@ -66,7 +66,7 @@ def embed_prompt(input_ids, attention_mask, model):
     outputs = model(input_ids=input_ids, attention_mask=attention_mask)
     return outputs.last_hidden_state.mean(dim=1)
 
-embedding_model = Accelerator().prepare_model(self.embedding_model)
+embedding_model = Accelerator().prepare_model(embedding_model)
 embedding_func = partial(embed_prompt, model=embedding_model)
 ```
 
@@ -85,7 +85,7 @@ bco_trainer = BCOTrainer(
     train_dataset=train_dataset,
     processing_class=tokenizer,
     embedding_func=embedding_func,
-    embedding_tokenizer=self.embedding_tokenizer,
+    embedding_tokenizer=embedding_tokenizer,
 )
 
 bco_trainer.train()

@@ -20,13 +20,14 @@ from ...trainer.grpo_config import GRPOConfig
 @dataclass
 class GMPOConfig(GRPOConfig):
     r"""
-    Configuration class for the [`GMPOTrainer`].
+    Configuration class for the [`experimental.gmpo.GMPOTrainer`].
 
-    [`GMPOConfig`] inherits every parameter from [`GRPOConfig`]; it only changes the meaning and default of the
-    clipping range. In GMPO, clipping is applied to the per-token *log*-importance ratios (i.e. in log space) before
-    the geometric mean is taken, so `epsilon` and `epsilon_high` are expressed in log space: the effective ratio
-    clipping range is `(exp(-epsilon), exp(epsilon_high))`. The [GMPO paper](https://huggingface.co/papers/2507.20673)
-    recommends a markedly wider range than GRPO/DAPO, `(exp(-0.4), exp(0.4))`, to encourage exploration.
+    [`experimental.gmpo.GMPOConfig`] inherits every parameter from [`GRPOConfig`]; it only changes the meaning and
+    default of the clipping range. In GMPO, clipping is applied to the per-token *log*-importance ratios (i.e. in log
+    space) before the geometric mean is taken, so `epsilon` and `epsilon_high` are expressed in log space: the
+    effective ratio clipping range is `(exp(-epsilon), exp(epsilon_high))`. The [GMPO
+    paper](https://huggingface.co/papers/2507.20673) recommends a markedly wider range than GRPO/DAPO, `(exp(-0.4),
+    exp(0.4))`, to encourage exploration.
 
     Parameters:
         epsilon (`float`, *optional*, defaults to `0.4`):
