@@ -52,42 +52,44 @@ from async_grpo_mini_swe_agent import MiniSWEAgentSessionFactory, build_dataset
 
 def run_one(factory: MiniSWEAgentSessionFactory, prompt: list[dict], sample: int) -> dict:
     t0 = time.perf_counter()
+    result = {
+        "instance_id": factory.instances[prompt[-1]["content"]]["instance_id"],
+        "sample": sample,
+        "exit_status": None,
+        "steps": 0,
+        "resolved": False,
+        "metrics": {},
+        "submission": "",
+        "messages": [],
+    }
+    session = None
     try:
         session = factory.create(prompt)
-    except Exception as e:  # e.g. the sandbox image failed to pull: a failed rollout, not a failed evaluation
-        instance = factory.instances[prompt[-1]["content"]]
-        return {
-            "instance_id": instance["instance_id"],
-            "sample": sample,
-            "exit_status": type(e).__name__,
-            "steps": 0,
-            "resolved": False,
-            "metrics": {},
-            "submission": "",
-            "messages": [],
-            "wall_s": time.perf_counter() - t0,
-        }
-    try:
         session.wait_for_completion()
         trace = session.fetch_proxy_trace()
         verify = session.verify([])
+        last = trace[-1] if trace else {}
+        choices = (last.get("response") or {}).get("choices") or []
+        exit_message = session.agent.messages[-1] if session.agent.messages else {}
+        result.update(
+            exit_status=session.exit_status,
+            steps=session.agent.n_calls,
+            resolved=verify.env_reward == 1.0,
+            metrics=verify.metrics,
+            submission=exit_message.get("extra", {}).get("submission", ""),
+            messages=list((last.get("request") or {}).get("messages") or [])
+            + ([choices[0]["message"]] if choices else []),
+        )
+    except Exception as e:  # a sandbox that failed to start or died mid-rollout is a failed rollout, not a failed eval
+        result.update(exit_status=type(e).__name__, error=str(e)[:500])
     finally:
-        session.close()
-    last = trace[-1] if trace else {}
-    choices = (last.get("response") or {}).get("choices") or []
-    messages = list((last.get("request") or {}).get("messages") or []) + ([choices[0]["message"]] if choices else [])
-    exit_message = session.agent.messages[-1] if session.agent.messages else {}
-    return {
-        "instance_id": session.instance["instance_id"],
-        "sample": sample,
-        "exit_status": session.exit_status,
-        "steps": session.agent.n_calls,
-        "resolved": verify.env_reward == 1.0,
-        "metrics": verify.metrics,
-        "submission": exit_message.get("extra", {}).get("submission", ""),
-        "messages": messages,
-        "wall_s": time.perf_counter() - t0,
-    }
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+    result["wall_s"] = time.perf_counter() - t0
+    return result
 
 
 def main() -> None:
@@ -96,6 +98,7 @@ def main() -> None:
     p.add_argument("--vllm-url", default="http://localhost:8000")
     p.add_argument("--output", default="eval_mini_swe_agent.jsonl")
     p.add_argument("--n-instances", type=int, default=32)
+    p.add_argument("--instances-file", default=None)  # JSON list of instance ids to evaluate instead of the first n
     p.add_argument("--instance-offset", type=int, default=0)  # skip the first N instances of the shuffled order
     p.add_argument("--samples-per-instance", type=int, default=4)
     p.add_argument("--max-inflight", type=int, default=32)
@@ -110,7 +113,8 @@ def main() -> None:
     p.add_argument("--eval-timeout", type=int, default=900)
     args = p.parse_args()
 
-    dataset, instances = build_dataset(args.instance_offset + args.n_instances, args.seed)
+    instance_ids = json.load(open(args.instances_file)) if args.instances_file else None
+    dataset, instances = build_dataset(args.instance_offset + args.n_instances, args.seed, instance_ids)
     dataset = dataset.select(range(args.instance_offset, len(dataset)))
     factory = MiniSWEAgentSessionFactory(
         instances=instances,
