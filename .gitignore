@@ -149,3 +149,4 @@ uv.lock
 # HF Jobs launcher state (examples/async_grpo_mini_swe_agent/run_all.sh)
 .last_run*
 .venv.shipped.tar*
+examples/async_grpo_mini_swe_agent/trainable_instances.json

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Start the trainer Job: FSDP2 across the flavor's GPUs, the shared bucket mounted read-write at /lora, rollouts in
-# Hugging Face sandboxes, generation served by the vLLM Jobs whose IDs are the arguments. Prints the Job ID on stdout.
+# Start the trainer Job for a mixture-of-experts policy (`async_grpo_mini_swe_agent_moe.py`). Otherwise the same as
+# `run_trainer_job.sh`: bucket at /lora, rollouts in Hugging Face sandboxes, generation served by the vLLM Jobs whose
+# IDs are the arguments. Prints the Job ID on stdout.
 #
-#   ./run_trainer_job.sh <vllm_job_id> [<vllm_job_id> ...]
+#   ./run_trainer_job_moe.sh <vllm_job_id> [<vllm_job_id> ...]
 #
 # The trainer never talks to `https://<id>--8000.hf.jobs` directly: that URL needs a bearer token on every request
 # and nothing in the AsyncGRPO stack adds one. So `lora_proxy.py` runs alongside the trainer: it adds the header,
@@ -12,23 +13,23 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-[ $# -ge 1 ] || { echo "usage: run_trainer_job.sh <vllm_job_id> [<vllm_job_id> ...]" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "usage: run_trainer_job_moe.sh <vllm_job_id> [<vllm_job_id> ...]" >&2; exit 1; }
 UPSTREAM_URLS=$(for id in "$@"; do printf 'https://%s--8000.hf.jobs,' "$id"; done)
 UPSTREAM_URLS=${UPSTREAM_URLS%,}
 BUCKET=${BUCKET:-aminediroHF/async-grpo-mini-swe-agent}
-MODEL=${MODEL:-Qwen/Qwen3-32B}
+MODEL=${MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}
 TRL_REF=${TRL_REF:-agent-rl-example}
 VLLM_TAG=${VLLM_TAG:-v0.27.1}
 FLAVOR=${TRAIN_FLAVOR:-h200x4}
 TIMEOUT=${TRAIN_TIMEOUT:-8h}
-RUN_TAG=${RUN_TAG:-r32}
-PROJECT=${PROJECT:-async-grpo-mini-swe-agent}
+RUN_TAG=${RUN_TAG:-moe-r16}
+PROJECT=${PROJECT:-async-grpo-mini-swe-agent-moe}
 # Every knob of the training script, forwarded as is. Both Jobs mount the bucket at /lora, so `--output-dir` resolves
 # to the same adapter directory on the server.
 TRAIN_ARGS=${TRAIN_ARGS:-}
 
 uvx hf jobs run \
-    --name async-grpo-mini-swe-agent-train --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
+    --name async-grpo-mini-swe-agent-moe-train --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "hf://buckets/${BUCKET}:/lora" \
     -v "$PWD:/work" \
     -e "UPSTREAM_URLS=${UPSTREAM_URLS}" \
@@ -80,7 +81,7 @@ done
 
 NPROC=$(nvidia-smi -L | wc -l)
 echo "=== trainer: FSDP2 on $NPROC rank(s) ==="
-accelerate launch --config_file /work/fsdp2.yaml --num_processes "$NPROC" /work/async_grpo_mini_swe_agent.py \
+accelerate launch --config_file /work/fsdp2.yaml --num_processes "$NPROC" /work/async_grpo_mini_swe_agent_moe.py \
     --model "$MODEL" --output-dir "$OUTPUT_DIR" --project "$PROJECT" --run-name "$RUN_TAG" --trackio-space-id "$PROJECT" \
     $TRAIN_ARGS
 ' 2>&1 | grep -oE '[0-9a-f]{24}' | head -1
