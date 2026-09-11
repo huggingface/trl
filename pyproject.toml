@@ -33,7 +33,7 @@ dependencies = [
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
     "jinja2",
     "packaging>20.0",
-    "transformers>=4.56.2",
+    "transformers @ git+https://github.com/albertvillanova/transformers.git@align-special-tokens-keep-declared-ids",
 ]
 dynamic = ["version"]
 
@@ -107,8 +107,7 @@ dev = [
     # deepspeed
     "deepspeed>=0.18.6",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
-    "transformers[kernels]",  # transformers >= 5.1.0
-    "transformers[hub-kernels]",  # transformers < 5.1.0
+    "transformers[kernels] @ git+https://github.com/albertvillanova/transformers.git@align-special-tokens-keep-declared-ids",
     # liger
     "liger-kernel>=0.8.2",
     # openreward (requires Python 3.11+)
