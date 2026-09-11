@@ -53,7 +53,7 @@ for attempt in 1 2 3 4 5; do
     pip install -q "https://codeload.github.com/huggingface/trl/tar.gz/${TRL_REF}" \
         "https://codeload.github.com/huggingface/OpenEnv/tar.gz/main" \
         "https://codeload.github.com/SWE-Gym/SWE-Bench-Package/tar.gz/main" \
-        peft trackio mini-swe-agent openai "huggingface_hub>=1.22" && break
+        peft "kernels>=0.16,<0.17" trackio mini-swe-agent openai "huggingface_hub>=1.22" && break
     echo "pip install failed (attempt $attempt), retrying in 30s"; sleep 30
 done
 
