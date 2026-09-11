@@ -113,7 +113,7 @@ experiment = Experiment(experiment_name="sft-customer-support")
 
 # Define multiple LoRA configurations to compare
 peft_configs = List([
-    RFLoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, 
+    RFLoraConfig(r=8, lora_alpha=16, lora_dropout=0.1,
                  target_modules=["q_proj", "v_proj"], bias="none"),
     RFLoraConfig(r=32, lora_alpha=64, lora_dropout=0.1,
                  target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], bias="none")
@@ -153,7 +153,7 @@ config_set = List([
 # Define model creation function
 def create_model(model_config):
     model = AutoModelForCausalLM.from_pretrained(
-        model_config["model_name"], 
+        model_config["model_name"],
         **model_config["model_kwargs"]
     )
     tokenizer = AutoTokenizer.from_pretrained(model_config["model_name"])
@@ -163,7 +163,7 @@ def create_model(model_config):
 config_group = RFGridSearch(configs=config_set, trainer_type="SFT")
 
 # Run all 4 configurations concurrently with chunk-based scheduling
-experiment.run_fit(config_group, create_model, train_dataset, eval_dataset, 
+experiment.run_fit(config_group, create_model, train_dataset, eval_dataset,
                    num_chunks=4, seed=42)
 
 # End experiment

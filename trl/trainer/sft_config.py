@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class SFTConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`SFTTrainer`].
 
@@ -38,11 +37,11 @@ class SFTConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string.
+            argument of the [`SFTTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -67,12 +66,12 @@ class SFTConfig(_BaseConfig):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left
-            or right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled,
-            this value sets the sequence length.
+            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
+            right depending on `truncation_mode`. If `None`, no truncation is applied. When packing is enabled, this
+            value sets the sequence length.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
-            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is `"keep_start"`.
+            The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         shuffle_dataset (`bool`, *optional*, defaults to `False`):
             Whether to shuffle the dataset.
         packing (`bool`, *optional*, defaults to `False`):
@@ -109,8 +108,7 @@ class SFTConfig(_BaseConfig):
             in which case it defaults to `"nll"`. Possible values are:
 
             - `"nll"`: standard negative log-likelihood.
-            - `"dft"`: Dynamic Fine-Tuning, as described in
-              [this paper](https://huggingface.co/papers/2508.05629).
+            - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
@@ -137,7 +135,7 @@ class SFTConfig(_BaseConfig):
     > - `learning_rate`: Defaults to `2e-5` instead of `5e-5`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "dataset_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -150,7 +148,15 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string."
+            "the `SFTTrainer` is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     router_aux_loss_coef: float = field(
@@ -159,13 +165,6 @@ class SFTConfig(_BaseConfig):
             "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
             "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
             "training loss with this weight. Set to `0.0` to disable it."
-        },
-    )
-    trust_remote_code: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
-            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(
@@ -183,7 +182,7 @@ class SFTConfig(_BaseConfig):
         default="text",
         metadata={"help": "Name of the column that contains text data in the dataset."},
     )
-    dataset_kwargs: dict[str, Any] | None = field(
+    dataset_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "

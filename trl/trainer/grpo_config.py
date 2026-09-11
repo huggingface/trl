@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class GRPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`GRPOTrainer`].
 
@@ -36,13 +35,14 @@ class GRPOConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
+        model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string.
+            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading
+            processing classes.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`]. Also applied to reward-model and reward-tokenizer loads.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+            Also applied to reward-model and reward-tokenizer loads.
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -64,7 +64,7 @@ class GRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
-        num_generations_eval (`int` or `None`, *optional*):
+        num_generations_eval (`int`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
@@ -88,7 +88,7 @@ class GRPOConfig(_BaseConfig):
         steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
-        temperature (`float`, defaults to `1.0`):
+        temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
@@ -122,14 +122,17 @@ class GRPOConfig(_BaseConfig):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
@@ -162,17 +165,6 @@ class GRPOConfig(_BaseConfig):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
-            waking the engine adds host–device transfer latency.
-
-        > Parameters that control generation acceleration powered by transformers continuous batching
-
-        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
-            Whether to use transformers' continuous batching engine for generating completions. Requires
-            `transformers>=5.8.0`.
-        transformers_continuous_batching_config (`dict`, *optional*):
-            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Parameters that control the training
 
@@ -300,14 +292,14 @@ class GRPOConfig(_BaseConfig):
             encourages exploration by keeping the policy from collapsing to near-deterministic outputs. The bonus is
             always the mean per-token entropy regardless of `loss_type`; it is not rescaled to match a loss type's
             policy normalization, so `entropy_coef` has the same meaning for every loss type. When
-            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step.
-            Has no effect when set to `0.0` (default).
+            `use_adaptive_entropy=True`, this serves as the initial coefficient and is updated each optimizer step. Has
+            no effect when set to `0.0` (default).
         use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
             Whether to use adaptive entropy control, introduced in
             [Skywork-OR1](https://huggingface.co/papers/2505.22312). When enabled, the entropy coefficient
-            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current
-            entropy is below `entropy_target`, and decremented otherwise. The coefficient is only applied when
-            entropy is at or below `entropy_target`.
+            `entropy_coef` is updated each optimizer step: incremented by `entropy_coef_delta` when the current entropy
+            is below `entropy_target`, and decremented otherwise. The coefficient is only applied when entropy is at or
+            below `entropy_target`.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
             Lower bound for the entropy coefficient when using adaptive entropy control.
         entropy_coef_max (`float`, *optional*, defaults to `1.0`):
@@ -315,14 +307,13 @@ class GRPOConfig(_BaseConfig):
         entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
             Step size for adjusting the entropy coefficient at each optimizer step during adaptive entropy control.
         entropy_target (`float`, *optional*, defaults to `0.2`):
-            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only
-            applied when the current entropy falls at or below this value. Measured over the same token set as
-            the policy loss: all completion tokens by default, or only the high-entropy subset when
-            `top_entropy_quantile < 1.0`. Typical language models have per-token entropies in the range 2–10
-            nats, so the default of `0.2` almost never triggers regularization (only on near-complete entropy
-            collapse); set it close to the entropy you observe early in training (logged as the `entropy`
-            metric) so the bonus engages before the policy collapses (and account for the token subset when
-            using `top_entropy_quantile`).
+            Target mean per-token entropy (in nats) used by adaptive entropy control. The coefficient is only applied
+            when the current entropy falls at or below this value. Measured over the same token set as the policy loss:
+            all completion tokens by default, or only the high-entropy subset when `top_entropy_quantile < 1.0`.
+            Typical language models have per-token entropies in the range 2–10 nats, so the default of `0.2` almost
+            never triggers regularization (only on near-complete entropy collapse); set it close to the entropy you
+            observe early in training (logged as the `entropy` metric) so the bonus engages before the policy collapses
+            (and account for the token subset when using `top_entropy_quantile`).
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
             stops when the model generates a response turn with no tool calls or when the total response length reaches
@@ -358,10 +349,10 @@ class GRPOConfig(_BaseConfig):
             paper](https://huggingface.co/papers/2512.02556). It expects a positive value (e.g., 0.5).
         use_bias_correction_kl (`bool`, *optional*, defaults to `True`):
             Whether to multiply the KL term by the importance sampling ratio, so that the KL gradient becomes the
-            unbiased reverse-KL gradient, as described in the
-            [DeepSeek-V3.2 paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever
-            `beta != 0`, including on-policy: the ratio is differentiable, so it affects the gradient even where its
-            value is exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
+            unbiased reverse-KL gradient, as described in the [DeepSeek-V3.2
+            paper](https://huggingface.co/papers/2512.02556). This changes the KL gradient whenever `beta != 0`,
+            including on-policy: the ratio is differentiable, so it affects the gradient even where its value is
+            exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
 
         > Parameters that control the logging
@@ -382,7 +373,15 @@ class GRPOConfig(_BaseConfig):
             Hugging Face Hub repository to save the completions. Should be a complete repository name like
             `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
             created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
-            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories.
+
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Deprecated parameters
 
@@ -399,7 +398,7 @@ class GRPOConfig(_BaseConfig):
 
             <Deprecated version="1.6.0">
 
-            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in v2.0.0. Use
+            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in version v2.0.0. Use
             `vllm_importance_sampling_clip_max` instead.
 
             </Deprecated>
@@ -415,6 +414,8 @@ class GRPOConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "transformers_continuous_batching_config",
+        "generation_kwargs",
+        "chat_template_kwargs",
     ]
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -428,7 +429,8 @@ class GRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
-            "argument of the `GRPOTrainer` is provided as a string."
+            "argument of the `GRPOTrainer` is provided as a string. The `revision` value is also used when loading "
+            "processing classes."
         },
     )
     trust_remote_code: bool = field(
@@ -457,7 +459,7 @@ class GRPOConfig(_BaseConfig):
     cast_lm_head_to_fp32: bool = field(
         default=False,
         metadata={
-            "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
+            "help": "Whether to cast the language modeling head of the policy and reference models to float32. "
             "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only "
             "supported when the model has untied word embedding and language modeling head layers i.e. "
             "`tie_word_embeddings` in the model config is False."
@@ -547,7 +549,7 @@ class GRPOConfig(_BaseConfig):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict | None = field(
+    generation_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
@@ -556,7 +558,7 @@ class GRPOConfig(_BaseConfig):
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -589,7 +591,7 @@ class GRPOConfig(_BaseConfig):
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
-            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },
@@ -754,7 +756,7 @@ class GRPOConfig(_BaseConfig):
         default="token",
         metadata={
             "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
+            "`'token'` keeps the raw per-token log-probability ratios (one weight per token). `'sequence'` averages "
             "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
             "shows that sequence-level sampling often yields more stable training and better alignment with "
             "sequence-level rewards."
@@ -1019,7 +1021,7 @@ class GRPOConfig(_BaseConfig):
             "transformers>=5.8.0."
         },
     )
-    transformers_continuous_batching_config: dict | None = field(
+    transformers_continuous_batching_config: dict | str | None = field(
         default=None,
         metadata={"help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`."},
     )
@@ -1127,7 +1129,7 @@ class GRPOConfig(_BaseConfig):
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
-                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0.  "
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0. "
                 "Use `vllm_importance_sampling_clip_max` instead.",
                 FutureWarning,
                 stacklevel=2,

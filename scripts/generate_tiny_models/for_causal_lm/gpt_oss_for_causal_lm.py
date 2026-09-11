@@ -32,7 +32,7 @@ MODEL_ID = "openai/gpt-oss-20b"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GptOssConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=201088,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -40,6 +40,8 @@ config = GptOssConfig(
     intermediate_size=32,
     num_local_experts=4,
     num_experts_per_tok=2,
+    eos_token_id=200002,
+    pad_token_id=199999,
 )
 model = GptOssForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

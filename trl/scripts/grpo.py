@@ -44,8 +44,8 @@ class GRPOScriptArguments(ScriptArguments):
                 - `"accuracy_reward"`
                 - `"reasoning_accuracy_reward"`
                 - `"think_format_reward"`
-                - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
-                - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
+                - `"get_soft_overlong_punishment"` (used values are `max_completion_len=1280`, `soft_punish_cache=256`)
+                - any dotted import path (e.g., `'my_lib.rewards.custom_reward'`).
     """
 
     reward_model_name_or_path: str | None = field(
@@ -58,7 +58,7 @@ class GRPOScriptArguments(ScriptArguments):
     reward_funcs: list[str] | None = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. Supported values are: `accuracy_reward`,  `reasoning_accuracy_reward`, `think_format_reward`, "
+            "help": "Reward functions to use. Supported values are: `accuracy_reward`, `reasoning_accuracy_reward`, `think_format_reward`, "
             "`get_soft_overlong_punishment` (used values are `max_completion_len=1280`, `soft_punish_cache=256`), or "
             "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
         },

@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class DPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`DPOTrainer`].
 
@@ -38,11 +37,11 @@ class DPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`DPOTrainer`] is provided as a string.
+            argument of the [`DPOTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
             Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
             (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
@@ -58,12 +57,14 @@ class DPOConfig(_BaseConfig):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
-            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is `"keep_start"`.
+            The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
+            Temporarily unavailable: since the DPO refactor, setting it to `True` warns and falls back to standard
+            padding. It is planned to return in a future update.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
@@ -108,7 +109,7 @@ class DPOConfig(_BaseConfig):
             reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
             by τ in the [paper](https://huggingface.co/papers/2310.12036).
         use_weighting (`bool`, *optional*, defaults to `False`):
-            Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference pairs using
+            Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference pairs using
             the policy's length-normalized sequence probabilities.
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the DiscoPOP paper, which controls the shape of the log-ratio modulated loss
@@ -125,8 +126,9 @@ class DPOConfig(_BaseConfig):
             reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
             π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
         ref_model_sync_steps (`int`, *optional*, defaults to `512`):
-            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
-            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
+            set `sync_ref_model=True`.
 
         > Deprecated parameters
 
@@ -160,7 +162,8 @@ class DPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `DPOTrainer` is provided as a string."
+            "the `DPOTrainer` is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
@@ -209,7 +212,8 @@ class DPOConfig(_BaseConfig):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure."
+            "structure. Temporarily unavailable: since the DPO refactor, setting it to True warns and falls back to "
+            "standard padding. It is planned to return in a future update."
         },
     )
     pad_to_multiple_of: int | None = field(
@@ -297,7 +301,7 @@ class DPOConfig(_BaseConfig):
     use_weighting: bool = field(
         default=False,
         metadata={
-            "help": "Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference "
+            "help": "Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference "
             "pairs using the policy's length-normalized sequence probabilities."
         },
     )
