@@ -386,6 +386,9 @@ def main() -> None:
     )  # or e.g. q_proj,k_proj,v_proj,o_proj for a smaller adapter
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--max-turn-tokens", type=int, default=4096)  # per model call; the context is bounded by vLLM
+    p.add_argument(
+        "--token-budget", type=int, default=None
+    )  # tokens per training micro-batch row; defaults to vLLM's max_model_len
     p.add_argument("--enable-thinking", action="store_true")  # Qwen3 hybrid models think before every command
     p.add_argument("--max-staleness", type=int, default=4)
     p.add_argument("--weight-sync-steps", type=int, default=1)
@@ -431,6 +434,7 @@ def main() -> None:
         num_generations=args.num_generations,
         temperature=args.temperature,
         max_completion_length=args.max_turn_tokens,
+        token_budget=args.token_budget,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
