@@ -82,31 +82,84 @@ class VLLMClient:
         response.raise_for_status()
         return response.json()["vllm_config"]["model_config"]["dtype"]
 
+    def get_server_info(self) -> dict:
+        """Return the server's resolved `vllm_config`, as reported by `/server_info`."""
+        response = requests.get(f"{self.server_url}/server_info", params={"config_format": "json"})
+        response.raise_for_status()
+        return response.json()["vllm_config"]
+
+    def load_lora_adapter(self, lora_name: str, lora_path: str, timeout: int = 1800) -> None:
+        """Register a PEFT adapter directory under `lora_name`, making it selectable as a model name.
+
+        Args:
+            lora_name (`str`):
+                Name to register the adapter under. Generation requests select it through their `model` field.
+            lora_path (`str`):
+                Directory holding `adapter_config.json` and the adapter weights. The server process reads it, so it
+                must sit on a filesystem the server can see: vLLM has no in-memory adapter API.
+        """
+        response = requests.post(
+            f"{self.server_url}/v1/load_lora_adapter",
+            # `load_inplace` stays `False`: it makes the server re-read the adapter from disk on every request
+            # (https://github.com/vllm-project/vllm/pull/41482). New policies get a new name instead.
+            json={"lora_name": lora_name, "lora_path": lora_path, "load_inplace": False},
+            timeout=timeout,
+        )
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The vLLM server at {self.server_url} does not expose `/v1/load_lora_adapter`. Restart it with "
+                "`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` in its environment."
+            )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def unload_lora_adapter(self, lora_name: str, timeout: int = 1800) -> None:
+        """Remove a previously registered adapter. Missing names are not an error."""
+        requests.post(f"{self.server_url}/v1/unload_lora_adapter", json={"lora_name": lora_name}, timeout=timeout)
+
     def get_world_size(self) -> int:
         """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
         response = requests.get(f"{self.server_url}/get_world_size")
         return response.json()["world_size"]
 
-    def pause(self) -> None:
+    def pause(self, timeout: int = 1800) -> None:
         """Pause generation while keeping the KV cache warm (`mode=keep`), so weights can be swapped in."""
-        requests.post(f"{self.server_url}/pause", params={"mode": "keep"})
+        response = requests.post(f"{self.server_url}/pause", params={"mode": "keep"}, timeout=timeout)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def resume(self) -> None:
+    def resume(self, timeout: int = 1800) -> None:
         """Resume generation after a weight update."""
-        requests.post(f"{self.server_url}/resume")
+        response = requests.post(f"{self.server_url}/resume", timeout=timeout)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_weight_transfer_engine(self, init_info: dict, timeout: int) -> None:
+    def init_weight_transfer_engine(self, init_info: dict, timeout: int = 1800) -> None:
         """Initialise the server side of the NCCL weight-transfer group."""
-        requests.post(f"{self.server_url}/init_weight_transfer_engine", json={"init_info": init_info}, timeout=timeout)
+        response = requests.post(
+            f"{self.server_url}/init_weight_transfer_engine", json={"init_info": init_info}, timeout=timeout
+        )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def start_weight_update(self, timeout: int = 1800) -> None:
         """Prepare the workers for a weight reload; must complete before any weights are sent."""
-        requests.post(f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": True}, timeout=timeout)
+        response = requests.post(
+            f"{self.server_url}/start_weight_update", json={"is_checkpoint_format": True}, timeout=timeout
+        )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def update_weights(self, update_info: dict, timeout: int = 1800) -> None:
-        """Drive the workers' blocking NCCL recv (call on a thread, concurrently with the trainer-side broadcast)."""
-        requests.post(f"{self.server_url}/update_weights", json={"update_info": update_info}, timeout=timeout)
+        """Drive the workers' blocking NCCL recv; returns once the server has received every chunk."""
+        response = requests.post(
+            f"{self.server_url}/update_weights", json={"update_info": update_info}, timeout=timeout
+        )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def finish_weight_update(self, timeout: int = 1800) -> None:
         """Finalise the weight update on the server."""
-        requests.post(f"{self.server_url}/finish_weight_update", timeout=timeout)
+        response = requests.post(f"{self.server_url}/finish_weight_update", timeout=timeout)
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")

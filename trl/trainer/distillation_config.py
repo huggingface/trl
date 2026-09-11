@@ -35,7 +35,7 @@ class DistillationConfig(_BaseConfig):
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
-            is provided as a string.
+            is provided as a string. The `revision` value is also used when loading the processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
@@ -135,6 +135,10 @@ class DistillationConfig(_BaseConfig):
             forward KL divergence. When `1.0`, the loss is the reverse KL divergence. When `0.5`, it is the standard
             JSD. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the
             divergence itself; there is no reference-model KL penalty.
+        max_tool_calling_iterations (`int`, *optional*):
+            Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_model_length`.
 
         > Parameters that control the logging
 
@@ -174,7 +178,8 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument "
-            "of the trainer is provided as a string."
+            "of the trainer is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
@@ -352,6 +357,14 @@ class DistillationConfig(_BaseConfig):
             "help": "Interpolation coefficient for the Generalized JSD loss. 0.0 = forward KL, 0.5 = JSD, 1.0 = reverse "
             "KL. Unlike GRPO's `beta` (a KL-penalty coefficient against a reference model), here it selects the "
             "divergence itself; there is no reference-model KL penalty."
+        },
+    )
+    max_tool_calling_iterations: int | None = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and "
+            "generation stops when the model generates a response turn with no tool calls or when the total "
+            "response length reaches `max_model_length`."
         },
     )
 

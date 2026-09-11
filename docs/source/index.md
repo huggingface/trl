@@ -12,46 +12,80 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**⚗️ DistillationTrainer is now stable:** [`DistillationTrainer`](distillation_trainer) graduates to the stable API — on-policy knowledge distillation that matches a teacher's full next-token distribution with a memory-efficient chunked JSD loss and vLLM-powered generation.
+**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
 
 ## Taxonomy
 
-Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support; 🧪 = experimental).
+Below is an overview of TRL trainers, organized by maturity and method type.
 
 <div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 <div style="flex: 1; min-width: 0;">
 
-### Online methods
+#### Online methods
 
-- [`GRPOTrainer`](grpo_trainer) ⚡️
-- [`RLOOTrainer`](rloo_trainer) ⚡️
-- [`OnlineDPOTrainer`](online_dpo_trainer) 🧪 ⚡️
-- [`NashMDTrainer`](nash_md_trainer) 🧪 ⚡️
-- [`PPOTrainer`](ppo_trainer) 🧪
-- [`XPOTrainer`](xpo_trainer) 🧪 ⚡️
+- [`GRPOTrainer`](grpo_trainer)
+- [`RLOOTrainer`](rloo_trainer)
 
-### Reward modeling
+#### Reward modeling
 
 - [`RewardTrainer`](reward_trainer)
-- [`PRMTrainer`](prm_trainer) 🧪
 
 </div>
 <div style="flex: 1; min-width: 0;">
 
-### Offline methods
+#### Offline methods
 
 - [`SFTTrainer`](sft_trainer)
 - [`DPOTrainer`](dpo_trainer)
 - [`KTOTrainer`](kto_trainer)
-- [`BCOTrainer`](bco_trainer) 🧪
-- [`CPOTrainer`](cpo_trainer) 🧪
-- [`ORPOTrainer`](orpo_trainer) 🧪
 
-### Knowledge distillation
+#### Knowledge distillation
 
-- [`DistillationTrainer`](distillation_trainer) ⚡️
-- [`GKDTrainer`](gkd_trainer) 🧪
-- [`MiniLLMTrainer`](minillm_trainer) 🧪
+- [`DistillationTrainer`](distillation_trainer)
+
+</div>
+</div>
+
+### Experimental
+
+<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
+<div style="flex: 1; min-width: 0;">
+
+#### Online methods
+
+- [`A2POTrainer`](a2po_trainer)
+- [`AsyncGRPOTrainer`](async_grpo_trainer)
+- [`GMPOTrainer`](gmpo)
+- [GSPO-token](gspo_token)
+- [`NashMDTrainer`](nash_md_trainer)
+- [`OnlineDPOTrainer`](online_dpo_trainer)
+- [`XPOTrainer`](xpo_trainer)
+
+#### Reward modeling
+
+- [`PRMTrainer`](prm_trainer)
+
+</div>
+<div style="flex: 1; min-width: 0;">
+
+#### Offline methods
+
+- [BEMA for Reference Model](bema_for_reference_model)
+- [`BCOTrainer`](bco_trainer)
+- [`CPOTrainer`](cpo_trainer)
+- [`ORPOTrainer`](orpo_trainer)
+- [`TPOTrainer`](tpo_trainer)
+
+#### Knowledge distillation
+
+- [`AsyncDistillationTrainer`](async_distillation_trainer)
+- [`GKDTrainer`](gkd_trainer)
+- [`GOLDTrainer`](gold_trainer)
+- [`IWOPDTrainer`](iw_opd_trainer)
+- [`MiniLLMTrainer`](minillm_trainer)
+- [`SDFTTrainer`](sdft_trainer)
+- [`SDPOTrainer`](sdpo_trainer)
+- [`SSDTrainer`](ssd_trainer)
 
 </div>
 </div>
@@ -77,10 +111,25 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/delta-weight-sync">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/delta-weight-sync/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on May 27, 2026</p>
+      <p class="text-gray-700">Shipping a Trillion Parameters With a Hub Bucket: Delta Weight Sync in TRL</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-v1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl-v1/thumbnail.png" alt="thumbnail" class="mt-0">
-      <p class="text-gray-500 text-sm">Published March 27, 2026</p>
+      <p class="text-gray-500 text-sm">Published on March 31, 2026</p>
       <p class="text-gray-700">TRL v1: Post-Training Library That Holds When the Field Invalidates Its Own Assumptions</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/async-rl-training-landscape">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/async-rl-landscape/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on March 10, 2026</p>
+      <p class="text-gray-700">Keep the Tokens Flowing: Lessons from 16 Open-Source RL Libraries</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/ulysses-sp">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/ulysses/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on March 9, 2026</p>
+      <p class="text-gray-700">Ulysses Sequence Parallelism: Training with Million-Token Contexts</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/openenv">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/openenv/thumbnail.png" alt="thumbnail" class="mt-0">
@@ -116,6 +165,11 @@ The documentation is organized into the following sections:
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/putting_rl_back_in_rlhf_with_rloo/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on June 12, 2024</p>
       <p class="text-gray-700">Putting RL back in RLHF</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/unsloth-trl">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/hf_unsloth/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on January 10, 2024</p>
+      <p class="text-gray-700">Make LLM Fine-tuning 2x faster with Unsloth and 🤗 TRL</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-ddpo">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/166_trl_ddpo/thumbnail.png" alt="thumbnail" class="mt-0">

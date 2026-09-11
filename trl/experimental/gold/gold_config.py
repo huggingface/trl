@@ -22,7 +22,7 @@ from ...trainer.sft_config import SFTConfig
 @dataclass
 class GOLDConfig(SFTConfig):
     r"""
-    Configuration class for [`GOLDTrainer`].
+    Configuration class for [`experimental.gold.GOLDTrainer`].
 
     This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
@@ -54,7 +54,7 @@ class GOLDConfig(SFTConfig):
             revision is used.
         teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
+            from a string. The `revision` value is also used when loading the teacher processing class.
         teacher_tokenizer_name_or_path (`str`, *optional*):
             Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
             the student model (not recommended for cross-tokenizer distillation).
@@ -116,7 +116,7 @@ class GOLDConfig(SFTConfig):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
-            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or `"colocate"`
+            Mode for student vLLM integration. Either `"server"` (connect to a running vLLM server) or `"colocate"`
             (run vLLM in the same process).
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host of the vLLM server for the student model (if `vllm_mode="server"`).
@@ -233,7 +233,7 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "teacher model from a string."
+            "teacher model from a string. The `revision` value is also used when loading the teacher processing class."
         },
     )
     teacher_tokenizer_name_or_path: str | None = field(
@@ -366,7 +366,7 @@ class GOLDConfig(SFTConfig):
     vllm_mode: str = field(
         default="colocate",
         metadata={
-            "help": 'Mode for vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+            "help": 'Mode for vLLM integration. Either "server" (connect to a running vLLM server) or "colocate" (run vLLM in the same process).'
         },
     )
     vllm_server_base_url: str | None = field(
