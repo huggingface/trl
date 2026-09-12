@@ -29,6 +29,12 @@ class TestGMPOConfig:
         # epsilon_high is inherited from GRPOConfig and defaults to None, so the range is symmetric.
         assert args.epsilon_high is None
 
+    def test_default_loss_type_is_grpo(self):
+        # GMPO always uses per-sequence-mean / grad-accum normalization, so loss_type should default to "grpo"
+        # rather than inheriting the parent's "dapo" default, which would be misleading.
+        args = GMPOConfig("dummy")
+        assert args.loss_type == "grpo"
+
 
 class TestGMPOTrainer(TrlTestCase):
     def test_train(self):
