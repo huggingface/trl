@@ -58,7 +58,7 @@ from `release-v{major}.{minor}` to `main`, named `Release: v{major}.{minor}`, wa
 
 ### 6. Once the pull request is approved, merge it into `main`
 
-It will automatically publish the new version of the package on PyPI.
+Merging does not publish anything. The package is published by the tag pushed in the next step.
 
 ### 7. Add a tag in git to mark the release
 
@@ -68,6 +68,8 @@ git pull origin main
 git tag -a v{major}.{minor}.0 -m 'Adds tag v{major}.{minor}.0 for PyPI'
 git push origin v{major}.{minor}.0
 ```
+
+Pushing the tag triggers the publish workflow, which uploads the package to PyPI. It refuses to upload unless `VERSION` in the tagged commit is exactly `{major}.{minor}.0`, so tag the release commit: do this before the dev bump of step 10.
 
 ### 8. Create a branch `v{major}.{minor}-release` for future patch releases
 
@@ -102,6 +104,8 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
    - {major}.{minor}.0
    + {major}.{minor+1}.0.dev0
    ```
+
+   The `.dev0` suffix is mandatory. CI rejects a pull request that replaces a release version with another release version: dropping the suffix here is what published the empty `v1.12.0` to PyPI.
 
 3. Commit and push these changes
 
@@ -150,21 +154,19 @@ git commit -m 'Release: {major}.{minor}.{patch}'
 git push origin v{major}.{minor}-release
 ```
 
-### 5. Wait for the CI to pass
-
-The CI will automatically publish the new version of the package on PyPI.
-
-### 6. Add a tag in git to mark the release
+### 5. Add a tag in git to mark the release
 
 ```shell
 git tag -a v{major}.{minor}.{patch} -m 'Adds tag v{major}.{minor}.{patch} for PyPI'
 git push origin v{major}.{minor}.{patch}
 ```
 
-### 7. Create a GitHub Release
+Pushing the tag triggers the publish workflow, which uploads the package to PyPI. It refuses to upload unless `VERSION` in the tagged commit is exactly `{major}.{minor}.{patch}`.
+
+### 6. Create a GitHub Release
 
 1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
 2. Click **Draft a new release**.
-3. Select the `v{major}.{minor}.{patch}` tag you just created in step 6.
+3. Select the `v{major}.{minor}.{patch}` tag you just created in step 5.
 4. Add a title (`v{major}.{minor}.{patch}`) and a short description of what’s new.
 5. Click **Publish Release**.
