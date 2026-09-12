@@ -151,13 +151,6 @@ class OffloadActivations(saved_tensors_hooks):
         self.accelerator_type = (
             torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
         )
-        # NOTE: xpu doesn't have `default_stream` API, use `current_stream` instead
-        if self.accelerator_type == "xpu":  # comp stream
-            self.s0 = torch.xpu.current_stream()
-        elif is_torch_npu_available() and self.accelerator_type == "npu":
-            self.s0 = torch.npu.current_stream()
-        else:
-            self.s0 = torch.cuda.default_stream()
 
         # For streaming
         if self.use_streams:
@@ -270,6 +263,21 @@ class OffloadActivations(saved_tensors_hooks):
                 pass
 
             # Tensor qualifies for offloading
+            # Check if tensor has broadcast dimensions (stride == 0)
+            # If so, copy the underlying storage directly instead of materializing the broadcast
+            has_broadcast = 0 in activation.stride()
+
+            # No broadcast - use normal contiguous copy
+            # .contiguous() can be a no-op for contiguous views with
+            # non-zero storage_offset. Force a clone for those views
+            # so later as_strided reconstruction stays in bounds.
+            # Done on the compute stream, before `wait_stream` below, so that wait also covers this clone.
+            if not has_broadcast and (not activation.is_contiguous() or activation.storage_offset() != 0):
+                if activation.storage_offset() != 0:
+                    activation = activation.clone(memory_format=torch.contiguous_format)
+                else:
+                    activation = activation.contiguous()
+
             if self.use_streams:
                 # First, sync back and dereference previously offloaded tensors
                 # as the offloading should be done sufficiently long ago.
@@ -285,6 +293,11 @@ class OffloadActivations(saved_tensors_hooks):
                 # Sync in, offload, and add an event to sync back later
                 self.s1.wait_stream(self.s0)
 
+            # Save original stride and shape information
+            original_stride = activation.stride()
+            original_storage_offset = activation.storage_offset()
+            original_shape = activation.size()
+
             stream = self.s1 if self.use_streams else self.s0
             if self.accelerator_type == "xpu":
                 stream_ctx = torch.xpu.stream(stream)
@@ -293,15 +306,6 @@ class OffloadActivations(saved_tensors_hooks):
             else:
                 stream_ctx = torch.cuda.stream(stream)
             with stream_ctx:
-                # Save original stride and shape information
-                original_stride = activation.stride()
-                original_storage_offset = activation.storage_offset()
-                original_shape = activation.size()
-
-                # Check if tensor has broadcast dimensions (stride == 0)
-                # If so, copy the underlying storage directly instead of materializing the broadcast
-                has_broadcast = 0 in original_stride
-
                 if has_broadcast:
                     # Copy only the actual underlying storage, not the materialized broadcast
                     # Create CPU tensor with same storage size as original
@@ -319,17 +323,6 @@ class OffloadActivations(saved_tensors_hooks):
                     cpu_storage.copy_(cpu_storage_view, non_blocking=True)
                     cpu_tensor = cpu_storage
                 else:
-                    # No broadcast - use normal contiguous copy
-                    # .contiguous() can be a no-op for contiguous views with
-                    # non-zero storage_offset. Force a clone for those views
-                    # so later as_strided reconstruction stays in bounds.
-                    if not activation.is_contiguous() or activation.storage_offset() != 0:
-                        if activation.storage_offset() != 0:
-                            activation = activation.clone(memory_format=torch.contiguous_format)
-                        else:
-                            activation = activation.contiguous()
-                        original_stride = activation.stride()
-                        original_storage_offset = activation.storage_offset()
                     cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                     cpu_tensor.copy_(activation, non_blocking=True)
 
@@ -555,6 +548,16 @@ class OffloadActivations(saved_tensors_hooks):
 
         unpack_tensor = unpack_tensor_with_streams if self.use_streams else unpack_tensor_single_stream
         super().__init__(pack_tensor, unpack_tensor)
+
+    @property
+    def s0(self) -> torch.Stream:
+        # Compute stream. Queried live, not cached: under FSDP2, checkpoint recompute, or a custom autograd
+        # Function, the current stream when packing/unpacking may differ from the one at construction time.
+        if self.accelerator_type == "xpu":
+            return torch.xpu.current_stream()
+        elif is_torch_npu_available() and self.accelerator_type == "npu":
+            return torch.npu.current_stream()
+        return torch.cuda.current_stream()
 
     def update_model_params(self, model: nn.Module):
         """
