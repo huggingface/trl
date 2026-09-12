@@ -330,16 +330,27 @@ class MiniLLMTrainer(GRPOTrainer):
         rewards = teacher_log_probs_on_labels - student_log_probs_on_labels  # (batch_size, sequence_length)
 
         if self.gamma > 0.0:
-            gamma_pow = torch.pow(self.gamma, torch.arange(response_length, device=rewards.device))
+            # advantages_t = sum_{i>=t} gamma^(i-t) R_i. Weighting the rewards by gamma^i (the absolute index) and
+            # reverse-cumsumming scaled every advantage by an extra gamma^t, and gamma^i underflowed to 0.0 in float32
+            # on long completions, giving 0/0 = nan under length normalization (issue #6626). A discount matrix
+            # D[i, t] = gamma^(i-t) for i >= t needs no division: a far-apart pair underflows to 0, which is its true
+            # size, and the sum is one matmul. D holds T x T values, 64 MB in float32 for a 4096-token completion, and
+            # the lag, its clamp and the powers each hold another T x T while D is built, so the peak is a few times that.
+            # Building the positions in the working dtype keeps every intermediate at that size rather than int64.
+            # `compute_loss` runs under the trainer's autocast context when mixed precision is on, and a matmul is
+            # autocast-eligible, so without disabling it here the sum would come back in bfloat16 or float16 with the
+            # rounding the float32 promotion was meant to avoid.
+            dtype = torch.promote_types(rewards.dtype, torch.float32)
+            with torch.autocast(device_type=rewards.device.type, enabled=False):
+                positions = torch.arange(response_length, device=rewards.device, dtype=dtype)
+                lag = (positions[:, None] - positions[None, :]).clamp(min=0)
+                discount = torch.tril(torch.pow(self.gamma, lag))
+                advantages = rewards.to(dtype) @ discount
 
-            advantages = rewards * gamma_pow
-            advantages = advantages.flip(1).cumsum(dim=1).flip(1)
-
-            if self.length_normalization:
-                mask = torch.where(mask < 0.5, 1e-4, mask)
-                lengths = mask * gamma_pow
-                lengths = lengths.flip(1).cumsum(dim=1).flip(1)
-                advantages = advantages / lengths
+                if self.length_normalization:
+                    mask = torch.where(mask < 0.5, 1e-4, mask)
+                    lengths = mask.to(dtype) @ discount
+                    advantages = advantages / lengths
         else:
             advantages = rewards
 
