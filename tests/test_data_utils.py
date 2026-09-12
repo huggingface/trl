@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import textwrap
 from time import strftime
 
@@ -33,7 +32,6 @@ from trl.data_utils import (
     maybe_unpair_preference_dataset,
     pack_dataset,
     prepare_multimodal_messages,
-    prepare_multimodal_messages_vllm,
     unpair_preference_dataset,
 )
 
@@ -266,98 +264,6 @@ class TestPrepareMultimodalMessages:
         ]
 
         assert messages == expected
-
-
-@require_vision
-class TestPrepareMultimodalMessagesVLLM:
-    def test_single_image_conversion(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                    {"type": "text", "text": "What color is the sky?"},
-                ],
-            }
-        ]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        # Original should remain unchanged (deepcopy test)
-        assert messages[0]["content"][0]["type"] == "image"
-
-        # Converted version should have correct structure
-        assert result[0]["content"][0]["type"] == "image_pil"
-        assert "image_pil" in result[0]["content"][0]
-        assert "image" not in result[0]["content"][0]
-        assert isinstance(result[0]["content"][0]["image_pil"], Image.Image)
-        assert result[0]["content"][1]["type"] == "text"
-
-    def test_mixed_content_conversion(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What color is the sky?"},
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                ],
-            }
-        ]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        # The image part should be converted, text should be unchanged
-        assert result[0]["content"][0]["type"] == "text"
-        assert result[0]["content"][1]["type"] == "image_pil"
-
-    def test_no_images(self):
-        messages = [{"role": "user", "content": [{"type": "text", "text": "What color is the sky?"}]}]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        # Should be identical since there are no images
-        assert result == messages
-        # And a deepcopy — not the same object
-        assert result is not messages
-        assert result[0] is not messages[0]
-
-    def test_multiple_messages(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What color is the sky?"},
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "It is blue."}],
-            },
-        ]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        assert result[0]["content"][1]["type"] == "image_pil"
-        assert result[1]["content"][0]["type"] == "text"
-        assert result[1]["content"][0]["text"] == "It is blue."
-
-    def test_deepcopy_integrity(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What color is the sky?"},
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                ],
-            },
-        ]
-        original = copy.deepcopy(messages)
-
-        _ = prepare_multimodal_messages_vllm(messages)
-
-        # Original should not be mutated
-        assert messages == original
 
 
 class TestIsConversational(TrlTestCase):
