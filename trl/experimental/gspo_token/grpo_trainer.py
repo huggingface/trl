@@ -143,10 +143,24 @@ class GRPOTrainer(_GRPOTrainer):
             totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
             return (totals[0] / totals[1].clamp(min=1.0)).item()
 
+        loss_metrics = {"entropy": global_masked_mean(entropies)}
         if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(global_masked_mean(per_token_kl))
+            loss_metrics["kl"] = global_masked_mean(per_token_kl)
 
-        self._metrics[mode]["entropy"].append(global_masked_mean(entropies))
+        # In training, each value is a micro-batch mean whose contribution to the optimizer-window loss is scaled by
+        # the current accumulation-window size. Sum those contributions and append one value per optimizer window so
+        # short final windows have the same weight as full windows when `log` averages the entries. Evaluation has no
+        # accumulation, so its per-batch logging stays unchanged.
+        if mode == "train":
+            for name, value in loss_metrics.items():
+                self._loss_window_metrics[name] += value / self.current_gradient_accumulation_steps
+            if self.accelerator.sync_gradients:
+                for name, value in self._loss_window_metrics.items():
+                    self._metrics[mode][name].append(value)
+                self._loss_window_metrics.clear()
+        else:
+            for name, value in loss_metrics.items():
+                self._metrics[mode][name].append(value)
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
