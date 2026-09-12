@@ -16,6 +16,7 @@ import json
 import os
 from unittest.mock import call, patch
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
@@ -236,3 +237,35 @@ class TestBEMACallback(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+    def test_frozen_parameters(self):
+        """Test that BEMACallback writes the BEMA weights to the right parameters when some are frozen."""
+        self.model.model.embed_tokens.weight.requires_grad_(False)
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=1)
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()
+
+        # Total 9 steps, updated at every step: the running model must hold the BEMA weights of the last update for
+        # each trainable parameter, matched by name, and the frozen parameter must be left untouched.
+        running_params = dict(bema_callback.running_model.named_parameters())
+        alpha = bema_callback._bema_alpha(9)
+        for name, thetat, theta0, ema in zip(
+            bema_callback.param_names,
+            bema_callback.thetat_params,
+            bema_callback.theta0_params,
+            bema_callback.ema_params,
+            strict=True,
+        ):
+            torch.testing.assert_close(
+                running_params[name], ema + alpha * (thetat.detach() - theta0), check_dtype=False
+            )
+        torch.testing.assert_close(
+            running_params["model.embed_tokens.weight"], self.model.model.embed_tokens.weight, check_dtype=False
+        )
