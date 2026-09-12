@@ -89,12 +89,15 @@ if __name__ == "__main__":
 
     if training_args.teacher_tokenizer_name_or_path is None and training_args.use_uld_loss:
         training_args.teacher_tokenizer_name_or_path = training_args.teacher_model_name_or_path
+
+    # The teacher is deliberately left unquantized: quantizing it degrades the reference distribution the student is
+    # trained to match. To quantize it anyway, override the default below with
+    # `--teacher_model_init_kwargs '{"quantization_config": {...}}'`.
     teacher_model_kwargs = dict(
         revision=training_args.teacher_model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=True,
-        quantization_config=quantization_config,
     )
     if training_args.teacher_model_init_kwargs is not None:
         teacher_model_kwargs.update(training_args.teacher_model_init_kwargs)
