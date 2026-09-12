@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import contextlib
-import copy
 import os
 import time
 from collections import defaultdict, deque
@@ -35,11 +34,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.distributed.configuration_utils import DistributedConfig
-from transformers.distributed.tensor_parallel import (
-    ALL_PARALLEL_STYLES,
-    _get_parameter_tp_plan,
-    _use_local_dtensor_params,
-)
+from transformers.distributed.tensor_parallel import _use_local_dtensor_params
 from transformers.generation import ContinuousBatchingConfig
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
@@ -65,11 +60,10 @@ class TurnRecord:
 def _chain_to_sequences(turns: list[TurnRecord]) -> tuple[list[dict[str, Any]], int]:
     """Reconcile one conversation's turns (in order) into training rows; fork when the tokens drift.
 
-    Every turn renders the full conversation through the chat template, so a template that rewrites
-    history (dropped reasoning, summarized turns) re-tokenizes previously generated tokens differently.
-    A turn continues the current row only if its prompt still starts with every token held so far; a
-    single changed token forks a new row, so trained tokens are never silently rewritten as context.
-    Returns the rows and the number of forks.
+    Every turn renders the full conversation through the chat template, so a template that rewrites history (dropped
+    reasoning, summarized turns) re-tokenizes previously generated tokens differently. A turn continues the current row
+    only if its prompt still starts with every token held so far; a single changed token forks a new row, so trained
+    tokens are never silently rewritten as context. Returns the rows and the number of forks.
     """
     rows: list[dict[str, Any]] = []
     forks = 0
@@ -94,9 +88,9 @@ def _compute_on_local_view(module):
     A replicated parameter is still a DTensor, and an op mixing one with a plain tensor raises. Keeping it a DTensor
     matters because gradient clipping cannot mix the two kinds either, so the unwrapping happens here instead. It
     covers the descendants because a module does not always read its parameters through its own forward: the gated
-    delta net convolves with `self.conv1d.weight` itself, so unwrapping the convolution alone would never fire. And
-    it is a forward wrapper rather than one context around the step, because gradient checkpointing replays these
-    forwards during the backward pass.
+    delta net convolves with `self.conv1d.weight` itself, so unwrapping the convolution alone would never fire. And it
+    is a forward wrapper rather than one context around the step, because gradient checkpointing replays these forwards
+    during the backward pass.
     """
     original = type(module).forward
     replicated = [
@@ -148,15 +142,15 @@ class _SharedPromptStream:
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
     """
-    Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and
-    training share ONE copy of the weights: a transformers continuous batching manager generates from the same
-    parameter tensors the optimizer updates in place, so there is no second engine, no weight synchronization and no
-    generation/training memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of
-    the completions and are used as the old policy in the clipped loss.
+    Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and training
+    share ONE copy of the weights: a transformers continuous batching manager generates from the same parameter tensors
+    the optimizer updates in place, so there is no second engine, no weight synchronization and no generation/training
+    memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of the completions and
+    are used as the old policy in the clipped loss.
 
     Generation and training take turns on those weights. Prompts are submitted to the engine continuously, each
-    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands,
-    and a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
+    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands, and
+    a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
     forward, backward and optimizer step and resumes where it left off, its in-flight requests intact. A slow group
     never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a
     bounded number of optimizer steps; the measured logprob gap this introduces is small and concentrated in each
@@ -198,9 +192,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             - A [`~transformers.PreTrainedModel`] object.
         reward_funcs (`Callable` or `list[Callable]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. The functions are provided with one
-            group's prompts, completions and completion ids, plus any additional columns in the dataset, and must
-            return a list of floats (or `None` for samples the function does not apply to).
+            functions with the prompts and completions and sum the rewards. The functions are provided with one group's
+            prompts, completions and completion ids, plus any additional columns in the dataset, and must return a list
+            of floats (or `None` for samples the function does not apply to).
         args ([`~trl.experimental.zero_sync_grpo.ZeroSyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -210,14 +204,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         eval_dataset ([`~datasets.Dataset`], *optional*):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If `None`, the processing class is loaded from the model's
-            name with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's
-            tokenizer is used; only text-only data is supported.
+            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
+            with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's tokenizer
+            is used; only text-only data is supported.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
-            None)`):
-            A tuple containing the optimizer and the scheduler to use.
+            None)`): A tuple containing the optimizer and the scheduler to use.
     """
 
     _tag_names = ["trl", "zero-sync-grpo"]
@@ -339,9 +332,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in ranks]
             self._replica_group = groups[rank % args.tp_size]
             self._replica_cpu_group = cpu_groups[rank % args.tp_size]
-        # The engine decodes through a second view of the model (built in `_init_manager`); the trainer pauses it for
-        # the duration of its own step, see `_pause_generation`.
-        self._generation_view = None
+        # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
+        # step, see `_pause_generation`.
         self._pause = None
         self._request_counter = 0
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
@@ -505,52 +497,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._manager.stop(block=True, timeout=30, hard_stop=True)
                 self._manager = None
 
-    def _make_generation_view(self, model):
-        """A second view of the model for the engine to decode through, over the same parameters.
-
-        `init_continuous_batching` switches a model to a paged attention implementation, which is written for the
-        packed inputs the engine prepares and raises on the training forward. The switch is a setting on the config,
-        shared by every module and read by the engine thread at every step, so flipping it around each training
-        forward is fragile. Giving the engine its own view, with its own config, means the switch never has to happen.
-        The view shares every parameter, so an optimizer step is what the engine decodes from, and it costs no extra
-        memory: only the module objects and the config are copied.
-        """
-
-        # The deepcopy memo maps every original config object to its copy, sub-configs included, so each module
-        # of the view keeps the same config it held on the model (composite models give their text and vision
-        # submodels their own sub-configs).
-        memo: dict[int, Any] = {}
-        copy.deepcopy(model.config, memo)
-
-        def clone(module):
-            copied = copy.copy(module)
-            copied._parameters = dict(module._parameters)
-            copied._buffers = dict(module._buffers)
-            copied._modules = {name: clone(child) for name, child in module._modules.items()}
-            # Fresh hook containers: a shallow copy shares them, so the hooks that advance generation would fire
-            # again inside the engine's own forward.
-            for attribute, value in list(copied.__dict__.items()):
-                if attribute.endswith(("_hooks", "_hooks_with_kwargs")):
-                    copied.__dict__[attribute] = type(value)()
-            copied.__dict__.pop("forward", None)  # the tensor parallel forward is reinstalled below
-            if hasattr(copied, "config"):
-                copied.config = memo.get(id(module.config), module.config)
-            return copied
-
-        view = clone(model)
-        for name, module in view.named_modules():
-            style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan or {}, is_weight=False)
-            # Replicated parameters are DTensors too, and a transform that splits their input would be wrong.
-            sharded = any(
-                isinstance(param, DTensor) and any(not isinstance(p, Replicate) for p in param.placements)
-                for param in module.parameters(recurse=False)
-            )
-            if style is not None and style in ALL_PARALLEL_STYLES and sharded:
-                ALL_PARALLEL_STYLES[style].install_forward(module, model._device_mesh)
-            elif any(isinstance(param, DTensor) for param in module.parameters(recurse=False)):
-                _compute_on_local_view(module)
-        return view
-
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
         # optimizer updates in place.
@@ -574,13 +520,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # the training collectives run, so captured and eager collectives are never in flight together and the
             # NCCL default, which is also the safe setting, can stay.
             cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
-        # The engine decodes in its own thread through its own view of the model, and the trainer pauses it for its
-        # step (`_pause_generation`): the engine waits for its in-flight step on the device before it reports itself
-        # paused, so the forward and backward have the device to themselves. Under tensor parallelism this is also
-        # what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the operations on its
-        # communicators in the same host-side order.
-        self._generation_view = self._make_generation_view(model)
-        self._manager = self._generation_view.init_continuous_batching(
+        # The engine decodes in its own thread, from the very tensors the optimizer updates, and the trainer pauses
+        # it for its step (`_pause_generation`): the engine waits for its in-flight step on the device before it
+        # reports itself paused, so the forward and backward have the device to themselves. Under tensor parallelism
+        # this is also what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the
+        # operations on its communicators in the same host-side order.
+        self._manager = model.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
         )
@@ -626,9 +571,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         A decode step costs about the same whatever number of sequences it carries: it reads the whole model and pays
         the per-layer all-reduces either way. Letting the batch drain between optimizer steps and refill in one burst
-        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free
-        rather than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so
-        the members of a group already see more than one version of the policy.
+        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free rather
+        than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so the
+        members of a group already see more than one version of the policy.
         """
         while len(self._inflight) < self.rollouts_in_flight and self._pending:
             rollout = self._pending.popleft()
@@ -650,10 +595,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def _pause_generation(self, mode: str) -> None:
         """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
 
-        Generation and training take turns: the forward, backward and optimizer step get the device to themselves,
-        and under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the
-        pause at the same step on every rank of a tensor parallel group, whichever rank asked first, so once it is
-        granted every rank of the group holds the same completions; what each rank had read by then can differ.
+        Generation and training take turns: the forward, backward and optimizer step get the device to themselves, and
+        under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the pause
+        at the same step on every rank of a tensor parallel group, whichever rank asked first, so once it is granted
+        every rank of the group holds the same completions; what each rank had read by then can differ.
         """
         if self._pause is not None:
             return
@@ -801,9 +746,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def _take_from_pool(self, num_samples: int) -> list[dict[str, Any]]:
         """Hand this replica its share of the samples every replica has ready.
 
-        A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built
-        for balance instead of for locality, so the replicas reach their forward together and carry the same load.
-        Every rank runs the same assignment over the same pool, so no one has to be told the result.
+        A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built for
+        balance instead of for locality, so the replicas reach their forward together and carry the same load. Every
+        rank runs the same assignment over the same pool, so no one has to be told the result.
         """
         pool: list[Any] = [None] * self.dp_size
         torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
@@ -995,12 +940,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def create_optimizer(self, model=None):
         """Give each replica the optimizer state of only its share of the parameters.
 
-        Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The
-        replicas split the parameters between them, each updates its own share, and passes the result back to the
-        others. The parameters themselves stay whole everywhere, which is what generation reads.
+        Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The replicas
+        split the parameters between them, each updates its own share, and passes the result back to the others. The
+        parameters themselves stay whole everywhere, which is what generation reads.
 
-        Measured on a 14B at tp=4 with two replicas: 9.2 GiB less per GPU at the peak, and the step itself takes
-        half as long, since each replica now updates half the parameters.
+        Measured on a 14B at tp=4 with two replicas: 9.2 GiB less per GPU at the peak, and the step itself takes half
+        as long, since each replica now updates half the parameters.
         """
         if self._replica_group is None or self.optimizer is not None:
             return super().create_optimizer(model)
