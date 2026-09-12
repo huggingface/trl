@@ -14,6 +14,7 @@
 
 import asyncio
 import enum
+import functools
 import inspect
 import multiprocessing as mp
 import os
@@ -26,6 +27,7 @@ import uuid
 import warnings
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
@@ -443,10 +445,8 @@ class _AsyncRolloutLoop:
                 "defines a `get_reward` method."
             )
 
-        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
-        for tool in self.tools:
-            if inspect.iscoroutinefunction(tool):
-                raise ValueError("Asynchronous tools are not supported yet.")
+        # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
+        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_inflight_tasks), thread_name_prefix="grpo-tool")
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -900,7 +900,7 @@ class _AsyncRolloutLoop:
                 # it had finished, so this is a silent truncation — hence the metric.
                 loop_exhausted = True
                 break
-            tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
+            tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
@@ -918,9 +918,10 @@ class _AsyncRolloutLoop:
         )
         return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 
-    def _execute_tool_calls(
+    async def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
     ) -> tuple[list[dict[str, str]], int, int]:
+        loop = asyncio.get_running_loop()
         tool_messages = []
         n_calls = 0
         n_failures = 0
@@ -938,12 +939,13 @@ class _AsyncRolloutLoop:
                 self._counters[f"tools/{name}_failure_total"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
-            # Tools run SYNCHRONOUSLY inside the asyncio loop, so a slow one stalls every concurrent rollout, not just
-            # this one. That failure mode is otherwise only visible as an unattributed drop in generation throughput.
             t0 = time.monotonic()
             try:
                 arguments = function.get("arguments", {})
-                result = tool(**arguments)
+                if inspect.iscoroutinefunction(tool):
+                    result = await tool(**arguments)
+                else:
+                    result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
                 self._counters[f"tools/{name}_failure_total"] += 1

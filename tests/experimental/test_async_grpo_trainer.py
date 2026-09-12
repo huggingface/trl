@@ -1149,8 +1149,11 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     async def _generate_one_turn(prompt_ids):
         return tq.pop(0)
 
+    async def _execute_tool_calls(tool_calls, tool_dict):
+        return [{"role": "tool", "name": "t", "content": "ok"}], 1, 0
+
     loop._generate_one_turn = _generate_one_turn
-    loop._execute_tool_calls = lambda tool_calls, tool_dict: ([{"role": "tool", "name": "t", "content": "ok"}], 1, 0)
+    loop._execute_tool_calls = _execute_tool_calls
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
     return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
