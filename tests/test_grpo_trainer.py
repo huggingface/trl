@@ -1006,6 +1006,25 @@ class TestGRPOTrainer(TrlTestCase):
                 peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
             )
 
+    @require_liger_kernel
+    def test_init_fails_with_moe_aux_loss_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+
+        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     @require_peft
     def test_train_peft_model(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
