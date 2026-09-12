@@ -1331,6 +1331,21 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 ```
 
+### Reducing Activation Recomputation in Large Transformer Models
+
+**📜 Paper**: https://huggingface.co/papers/2205.05198
+
+Full activation checkpointing recomputes every op in a checkpointed region during backward, including attention, even though only a few ops (attention among them) account for most of the recomputation cost relative to the memory they'd cost to keep. The paper's selective activation recomputation checkpoints only those expensive ops instead of the whole region. TRL implements this as selective activation checkpointing (SAC) for [`SFTTrainer`], saving the attention output during the forward pass so backward does not recompute it:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    gradient_checkpointing=True,
+    selective_activation_checkpointing=True,
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
