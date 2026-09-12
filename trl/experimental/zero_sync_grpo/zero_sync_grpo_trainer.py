@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import contextlib
-import copy
 import os
 import time
 from collections import defaultdict, deque
@@ -35,11 +34,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.distributed.configuration_utils import DistributedConfig
-from transformers.distributed.tensor_parallel import (
-    ALL_PARALLEL_STYLES,
-    _get_parameter_tp_plan,
-    _use_local_dtensor_params,
-)
+from transformers.distributed.tensor_parallel import _use_local_dtensor_params
 from transformers.generation import ContinuousBatchingConfig
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
@@ -339,9 +334,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in ranks]
             self._replica_group = groups[rank % args.tp_size]
             self._replica_cpu_group = cpu_groups[rank % args.tp_size]
-        # The engine decodes through a second view of the model (built in `_init_manager`); the trainer pauses it for
-        # the duration of its own step, see `_pause_generation`.
-        self._generation_view = None
+        # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
+        # step, see `_pause_generation`.
         self._pause = None
         self._request_counter = 0
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
@@ -505,52 +499,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._manager.stop(block=True, timeout=30, hard_stop=True)
                 self._manager = None
 
-    def _make_generation_view(self, model):
-        """A second view of the model for the engine to decode through, over the same parameters.
-
-        `init_continuous_batching` switches a model to a paged attention implementation, which is written for the
-        packed inputs the engine prepares and raises on the training forward. The switch is a setting on the config,
-        shared by every module and read by the engine thread at every step, so flipping it around each training
-        forward is fragile. Giving the engine its own view, with its own config, means the switch never has to happen.
-        The view shares every parameter, so an optimizer step is what the engine decodes from, and it costs no extra
-        memory: only the module objects and the config are copied.
-        """
-
-        # The deepcopy memo maps every original config object to its copy, sub-configs included, so each module
-        # of the view keeps the same config it held on the model (composite models give their text and vision
-        # submodels their own sub-configs).
-        memo: dict[int, Any] = {}
-        copy.deepcopy(model.config, memo)
-
-        def clone(module):
-            copied = copy.copy(module)
-            copied._parameters = dict(module._parameters)
-            copied._buffers = dict(module._buffers)
-            copied._modules = {name: clone(child) for name, child in module._modules.items()}
-            # Fresh hook containers: a shallow copy shares them, so the hooks that advance generation would fire
-            # again inside the engine's own forward.
-            for attribute, value in list(copied.__dict__.items()):
-                if attribute.endswith(("_hooks", "_hooks_with_kwargs")):
-                    copied.__dict__[attribute] = type(value)()
-            copied.__dict__.pop("forward", None)  # the tensor parallel forward is reinstalled below
-            if hasattr(copied, "config"):
-                copied.config = memo.get(id(module.config), module.config)
-            return copied
-
-        view = clone(model)
-        for name, module in view.named_modules():
-            style = _get_parameter_tp_plan(parameter_name=name, tp_plan=model.tp_plan or {}, is_weight=False)
-            # Replicated parameters are DTensors too, and a transform that splits their input would be wrong.
-            sharded = any(
-                isinstance(param, DTensor) and any(not isinstance(p, Replicate) for p in param.placements)
-                for param in module.parameters(recurse=False)
-            )
-            if style is not None and style in ALL_PARALLEL_STYLES and sharded:
-                ALL_PARALLEL_STYLES[style].install_forward(module, model._device_mesh)
-            elif any(isinstance(param, DTensor) for param in module.parameters(recurse=False)):
-                _compute_on_local_view(module)
-        return view
-
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
         # optimizer updates in place.
@@ -574,13 +522,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # the training collectives run, so captured and eager collectives are never in flight together and the
             # NCCL default, which is also the safe setting, can stay.
             cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
-        # The engine decodes in its own thread through its own view of the model, and the trainer pauses it for its
-        # step (`_pause_generation`): the engine waits for its in-flight step on the device before it reports itself
-        # paused, so the forward and backward have the device to themselves. Under tensor parallelism this is also
-        # what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the operations on its
-        # communicators in the same host-side order.
-        self._generation_view = self._make_generation_view(model)
-        self._manager = self._generation_view.init_continuous_batching(
+        # The engine decodes in its own thread, from the very tensors the optimizer updates, and the trainer pauses
+        # it for its step (`_pause_generation`): the engine waits for its in-flight step on the device before it
+        # reports itself paused, so the forward and backward have the device to themselves. Under tensor parallelism
+        # this is also what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the
+        # operations on its communicators in the same host-side order.
+        self._manager = model.init_continuous_batching(
             generation_config=generation_config,
             continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
         )
