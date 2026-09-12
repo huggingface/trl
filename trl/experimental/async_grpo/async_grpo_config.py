@@ -21,7 +21,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class AsyncGRPOConfig(_BaseConfig):
     r"""
-    Configuration class for the [`AsyncGRPOTrainer`].
+    Configuration class for the [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     This class includes only the parameters that are specific to asynchronous GRPO training. For a full list of
     training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values
@@ -32,7 +32,7 @@ class AsyncGRPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            model from a path.
+            model from a path. The `revision` value is also used when loading the processing class.
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
             to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
@@ -94,6 +94,9 @@ class AsyncGRPOConfig(_BaseConfig):
             Total timeout duration in seconds to wait for the vLLM server to be ready.
         request_timeout (`int`, *optional*, defaults to `600`):
             Timeout in seconds for individual HTTP requests to the vLLM server.
+        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
+            Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete within this
+            time raises instead of hanging the run.
 
         > Parameters that control the training
 
@@ -161,14 +164,14 @@ class AsyncGRPOConfig(_BaseConfig):
     >   decaying schedule together with an explicit `max_steps`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
-            "the model from a path."
+            "the model from a path. The `revision` value is also used when loading the processing class."
         },
     )
     dtype: str = field(
@@ -267,7 +270,7 @@ class AsyncGRPOConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -307,6 +310,13 @@ class AsyncGRPOConfig(_BaseConfig):
     request_timeout: int = field(
         default=600,
         metadata={"help": "Timeout in seconds for individual HTTP requests to the vLLM server."},
+    )
+    weight_sync_timeout: int = field(
+        default=1800,
+        metadata={
+            "help": "Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete "
+            "within this time raises instead of hanging the run."
+        },
     )
 
     # Parameters that control the training

@@ -23,7 +23,7 @@
 
 """
 # Full training
-```
+```bash
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -40,7 +40,7 @@ python trl/scripts/sft.py \
 ```
 
 # LoRA
-```
+```bash
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \

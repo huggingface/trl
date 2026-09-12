@@ -78,11 +78,11 @@ TRL implements packing using **Best-Fit Decreasing (BFD)** bin packing, which gr
 
 TRL supports three strategies:
 
-* `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
+- `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
 
-* `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
+- `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
 
-* `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
+- `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
 
 > [!NOTE]
 > If all sequences are shorter than `max_length`, **`bfd` and `bfd_split` behave identically**, since no truncation or splitting is required.
@@ -208,6 +208,9 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 <hfoptions id="padding-free">
 <hfoption id="DPO">
 
+> [!WARNING]
+> Padding-free is temporarily unavailable in [`DPOTrainer`]: since the DPO refactor, setting `padding_free=True` warns and falls back to standard padding. It is planned to return in a future update.
+
 ```python
 from trl import DPOConfig
 
@@ -291,15 +294,6 @@ training_args = GRPOConfig(..., ds3_gather_for_generation=False)
 from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
-```
-
-</hfoption>
-<hfoption id="PPO">
-
-```python
-from trl.experimental.ppo import PPOConfig
-
-training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```
 
 </hfoption>
