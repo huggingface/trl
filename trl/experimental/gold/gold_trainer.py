@@ -191,11 +191,14 @@ def build_teacher_inputs_from_texts(
 
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
-    backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
     if use_extended_uld:
-        completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+        # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
+        # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
+        completion_encs = encode_with_byte_offsets(
+            tokenizer.backend_tokenizer, completion_texts, add_special_tokens=False
+        )
     else:
         completion_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
         completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
@@ -2077,7 +2080,6 @@ class GOLDTrainer(SFTTrainer):
                 """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
                 text.
                 """
-                backend = processing_class.backend_tokenizer
                 result = {}
 
                 if "prompt" in example:  # prompt-completion case
@@ -2159,8 +2161,11 @@ class GOLDTrainer(SFTTrainer):
                 if use_extended_uld:
                     # Single backend call: ids and char-derived byte offsets from the same encoding,
                     # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                    backend = processing_class.backend_tokenizer
                     [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
                     prompt_byte_len = len(prompt_text.encode("utf-8"))
+                    # A token straddling the boundary is pulled into the completion here: extended ULD
+                    # re-splits it against the teacher's own byte offsets via `_align_by_byte_offsets`.
                     completion_start = next(
                         (idx for idx, (_, e) in enumerate(full_offs) if e > prompt_byte_len),
                         len(input_ids),
@@ -2171,8 +2176,12 @@ class GOLDTrainer(SFTTrainer):
                         (max(0, s - prompt_byte_len), e - prompt_byte_len) for s, e in full_offs[completion_start:]
                     ]
                 else:
+                    # Works with slow tokenizers too (e.g. SentencePiece): no `backend_tokenizer` needed.
                     encoding = processing_class(full_text, add_special_tokens=False, return_offsets_mapping=True)
                     input_ids = encoding["input_ids"]
+                    # Same boundary rule as extended ULD: a leading space at the seam is normally attached to
+                    # the following (completion) token by the tokenizer, so matching on `start` instead would
+                    # drop that token's content from the completion entirely.
                     completion_start = next(
                         (idx for idx, (_, end) in enumerate(encoding["offset_mapping"]) if end > len(prompt_text)),
                         len(input_ids),
@@ -2380,7 +2389,6 @@ class GOLDTrainer(SFTTrainer):
 
         Returns ``(input_ids, labels, attention_mask, byte_offsets, forward_kwargs)``.
         """
-        backend = self.teacher_tokenizer.backend_tokenizer
         pad_token_id = self.teacher_tokenizer.pad_token_id
         eos_token_id = self.teacher_tokenizer.eos_token_id
 
@@ -2394,6 +2402,9 @@ class GOLDTrainer(SFTTrainer):
             return_tensors="pt",
         )
         if self.uld_loss_fn.use_extended_uld:
+            # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
+            # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
+            backend = self.teacher_tokenizer.backend_tokenizer
             completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
         else:
             completion_ids = self.teacher_tokenizer(completion_texts, add_special_tokens=False)["input_ids"]

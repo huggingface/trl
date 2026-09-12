@@ -1188,6 +1188,63 @@ def test_build_teacher_inputs_positional_uld_supports_sentencepiece(gemma4_token
     assert byte_offsets.tolist() == [[[0, 0]] * input_ids.shape[1]]
 
 
+class _NoBackendTokenizer:
+    """Wraps a tokenizer but hides `backend_tokenizer`, standing in for a slow tokenizer with no fast backend."""
+
+    def __init__(self, tokenizer):
+        self._tokenizer = tokenizer
+
+    def __getattr__(self, name):
+        if name == "backend_tokenizer":
+            raise AttributeError(name)
+        return getattr(self._tokenizer, name)
+
+    def __call__(self, *args, **kwargs):
+        return self._tokenizer(*args, **kwargs)
+
+
+def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
+    slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
+
+    input_ids, labels, _, _ = build_teacher_inputs_from_texts(
+        slow_tokenizer,
+        ["Question: "],
+        ["Answer."],
+        use_extended_uld=False,
+    )
+
+    completion_ids = input_ids[0][labels[0] != -100].tolist()
+    assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
+
+
+def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
+    slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
+    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+
+    row = trainer._prepare_dataset_with_original_text(
+        dataset,
+        slow_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
+
+
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
     loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
