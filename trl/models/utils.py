@@ -102,6 +102,7 @@ def _unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
+    gradient_checkpointing_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -114,6 +115,8 @@ def _unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Keyword arguments used to restore gradient checkpointing after generation.
 
     Yields:
         Unwrapped model.
@@ -125,25 +128,21 @@ def _unwrap_model_for_generation(
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
-    is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
-    if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_disable()
     from ..distributed import DistributedBackend
 
-    if DistributedBackend(accelerator).is_zero3:
-        if not gather_deepspeed3_params:
-            yield accelerator.unwrap_model(model)
-        else:
-            import deepspeed
-
-            with deepspeed.zero.GatheredParameters(model.parameters()):
-                remove_hooks(model)
+    with disable_gradient_checkpointing(unwrapped_model, gradient_checkpointing_kwargs):
+        if DistributedBackend(accelerator).is_zero3:
+            if not gather_deepspeed3_params:
                 yield accelerator.unwrap_model(model)
-                add_hooks(model)
-    else:
-        yield unwrapped_model
-    if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_enable()
+            else:
+                import deepspeed
+
+                with deepspeed.zero.GatheredParameters(model.parameters()):
+                    remove_hooks(model)
+                    yield accelerator.unwrap_model(model)
+                    add_hooks(model)
+        else:
+            yield unwrapped_model
 
 
 @contextmanager
@@ -196,6 +195,7 @@ def unwrap_model_for_generation(
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
     generation_kwargs: dict | None = None,
+    gradient_checkpointing_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -216,13 +216,18 @@ def unwrap_model_for_generation(
             If provided, temporarily overrides the model's generation_config during generation. The original config is
             automatically restored when exiting the context. This is useful for using different generation parameters
             during training vs. inference.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Keyword arguments used to restore gradient checkpointing after generation.
 
     Yields:
         Unwrapped model with optionally overridden generation_config.
     """
     with (
         _unwrap_model_for_generation(
-            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+            model,
+            accelerator,
+            gather_deepspeed3_params=gather_deepspeed3_params,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         ) as unwrapped_model,
         _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
     ):
@@ -392,7 +397,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
         yield
     finally:
         if was_enabled:
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
 
 
 def create_reference_model(
