@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from functools import partial
 from unittest.mock import patch
 
 import pytest
@@ -26,7 +27,7 @@ from transformers.utils import is_peft_available
 
 from trl import DistillationConfig, DistillationTrainer
 from trl.experimental.gkd.gkd_trainer import GKDTrainer
-from trl.trainer.distillation_trainer import _chunked_divergence_loss
+from trl.trainer.distillation_trainer import _chunk, _chunked_divergence_loss
 
 from .testing_utils import (
     TrlTestCase,
@@ -206,6 +207,11 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         expected = per_token.sum() / mask.sum()
         torch.testing.assert_close(loss, expected)
 
+    @staticmethod
+    def _set_global_max(n_padded, op, global_n_padded):
+        assert op == torch.distributed.ReduceOp.MAX
+        n_padded.fill_(global_n_padded)
+
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
     def test_parity_with_gkd(self, beta):
         # Identity lm_head so hidden states are the logits, then compare against GKD's full-vocab JSD (sum reduction).
@@ -275,6 +281,73 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         assert torch.isfinite(loss)
         loss.backward()  # must not raise: the graph stays connected through the student hidden states + lm_head
         assert sh.grad is not None and sw.grad is not None and s_bias.grad is not None
+
+    def test_zero3_synchronizes_chunk_count_across_ranks(self):
+        """ZeRO-3 ranks execute the global maximum chunk count when local valid-token counts differ."""
+        sh, th, sw, tw, mask = self._inputs(n_masked=9)
+        sh, sw = sh.clone().requires_grad_(True), sw.clone().requires_grad_(True)
+        local_n_valid = mask.sum()
+        global_n_padded = 2 * 4
+
+        with (
+            patch("trl.trainer.distillation_trainer.is_deepspeed_zero3_enabled", return_value=True),
+            patch("torch.distributed.is_initialized", return_value=True),
+            patch(
+                "torch.distributed.all_reduce",
+                side_effect=partial(
+                    self._set_global_max,
+                    global_n_padded=global_n_padded,
+                ),
+            ) as all_reduce,
+            patch("trl.trainer.distillation_trainer._chunk", wraps=_chunk) as chunk,
+        ):
+            loss, _, n_valid = _chunked_divergence_loss(
+                sh,
+                th,
+                sw,
+                tw,
+                mask,
+                beta=0.5,
+                chunk_size=4,
+                num_items_in_batch=local_n_valid,
+            )
+
+        assert all_reduce.call_count == 1
+        assert chunk.call_count == global_n_padded // 4
+        assert n_valid.item() == local_n_valid.item()
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert sh.grad is not None
+        assert sw.grad is not None
+
+    def test_zero3_all_masked_rank_joins_chunk_loop(self):
+        """A fully masked ZeRO-3 rank still joins chunk gathers required by ranks with valid tokens."""
+        sh, th, sw, tw, _ = self._inputs()
+        sh, sw = sh.clone().requires_grad_(True), sw.clone().requires_grad_(True)
+        mask = torch.zeros(sh.size(0), sh.size(1))
+        global_n_padded = 2 * 4
+
+        with (
+            patch("trl.trainer.distillation_trainer.is_deepspeed_zero3_enabled", return_value=True),
+            patch("torch.distributed.is_initialized", return_value=True),
+            patch(
+                "torch.distributed.all_reduce",
+                side_effect=partial(
+                    self._set_global_max,
+                    global_n_padded=global_n_padded,
+                ),
+            ),
+            patch("trl.trainer.distillation_trainer._chunk", wraps=_chunk) as chunk,
+        ):
+            loss, entropy_sum, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+
+        assert chunk.call_count == global_n_padded // 4
+        assert loss.item() == 0.0
+        assert entropy_sum.item() == 0.0
+        assert n_valid.item() == 0
+        loss.backward()
+        assert sh.grad is not None and sh.grad.abs().sum().item() == 0.0
+        assert sw.grad is not None and sw.grad.abs().sum().item() == 0.0
 
 
 class TestDistillationTrainer(TrlTestCase):
