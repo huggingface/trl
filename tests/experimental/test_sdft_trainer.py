@@ -227,6 +227,45 @@ class TestSDFTTrainer(TrlTestCase):
             atol=1e-6,
         )
 
+    def test_prediction_step_gathers_liger_zero3_lm_head_like_training_step(self, monkeypatch):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+
+        training_args = SDFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,
+            per_device_eval_batch_size=2,
+            max_completion_length=8,
+            max_steps=1,
+            num_generations=1,
+            report_to="none",
+            use_cpu=True,
+            bf16=False,
+        )
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        call_count = 0
+        original_gather_ctx = trainer._get_liger_zero3_lm_head_gather_ctx
+
+        def counting_gather_ctx(model):
+            nonlocal call_count
+            call_count += 1
+            return original_gather_ctx(model)
+
+        monkeypatch.setattr(trainer, "_get_liger_zero3_lm_head_gather_ctx", counting_gather_ctx)
+
+        trainer.evaluate()
+        assert call_count > 0
+
     def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
             {
