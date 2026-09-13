@@ -1189,7 +1189,15 @@ def create_model_from_path(
         kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+        config = AutoConfig.from_pretrained(
+            model_id,
+            subfolder=kwargs.get("subfolder", ""),
+            revision=kwargs.get("revision", "main"),
+            cache_dir=kwargs.get("cache_dir"),
+            token=kwargs.get("token"),
+            local_files_only=kwargs.get("local_files_only", False),
+            trust_remote_code=kwargs.get("trust_remote_code", False),
+        )
         architecture = getattr(transformers, config.architectures[0], None)
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
