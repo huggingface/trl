@@ -16,6 +16,7 @@ import copy
 import functools
 import textwrap
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -41,6 +42,7 @@ from trl.trainer.utils import (
     generate_model_card,
     get_callable_name,
     get_peak_flops,
+    get_peak_flops_per_device,
     get_peft_config,
     hash_module,
     nanstd,
@@ -1765,6 +1767,7 @@ class TestGetPeakFlops:
             ("NVIDIA A100-SXM4-80GB", torch.float16, 312e12),
             ("NVIDIA RTX A6000", torch.bfloat16, 154.85e12),
             ("NVIDIA A10G", torch.bfloat16, 125e12),
+            ("NVIDIA A10", torch.bfloat16, 125e12),
             ("NVIDIA L40S", torch.float16, 362e12),
             ("NVIDIA L4", torch.bfloat16, 121e12),
             ("Tesla T4", torch.float16, 65e12),
@@ -1792,6 +1795,10 @@ class TestGetPeakFlops:
             ("Tesla T4", torch.bfloat16),
             ("NVIDIA A10G", torch.float32),
             ("Unknown accelerator", torch.bfloat16),
+            ("NVIDIA L40", torch.bfloat16),
+            ("NVIDIA A1000", torch.bfloat16),
+            ("NVIDIA XA100", torch.bfloat16),
+            ("Intel Data Center GPU Max 15500", torch.bfloat16),
             ("Intel Data Center GPU Max 1550", torch.float16),
         ],
     )
@@ -1809,6 +1816,43 @@ class TestGetPeakFlops:
         with patch("torch.xpu.get_device_properties") as get_device_properties:
             get_device_properties.return_value.max_compute_units = max_compute_units
             assert get_peak_flops("Intel Data Center GPU Max 1550", torch.bfloat16) == expected
+
+
+class TestGetPeakFlopsPerDevice:
+    @pytest.mark.parametrize(
+        ("device_name", "mixed_precision", "model_dtype", "expected"),
+        [
+            ("NVIDIA A100", "bf16", torch.float32, 312e12),
+            ("Tesla T4", "fp16", torch.float32, 65e12),
+            ("NVIDIA A100", "no", torch.bfloat16, 312e12),
+            ("Tesla T4", "bf16", torch.float16, None),
+            ("NVIDIA A100", "fp8", torch.bfloat16, None),
+        ],
+    )
+    def test_training_precision_overrides_storage_dtype(self, device_name, mixed_precision, model_dtype, expected):
+        accelerator = SimpleNamespace(device=torch.device("cuda:0"), mixed_precision=mixed_precision)
+        with (
+            patch("torch.cuda.get_device_name", return_value=device_name),
+            patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks),
+            patch("trl.trainer.utils.logger.info"),
+        ):
+            assert get_peak_flops_per_device(accelerator, model_dtype) == expected
+
+    @pytest.mark.parametrize("other_peak", [989e12, None])
+    def test_distributed_capacity_requires_every_rank(self, other_peak):
+        accelerator = SimpleNamespace(device=torch.device("cuda:0"), mixed_precision="bf16")
+        with (
+            patch("torch.cuda.get_device_name", return_value="NVIDIA A100"),
+            patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks + [other_peak]),
+            patch("trl.trainer.utils.logger.info"),
+        ):
+            peak = get_peak_flops_per_device(accelerator, torch.float32)
+        if other_peak is None:
+            assert peak is None
+        else:
+            # A workload equal to both devices' combined capacity must give 100%, not assume two A100s.
+            tokens_per_second = (312e12 + 989e12) / 100e9
+            assert compute_mfu(100e9, tokens_per_second, 2, peak) == pytest.approx(100.0)
 
 
 class TestComputeMfu(TrlTestCase):

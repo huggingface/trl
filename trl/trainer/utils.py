@@ -19,6 +19,7 @@ import hashlib
 import importlib.resources as pkg_resources
 import os
 import random
+import re
 import socket
 import threading
 import types
@@ -33,8 +34,9 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
+from accelerate import Accelerator, PartialState
 from accelerate.logging import get_logger
+from accelerate.utils import gather_object
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
@@ -1720,6 +1722,7 @@ _PEAK_FLOPS_BY_DEVICE = (
     ("RTX PRO 6000", {torch.float16: 500e12, torch.bfloat16: 500e12}),
     ("A100", {torch.float16: 312e12, torch.bfloat16: 312e12}),
     ("A6000", {torch.float16: 154.85e12, torch.bfloat16: 154.85e12}),
+    ("A10G", {torch.float16: 125e12, torch.bfloat16: 125e12}),
     ("A10", {torch.float16: 125e12, torch.bfloat16: 125e12}),
     ("L40S", {torch.float16: 362e12, torch.bfloat16: 362e12}),
     ("L4", {torch.float16: 121e12, torch.bfloat16: 121e12}),
@@ -1763,22 +1766,58 @@ def get_peak_flops(device_name: str, dtype: torch.dtype) -> float | None:
         `float` or `None`: Peak FLOPs, or `None` when the device or dtype is not in the lookup table.
     """
     device_name = device_name.casefold()
-    if "data center gpu max 1550" in device_name:
+    if re.search(r"\bdata center gpu max 1550\b", device_name):
         if dtype != torch.bfloat16:
             return None
         max_compute_units = torch.xpu.get_device_properties("xpu").max_compute_units
         return _PVC_BF16_FLOPS_PER_COMPUTE_UNIT * max_compute_units
     for model_name, peak_flops_by_dtype in _PEAK_FLOPS_BY_DEVICE:
-        if model_name.casefold() in device_name:
+        if re.search(rf"\b{re.escape(model_name.casefold())}\b", device_name):
             return peak_flops_by_dtype.get(dtype)
     return None
+
+
+def get_peak_flops_per_device(accelerator: Accelerator, model_dtype: torch.dtype) -> float | None:
+    """
+    Resolve the mean theoretical dense peak FLOPs per training device.
+
+    Uses the accelerator's mixed precision, or the model dtype when mixed precision is disabled. All training ranks
+    must call this function; their device capacities are gathered so that multiplying the result by the number of
+    ranks gives the total training capacity. External rollout and teacher devices are not included.
+
+    Args:
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator managing the training devices and precision.
+        model_dtype (`torch.dtype`):
+            Model dtype to use when mixed precision is disabled.
+
+    Returns:
+        `float` or `None`: Mean peak FLOPs per device, or `None` if any training device or precision is unsupported.
+    """
+    device = accelerator.device
+    if device.type == "cuda":
+        device_name = torch.cuda.get_device_name(device)
+    elif device.type == "xpu":
+        device_name = torch.xpu.get_device_name(device)
+    else:
+        device_name = device.type
+    dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "no": model_dtype}.get(accelerator.mixed_precision)
+    peak_flops = get_peak_flops(device_name, dtype) if dtype is not None else None
+    peaks = gather_object([peak_flops])
+    if any(peak is None for peak in peaks):
+        logger.info(
+            "MFU metrics are disabled because the peak FLOPs are unknown for at least one training device or "
+            "precision. Throughput and timing metrics are still reported."
+        )
+        return None
+    return sum(peaks) / len(peaks)
 
 
 def compute_mfu(
     flops_per_token: int,
     tokens_per_second: float,
     world_size: int,
-    peak_flops_per_device: float = 989.5e12,
+    peak_flops_per_device: float,
 ) -> float:
     """
     Compute Model FLOPs Utilization (MFU) as a percentage.
@@ -1794,8 +1833,9 @@ def compute_mfu(
             Aggregate tokens per second across all devices, after any parallelism corrections.
         world_size (`int`):
             Number of devices (GPUs).
-        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
-            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM5.
+        peak_flops_per_device (`float`):
+            Theoretical dense peak FLOPs per device for the training precision. For heterogeneous devices, pass the
+            mean peak across the training ranks.
 
     Returns:
         `float`: MFU as a percentage (0-100).

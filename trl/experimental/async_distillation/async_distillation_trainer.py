@@ -43,6 +43,7 @@ from ...trainer.utils import (
     compute_flops_per_token,
     compute_mfu,
     get_config_model_id,
+    get_peak_flops_per_device,
     is_trackio_available,
     pad,
 )
@@ -1010,6 +1011,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.model.dtype)
+
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
         # row yields exactly one training sample, not a group of them.
@@ -1471,19 +1474,32 @@ class AsyncDistillationTrainer(_BaseTrainer):
         ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
         ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
-            mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
-            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
-            world_size = self.accelerator.num_processes
+            if self._peak_flops_per_device is not None:
+                mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
+                flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
+                world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            metrics["perf/mfu_fwd_bwd"].append(
-                compute_mfu(flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size)
-            )
+            if self._peak_flops_per_device is not None:
+                metrics["perf/mfu_fwd_bwd"].append(
+                    compute_mfu(
+                        flops_per_token,
+                        self._step_forward_tokens / fwd_bwd_s,
+                        world_size,
+                        self._peak_flops_per_device,
+                    )
+                )
             if step_s is not None:
                 metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
                 metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                metrics["perf/mfu_wall_clock"].append(
-                    compute_mfu(flops_per_token, self._step_forward_tokens / step_s, world_size)
-                )
+                if self._peak_flops_per_device is not None:
+                    metrics["perf/mfu_wall_clock"].append(
+                        compute_mfu(
+                            flops_per_token,
+                            self._step_forward_tokens / step_s,
+                            world_size,
+                            self._peak_flops_per_device,
+                        )
+                    )
 
         self._last_step_end_time = time_after
         self._current_train_step_time = 0.0
