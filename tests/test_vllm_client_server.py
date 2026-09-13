@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
@@ -36,6 +38,30 @@ from .testing_utils import (
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+
+
+class TestConnectionPoolSize(TrlTestCase):
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_pool_capacity_covers_default_concurrency(self, scheme):
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            client = VLLMClient(host="127.0.0.1")
+
+        with client.session:
+            # The mounted pool must retain enough connections for each method's default concurrency.
+            methods = (VLLMClient.image_features, VLLMClient._generate_from_features, VLLMClient.chat)
+            required_concurrency = max(
+                inspect.signature(method).parameters["max_concurrent_requests"].default for method in methods
+            )
+            url = f"{scheme}://127.0.0.1:8000"
+            adapter = client.session.get_adapter(url)
+            pool = adapter.poolmanager.connection_from_url(url)
+            assert pool.pool.maxsize >= required_concurrency, (
+                f"{scheme} pool capacity {pool.pool.maxsize} is below the default concurrency {required_concurrency}"
+            )
 
 
 class TestParseLogprobs(TrlTestCase):
