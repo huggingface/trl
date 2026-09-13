@@ -116,7 +116,11 @@ if __name__ == "__main__":
 
     # Load the VLM model using correct architecture (from GRPO pattern)
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    architecture = getattr(transformers, config.architectures[0])
+    architecture = (
+        getattr(transformers, config.architectures[0])
+        if config.architectures
+        else transformers.AutoModelForImageTextToText
+    )
     model = architecture.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # For VLM online DPO, using a reward model is complex because it needs images
