@@ -22,10 +22,17 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Protocol, TypedDict, cast
+from typing import Any, cast
 
 from accelerate.logging import get_logger
-from openenv.core.harness import HarnessAdapter, HarnessRunLimits, ModelStepResult, ResourceSessionFactory
+from openenv.core.harness import (
+    HarnessAdapter,
+    HarnessRunLimits,
+    LoopOwningSession,
+    ModelStepResult,
+    ResourceSessionFactory,
+    TraceEntry,
+)
 from openenv.core.llm_client import LLMResponse, ToolCall
 
 from ...chat_template_utils import parse_response
@@ -42,24 +49,11 @@ logger = get_logger(__name__)
 Message = dict[str, Any]
 
 
-# TODO(@openenv): this is OpenEnv's proxy-trace record shape; it should be defined and exported by OpenEnv, not here.
-class TraceEntry(TypedDict, total=False):
-    request: dict[str, Any]  # forwarded chat body, e.g. {"messages": [...], "tools": [...] | None}
-    response: dict[str, Any]  # upstream reply, e.g. {"choices": [{"message": {"content", "tool_calls"}}]}
-    completion_token_ids: list[int]  # generated token ids for this turn
-    completion_tokens: list[str]  # fallback token strings ("token_id:{id}") when ids are absent
-    per_token_logps: list[float]  # generator logprobs for the generated tokens
-
-
-# TODO(@openenv): this probably should live in OpenEnv to extend the base session for loop-owning harnesses.
-class LoopOwningSession(Protocol):
-    """The session contract the loop-owning path needs BEYOND OpenEnv's base `ResourceSession`. The agent runs its own
-    loop, so we block until it finishes and read its captured proxy trace. `wait_for_completion`/`fetch_proxy_trace`
-    are not on the base `ResourceSession` (they are loop-owning extensions, e.g. `OpenCodeSession`), so a factory used
-    in loop-owning mode must return sessions satisfying this protocol."""
-
-    def wait_for_completion(self, timeout_s: float | None = ...) -> int: ...
-    def fetch_proxy_trace(self) -> list[TraceEntry]: ...
+# `TraceEntry` and `LoopOwningSession` are imported from `openenv.core.harness` above. They used to be declared here,
+# each carrying a `TODO(@openenv)` asking for exactly that move. Keeping local copies left the trainer owning the schema
+# for a record it neither produces nor can validate, and the two were free to drift with nothing to notice until the
+# token fields came back empty -- which is precisely how `prompt_token_ids` could be added on the producer side and go
+# unread here for a full training run.
 
 
 @dataclass
@@ -228,7 +222,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 trace = loop_session.fetch_proxy_trace()
                 # Resolve the real agent turns ONCE (dropping any framework aux calls), then derive everything from them.
                 entries = self._agent_turn_fn(trace)
-                turns = _turns_from_trace(entries, self.tokenizer, self._train_turn_fn)
+                # No tokenizer: prompts come from the capture as the engine tokenized them.
+                # require_engine_ids=True makes a trace without them a hard error rather than a
+                # silent re-render, which is decision 4 of the contract.
+                turns = _turns_from_trace(entries, self._train_turn_fn)
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
                 tool_call_count = sum(tool_calls_by_name.values())
@@ -331,11 +328,18 @@ def _entry_to_turn(entry: TraceEntry) -> HarnessTurn:
 
 
 def _turns_from_trace(
-    entries: list[TraceEntry], tokenizer, train_turn_fn: Callable[[HarnessTurn], bool] | None = None
+    entries: list[TraceEntry], train_turn_fn: Callable[[HarnessTurn], bool] | None = None
 ) -> list[TurnRecord]:
-    """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns (`entries`, already selected by the
-    loop's `agent_turn_fn`). Re-tokenize each request's messages (passing its `tools` so the prompt matches what the
-    upstream rendered); ids + logprobs come from the capture.
+    """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns, using the ENGINE's own tokenization.
+
+    Nothing here re-renders a prompt. This function used to call `apply_chat_template` on every entry, because
+    `TraceEntry` carried no prompt field. It does now, and the re-render was never safe: measured on Qwen3.5-4B over 28
+    live turns it matched the engine on ZERO of them -- off by two tokens at the generation boundary every turn -- and
+    training on those positions collapsed a run at its FIRST weight update, the model emitting `<|im_start|>bash` where
+    `<function=bash>` belongs.
+
+    A turn without `prompt_token_ids` is a hard error: the engine was not serving with `--return-tokens-as-token-ids
+    --logprobs-mode processed_logprobs`, and every prompt would be one the model never saw.
 
     By default every agent turn is trained. Which turns to reinforce beyond that is the CALLER's policy: pass
     `train_turn_fn(turn: HarnessTurn) -> bool` to narrow it, e.g. `has_tool_call` to train only turns that took an
@@ -346,15 +350,19 @@ def _turns_from_trace(
         entries = [entry for entry in entries if train_turn_fn(_entry_to_turn(entry))]
     turns = []
     for entry in entries:
-        request = entry["request"]
-        prompt_ids = tokenizer.apply_chat_template(
-            request["messages"],
-            tools=request.get("tools"),
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=False,
-        )
-        turns.append(TurnRecord(prompt_ids, _trace_output_ids(entry), entry.get("per_token_logps") or []))
+        prompt_ids = entry.get("prompt_token_ids")
+        if not prompt_ids:
+            raise ValueError(
+                "a captured turn carried no `prompt_token_ids`. Serve the engine with "
+                "`--return-tokens-as-token-ids --logprobs-mode processed_logprobs`; without them every prompt trained "
+                "on here would be a local re-render, which matched the engine on 0 of 28 measured turns."
+            )
+        output_ids = _trace_output_ids(entry)
+        # The producer masks over prompt+completion; keep the completion span. A turn masked out upstream (its logprobs
+        # were rejected on ingest) arrives with zeros here, and that cannot be re-derived downstream.
+        mask = entry.get("loss_mask")
+        output_mask = list(mask[len(prompt_ids) :]) if mask else None
+        turns.append(TurnRecord(list(prompt_ids), output_ids, entry.get("per_token_logps") or [], output_mask))
     return turns
 
 
