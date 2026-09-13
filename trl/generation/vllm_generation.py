@@ -513,8 +513,10 @@ class VLLMGeneration:
         # Reset cache on vLLM
         if self.mode == "server" and accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
+            self.vllm_client.reset_encoder_cache()
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
+            self.llm.llm_engine.reset_encoder_cache()
 
     def _place_features(self, features: dict | None, prompt_ids: list[int]) -> dict | None:
         """Point the image features at the image tokens of `prompt_ids`.

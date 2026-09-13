@@ -794,8 +794,10 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Reset cache on vLLM
         if self.vllm_mode == "server" and self.accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
+            self.vllm_client.reset_encoder_cache()
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
+            self.llm.llm_engine.reset_encoder_cache()
 
     def _move_model_to_vllm_inner(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
