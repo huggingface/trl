@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from accelerate.data_loader import IterableDatasetShard
 from accelerate.parallelism_config import ParallelismConfig
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -81,32 +82,33 @@ def _chain_to_sequences(turns: list[TurnRecord]) -> tuple[list[dict[str, Any]], 
     return [row for row in rows if any(row["completion_mask"])], forks
 
 
-class _SharedPromptStream:
-    """One pass over the prompts, shared by the training loop and by the generation queue.
+class _RolloutStream(torch.utils.data.IterableDataset):
+    """Prompts in, finished rollouts out: what the training loop iterates.
 
-    The loop pulls a batch per step; the queue pulls whatever else it needs to keep `rollouts_in_flight` rollouts
-    generating. Both take from the same iterator, so a prompt is read once and the loop simply advances past what the
-    queue already took.
+    One pass over the prompt dataset yields `num_generations` rollouts per prompt, so the stream is that many items
+    long. That length is all the `Trainer` needs to size its epochs, its schedule and its progress, which is why
+    feeding the engine and waiting on it can live here instead of in the training step.
+
+    Each rank generates its own rollouts, so the stream is already rank-local and must not be sharded again.
     """
 
-    def __init__(self, loader, trainer):
-        self._loader = loader
+    def __init__(self, trainer, prompt_loader):
         self._trainer = trainer
-        self._iterator = None
-
-    def __iter__(self):
-        self._iterator = iter(self._loader)
-        self._trainer._prompt_stream = self
-        return self
-
-    def __next__(self):
-        return next(self._iterator)
+        self._prompt_loader = prompt_loader
 
     def __len__(self):
-        return len(self._loader)
+        return len(self._prompt_loader.dataset) * self._trainer.num_generations
 
-    def __getattr__(self, name):
-        return getattr(self._loader, name)
+    def __iter__(self):
+        prompts = iter(self._prompt_loader)
+        while True:
+            # A whole batch at a time, because the wait, the pause and the pool exchange are collectives: every rank
+            # runs them once per batch, so the cadence is the same on all of them and none can arrive at a collective
+            # its peers have already left.
+            samples = self._trainer._next_rollout_batch(prompts)
+            if not samples:
+                return
+            yield from samples
 
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
@@ -322,14 +324,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 processing_class = add_response_schema(processing_class)
                 self._tokenizer = getattr(processing_class, "tokenizer", processing_class)
 
-        if args.per_device_train_batch_size % self.num_generations != 0:
-            raise ValueError(
-                f"The per-device train batch size ({args.per_device_train_batch_size}) must be evenly divisible by "
-                f"the number of generations per prompt ({self.num_generations}): each step consumes "
-                "`per_device_train_batch_size` scored samples while the dataloader feeds "
-                "`per_device_train_batch_size / num_generations` prompts."
-            )
-
         # Under tensor parallelism the vocabulary projection is replicated rather than split. The chunked lm_head
         # below multiplies by the weight directly, which a sharded weight cannot serve, and the projection is the one
         # place where splitting buys least: it costs one copy of that matrix per process and removes a gather from
@@ -392,7 +386,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # training batches are drawn.
         self._manager = None
         self._pending: deque[dict[str, Any]] = deque()
-        self._prompt_stream = None
         self._inflight = {}
         self._ready = deque()
 
@@ -408,21 +401,32 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._signature_columns = ["prompt"]
 
     def get_train_dataloader(self):
-        # The loop and the generation queue read prompts from one iterator. The queue has to run ahead of the loop to
-        # keep the engine full, and reading ahead through a second iterator would hand the same prompts to both.
-        return _SharedPromptStream(self._build_train_dataloader(), self)
+        return self._build_train_dataloader()
 
     def _build_train_dataloader(self):
-        # Each step consumes `per_device_train_batch_size` scored samples and every prompt produces
-        # `num_generations` of them, so the dataloader feeds `per_device_train_batch_size / num_generations`
-        # prompts per step.
-        return self._get_dataloader(
+        # The prompts keep the sampler and the per-replica sharding; every prompt produces `num_generations`
+        # rollouts, so this feeds `per_device_train_batch_size / num_generations` prompts for each batch of samples.
+        prompt_loader = self._get_dataloader(
             dataset=self.train_dataset,
             description="Training",
             batch_size=self._train_batch_size // self.num_generations,
             sampler_fn=self._get_train_sampler,
             is_training=True,
         )
+        # What the loop iterates is the rollouts, not the prompts. The stream is already rank-local, so the shard
+        # `accelerator.prepare` wraps around an iterable dataset would hand each rank a fraction of its own samples:
+        # neutralise it, the way `BatchRebalanceSampler` is neutralised for the same reason.
+        loader = self._get_dataloader(
+            dataset=_RolloutStream(self, prompt_loader),
+            description="Rollouts",
+            batch_size=self._train_batch_size,
+            is_training=True,
+        )
+        shard = getattr(loader, "dataset", None)
+        if isinstance(shard, IterableDatasetShard):
+            shard.num_processes = 1
+            shard.process_index = 0
+        return loader
 
     def train(self, *args, **kwargs):
         try:
@@ -723,34 +727,31 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         )
         return [sample for _, _, sample in assigned[replica]]
 
-    def _prepare_inputs(self, generation_batch: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
-        device = self.accelerator.device
+    def _next_rollout_batch(self, prompts) -> list[dict[str, Any]]:
+        """Keep the engine fed and return one batch of finished rollouts, or nothing once the prompts run out.
+
+        Called once per training batch by `_RolloutStream`, on every rank, which is what keeps the collectives
+        below aligned.
+        """
         mode = "train" if self.model.training else "eval"
+        num_samples = self._train_batch_size
 
         if self._manager is None:
             self._init_manager()
         self._resume_generation()
 
-        # A step queues one batch of prompts and consumes one batch of samples, so the depth of the pipeline is
-        # whatever it starts with. It is filled once, here, by reading prompts ahead of the training loop; from then
-        # on each step queues its own batch and `_fill_slots` starts them as rollouts finish, which is what holds the
-        # decode batch at `rollouts_in_flight` instead of letting it drain and refill once per step.
-        #
-        # Filling it used to mean submitting the first batch `generation_ahead` times over, so the opening steps
-        # trained on copies of a single prompt.
-        num_samples = len(generation_batch) * self.num_generations
-        self._enqueue_group_batch(generation_batch)
-        # Read further prompts from the same stream the loop is walking, enough to keep every slot filled and one
-        # batch spare: prompts arrive a batch at a time while rollouts finish one at a time, and without that spare a
-        # burst of completions would leave slots idle until the next step. The loop carries on from where this left
-        # off, so no prompt is read twice and none is skipped.
-        if mode == "train" and self._prompt_stream is not None:
-            while len(self._pending) < self.rollouts_in_flight + num_samples:
-                try:
-                    self._enqueue_group_batch(next(self._prompt_stream))
-                except StopIteration:
-                    break
+        # Prompts arrive a batch at a time while rollouts finish one at a time, so the queue is kept a batch deeper
+        # than the slots: without that spare a burst of completions would leave slots idle until the next batch.
+        exhausted = False
+        while len(self._pending) < self.rollouts_in_flight + num_samples:
+            try:
+                self._enqueue_group_batch(next(prompts))
+            except StopIteration:
+                exhausted = True
+                break
         self._fill_slots()
+        if exhausted and not self._pending and not self._inflight and len(self._ready) < num_samples:
+            return []
 
         # Time spent waiting for the engine. Near zero means the samples were ready before the trainer asked; a large
         # value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at once)
@@ -764,9 +765,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
             # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
             # count to cover every replica, then handing the samples out, is what keeps the steps aligned.
-            # The count travels over gloo, a few microseconds, and is asked after every drain: a drain blocks on the
-            # engine for up to its timeout, so checking less often let replicas overshoot by seconds and meet late at
-            # the gather below (8 s per optimizer step at one check per eight drains of one second).
             while True:
                 counts = torch.tensor([len(self._ready)])
                 torch.distributed.all_reduce(counts, group=self._replica_cpu_group)
@@ -791,6 +789,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
             # the length cap is over twice the tokens of a mixed one). Arrival order keeps the mix.
             samples = [self._ready.popleft() for _ in range(num_samples)]
+        return samples
+
+    def _prepare_inputs(self, samples: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
 
         # Metrics of the rollouts this step trains on. They are per process: groups are formed and scored locally,
         # and `Trainer.log` reports process zero.
