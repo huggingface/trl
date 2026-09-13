@@ -20,11 +20,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from accelerate.data_loader import IterableDatasetShard
 from accelerate.parallelism_config import ParallelismConfig
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.distributed.tensor import DTensor
+from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
     GenerationConfig,
@@ -413,20 +413,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             sampler_fn=self._get_train_sampler,
             is_training=True,
         )
-        # What the loop iterates is the rollouts, not the prompts. The stream is already rank-local, so the shard
-        # `accelerator.prepare` wraps around an iterable dataset would hand each rank a fraction of its own samples:
-        # neutralise it, the way `BatchRebalanceSampler` is neutralised for the same reason.
-        loader = self._get_dataloader(
-            dataset=_RolloutStream(self, prompt_loader),
-            description="Rollouts",
+        # What the loop iterates is the rollouts, not the prompts. This loader is deliberately not prepared by
+        # accelerate: every rank generates its own rollouts, so there is nothing to shard, and the dispatcher
+        # accelerate wraps an iterable dataset in would have rank zero alone walk the stream and broadcast the
+        # batches, leaving its peers out of the engine's collectives.
+        return DataLoader(
+            _RolloutStream(self, prompt_loader),
             batch_size=self._train_batch_size,
-            is_training=True,
+            collate_fn=self.data_collator,
+            num_workers=0,  # the engine lives in this process
         )
-        shard = getattr(loader, "dataset", None)
-        if isinstance(shard, IterableDatasetShard):
-            shard.num_processes = 1
-            shard.process_index = 0
-        return loader
 
     def train(self, *args, **kwargs):
         try:
