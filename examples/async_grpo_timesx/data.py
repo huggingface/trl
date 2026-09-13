@@ -126,5 +126,6 @@ Historical values, oldest first:
 Forecast the value at each of the following timestamps, in order:
 {targets}
 
-On the last line, output only the {len(example.future_timestamps)} forecast values, one per timestamp above, in the
-same order, separated by spaces. Do not include units, timestamps, or any other text on that line."""
+Respond with only the {len(example.future_timestamps)} forecast values, one per timestamp above, in the same order,
+separated by spaces, on a single line. Do not show your reasoning, do not use a table, do not include units,
+timestamps, or any other text -- the whole response should be just that one line of numbers."""

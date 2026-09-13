@@ -40,7 +40,7 @@ https://github.com/haoxin1998/TimesX-project (see that dataset's card for licens
 `data.load_timesx_split(...).test` is there if you want to score a checkpoint afterwards.
 
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B-Instruct-2507 \
-    --max-model-len 10240 \
+    --max-model-len 14336 \
     --dtype bfloat16 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
@@ -131,9 +131,10 @@ def main() -> None:
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         num_generations=8,
-        # Verified against the real vLLM server: with 512 tokens, completions were getting cut off before reaching
-        # an answer line. 2048 gives the model enough room to actually finish.
-        max_completion_length=2048,
+        # Verified against the real vLLM server: at 2048 tokens, this model still spent most completions on
+        # prose/table reasoning before the answer line and got cut off 4/5 times. 4096 gives it enough room even
+        # when it doesn't follow the "no reasoning" instruction in the prompt.
+        max_completion_length=4096,
         # AsyncGRPOConfig defaults to fp32 model weights (avoids a trainer/vLLM precision mismatch, see its
         # docstring); bf16 keeps a 4B model's full-parameter AdamW state comfortably within one H100. The vLLM
         # server below must serve in the same dtype to still match.
