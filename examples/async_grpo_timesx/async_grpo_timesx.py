@@ -40,7 +40,7 @@ https://github.com/haoxin1998/TimesX-project (see that dataset's card for licens
 `data.load_timesx_split(...).test` is there if you want to score a checkpoint afterwards.
 
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
-    --max-model-len 8192 \
+    --max-model-len 10240 \
     --dtype bfloat16 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
@@ -131,7 +131,9 @@ def main() -> None:
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         num_generations=8,
-        max_completion_length=512,
+        # Verified against the real vLLM server: with 512 tokens, every completion hit finish_reason="length"
+        # (Qwen3.5-2B rambles at length even with thinking disabled). 2048 gives it room to actually finish.
+        max_completion_length=2048,
         # AsyncGRPOConfig defaults to fp32 model weights (avoids a trainer/vLLM precision mismatch, see its
         # docstring). Qwen3.5-4B OOM'd a single H100 even in bf16 (its vision tower and hybrid linear-attention
         # buffers cost more than a plain dense model of the same size), so this uses the 2B variant instead; bf16
