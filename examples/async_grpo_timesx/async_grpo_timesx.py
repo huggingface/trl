@@ -41,6 +41,7 @@ https://github.com/haoxin1998/TimesX-project (see that dataset's card for licens
 
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-4B \
     --max-model-len 8192 \
+    --dtype bfloat16 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
 
@@ -61,9 +62,9 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 def parse_forecast(text: str, expected_length: int) -> list[float] | None:
     """Parse the completion's last non-empty line as `expected_length` space/comma-separated numbers.
 
-    A 0.6B model asked for a "JSON list" reliably ignores the brackets and just writes the numbers out, so this
-    parses what the model actually produces instead of what was asked for -- same reasoning as
-    `examples/async_grpo_prophet_arena`'s `parse_probability`.
+    Matches what `render_prompt` actually asks for (plain numbers on the last line, not a JSON list) -- an earlier
+    version of this prompt asked for JSON and a small model just ignored the brackets, so the prompt and parser were
+    both changed to agree with each other. Same reasoning as `examples/async_grpo_prophet_arena`'s `parse_probability`.
     """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
@@ -131,6 +132,10 @@ def main() -> None:
         gradient_accumulation_steps=2,
         num_generations=8,
         max_completion_length=512,
+        # AsyncGRPOConfig defaults to fp32 model weights (avoids a trainer/vLLM precision mismatch, see its
+        # docstring) -- full fp32 AdamW training is ~16 bytes/param, which is why Qwen3.5-4B alone OOMs a single
+        # H100. bf16 roughly halves that; the vLLM server below must serve in the same dtype to still match.
+        dtype="bfloat16",
         # Qwen3 reasons by default, and here it never converges -- it just goes in circles second-guessing the
         # timestamps instead of answering. Turning it off gets a real answer out most of the time instead.
         chat_template_kwargs={"enable_thinking": False},
