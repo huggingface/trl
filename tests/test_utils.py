@@ -934,6 +934,39 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_selective_log_softmax_2d_flat_tokens(self, dtype):
+        """Test with 2D (N, vocab) logits — the shape trainers like GRPO/RLOO pass after
+        reshaping (batch * seq_len, vocab_size).  Exercises the chunked bf16/fp16 path."""
+        vocab_size = 1024
+        num_tokens = 256  # flat token dimension
+
+        input_ids = torch.randint(low=0, high=vocab_size, size=(num_tokens,))
+        logits = torch.randn(num_tokens, vocab_size, dtype=dtype)
+
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        actual_output = selective_log_softmax(logits, input_ids)
+
+        assert actual_output.shape == (num_tokens,)
+        assert torch.equal(actual_output, expected_output)
+
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("chunk_size_tokens", [64, 512, 2048])
+    def test_selective_log_softmax_chunk_size_invariant(self, dtype, chunk_size_tokens):
+        """Results must be identical regardless of the chunk_size passed to the
+        bf16/fp16 vectorised path."""
+        vocab_size = 1024
+        num_tokens = 1024
+
+        input_ids = torch.randint(low=0, high=vocab_size, size=(num_tokens,))
+        logits = torch.randn(num_tokens, vocab_size, dtype=dtype)
+
+        # Reference: naive gather on log_softmax
+        expected_output = torch.gather(logits.log_softmax(-1), dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+        actual_output = selective_log_softmax(logits, input_ids, chunk_size=chunk_size_tokens)
+
+        assert torch.equal(actual_output, expected_output)
+
 
 class TestShuffleSequenceDict(TrlTestCase):
     def test_shuffle_preserves_shape(self):
