@@ -55,13 +55,13 @@ from ..chat_template_utils import (
     parse_response,
     supports_tool_calling,
 )
-from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..data_utils import apply_chat_template, get_dataset_column_names, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_vllm_available
 from ..models import prepare_deepspeed
-from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
+from ..models.utils import _ForwardRedirection, freeze_non_language_model_parameters, unwrap_model_for_generation
 from .base_trainer import _BaseTrainer
 from .distillation_config import DistillationConfig
 from .utils import (
@@ -690,6 +690,12 @@ class DistillationTrainer(_BaseTrainer):
                 f"provided value ({args.dataloader_num_workers})."
             )
             args.dataloader_num_workers = 0
+
+        if train_dataset is not None:
+            dataset_columns = get_dataset_column_names(train_dataset)
+            has_vision_data = not {"image", "images"}.isdisjoint(dataset_columns)
+            if self._is_vlm and not has_vision_data and not self.tools:
+                freeze_non_language_model_parameters(model)
 
         super().__init__(
             model=model,
