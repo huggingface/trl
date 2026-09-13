@@ -39,7 +39,7 @@ Data comes from `datasets.load_dataset("kashif/timesx")`, a flattened mirror of
 https://github.com/haoxin1998/TimesX-project (see that dataset's card for licensing). Only `train` is used here;
 `data.load_timesx_split(...).test` is there if you want to score a checkpoint afterwards.
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B-Instruct-2507 \
     --max-model-len 10240 \
     --dtype bfloat16 \
     --logprobs-mode processed_logprobs \
@@ -131,17 +131,13 @@ def main() -> None:
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         num_generations=8,
-        # Verified against the real vLLM server: with 512 tokens, every completion hit finish_reason="length"
-        # (Qwen3.5-2B rambles at length even with thinking disabled). 2048 gives it room to actually finish.
+        # Verified against the real vLLM server: with 512 tokens, completions were getting cut off before reaching
+        # an answer line. 2048 gives the model enough room to actually finish.
         max_completion_length=2048,
         # AsyncGRPOConfig defaults to fp32 model weights (avoids a trainer/vLLM precision mismatch, see its
-        # docstring). Qwen3.5-4B OOM'd a single H100 even in bf16 (its vision tower and hybrid linear-attention
-        # buffers cost more than a plain dense model of the same size), so this uses the 2B variant instead; bf16
-        # is kept anyway for headroom. The vLLM server below must serve in the same dtype to still match.
+        # docstring); bf16 keeps a 4B model's full-parameter AdamW state comfortably within one H100. The vLLM
+        # server below must serve in the same dtype to still match.
         dtype="bfloat16",
-        # Qwen3 reasons by default, and here it never converges -- it just goes in circles second-guessing the
-        # timestamps instead of answering. Turning it off gets a real answer out most of the time instead.
-        chat_template_kwargs={"enable_thinking": False},
         # num_train_epochs, not max_steps: per_device_train_batch_size counts samples not questions here, and rows
         # are packed by token count by default, so a step count wouldn't map to a known number of epochs anyway.
         num_train_epochs=2,
@@ -153,7 +149,7 @@ def main() -> None:
         logging_steps=1,
     )
     trainer = AsyncGRPOTrainer(
-        model="Qwen/Qwen3.5-2B",
+        model="Qwen/Qwen3-4B-Instruct-2507",
         args=config,
         train_dataset=dataset,
         reward_funcs=[format_reward, mase_reward],
