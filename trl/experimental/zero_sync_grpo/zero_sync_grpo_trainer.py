@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import os
 import time
 from collections import defaultdict, deque
@@ -24,7 +23,7 @@ import torch
 from accelerate.parallelism_config import ParallelismConfig
 from datasets import Dataset, IterableDataset
 from torch import nn
-from torch.distributed.tensor import DTensor, Replicate
+from torch.distributed.tensor import DTensor
 from transformers import (
     AutoProcessor,
     GenerationConfig,
@@ -34,7 +33,6 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.distributed.configuration_utils import DistributedConfig
-from transformers.distributed.tensor_parallel import _use_local_dtensor_params
 from transformers.generation import ContinuousBatchingConfig
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
@@ -81,36 +79,6 @@ def _chain_to_sequences(turns: list[TurnRecord]) -> tuple[list[dict[str, Any]], 
         row["completion_mask"].extend([0] * len(context) + [1] * len(turn.output_ids))
         row["logprobs"].extend([0.0] * len(context) + turn.output_log_probs)
     return [row for row in rows if any(row["completion_mask"])], forks
-
-
-def _compute_on_local_view(module):
-    """Run `module` on the local view of the replicated parameters in its subtree.
-
-    A replicated parameter is still a DTensor, and an op mixing one with a plain tensor raises. Keeping it a DTensor
-    matters because gradient clipping cannot mix the two kinds either, so the unwrapping happens here instead. It
-    covers the descendants because a module does not always read its parameters through its own forward: the gated
-    delta net convolves with `self.conv1d.weight` itself, so unwrapping the convolution alone would never fire. And
-    it is a forward wrapper rather than one context around the step, because gradient checkpointing replays these
-    forwards during the backward pass.
-    """
-    original = type(module).forward
-    replicated = [
-        submodule
-        for submodule in module.modules()
-        if any(True for _ in submodule.parameters(recurse=False))
-        and all(
-            isinstance(param, DTensor) and all(isinstance(p, Replicate) for p in param.placements)
-            for param in submodule.parameters(recurse=False)
-        )
-    ]
-
-    def forward(*args, **kwargs):
-        with contextlib.ExitStack() as stack:
-            for submodule in replicated:
-                stack.enter_context(_use_local_dtensor_params(submodule))
-            return original(module, *args, **kwargs)
-
-    module.forward = forward
 
 
 class _SharedPromptStream:
@@ -370,24 +338,20 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             output_embeddings = model.get_output_embeddings()
             input_embeddings = model.get_input_embeddings()
             tied = input_embeddings.weight is output_embeddings.weight
-            # Kept as a DTensor, replicated rather than split: every parameter then has the same type, which
-            # gradient clipping requires, and the chunked lm_head reads its local view.
+            # A plain full tensor: the chunked lm_head multiplies by the weight directly, and the gradient norm
+            # spans sharded and plain parameters on its own, so there is nothing to gain from a DTensor here.
             weight = output_embeddings.weight
-            device_mesh = model._device_mesh
             # Some models keep the projection out of their tensor parallel plan, so it is already a full tensor
             local_weight = weight.full_tensor().contiguous() if isinstance(weight, DTensor) else weight.data
-            replicated = nn.Parameter(DTensor.from_local(local_weight, device_mesh, [Replicate()], run_check=False))
+            replicated = nn.Parameter(local_weight)
             output_embeddings.weight = replicated
             # The transform installed for the split weight would now mix a plain weight with a DTensor input.
             output_embeddings.__dict__.pop("forward", None)
-            _compute_on_local_view(output_embeddings)
             if tied:
                 input_embeddings.weight = replicated
                 # The transform installed for the split weight would now mix a plain weight with a DTensor input.
                 input_embeddings.__dict__.pop("forward", None)
-                _compute_on_local_view(input_embeddings)
             # An untied input embedding loads outside the plan, as a plain tensor, and the sweep below replicates it
-
 
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
