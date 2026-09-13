@@ -56,6 +56,8 @@ def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -1.0
     """
     if max_penalty > 0:
         raise ValueError(f"max_penalty {max_penalty} should not be positive")
+    if ngram_size <= 0:
+        raise ValueError(f"ngram_size {ngram_size} should be greater than 0")
     return _RepetitionPenalty(ngram_size, max_penalty)
 
 
