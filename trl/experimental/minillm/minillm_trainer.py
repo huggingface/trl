@@ -29,7 +29,7 @@ from transformers import (
 )
 from transformers.utils import is_peft_available
 
-from ...models import prepare_deepspeed
+from ...models import prepare_deepspeed, prepare_fsdp
 from ...trainer.grpo_trainer import GRPOTrainer, RewardFunc, RolloutFunc
 from ...trainer.utils import disable_dropout_in_model, get_config_model_id
 from ..utils import empty_cache
@@ -233,6 +233,8 @@ class MiniLLMTrainer(GRPOTrainer):
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+        elif self.is_fsdp_enabled:
+            self.teacher_model = prepare_fsdp(teacher_model, self.accelerator)
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
