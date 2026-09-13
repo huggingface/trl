@@ -39,7 +39,7 @@ Data comes from `datasets.load_dataset("kashif/timesx")`, a flattened mirror of
 https://github.com/haoxin1998/TimesX-project (see that dataset's card for licensing). Only `train` is used here;
 `data.load_timesx_split(...).test` is there if you want to score a checkpoint afterwards.
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-4B \
     --max-model-len 8192 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
@@ -145,7 +145,7 @@ def main() -> None:
         logging_steps=1,
     )
     trainer = AsyncGRPOTrainer(
-        model="Qwen/Qwen3-0.6B",
+        model="Qwen/Qwen3.5-4B",
         args=config,
         train_dataset=dataset,
         reward_funcs=[format_reward, mase_reward],
