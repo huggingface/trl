@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
@@ -42,6 +43,12 @@ from .vllm_client import VLLMClient
 if is_vllm_available():
     from vllm import LLM, RequestOutput, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
+
+# DTensor lives under `torch.distributed._tensor` before torch 2.5.0
+if is_torch_version(">=", "2.5.0"):
+    from torch.distributed.tensor import DTensor
+else:
+    from torch.distributed._tensor import DTensor
 
 
 logger = logging.getLogger(__name__)
@@ -421,7 +428,9 @@ class VLLMGeneration:
 
             if param.is_cpu:
                 param = param.to(self.accelerator.device)
-            param = param.full_tensor()
+            # Ignored params stay plain tensors under FSDP2, so only DTensors need `full_tensor()`
+            if isinstance(param, DTensor):
+                param = param.full_tensor()
 
             yield name, param
 
