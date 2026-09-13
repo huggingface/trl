@@ -150,3 +150,5 @@ uv.lock
 .last_run*
 .venv.shipped.tar*
 examples/async_grpo_mini_swe_agent/trainable_instances.json
+
+.venv-ep*
