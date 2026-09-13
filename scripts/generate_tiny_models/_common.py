@@ -174,8 +174,22 @@ def check_dtype_pattern(reference_id, model):
         print(f"  {name}: reference={ref}, tiny={tiny}")
 
 
-def print_config_diff(reference_id, model):
-    """Print the flat, recursive diff between the reference Hub config and the tiny-model config."""
+def _format_diff_value(value, width):
+    """Render a config value for the diff table, tagging lists with their length and marking truncation."""
+    text = f"[{len(value)} items] {value}" if isinstance(value, list) else str(value)
+    if width is None or len(text) <= width:
+        return text
+    return text[: width - 1] + "\u2026"
+
+
+def print_config_diff(reference_id, model, full=None):
+    """Print the flat, recursive diff between the reference Hub config and the tiny-model config.
+
+    Values are truncated to keep the table aligned; pass `--full-diff` (or `full=True`) to print them in full.
+    """
+    if full is None:
+        full = _parse_args().full_diff
+    width = None if full else 34
     reference_config = AutoConfig.from_pretrained(reference_id)
     ref_flat = _flatten(reference_config.to_dict())
     tiny_flat = _flatten(model.config.to_dict())
@@ -191,7 +205,7 @@ def print_config_diff(reference_id, model):
 
     print(f"[config_diff] {reference_id} vs tiny ({len(rows)} differences)")
     for k, r, t in rows:
-        print(f"  {k:48s} {str(r)[:34]:34s} → {str(t)[:34]}")
+        print(f"  {k:48s} {_format_diff_value(r, width):34s} → {_format_diff_value(t, width)}")
 
 
 def _parse_args():
@@ -200,6 +214,11 @@ def _parse_args():
         "--create-pr",
         action="store_true",
         help="If the repo already exists, open a PR instead of skipping.",
+    )
+    parser.add_argument(
+        "--full-diff",
+        action="store_true",
+        help="Print untruncated values in the config diff.",
     )
     args, _ = parser.parse_known_args()
     return args
