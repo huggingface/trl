@@ -441,6 +441,16 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
     """
     import datasets
 
+    # Validate fractions before loading datasets
+    fractions = [dataset_config.fraction for dataset_config in mixture_config.datasets]
+    if any(fraction is not None for fraction in fractions):
+        if any(fraction is None for fraction in fractions):
+            raise ValueError("`fraction` must be set for either all datasets in the mixture or none of them.")
+        if any(fraction < 0 for fraction in fractions):
+            raise ValueError(f"All `fraction` values must be non-negative, got {fractions}")
+        if sum(fractions) <= 0:
+            raise ValueError(f"Sum of `fraction` values must be positive, got {fractions} (sum={sum(fractions)})")
+
     logger.info(f"Creating dataset mixture with {len(mixture_config.datasets)} datasets")
     datasets_list = []
     for dataset_config in mixture_config.datasets:
@@ -462,8 +472,6 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
     # each dataset, where `total` is the largest mixture size such that no dataset contributes more rows than it has.
     fractions = [dataset_config.fraction for dataset_config in mixture_config.datasets]
     if any(fraction is not None for fraction in fractions):
-        if any(fraction is None for fraction in fractions):
-            raise ValueError("`fraction` must be set for either all datasets in the mixture or none of them.")
         if mixture_config.streaming:
             raise ValueError("Using a dataset `fraction` is not supported with streaming datasets.")
         weights = [fraction / sum(fractions) for fraction in fractions]

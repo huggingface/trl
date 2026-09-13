@@ -393,6 +393,26 @@ class TestGetDataset:
         with pytest.raises(ValueError, match="not supported with streaming datasets"):
             get_dataset(mixture_config)
 
+    def test_dataset_fraction_negative_raises_error(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5),
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=-0.5),
+            ]
+        )
+        with pytest.raises(ValueError, match="All `fraction` values must be non-negative"):
+            get_dataset(mixture_config)
+
+    def test_dataset_fraction_zero_sum_raises_error(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.0),
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.0),
+            ]
+        )
+        with pytest.raises(ValueError, match="Sum of `fraction` values must be positive"):
+            get_dataset(mixture_config)
+
     def test_dataset_mixture_with_test_split(self):
         mixture_config = DatasetMixtureConfig(
             datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")],
