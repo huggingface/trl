@@ -272,6 +272,30 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 </hfoption>
 </hfoptions>
 
+## PyTorch caching allocator
+
+PyTorch's caching allocator can fragment over long training runs — separate caches for forward activations, optimizer states, KL reference logits, and FlashAttention workspace each grow and shrink at different rates, leaving holes that cannot satisfy a new large allocation even though aggregate free memory is high. This is especially common in online RL methods (GRPO, RLOO, Online DPO) where the rollout, log-prob, and update steps allocate at different sizes within each iteration.
+
+Setting `expandable_segments:True` lets the allocator grow existing segments instead of fragmenting into fresh fixed blocks, which can substantially reduce the gap between allocated and reserved memory on long-context training.
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True   # canonical name in PyTorch >= 2.10
+```
+
+Set both names: `PYTORCH_ALLOC_CONF` is the canonical knob since PyTorch 2.10 (`PYTORCH_CUDA_ALLOC_CONF` is kept as a backward-compatibility alias); PyTorch 2.9 and older only read `PYTORCH_CUDA_ALLOC_CONF`. Note that vLLM (and possibly other libraries) inspect only `PYTORCH_CUDA_ALLOC_CONF`, so setting only the new name can silently bypass their allocator-config handling.
+
+> [!WARNING]
+> `expandable_segments:True` conflicts with the `CuMemAllocator` that vLLM uses for [vLLM sleep mode](#vllm-sleep-mode). This only applies when sleep mode is enabled (`vllm_enable_sleep_mode=True`); plain `use_vllm=True` is unaffected. vLLM detects the setting and temporarily disables expandable segments while its memory pool is active, but it reads only `PYTORCH_CUDA_ALLOC_CONF` — if you enable expandable segments only via `PYTORCH_ALLOC_CONF`, that detection is bypassed. With sleep mode enabled, prefer setting the legacy name (or both).
+
+For runs where fragmentation persists despite this knob (typically chunked-LM-head and other custom kernels that allocate transient ~GB tensors), append `garbage_collection_threshold:0.85` to trigger the allocator's defragmentation pass earlier:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.85
+```
+
+This is a defragmentation-only knob; it does not change peak memory or training dynamics. See the [PyTorch CUDA semantics docs](https://pytorch.org/docs/stable/notes/cuda.html#environment-variables) for the full list of options.
+
 ## Disabling model gathering for generation in online methods
 
 When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
