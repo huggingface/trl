@@ -4,6 +4,10 @@ Trains a real coding agent, [`mini-swe-agent`](https://github.com/SWE-agent/mini
 
 ## What runs where
 
+Two shapes share the same agent, sandboxes, verifier and rollout worker. They differ only in how the updated policy reaches vLLM.
+
+### LoRA: the adapter reaches vLLM as a path
+
 ```
  trainer (AsyncGRPOTrainer, FSDP2, LoRA)                          vLLM (--enable-lora)
  ┌────────────────────────────────────────────────┐              ┌──────────────────────────┐
@@ -18,12 +22,36 @@ Trains a real coding agent, [`mini-swe-agent`](https://github.com/SWE-agent/mini
                              HF sandboxes, one per rollout, cpu-basic, started from xingyaoww/sweb.eval.x86_64.<instance>
 ```
 
+Both Jobs mount the same Storage Bucket, so `<output_dir>` resolves to one directory on both sides and the adapter is a path the server can open. Launch with `./run_all.sh`.
+
+### Full fine-tune on a MoE: merged weights over NCCL
+
+```
+ trainer (AsyncGRPOTrainer, torchrun, expert parallel)            vLLM (no adapter, no bucket)
+ ┌────────────────────────────────────────────────┐              ┌──────────────────────────┐
+ │ HarnessRolloutWorker                           │              │ Qwen3-Coder-30B-A3B      │
+ │  └ MiniSWEAgentSessionFactory.create()         │  chat        │  experts sharded by      │
+ │      ├ Sandbox.create(image=<instance image>)  │  completions │  tensor parallel rank    │
+ │      ├ mini-swe-agent DefaultAgent ────────────┼─────────────▶│                          │
+ │      │    bash tool ──▶ sandbox.run(...)  ─────┼───┐          └──────────────────────────┘
+ │      └ verify(): run SWE-bench eval in sandbox ┼───┤   ▲ every parameter streamed over NCCL each step
+ │                                                │   │   │   (fused experts sent as they are)
+ │ experts sharded over the (fsdp, tp) mesh       │   │   │
+ └────────────────────────────────────────────────┘   │   │
+                                                      ▼   │
+                             HF sandboxes, one per rollout, cpu-basic, started from xingyaoww/sweb.eval.x86_64.<instance>
+
+ both Jobs sit in one HF Jobs network group and address each other by name:
+ http://${HF_NETWORK_GROUP_PREFIX}vllm:8000
+```
+
+No adapter, no proxy, no bucket anywhere in the loop. Launch with `GROUP=my-run ./run_all_coder.sh`, and see the expert-parallel section below for what makes it fit.
+
 - **The agent owns the loop.** `mini-swe-agent` renders SWE-bench's prompts, calls the model, runs the command it gets back in the sandbox, formats the observation, and repeats until the model submits a patch or hits its step, time or format-error limit. TRL never samples a turn.
 - **TRL reads the trace.** The agent's model class talks to vLLM through the OpenAI client and records every call the way OpenEnv's interception proxy would: the request as sent, the response, the generated token ids and their logprobs. `HarnessRolloutWorker` rebuilds one training row per turn from those records, then trains with GRPO.
 - **The sandbox is the environment.** Each rollout is one [Hugging Face sandbox](https://huggingface.co/docs/huggingface_hub/guides/sandbox) started from the SWE-Gym image of its instance: the repository at the base commit in `/testbed`, its conda environment already built. The agent's commands run there, and the reward is computed there too.
 - **The reward is SWE-bench's.** After the agent stops, the session writes SWE-bench's evaluation script into the sandbox (check the test files out at the base commit, apply the held-out test patch, run the FAIL_TO_PASS and PASS_TO_PASS tests), runs it, and grades the log with the SWE-Gym harness. 1.0 if the instance is resolved, 0.0 otherwise, as in NeMo Gym.
-- **The policy reaches vLLM one of two ways.** With LoRA, every weight sync writes the adapter to `<output_dir>/.vllm_lora/trl-policy-vN` and asks vLLM to load it. Training the full model instead, the merged weights stream to vLLM over NCCL and no adapter, proxy or bucket is involved; see the expert-parallel section below.
-- **With an adapter.** Every weight sync writes the LoRA adapter to `<output_dir>/.vllm_lora/trl-policy-vN` and asks vLLM to load it. The agent's requests name that adapter, because in vLLM's API an adapter *is* a model name and a request naming the base model would be served by the base model.
+- **The policy reaches vLLM one of two ways.** Under LoRA, every weight sync writes the adapter to `<output_dir>/.vllm_lora/trl-policy-vN` and asks vLLM to load it; the agent's requests then name that adapter, because in vLLM's API an adapter *is* a model name and a request naming the base model would be served by the base model. Training the full model instead, every parameter streams to vLLM over NCCL each step and the requests name the model itself.
 
 ## Training the full model over an expert-parallel mesh
 
