@@ -1782,8 +1782,8 @@ def get_peak_flops_per_device(accelerator: Accelerator, model_dtype: torch.dtype
     Resolve the mean theoretical dense peak FLOPs per training device.
 
     Uses the accelerator's mixed precision, or the model dtype when mixed precision is disabled. All training ranks
-    must call this function; their device capacities are gathered so that multiplying the result by the number of
-    ranks gives the total training capacity. External rollout and teacher devices are not included.
+    must call this function; their device capacities are gathered so that multiplying the result by the number of ranks
+    gives the total training capacity. External rollout and teacher devices are not included.
 
     Args:
         accelerator ([`~accelerate.Accelerator`]):
