@@ -388,32 +388,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 _compute_on_local_view(input_embeddings)
             # An untied input embedding loads outside the plan, as a plain tensor, and the sweep below replicates it
 
-            # Whatever the plan leaves out loads as a plain tensor: norms, and on hybrid models the gated delta
-            # net's convolution and gates. Those parameters see the same inputs and produce the same gradients on
-            # every rank, so they are replicated, but fused optimizers and gradient clipping still reject a group
-            # mixing them with DTensors. Their modules then compute on the local view, like the embeddings above.
-            converted = []
-            for module in model.modules():
-                plain_names = [
-                    name for name, param in module.named_parameters(recurse=False) if not isinstance(param, DTensor)
-                ]
-                if not plain_names:
-                    continue
-                for name in plain_names:
-                    param = getattr(module, name)
-                    setattr(
-                        module,
-                        name,
-                        nn.Parameter(
-                            DTensor.from_local(param.data, device_mesh, [Replicate()], run_check=False),
-                            requires_grad=param.requires_grad,
-                        ),
-                    )
-                converted.append(module)
-            # In a second pass, so that each wrapper sees the whole of its subtree already replicated: modules are
-            # walked parents first, and a child converted later would not have been picked up.
-            for module in converted:
-                _compute_on_local_view(module)
 
         # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
         # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
