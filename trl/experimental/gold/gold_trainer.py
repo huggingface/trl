@@ -49,7 +49,6 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import (
     is_datasets_available,
-    is_liger_kernel_available,
     is_peft_available,
     is_rich_available,
 )
@@ -63,6 +62,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
@@ -84,10 +84,6 @@ from ..utils import (
     piece_byte_len,
 )
 from .gold_config import GOLDConfig
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -803,11 +799,18 @@ class GOLDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        self.model_revision = (args.model_init_kwargs or {}).get("revision")
+        self.model_revision = (args.model_init_kwargs or {}).get("revision") if isinstance(model, str) else None
+        teacher_revision = (
+            (args.teacher_model_init_kwargs or {}).get("revision", args.teacher_model_revision)
+            if isinstance(teacher_model, str)
+            else None
+        )
         dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
         if processing_class is None:
             model_id = model if isinstance(model, str) else get_config_model_id(model.config)
-            processing_class = AutoProcessor.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoProcessor.from_pretrained(
+                model_id, revision=self.model_revision, trust_remote_code=args.trust_remote_code
+            )
             # simplified logic from SFTTrainer
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -828,7 +831,9 @@ class GOLDTrainer(SFTTrainer):
         if self._is_vlm:
             if isinstance(teacher_model, str):
                 # Teacher not yet instantiated -- validate it's a VLM
-                teacher_proc = AutoProcessor.from_pretrained(teacher_model, trust_remote_code=args.trust_remote_code)
+                teacher_proc = AutoProcessor.from_pretrained(
+                    teacher_model, revision=teacher_revision, trust_remote_code=args.trust_remote_code
+                )
                 if not isinstance(teacher_proc, ProcessorMixin):
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
@@ -867,6 +872,7 @@ class GOLDTrainer(SFTTrainer):
                     if isinstance(teacher_model, str)
                     else AutoProcessor.from_pretrained(
                         teacher_model.config._name_or_path,
+                        revision=teacher_revision,
                         trust_remote_code=args.trust_remote_code,
                     )
                 )
@@ -923,7 +929,7 @@ class GOLDTrainer(SFTTrainer):
                     "cross-tokenizer case. Either set `use_uld_loss=False` (if your student and teacher are from the "
                     "same family and the standard JSD loss applies), or set `use_liger_kernel=False`."
                 )
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 temperature=args.temperature,
@@ -958,6 +964,11 @@ class GOLDTrainer(SFTTrainer):
                     "`teacher_tokenizer_name_or_path` must be set when using ULD loss with a pre-instantiated teacher model."
                 )
 
+        # The teacher revision pins a commit in the teacher model's repo, so it only applies to a tokenizer served from
+        # that same repo. ULD's cross-tokenizer setup points `teacher_tokenizer_name_or_path` at a different repo, where
+        # that commit does not exist.
+        teacher_tokenizer_revision = teacher_revision if args.teacher_tokenizer_name_or_path == teacher_model else None
+
         if isinstance(teacher_model, str):
             init_kwargs = dict(teacher_model_init_kwargs)
             if args.teacher_model_revision is not None:
@@ -976,6 +987,7 @@ class GOLDTrainer(SFTTrainer):
         elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(
                 args.teacher_tokenizer_name_or_path,
+                revision=teacher_tokenizer_revision,
                 trust_remote_code=args.trust_remote_code,
             )
             if self.teacher_tokenizer.pad_token is None:

@@ -313,6 +313,7 @@ class _AsyncRolloutLoop:
         queue_maxsize: int = 0,
         score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
+        lora_name: str | None = None,
         max_tokens: int = 32,
         temperature: float = 1.0,
         top_p: float = 1.0,
@@ -328,6 +329,7 @@ class _AsyncRolloutLoop:
         dataset_start_index: int = 0,
     ):
         self.model_name = model_name
+        self.lora_name = lora_name
         self.dataset = dataset
         if dataset_start_index > 0:
             start = dataset_start_index % len(dataset)
@@ -465,6 +467,15 @@ class _AsyncRolloutLoop:
     @property
     def model_version(self) -> int:
         return int(self._model_version_value.value)
+
+    @property
+    def _request_model(self) -> str:
+        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
+        # serves the base model, so the published version has to be part of the request. `model_version` reads the
+        # shared `mp.Value`, so a sync is picked up without extra IPC.
+        if self.lora_name is None:
+            return self.model_name
+        return f"{self.lora_name}-v{self.model_version}"
 
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -949,7 +960,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
         payload = {
-            "model": self.model_name,
+            "model": self._request_model,
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,

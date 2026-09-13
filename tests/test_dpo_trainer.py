@@ -31,6 +31,7 @@ from .testing_utils import (
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_peft_target_parameters,
     require_vision,
 )
 
@@ -732,7 +733,7 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -800,7 +801,7 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -905,6 +906,23 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
+    def test_liger_loss_forwards_config(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            use_liger_kernel=True,
+            loss_type="robust",
+            label_smoothing=0.1,
+            discopop_tau=0.2,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.liger_loss.label_smoothing == 0.1
+        assert trainer.liger_loss.discopop_tau == 0.2
+
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
         # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
@@ -1090,11 +1108,6 @@ class TestDPOTrainer(TrlTestCase):
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-    )
-    @pytest.mark.xfail(
-        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
-        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
-        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -1446,6 +1459,21 @@ class TestDPOTrainer(TrlTestCase):
             if "lora" in n:  # We expect the peft params to be different
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2", args=training_args, train_dataset=dataset
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
 
 
 @require_vision
