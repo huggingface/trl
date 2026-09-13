@@ -39,7 +39,7 @@ Data comes from `datasets.load_dataset("kashif/timesx")`, a flattened mirror of
 https://github.com/haoxin1998/TimesX-project (see that dataset's card for licensing). Only `train` is used here;
 `data.load_timesx_split(...).test` is there if you want to score a checkpoint afterwards.
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B-Instruct-2507 \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-8B \
     --max-model-len 14336 \
     --dtype bfloat16 \
     --logprobs-mode processed_logprobs \
@@ -143,9 +143,12 @@ def main() -> None:
         # when it doesn't follow the "no reasoning" instruction in the prompt.
         max_completion_length=4096,
         # AsyncGRPOConfig defaults to fp32 model weights (avoids a trainer/vLLM precision mismatch, see its
-        # docstring); bf16 keeps a 4B model's full-parameter AdamW state comfortably within one H100. The vLLM
-        # server below must serve in the same dtype to still match.
+        # docstring); bf16 keeps an 8B model's full-parameter AdamW state within one H100 (fp32 would not fit --
+        # this is what OOM'd Qwen3.5-4B earlier). The vLLM server below must serve in the same dtype to still match.
         dtype="bfloat16",
+        # Qwen3-8B reasons by default; here that just means it burns the completion budget on reasoning instead of
+        # ever reaching an answer. Turning it off gets a real answer out most of the time instead.
+        chat_template_kwargs={"enable_thinking": False},
         # num_train_epochs, not max_steps: per_device_train_batch_size counts samples not questions here, and rows
         # are packed by token count by default, so a step count wouldn't map to a known number of epochs anyway.
         num_train_epochs=2,
@@ -157,7 +160,7 @@ def main() -> None:
         logging_steps=1,
     )
     trainer = AsyncGRPOTrainer(
-        model="Qwen/Qwen3-4B-Instruct-2507",
+        model="Qwen/Qwen3-8B",
         args=config,
         train_dataset=dataset,
         reward_funcs=[mase_reward],
