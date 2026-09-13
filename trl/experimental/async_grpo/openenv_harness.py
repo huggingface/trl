@@ -338,8 +338,8 @@ def _turns_from_trace(
     training on those positions collapsed a run at its FIRST weight update, the model emitting `<|im_start|>bash` where
     `<function=bash>` belongs.
 
-    A turn without `prompt_token_ids` is a hard error: the engine was not serving with
-    `--return-tokens-as-token-ids --logprobs-mode processed_logprobs`, and every prompt would be one the model never saw.
+    A turn without `prompt_token_ids` is a hard error: the engine was not serving with `--return-tokens-as-token-ids
+    --logprobs-mode processed_logprobs`, and every prompt would be one the model never saw.
 
     By default every agent turn is trained. Which turns to reinforce beyond that is the CALLER's policy: pass
     `train_turn_fn(turn: HarnessTurn) -> bool` to narrow it, e.g. `has_tool_call` to train only turns that took an
