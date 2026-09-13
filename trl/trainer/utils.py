@@ -1703,6 +1703,77 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     return 3 * forward_flops
 
 
+# Theoretical dense accelerator throughput. Values and sources follow TorchTitan's BF16 peak-FLOPs lookup, extended
+# with the additional NVIDIA GPUs offered by Hugging Face Jobs. More specific names must precede their prefixes.
+_PEAK_FLOPS_BY_DEVICE = (
+    # NVIDIA
+    ("GB300", {torch.bfloat16: 2.5e15}),
+    ("GB200", {torch.bfloat16: 2.5e15}),
+    ("B300", {torch.bfloat16: 2.25e15}),
+    ("B200", {torch.bfloat16: 2.25e15}),
+    ("H100 NVL", {torch.float16: 835e12, torch.bfloat16: 835e12}),
+    ("H100 PCIe", {torch.float16: 756e12, torch.bfloat16: 756e12}),
+    ("H100", {torch.float16: 989e12, torch.bfloat16: 989e12}),
+    ("H200 NVL", {torch.float16: 835e12, torch.bfloat16: 835e12}),
+    ("H200", {torch.float16: 989e12, torch.bfloat16: 989e12}),
+    ("H20", {torch.float16: 148e12, torch.bfloat16: 148e12}),
+    ("RTX PRO 6000", {torch.float16: 500e12, torch.bfloat16: 500e12}),
+    ("A100", {torch.float16: 312e12, torch.bfloat16: 312e12}),
+    ("A6000", {torch.float16: 154.85e12, torch.bfloat16: 154.85e12}),
+    ("A10", {torch.float16: 125e12, torch.bfloat16: 125e12}),
+    ("L40S", {torch.float16: 362e12, torch.bfloat16: 362e12}),
+    ("L4", {torch.float16: 121e12, torch.bfloat16: 121e12}),
+    ("T4", {torch.float16: 65e12}),
+    # AMD
+    ("MI355X", {torch.bfloat16: 2500e12}),
+    ("MI325X", {torch.bfloat16: 1300e12}),
+    ("MI300X", {torch.bfloat16: 1300e12}),
+    ("MI250X", {torch.bfloat16: 191.5e12}),
+    # AWS Trainium and Inferentia
+    ("trn1n", {torch.bfloat16: 90e12}),
+    ("trn1", {torch.bfloat16: 90e12}),
+    ("inf2", {torch.bfloat16: 90e12}),
+    ("trn2n", {torch.bfloat16: 158e12}),
+    ("trn2u", {torch.bfloat16: 158e12}),
+    ("trn2", {torch.bfloat16: 158e12}),
+    ("trn3u", {torch.bfloat16: 158e12}),
+    ("trn3", {torch.bfloat16: 158e12}),
+    # Google TPU
+    ("TPU v4", {torch.bfloat16: 275e12}),
+    ("TPU v5e", {torch.bfloat16: 197e12}),
+    ("TPU v5p", {torch.bfloat16: 459e12}),
+    ("TPU v6e", {torch.bfloat16: 918e12}),
+    ("TPU v7", {torch.bfloat16: 2307e12 / 2}),
+)
+
+_PVC_BF16_FLOPS_PER_COMPUTE_UNIT = 512 * 1_300_000_000
+
+
+def get_peak_flops(device_name: str, dtype: torch.dtype) -> float | None:
+    """
+    Get the theoretical dense accelerator peak FLOPs for a device and dtype.
+
+    Args:
+        device_name (`str`):
+            Device name as returned by the accelerator runtime.
+        dtype (`torch.dtype`):
+            Floating-point dtype used by the model's matrix multiplications.
+
+    Returns:
+        `float` or `None`: Peak FLOPs, or `None` when the device or dtype is not in the lookup table.
+    """
+    device_name = device_name.casefold()
+    if "data center gpu max 1550" in device_name:
+        if dtype != torch.bfloat16:
+            return None
+        max_compute_units = torch.xpu.get_device_properties("xpu").max_compute_units
+        return _PVC_BF16_FLOPS_PER_COMPUTE_UNIT * max_compute_units
+    for model_name, peak_flops_by_dtype in _PEAK_FLOPS_BY_DEVICE:
+        if model_name.casefold() in device_name:
+            return peak_flops_by_dtype.get(dtype)
+    return None
+
+
 def compute_mfu(
     flops_per_token: int,
     tokens_per_second: float,

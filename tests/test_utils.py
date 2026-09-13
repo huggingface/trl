@@ -40,6 +40,7 @@ from trl.trainer.utils import (
     flush_left,
     generate_model_card,
     get_callable_name,
+    get_peak_flops,
     get_peft_config,
     hash_module,
     nanstd,
@@ -1744,6 +1745,70 @@ class TestComputeFlopsPerToken(TrlTestCase):
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", torch.bfloat16, 2.5e15),
+            ("NVIDIA GB200", torch.bfloat16, 2.5e15),
+            ("NVIDIA B300", torch.bfloat16, 2.25e15),
+            ("NVIDIA B200", torch.bfloat16, 2.25e15),
+            ("NVIDIA H100 NVL", torch.bfloat16, 835e12),
+            ("NVIDIA H100 PCIe", torch.float16, 756e12),
+            ("NVIDIA H100 80GB HBM3", torch.bfloat16, 989e12),
+            ("NVIDIA H200 NVL", torch.float16, 835e12),
+            ("NVIDIA H200", torch.bfloat16, 989e12),
+            ("NVIDIA H20", torch.float16, 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", torch.bfloat16, 500e12),
+            ("NVIDIA A100-SXM4-80GB", torch.float16, 312e12),
+            ("NVIDIA RTX A6000", torch.bfloat16, 154.85e12),
+            ("NVIDIA A10G", torch.bfloat16, 125e12),
+            ("NVIDIA L40S", torch.float16, 362e12),
+            ("NVIDIA L4", torch.bfloat16, 121e12),
+            ("Tesla T4", torch.float16, 65e12),
+            ("AMD Instinct MI355X", torch.bfloat16, 2500e12),
+            ("AMD Instinct MI325X", torch.bfloat16, 1300e12),
+            ("AMD Instinct MI300X", torch.bfloat16, 1300e12),
+            ("AMD Instinct MI250X", torch.bfloat16, 191.5e12),
+            ("trn1n", torch.bfloat16, 90e12),
+            ("inf2", torch.bfloat16, 90e12),
+            ("trn2u", torch.bfloat16, 158e12),
+            ("trn3u", torch.bfloat16, 158e12),
+            ("TPU v4", torch.bfloat16, 275e12),
+            ("TPU v5e", torch.bfloat16, 197e12),
+            ("TPU v5p", torch.bfloat16, 459e12),
+            ("TPU v6e", torch.bfloat16, 918e12),
+            ("TPU v7", torch.bfloat16, 1153.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", torch.bfloat16),
+            ("NVIDIA A10G", torch.float32),
+            ("Unknown accelerator", torch.bfloat16),
+            ("Intel Data Center GPU Max 1550", torch.float16),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
+
+    @pytest.mark.parametrize(
+        ("max_compute_units", "expected"),
+        [
+            (448, 298.1888e12),
+            (512, 340.7872e12),
+        ],
+    )
+    def test_intel_pvc_uses_available_compute_units(self, max_compute_units, expected):
+        with patch("torch.xpu.get_device_properties") as get_device_properties:
+            get_device_properties.return_value.max_compute_units = max_compute_units
+            assert get_peak_flops("Intel Data Center GPU Max 1550", torch.bfloat16) == expected
 
 
 class TestComputeMfu(TrlTestCase):
