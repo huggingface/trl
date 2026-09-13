@@ -87,7 +87,14 @@ def mase(forecast: list[float], future_values: list[float], past_values: list[fl
 
 
 def format_reward(completions: list[list[dict[str, str]]], future_values: list[list[float]], **kwargs) -> list[float]:
-    """1.0 if the completion parses to exactly as many numbers as there are future timestamps, else 0.0."""
+    """1.0 if the completion parses to exactly as many numbers as there are future timestamps, else 0.0.
+
+    Not passed to `reward_funcs` below -- `mase_reward` already scores a malformed completion 0.0, so adding this
+    as a second, equally-weighted reward source (AsyncGRPOTrainer has no `reward_weights`) let the model farm a free
+    +1.0 with any parseable output regardless of its values: it collapsed to repeating "1.0" 12 times, satisfying
+    this reward while `mase_reward` cratered. Kept here only as a metric you can call by hand on saved completions
+    to check the format-valid rate separately from forecast quality.
+    """
     return [
         1.0 if parse_forecast(completion[0]["content"], len(targets)) is not None else 0.0
         for completion, targets in zip(completions, future_values, strict=True)
@@ -153,7 +160,7 @@ def main() -> None:
         model="Qwen/Qwen3-4B-Instruct-2507",
         args=config,
         train_dataset=dataset,
-        reward_funcs=[format_reward, mase_reward],
+        reward_funcs=[mase_reward],
     )
     trainer.train()
 
