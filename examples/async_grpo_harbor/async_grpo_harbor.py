@@ -38,7 +38,8 @@ Everything Harbor-specific lives in `harbor_env.harness` (OpenEnv). Nothing is a
 below is the whole integration, and every training-facing object is module-level (picklable) so the
 rollout worker can pickle the factory and reward into its spawned child.
 
-WHY `mini-swe-agent`. Measured, not chosen by taste. Across a 15-harness sweep on the same 50 tasks
+WHY `mini-swe-agent`. Measured, not chosen by taste. Fifteen harnesses were probed; twelve produced
+usable rollouts and are the set referred to below. Across that sweep, on the same 50 tasks
 (`Qwen3.5-2B`, k=4) it was both the most accurate and the most turn-efficient — and, decisively for
 training, its prompt re-render is byte-exact against the engine's own `prompt_token_ids`. TRL re-renders
 each prompt locally because `TraceEntry` carries no prompt ids, and for three of the twelve harnesses
@@ -108,8 +109,8 @@ logger = logging.getLogger(__name__)
 # Weight on the efficiency term, and the tool-call budget it is measured against. The budget is a
 # property of the task family, not of the model: on data-analysis tasks a competent rollout inspects the
 # data in well under 15 calls.
-W_TOOL_EFFICIENCY = float(os.environ.get("REWARD_W_TOOL_EFFICIENCY", "0.3"))
-TOOL_BUDGET = float(os.environ.get("TOOL_BUDGET", "15"))
+W_TOOL_EFFICIENCY = 0.3
+TOOL_BUDGET = 15.0
 
 
 def tool_efficiency(n_tool_calls: int | None) -> float | None:
@@ -204,22 +205,10 @@ def parse_args() -> argparse.Namespace:
     # a warning and run unbounded.
     p.add_argument("--agent-step-limit", type=int, default=12)
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
-    p.add_argument("--optim", default="adamw_torch")
-    p.add_argument("--no-bf16", dest="bf16", action="store_false", default=True)
-    p.add_argument(
-        "--gradient-checkpointing",
-        action="store_true",
-        default=True,
-        help="on by default; rollout sequences here are long enough that activations dominate",
-    )
-    p.add_argument("--no-gradient-checkpointing", dest="gradient_checkpointing", action="store_false")
     p.add_argument("--output-dir", default=None)
-    p.add_argument("--save-steps", type=int, default=0, help="0 disables checkpointing; set it for long runs")
-    p.add_argument("--save-total-limit", type=int, default=3)
     p.add_argument("--project", default="async-grpo-harbor")
     p.add_argument("--trackio-space-id", default=None, help="host the trackio dashboard on a HF Space")
     p.add_argument("--run-name", default=None)
-    p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
 
@@ -260,9 +249,10 @@ def main() -> None:
 
     config = AsyncGRPOConfig(
         output_dir=output_dir,
-        save_strategy="steps" if args.save_steps else "no",
-        save_steps=args.save_steps or 500,
-        save_total_limit=args.save_total_limit,
+        # Checkpointing is off by default because a short example run has nothing worth keeping.
+        # Edit these two lines for a long run rather than reaching for a flag.
+        save_strategy="no",
+        save_total_limit=3,
         per_device_train_batch_size=args.per_device_train_batch_size,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
@@ -271,9 +261,10 @@ def main() -> None:
         temperature=args.temperature,
         max_staleness=args.max_staleness,
         vllm_server_base_url=args.vllm_url,
-        optim=args.optim,
-        bf16=args.bf16,
-        gradient_checkpointing=args.gradient_checkpointing,
+        optim="adamw_torch",
+        bf16=True,
+        # On: rollout sequences here are long enough that activations dominate.
+        gradient_checkpointing=True,
         # `use_reentrant=False` is required: the reentrant checkpointer does not see inputs that reach a
         # block through anything but positional args.
         gradient_checkpointing_kwargs={"use_reentrant": False},
@@ -284,7 +275,7 @@ def main() -> None:
         log_completions=True,
         # Every rollout costs a sandbox and minutes, so nothing is logged in arrears: flush each step.
         logging_steps=1,
-        seed=args.seed,
+        seed=0,
     )
 
     worker = HarnessRolloutWorker(
