@@ -80,10 +80,12 @@ def main() -> None:
     dataset = build_dataset()
 
     # RL loop hyperparameters mirror tinker-cookbook's recipe: 32 forecasts per question (`num_generations`) and
-    # temperature 1.0. `num_train_epochs=2` gives two passes over the 1,024-question training set -- it counts
-    # distinct prompts actually trained on, independent of batch composition, so it holds regardless of how rows are
-    # packed for the forward pass. There's no exact "16 questions per optimizer step" here the way tinker-cookbook
-    # has: by default `token_budget` is set to the vLLM server's `max_model_len` and rows are packed by token count
+    # temperature 1.0. `num_train_epochs=1` gives one pass over the 1,024-question training set -- tinker-cookbook's
+    # own results show most of the improvement lands in the first epoch (their 64-step mark), with the second
+    # epoch mostly noise, so their README now recommends stopping there. `num_train_epochs` counts distinct prompts
+    # actually trained on, independent of batch composition, so it holds regardless of how rows are packed for the
+    # forward pass. There's no exact "16 questions per optimizer step" here the way tinker-cookbook has: by default
+    # `token_budget` is set to the vLLM server's `max_model_len` and rows are packed by token count
     # (`TokenBudgetBatcher`), not by `per_device_train_batch_size` samples -- see `AsyncGRPOConfig`'s docstring.
     # `gradient_accumulation_steps` still means what it always does (accumulate over that many packed micro-batches
     # before stepping) regardless of how those micro-batches were packed, so it's set the same as
@@ -100,7 +102,7 @@ def main() -> None:
         gradient_accumulation_steps=2,
         num_generations=32,
         max_completion_length=2048,
-        num_train_epochs=2,
+        num_train_epochs=1,
         learning_rate=1e-4,
         temperature=1.0,
         report_to="trackio",

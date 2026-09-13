@@ -142,6 +142,7 @@ def main() -> None:
         trackio_space_id="async-grpo-timesx",
         project="async-grpo-timesx",
         log_completions=True,
+        logging_steps=1,
     )
     trainer = AsyncGRPOTrainer(
         model="Qwen/Qwen3-0.6B",
