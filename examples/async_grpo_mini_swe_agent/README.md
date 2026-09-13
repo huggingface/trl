@@ -1,4 +1,4 @@
-# LoRA AsyncGRPO of `mini-swe-agent` on SWE-Gym
+# AsyncGRPO of `mini-swe-agent` on SWE-Gym
 
 Trains a real coding agent, [`mini-swe-agent`](https://github.com/SWE-agent/mini-swe-agent), on real GitHub issues from [SWE-Gym](https://huggingface.co/datasets/SWE-Gym/SWE-Gym), with a LoRA policy and [`AsyncGRPOTrainer`](https://huggingface.co/docs/trl/async_grpo_trainer). A port of NeMo Gym's [`mini_swe_agent`](https://github.com/NVIDIA-NeMo/Gym/tree/main/responses_api_agents/mini_swe_agent) responses API agent onto TRL's [loop-owning OpenEnv path](https://huggingface.co/docs/trl/openenv#training-on-harnesses-training-a-real-coding-agent-opencode).
 
@@ -22,7 +22,28 @@ Trains a real coding agent, [`mini-swe-agent`](https://github.com/SWE-agent/mini
 - **TRL reads the trace.** The agent's model class talks to vLLM through the OpenAI client and records every call the way OpenEnv's interception proxy would: the request as sent, the response, the generated token ids and their logprobs. `HarnessRolloutWorker` rebuilds one training row per turn from those records, then trains with GRPO.
 - **The sandbox is the environment.** Each rollout is one [Hugging Face sandbox](https://huggingface.co/docs/huggingface_hub/guides/sandbox) started from the SWE-Gym image of its instance: the repository at the base commit in `/testbed`, its conda environment already built. The agent's commands run there, and the reward is computed there too.
 - **The reward is SWE-bench's.** After the agent stops, the session writes SWE-bench's evaluation script into the sandbox (check the test files out at the base commit, apply the held-out test patch, run the FAIL_TO_PASS and PASS_TO_PASS tests), runs it, and grades the log with the SWE-Gym harness. 1.0 if the instance is resolved, 0.0 otherwise, as in NeMo Gym.
-- **The policy is an adapter.** Every weight sync writes the LoRA adapter to `<output_dir>/.vllm_lora/trl-policy-vN` and asks vLLM to load it. The agent's requests name that adapter, because in vLLM's API an adapter *is* a model name and a request naming the base model would be served by the base model.
+- **The policy reaches vLLM one of two ways.** With LoRA, every weight sync writes the adapter to `<output_dir>/.vllm_lora/trl-policy-vN` and asks vLLM to load it. Training the full model instead, the merged weights stream to vLLM over NCCL and no adapter, proxy or bucket is involved; see the expert-parallel section below.
+- **With an adapter.** Every weight sync writes the LoRA adapter to `<output_dir>/.vllm_lora/trl-policy-vN` and asks vLLM to load it. The agent's requests name that adapter, because in vLLM's API an adapter *is* a model name and a request naming the base model would be served by the base model.
+
+## Training the full model over an expert-parallel mesh
+
+`async_grpo_mini_swe_agent_coder.py` trains every weight of a mixture-of-experts policy rather than an adapter. It exists because a MoE keeps about 95% of its parameters in the experts, which are fused 3D tensors (`experts.gate_up_proj` of shape `[num_experts, 2 * intermediate, hidden]`) that a LoRA cannot target: a LoRA run on `Qwen/Qwen3-Coder-30B-A3B-Instruct` trains the attention projections of a model that is almost entirely experts.
+
+Three things make that fit on four GPUs:
+
+- **The experts are sharded, not replicated.** `DistributedConfig(tp_size=4, fsdp_size=1, enable_expert_parallel=True, experts_dispatch="all-to-all")` gives each rank `num_experts / tp_size` experts. Expert parallelism lives on the `tp` mesh dimension, and with it enabled the applied plan is the model's expert plan, which touches only the router and the experts: attention is never tensor-parallel.
+- **Each rank routes its own tokens.** Under `"all-to-all"` a token is dispatched to whichever rank owns its expert and comes back, so every rank trains on its own rows and the whole world stays data-parallel. Under the `"all-reduce"` default the ranks of a group instead recompute one batch together and would have to be handed identical rows, which this trainer does not do. This needs [huggingface/transformers#48204](https://github.com/huggingface/transformers/pull/48204) (branch `ep-fsdp-2d-mesh`), not a released transformers.
+- **Adam moments stay in the model's dtype.** fp32 moments are 16 bytes per parameter, which does not fit; the 8-bit optimizers take a raw device pointer a sharded parameter cannot give.
+
+The merged weights reach vLLM over NCCL between two Jobs in a network group. Nothing has to be converted on the way out: vLLM's Qwen3-MoE loader detects a fused checkpoint by tensor rank and splits it per expert itself, so the trainer streams its parameters unchanged.
+
+```sh
+GROUP=my-run ./run_all_coder.sh          # trainer h200x4 + vLLM h200x2, same network group
+GROUP=my-run TAG=before ./run_eval_job_netgroup.sh   # score a fixed instance list against that server
+./bench_vllm_parallel.sh                 # tensor vs expert vs data parallelism on the server
+```
+
+A model sharded at load time cannot checkpoint its optimizer state, so `save_only_model=True` is mandatory and a restart begins a fresh run. The launcher is `torchrun`, not `accelerate`: the model is already sharded when the Trainer sees it, and an FSDP plugin would shard it twice.
 
 ## Differences from NeMo Gym's agent
 
