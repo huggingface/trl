@@ -1640,15 +1640,21 @@ class DistillationTrainer(_BaseTrainer):
             if self.processing_class.image_processor.use_thumbnail:
                 tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
             num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
-        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        # Recover counts for crop/tile-indexed pixels (Gemma pan-and-scan and InternVL).
         elif (
             images is not None
             and forward_kwargs["pixel_values"].ndim == 4
             and forward_kwargs["pixel_values"].size(0) != sum(num_images)
         ):
-            num_patches = self.processing_class.image_processor(
-                images=images, crop_to_patches=True, return_tensors="pt"
-            )["num_patches"]
+            if "num_crops" in self.processing_class.image_processor.model_input_names and hasattr(
+                self.processing_class.image_processor, "do_pan_and_scan"
+            ):
+                image_info = self.processing_class.image_processor(images=images, return_tensors="pt")
+                num_patches = torch.as_tensor(image_info["num_crops"]) + 1
+            else:
+                num_patches = self.processing_class.image_processor(
+                    images=images, crop_to_patches=True, return_tensors="pt"
+                )["num_patches"]
             num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part

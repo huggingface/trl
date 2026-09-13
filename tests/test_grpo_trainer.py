@@ -26,6 +26,7 @@ from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
@@ -4039,6 +4040,69 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize("pan_and_scan", [False, True])
+    def test_train_gemma_pan_and_scan(self, pan_and_scan):
+        from PIL import Image
+
+        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        crop_options = {
+            "do_pan_and_scan": pan_and_scan,
+            "pan_and_scan_min_crop_size": 32,
+            "pan_and_scan_max_num_crops": 4,
+            "pan_and_scan_min_ratio_to_activate": 1.2,
+        }
+        processor = AutoProcessor.from_pretrained(model_id, image_seq_length=4, **crop_options)
+        processor.image_processor.size = {"height": 28, "width": 28}
+        config = AutoConfig.from_pretrained(model_id)
+        config.vision_config.image_size = 28
+        config.mm_tokens_per_image = 4
+        config.text_config.head_dim = 8
+        config.text_config.query_pre_attn_scalar = 8
+        model = AutoModelForImageTextToText.from_config(config, attn_implementation="eager")
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [[{"role": "user", "content": "Describe the image."}]] * 4,
+                "image": [
+                    Image.new("RGB", size, color)
+                    for size, color in [
+                        ((128, 32), "red"),
+                        ((32, 32), "blue"),
+                        ((32, 128), "green"),
+                        ((32, 32), "white"),
+                    ]
+                ],
+            }
+        )
+
+        def reward_func(completions, **kwargs):
+            return [float(i % 2) for i in range(len(completions))]
+
+        args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            fp16=False,
+            gradient_checkpointing=False,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=2,
+            generation_batch_size=4,
+            num_generations=2,
+            max_completion_length=2,
+            max_steps=2,
+            learning_rate=0.01,
+            report_to="none",
+            save_strategy="no",
+            mask_truncated_completions=False,
+            seed=42,
+        )
+        trainer = GRPOTrainer(
+            model=model, processing_class=processor, args=args, train_dataset=dataset, reward_funcs=reward_func
+        )
+        before = model.model.multi_modal_projector.mm_input_projection_weight.detach().clone()
+        result = trainer.train()
+        assert trainer.state.global_step == 2
+        assert torch.isfinite(torch.tensor(result.training_loss))
+        assert not torch.equal(before, model.model.multi_modal_projector.mm_input_projection_weight.detach())
 
     def test_train_vlm_with_pad_to_multiple_of(self):
         # Models like Gemma3 use other forward keyword arguments like token_type_ids that also need to be padded when
