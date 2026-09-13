@@ -5,6 +5,18 @@ on:
     branches:
       - main
       - ci-*
+    paths:
+      # Run only when relevant files are modified
+      - ".github/**.yml"
+      - ".pre-commit-config.yaml"
+      - "examples/**.py"
+      - "scripts/**.py"
+      - "tests/**.py"
+      - "trl/**.py"
+      - "pyproject.toml"
+      # Exclude if only experimental code/tests
+      - "!trl/experimental/**"
+      - "!tests/experimental/**"
   pull_request:
     paths:
       # Run only when relevant files are modified
@@ -18,6 +30,7 @@ on:
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
       - "!tests/experimental/**"
+  workflow_dispatch:
 
 env:
   TQDM_DISABLE: 1
@@ -25,6 +38,10 @@ env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check_code_quality:
@@ -92,7 +109,7 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
@@ -147,7 +164,7 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
@@ -197,7 +214,7 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
@@ -251,7 +268,7 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
@@ -303,7 +320,7 @@ jobs:
           pytest -v tests/distributed/test_distributed.py
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
