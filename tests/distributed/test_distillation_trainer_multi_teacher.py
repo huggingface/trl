@@ -17,22 +17,10 @@ Two-rank CPU check of managed multi-teacher distillation (the `teacher_models` c
 processes on CPU, compared against a single-process reference trained on the same global batch and the same tokens
 (see `distillation_multi_teacher_script.py`).
 
-The two-process launch reproduces `data/accelerate_configs/multi_cpu.yaml` with `torch.distributed.run` rather than
-`accelerate launch --config_file`: in this environment (no `mpirun`/`mpiexec`/`mpi4py`), `accelerate launch` cannot
-actually start two CPU processes from a `MULTI_CPU` config. Probing it directly confirms this —
-`accelerate launch --config_file data/accelerate_configs/multi_cpu.yaml <script>` exits 0 but runs exactly *one*
-process (`Accelerator().num_processes == 1`, `distributed_type == DistributedType.NO`) instead of two. The reason is
-in `accelerate/commands/launch.py::launch_command`: it special-cases a non-MPI multi-process spawn (via
-`torch.distributed.run`) only for `MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA` distributed types; `MULTI_CPU`
-falls through to `simple_launcher`, which starts a single subprocess unless `--mpirun_hostfile` is given, and that
-needs an `mpirun`/`mpiexec` binary that this environment does not have (confirmed via `shutil.which` and
-`import mpi4py`). Setting up MPI in a machine shared with concurrent agents was avoided as too invasive for a test
-file.
-
-`torch.distributed.run` is what `accelerate launch --multi_gpu` itself calls internally for its own non-MPI
-multi-process spawn, so this replicates the same mechanism `accelerate launch` would use, just addressed directly;
-`ACCELERATE_USE_CPU`, read from the config's `use_cpu`, is what makes `Accelerator()` resolve to `MULTI_CPU`/gloo
-instead of trying (and, on this CPU-only torch build, failing) a GPU backend.
+Launched with `python -m torch.distributed.run` rather than `accelerate launch`: this environment has no
+`mpirun`/`mpiexec`/`mpi4py`, and `accelerate launch`'s non-MPI multi-process spawn is only wired up for
+`MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process
+launcher. `ACCELERATE_USE_CPU=1` is set explicitly so `Accelerator()` still resolves to `MULTI_CPU`/gloo.
 """
 
 import json
@@ -42,17 +30,12 @@ import sys
 
 import pytest
 import torch
-import yaml
 
 from ..testing_utils import TrlTestCase
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "distillation_multi_teacher_script.py")
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "accelerate_configs", "multi_cpu.yaml")
-
-with open(CONFIG_PATH) as _handle:
-    CONFIG = yaml.safe_load(_handle)
 
 
 @pytest.mark.slow
@@ -63,8 +46,9 @@ class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
             OMP_NUM_THREADS="1",
             MKL_NUM_THREADS="1",
             TOKENIZERS_PARALLELISM="false",
-            ACCELERATE_USE_CPU=str(CONFIG["use_cpu"]),
-            ACCELERATE_MIXED_PRECISION=CONFIG["mixed_precision"],
+            # Makes `Accelerator()` resolve to `MULTI_CPU`/gloo instead of trying (and, on this CPU-only torch
+            # build, failing) a GPU backend. See the module docstring for why this bypasses `accelerate launch`.
+            ACCELERATE_USE_CPU="1",
         )
 
         def run(mode, num_processes):
@@ -79,8 +63,6 @@ class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
                 os.path.join(self.tmp_dir, f"out-{mode}"),
             ]
             if num_processes > 1:
-                # See the module docstring: this is `accelerate launch`'s own non-MPI multi-process mechanism,
-                # addressed directly because the CLI does not wire it up for a `MULTI_CPU` config.
                 command = [
                     sys.executable,
                     "-m",
@@ -98,7 +80,7 @@ class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
             parameters = torch.load(os.path.splitext(output)[0] + "-params.pt", weights_only=True)
             return summary, parameters
 
-        multi, multi_parameters = run("multi", num_processes=CONFIG["num_processes"])
+        multi, multi_parameters = run("multi", num_processes=2)
         reference, reference_parameters = run("reference", num_processes=1)
 
         # The worker asserts this itself; assert it again on the evidence so a single-process fallback can never be
