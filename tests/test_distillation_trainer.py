@@ -1705,7 +1705,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
 
     def test_two_teachers_log_per_teacher_metrics(self, teachers):
         # Two different checkpoints train the student end to end, and every per-teacher metric family is logged under
-        # each routing ID. Key names come from `teacher_metric_key`: "<family>/<teacher_id>".
+        # each routing ID, as "<family>/<teacher_id>".
         training_args = DistillationConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
@@ -1790,15 +1790,23 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         with pytest.raises(ValueError, match=error):
             trainer.train()
 
-        # With exactly one teacher registered the column is optional: every row goes to that teacher.
-        single = DistillationTrainer(
+    def test_teacher_id_column_is_optional_with_one_teacher(self, teachers):
+        # With exactly one teacher registered the routing column may be absent: every row goes to that teacher.
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            max_completion_length=4,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
             model=self.model_id,
             args=training_args,
             train_dataset=self._unrouted_dataset(6),
             teacher_models={"a": teachers["a"]},
         )
-        single.train()
-        assert single.state.log_history[-1]["train_loss"] is not None
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_teacher_tokenizer_must_match_student(self, tmp_path, teachers):
         # Prompts are rendered once with the student's processing class and the teacher scores those exact token IDs,
@@ -1934,6 +1942,43 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             f"no evaluation logged both teachers; last eval keys: {sorted(eval_logs[-1])}"
         )
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_evaluation_loss_does_not_scale_with_the_number_of_groups(self, teachers):
+        # Evaluation has no `num_items_in_batch`, so the per-teacher group losses must share one denominator: the
+        # same rows split over two routing IDs must evaluate to the same loss as a single teacher scoring them all.
+        def run(train_dataset, eval_dataset, teacher_models):
+            training_args = DistillationConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.0,  # no update, so both runs evaluate the same student
+                per_device_train_batch_size=2,
+                per_device_eval_batch_size=4,
+                max_completion_length=4,
+                max_steps=2,
+                logging_steps=1,
+                eval_strategy="steps",
+                eval_steps=1,
+                seed=7,
+                report_to="none",
+            )
+            trainer = DistillationTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                teacher_models=teacher_models,
+            )
+            set_seed(7)
+            trainer.train()
+            return [entry["eval_loss"] for entry in trainer.state.log_history if "eval_loss" in entry]
+
+        one = run(self._unrouted_dataset(8), self._unrouted_dataset(4), {"only": teachers["a"]})
+        two = run(
+            self._routed_dataset(["a", "b"] * 4),
+            self._routed_dataset(["a", "b"] * 2),
+            {"a": teachers["a"], "b": teachers["a"]},
+        )
+        assert len(two) == len(one)
+        torch.testing.assert_close(torch.tensor(two), torch.tensor(one), rtol=1e-6, atol=1e-6)
 
     def test_resume_checks_teacher_manifest(self, teachers):
         # The teacher identities are part of the run: resuming against a different teacher under the same routing ID

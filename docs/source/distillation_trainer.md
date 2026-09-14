@@ -301,8 +301,9 @@ trainer.train()
 ### Requirements
 
 - Every teacher must share the student's tokenizer — identical tokenization and identical special-token roles/IDs — and the same `vocab_size`. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs.
-- Teachers must be dense checkpoints: quantization (`load_in_8bit`, `load_in_4bit`, a `quantization_config`) and `device_map` are rejected at initialization, since scoring substitutes device copies of a teacher's own parameters directly into its forward pass.
+- Teachers must be dense checkpoints: quantization (`load_in_8bit`, `load_in_4bit`, a `quantization_config`) and `device_map` are rejected at initialization, since scoring moves a teacher to the accelerator as a whole and projects through its plain head weight.
 - Students must be text-only. VLM students are not supported in multi-teacher mode; use the single `teacher_model` argument for VLM distillation.
+- DeepSpeed ZeRO-3 is rejected: the teacher head is uploaded as a plain device tensor, while the chunked loss only knows how to gather a ZeRO-partitioned head. Use ZeRO stage 1 or 2, or the single `teacher_model` argument.
 
 ### Memory
 
@@ -311,14 +312,16 @@ Teachers are inference-only sources: they never enter the student's module tree,
 - **CPU** holds every registered teacher for the whole run, plus one generation batch's worth of completion hidden-state targets. Those targets are computed once per generation batch and reused by every accumulation step drawn from it, sized as:
 
   ```
-  per_device_train_batch_size × gradient_accumulation_steps × max_completion_length × hidden_size × dtype_bytes
+  per_device_train_batch_size × gradient_accumulation_steps × max_completion_length × teacher_hidden_size × dtype_bytes
   ```
 
-- **Device, while scoring**: one teacher body at a time. A teacher's parameters and buffers are copied to the device, every row routed to it is scored, and the copy is freed before the next teacher — so device memory is bounded by the *largest* registered teacher, never the sum of all of them. This costs one device upload per teacher per generation batch.
+  where `teacher_hidden_size` is the *teacher's* hidden size (a teacher may be wider or narrower than the student; only the vocabulary has to match).
+
+- **Device, while scoring**: one teacher body at a time. A teacher is moved to the device, every row routed to it is scored, and it is moved back to CPU before the next teacher — so device memory is bounded by the *largest* registered teacher, never the sum of all of them. This costs one device round trip per teacher per generation batch.
 - **Device, while computing the loss**: only the output heads (`lm_head` weight and bias) of the teachers present in the current microbatch, one at a time:
 
   ```
-  vocab_size × hidden_size × dtype_bytes
+  vocab_size × teacher_hidden_size × dtype_bytes
   ```
 
   A microbatch routed to several teachers holds one head per teacher present in it — never a head per registered teacher, and never a teacher body.
@@ -338,7 +341,9 @@ Each checkpoint saves a `teacher_manifest.json` alongside the student weights, r
 
 ### Precision and distributed training
 
-Teachers are scored under the same precision context the loss uses for its own forward passes, so a single registered teacher is numerically identical to passing `teacher_model=` directly. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
+Teachers are scored under the same precision context the loss uses for its own forward passes. On a single process and under DDP, a single registered teacher therefore reproduces `teacher_model=` bitwise; ZeRO-1/2 is expected to match as well but is not covered by the CPU test suite. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
+
+With several teachers, the microbatch rows are grouped per teacher and each group is a separate call into the same loss, so the order in which the per-token divergences are summed differs from one ungrouped call; the result agrees to within floating-point noise rather than bitwise.
 
 Distributed training does not change the student side: it is the same generation and optimization loop as single-teacher distillation. Each rank scores only its own rows, against its own CPU copy of every teacher.
 
