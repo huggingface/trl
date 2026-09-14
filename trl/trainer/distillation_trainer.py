@@ -14,6 +14,7 @@
 
 import copy
 import inspect
+import json
 import math
 import os
 import sys
@@ -23,6 +24,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -32,10 +34,12 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from huggingface_hub import HfApi
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -45,6 +49,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, get_last_checkpoint
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
@@ -291,6 +296,61 @@ def _chunked_divergence_loss(
     return loss, entropy_sum, n_valid_tensor
 
 
+def _tokenizer_payload(tokenizer: PreTrainedTokenizerBase) -> str:
+    """
+    Canonical serialization of everything that decides how a tokenizer turns text into token IDs.
+
+    Used to compare a teacher's tokenizer against the student's: prompts are rendered once with the student's
+    processing class and every teacher scores those exact IDs, so a teacher that renders text differently is
+    training against the wrong tokens. The backend's `padding` and `truncation` sections are dropped because they
+    are call-time state — a fast tokenizer records the strategy of the last call that used them — not identity, and
+    `padding_side` / `truncation_side` are excluded for the same reason.
+
+    Args:
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            Fast (Rust-backed) tokenizer to serialize.
+
+    Returns:
+        `str`: the serialization, with key order and whitespace normalized so only real differences compare unequal.
+    """
+    payload = json.loads(tokenizer.backend_tokenizer.to_str())
+    payload.pop("padding", None)
+    payload.pop("truncation", None)
+    payload["special_tokens"] = {
+        "bos": (tokenizer.bos_token, tokenizer.bos_token_id),
+        "eos": (tokenizer.eos_token, tokenizer.eos_token_id),
+        "pad": (tokenizer.pad_token, tokenizer.pad_token_id),
+        "unk": (tokenizer.unk_token, tokenizer.unk_token_id),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _functional_teacher(teacher: PreTrainedModel, device_state: dict[str, torch.Tensor]) -> SimpleNamespace:
+    """
+    Wrap a CPU teacher so its backbone runs on device copies of its tensors, leaving the CPU module untouched.
+
+    `_get_last_hidden_state` only reads `.base_model` off the model it is handed, so a stand-in carrying the
+    reparametrized call is all it needs: `torch.func.functional_call` substitutes `device_state` for the module's
+    parameters and buffers for the duration of each call, so the teacher itself is never moved or mutated and the
+    device copies are freed with `device_state`. Scoring therefore runs the same code, with the same shapes, as the
+    single-teacher loss's own teacher forward.
+
+    Args:
+        teacher ([`~transformers.PreTrainedModel`]):
+            Frozen CPU teacher.
+        device_state (`dict[str, torch.Tensor]`):
+            Device copies of the backbone's parameters and buffers, keyed by their names in the backbone.
+
+    Returns:
+        `SimpleNamespace`: stand-in accepted by `_get_last_hidden_state` in place of a model.
+    """
+
+    def backbone(**model_inputs):
+        return torch.func.functional_call(teacher.base_model, device_state, kwargs=model_inputs)
+
+    return SimpleNamespace(base_model=backbone)
+
+
 class DistillationTrainer(_BaseTrainer):
     """
     Trainer for knowledge distillation. The student is trained on-policy — it generates the completions itself — to
@@ -374,6 +434,18 @@ class DistillationTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
+        teacher_models (`dict[str, str` or [`~transformers.PreTrainedModel`]`]`, *optional*):
+            Mapping from routing ID to a teacher checkpoint path / Hub ID, or to an already instantiated teacher.
+            Passing it opts into multi-teacher on-policy distillation: every dataset row's `teacher_id` column
+            selects the teacher that supplies its target (the column is optional when a single teacher is
+            registered), and per-teacher `teacher_jsd/<id>`, `teacher_entropy/<id>` and `teacher_token_frac/<id>`
+            metrics are logged. The teachers are held on CPU and uploaded to the device one at a time, so device
+            memory is bounded by the largest teacher rather than their sum. Several IDs may point at the same
+            checkpoint with different `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must
+            share the student's tokenizer and vocabulary size. Mutually exclusive with `teacher_model`.
+        teacher_tokenizers (`dict[str, ~transformers.PreTrainedTokenizerBase]`, *optional*):
+            Tokenizers for the `teacher_models` entries whose tokenizer cannot be loaded from the checkpoint itself,
+            i.e. already instantiated teachers. Only valid together with `teacher_models`.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -406,11 +478,27 @@ class DistillationTrainer(_BaseTrainer):
         quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
+        teacher_models: "dict[str, str | PreTrainedModel] | None" = None,
+        teacher_tokenizers: dict[str, PreTrainedTokenizerBase] | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = DistillationConfig(f"{model_name}-Distillation")
+
+        # Multi-teacher mode is opted into by `teacher_models` and is exclusive with the singular teacher entry
+        # points, so a run can never carry two teacher sources with different lifecycles. Checked before any loading.
+        if teacher_models is not None and (teacher_model is not None or args.teacher_model_name_or_path is not None):
+            raise ValueError(
+                "You passed `teacher_models` (multi-teacher distillation) together with the singular `teacher_model` "
+                "or `args.teacher_model_name_or_path`. Pass only one: register every teacher in `teacher_models` "
+                '(e.g. `teacher_models={"teacher": ...}`), or drop `teacher_models`.'
+            )
+        if teacher_models is None and (teacher_tokenizers is not None or args.teacher_model_init_kwargs_by_teacher):
+            raise ValueError(
+                "`teacher_tokenizers` and `args.teacher_model_init_kwargs_by_teacher` only apply to multi-teacher "
+                "distillation. Pass `teacher_models` as well, or drop them."
+            )
 
         # Student model loading
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
@@ -738,6 +826,41 @@ class DistillationTrainer(_BaseTrainer):
         else:
             self.teacher_model = None
 
+        # Multi-teacher setup. The teachers are plain CPU inference sources: they never enter the student module
+        # tree, the optimizer or the accelerator's model preparation, so `self.teacher_model` stays `None` and
+        # `_compute_loss` takes the multi-teacher branch. Runs here because the checks below need the accelerator.
+        self.teacher_models = teacher_models
+        if teacher_models is not None:
+            self._check_teacher_support(teacher_model_init_kwargs)
+            # Accelerate's RAM-efficient FSDP loading fills every process that is not local rank zero with zeros and
+            # waits for the student's state synchronization. Each rank scores with its own complete teacher, so that
+            # policy is scoped off for the duration of the loads.
+            plain_loading_env = {"ACCELERATE_USE_FSDP": "false", "FSDP_CPU_RAM_EFFICIENT_LOADING": "false"}
+            previous_env = {name: os.environ.get(name) for name in plain_loading_env}
+            os.environ.update(plain_loading_env)
+            self.teacher_models = {}
+            self._teacher_manifest = []
+            try:
+                for teacher_id, source in teacher_models.items():
+                    self.teacher_models[teacher_id] = self._load_teacher(
+                        teacher_id, source, teacher_model_init_kwargs, teacher_tokenizers or {}
+                    )
+            finally:
+                for name, value in previous_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+            self._teacher_ids = list(self.teacher_models)
+            self._teacher_id_to_idx = {teacher_id: index for index, teacher_id in enumerate(self._teacher_ids)}
+            # Completion hidden states scored ahead of the loss in `_prepare_inputs`, kept on CPU and keyed per mode
+            # so a nested evaluation cannot clobber the training targets:
+            # `{mode: {microbatch index: {teacher index: (rows, completion length, H) tensor}}}`.
+            self._teacher_targets = {"train": {}, "eval": {}}
+            self._teacher_targets_index = 0
+            # One-entry device cache for the teacher `lm_head`: `(teacher id, weight, bias)`, replaced on demand.
+            self._teacher_head = None
+
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
@@ -849,13 +972,195 @@ class DistillationTrainer(_BaseTrainer):
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
+    def _check_teacher_support(self, teacher_model_init_kwargs: dict):
+        """
+        Reject what the multi-teacher teacher lifecycle has no adapter for, before any teacher is loaded.
+
+        The student side is the single-teacher loss, so only the teacher side is constrained here.
+
+        Args:
+            teacher_model_init_kwargs (`dict`):
+                Common teacher loading kwargs, scanned together with the per-ID overrides.
+        """
+        unsupported = ("quantization_config", "load_in_8bit", "load_in_4bit", "device_map")
+        per_teacher_kwargs = (self.args.teacher_model_init_kwargs_by_teacher or {}).values()
+        for kwargs in [teacher_model_init_kwargs, *per_teacher_kwargs]:
+            present = sorted(key for key in unsupported if key in kwargs)
+            if present:
+                raise ValueError(
+                    f"Multi-teacher distillation does not support the teacher loading options {present}: a quantized "
+                    f"or device-mapped teacher has no dense parameters to substitute into the scoring forward, and no "
+                    f"plain head weight to project through. Register dense checkpoints instead."
+                )
+        if self._is_vlm:
+            raise ValueError(
+                "Multi-teacher distillation does not support vision-language students: teacher scoring carries only "
+                "the text tokens of the generation batch, so image expansion and completion alignment cannot be "
+                "reproduced for the teacher. Use the single-teacher `teacher_model` argument for VLM distillation."
+            )
+
+    def _load_teacher(
+        self,
+        teacher_id: str,
+        source: "str | PreTrainedModel",
+        common_init_kwargs: dict,
+        teacher_tokenizers: dict[str, PreTrainedTokenizerBase],
+    ) -> PreTrainedModel:
+        """
+        Load one teacher on CPU, check it against the student, and record its identity for the manifest.
+
+        Args:
+            teacher_id (`str`):
+                Routing ID of the teacher.
+            source (`str` or [`~transformers.PreTrainedModel`]):
+                Checkpoint path / Hub ID, or an already instantiated teacher.
+            common_init_kwargs (`dict`):
+                `args.teacher_model_init_kwargs`, under this teacher's `args.teacher_model_init_kwargs_by_teacher`
+                entry.
+            teacher_tokenizers (`dict[str, ~transformers.PreTrainedTokenizerBase]`):
+                Tokenizers passed explicitly for the teachers that have none of their own.
+
+        Returns:
+            [`~transformers.PreTrainedModel`]: the frozen CPU teacher.
+        """
+        per_teacher = (self.args.teacher_model_init_kwargs_by_teacher or {}).get(teacher_id, {})
+        init_kwargs = {**common_init_kwargs, **per_teacher}
+        init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # Teachers stay on CPU and are uploaded one at a time, so they are always loaded unmapped.
+        init_kwargs["device_map"] = None
+        revision = init_kwargs.get("revision")
+        preloaded = not isinstance(source, str)
+        commit = None
+        if preloaded:
+            teacher, source = source, get_config_model_id(source.config)
+        elif os.path.isdir(source):
+            if revision is not None:
+                raise ValueError(
+                    f"Teacher {teacher_id!r} is the local path {source!r} but was given `revision` {revision!r}. "
+                    f"Local paths carry no revision; drop it, or register the Hub repository instead."
+                )
+            teacher = create_model_from_path(source, **init_kwargs)
+        else:
+            # Pin the branch/tag to the commit it resolves to now, so the identity saved in the manifest is immutable
+            # and a resume cannot silently follow a moved branch.
+            commit = HfApi().model_info(source, revision=revision).sha
+            teacher = create_model_from_path(source, **{**init_kwargs, "revision": commit})
+        teacher = teacher.to("cpu").eval().requires_grad_(False)
+
+        # The divergence compares the full next-token distribution of the student against the teacher's, so both must
+        # be defined over the same vocabulary.
+        student_vocab_size = self.model.config.get_text_config().vocab_size
+        teacher_vocab_size = teacher.config.get_text_config().vocab_size
+        if student_vocab_size != teacher_vocab_size:
+            raise ValueError(
+                f"The student model has vocab_size {student_vocab_size} but teacher {teacher_id!r} has vocab_size "
+                f"{teacher_vocab_size}. Distillation compares the teacher's full next-token distribution, which "
+                f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for cross-tokenizer "
+                f"distillation."
+            )
+        # An instantiated teacher carries no tokenizer of its own; pass one in `teacher_tokenizers` to have it checked.
+        tokenizer = teacher_tokenizers.get(teacher_id)
+        if tokenizer is None and not preloaded:
+            tokenizer = AutoTokenizer.from_pretrained(
+                source, revision=commit, trust_remote_code=init_kwargs["trust_remote_code"]
+            )
+        if tokenizer is not None and _tokenizer_payload(tokenizer) != _tokenizer_payload(self._tokenizer):
+            raise ValueError(
+                f"Teacher {teacher_id!r} does not share the student's tokenizer. Prompts are rendered once with the "
+                f"student's processing class and every teacher scores those exact token IDs, so the tokenizer "
+                f"serialization and special-token roles/IDs must be identical. Use a teacher trained on the student's "
+                f"tokenizer, or GOLD for cross-tokenizer distillation."
+            )
+
+        # What this routing ID trains against: where the weights came from, the commit its revision resolved to
+        # (`None` for a local path or an instantiated model), and the dtype they materialized in. No content hashing,
+        # so a local checkpoint overwritten in place between save and resume is not detected.
+        source_dtype = str(teacher.dtype)
+        self._teacher_manifest.append(
+            {
+                "id": teacher_id,
+                "source": source,
+                "source_key": f"{source}@{commit}#{source_dtype}",
+                "source_dtype": source_dtype,
+            }
+        )
+        return teacher
+
+    def _teacher_index(self, teacher_id: str | None) -> int:
+        """Index in `teacher_models` of the teacher that scores a row; the `teacher_id` column is optional with one."""
+        if teacher_id is None:
+            if len(self.teacher_models) > 1:
+                raise ValueError(
+                    f"A row has no `teacher_id`, but {len(self.teacher_models)} teachers are registered "
+                    f"({list(self.teacher_models)}). Add a `teacher_id` column naming one of them to every row; it is "
+                    f"only optional when a single teacher is registered."
+                )
+            return 0
+        if teacher_id not in self._teacher_id_to_idx:
+            raise ValueError(
+                f"Unknown teacher ID {teacher_id!r} in the dataset's `teacher_id` column. Registered teachers: "
+                f"{list(self.teacher_models)}."
+            )
+        return self._teacher_id_to_idx[teacher_id]
+
+    def _score_teachers(self, mode: str, microbatches: list[dict[str, torch.Tensor | Any]]) -> None:
+        """
+        Score every teacher present in a freshly generated batch, keeping the completion hidden states on CPU.
+
+        One device upload per teacher per generation batch: the teacher's tensors are copied to the device, every
+        microbatch slice routed to it is scored in order, and the copies are freed before the next teacher — so
+        device memory holds one teacher body at a time, whatever the number registered. The slices are scored exactly
+        as the loss's own forward would see them (the same rows, the same shapes, the same precision), which is what
+        makes a single registered teacher numerically identical to passing `teacher_model=`.
+
+        Args:
+            mode (`str`):
+                `"train"` or `"eval"`. Targets are stored per mode, so an evaluation nested in a training
+                accumulation cannot clobber the training targets.
+            microbatches (`list[dict[str, torch.Tensor | Any]]`):
+                Microbatches of the generation batch, in the order they will be trained on.
+        """
+        device = self.accelerator.device
+        # The previous batch's targets and the head it left on the device are dead as soon as its tokens are.
+        self._teacher_head = None
+        targets = {index: {} for index in range(len(microbatches))}
+        for teacher_index, teacher in enumerate(self.teacher_models.values()):
+            rows_per_microbatch = [
+                (inputs["teacher_index"] == teacher_index).nonzero(as_tuple=True)[0] for inputs in microbatches
+            ]
+            if not any(rows.numel() for rows in rows_per_microbatch):
+                continue
+            backbone = teacher.base_model
+            device_state = {
+                name: tensor.to(device) for name, tensor in [*backbone.named_parameters(), *backbone.named_buffers()]
+            }
+            for index, (inputs, rows) in enumerate(zip(microbatches, rows_per_microbatch, strict=True)):
+                if rows.numel() == 0:
+                    continue
+                input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)[rows]
+                attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)[rows]
+                # `compute_loss_context_manager()` is the very context the loss runs its own forwards in, so the
+                # targets are computed in the precision the objective uses rather than a guess from
+                # `accelerator.mixed_precision` (the two disagree whenever Trainer declines to autocast).
+                with torch.no_grad(), self.compute_loss_context_manager():
+                    hidden_states = self._get_last_hidden_state(
+                        _functional_teacher(teacher, device_state),
+                        input_ids,
+                        attention_mask,
+                        inputs["completion_ids"].size(1),
+                    )
+                targets[index][teacher_index] = hidden_states.to("cpu")
+            del device_state
+        self._teacher_targets[mode] = targets
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask"). In DistillationTrainer, we preprocess data, so using the model's signature columns
         # doesn't work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
+        # `teacher_id` is kept so multi-teacher routing survives `remove_unused_columns`; nothing reads it otherwise.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image", "images"]
+            self._signature_columns = ["prompt", "image", "images", "teacher_id"]
 
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × gradient_accumulation_steps`). This allows us to generate
@@ -1544,6 +1849,12 @@ class DistillationTrainer(_BaseTrainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Resolve the routing IDs before generating: an unknown or missing `teacher_id` is a dataset error that must
+        # not cost a generation pass. Routing decides which teacher supplies a row's target, never which rows are
+        # sampled.
+        if self.teacher_models is not None:
+            teacher_index = [self._teacher_index(x.get("teacher_id")) for x in inputs]
+
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
         elif "image" in inputs[0]:
@@ -1741,6 +2052,10 @@ class DistillationTrainer(_BaseTrainer):
             "completion_mask": completion_mask,
             "num_items_in_batch": num_items_in_batch,
         }
+        if self.teacher_models is not None:
+            # An int64 `(B,)` column, so the shuffle and the accumulation split permute and slice it together with the
+            # tokens, and on `device` like every other payload tensor.
+            output["teacher_index"] = torch.tensor(teacher_index, dtype=torch.int64, device=device)
         if "pixel_values" in forward_kwargs:
             output["pixel_values"] = forward_kwargs["pixel_values"]
         if "image_grid_thw" in forward_kwargs:
@@ -1790,11 +2105,22 @@ class DistillationTrainer(_BaseTrainer):
                 generation_batch = shuffle_sequence_dict(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.gradient_accumulation_steps)
                 self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
-            inputs = self._buffered_inputs[self._step % self.args.gradient_accumulation_steps]
+                if self.teacher_models is not None:
+                    # Score the whole generation batch once, here: the teachers are uploaded to the device while the
+                    # student holds nothing but its weights, and each accumulation step then reads CPU targets.
+                    self._score_teachers("train", self._buffered_inputs)
+            index = self._step % self.args.gradient_accumulation_steps
+            if self.teacher_models is not None:
+                # The microbatch whose targets `_compute_loss` reads back; it runs right after this returns.
+                self._teacher_targets_index = index
+            inputs = self._buffered_inputs[index]
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
             # local generation batch == local eval batch
             inputs = self._generate_and_score_completions(generation_batch)
+            if self.teacher_models is not None:
+                self._score_teachers("eval", [inputs])
+                self._teacher_targets_index = 0
         return inputs
 
     @profiling_decorator
@@ -1810,14 +2136,39 @@ class DistillationTrainer(_BaseTrainer):
         # `_forward_redirection`, so DDP.forward() fires `prepare_for_backward()` and FSDP/DeepSpeed keep the student's
         # sharded parameters (including the `lm_head`) materialized for the projection.
         unwrapped_student = self.accelerator.unwrap_model(model)
-        loss, entropy_sum, num_valid_tokens = self._forward_redirection(
+        outputs = self._forward_redirection(
             model, unwrapped_student, self._compute_loss, unwrapped_student, inputs, num_items_in_batch
         )
+
+        mode = "train" if self.model.training else "eval"
+        if self.teacher_models is not None:
+            loss, entropy_sum, num_valid_tokens, teacher_stats = outputs
+            # `[3, num_teachers]` on every rank, with zero columns for the teachers this microbatch did not route to,
+            # so the shape is rank-independent and a plain sum-reduce is correct. `gather_for_metrics` must not be
+            # used: it trims the first dimension to the dataloader remainder, and here that is the statistic row, not
+            # an example count. Reduced after `_forward_redirection` returns, like the entropy gather below.
+            divergence_sums, entropy_sums, counts = self.accelerator.reduce(teacher_stats, reduction="sum")
+            total_count = counts.sum()
+            for teacher_index, teacher_id in enumerate(self._teacher_ids):
+                count = counts[teacher_index]
+                # A teacher absent from this microbatch scored no token: its share of the tokens is a real zero, but
+                # its mean divergence and entropy are undefined, so those keys are left out entirely. The entropy is
+                # the student's own, broken down by the teacher that scored the token — the teacher's entropy would
+                # need a second vocabulary-wide projection of the targets.
+                self._metrics[mode][f"teacher_token_frac/{teacher_id}"].append((count / total_count).item())
+                if count > 0:
+                    self._metrics[mode][f"teacher_jsd/{teacher_id}"].append(
+                        (divergence_sums[teacher_index] / count).item()
+                    )
+                    self._metrics[mode][f"teacher_entropy/{teacher_id}"].append(
+                        (entropy_sums[teacher_index] / count).item()
+                    )
+        else:
+            loss, entropy_sum, num_valid_tokens = outputs
 
         # Log the mean per-token student entropy (in nats). The reduction runs here, after `_forward_redirection`
         # returns, so the `gather_for_metrics` collective does not run inside the DDP/FSDP-wrapped forward (a hang/
         # ordering risk). Mirrors `SFTTrainer.compute_loss`.
-        mode = "train" if self.model.training else "eval"
         num_valid_tokens = self.accelerator.gather_for_metrics(num_valid_tokens).sum()
         entropy_sum = self.accelerator.gather_for_metrics(entropy_sum).sum()
         entropy = (entropy_sum / num_valid_tokens).item() if num_valid_tokens > 0 else 0.0
@@ -1853,6 +2204,66 @@ class DistillationTrainer(_BaseTrainer):
             unwrapped_student, input_ids, attention_mask, logits_to_keep, **multimodal_inputs
         )
 
+        # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
+        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+        # as-is. Muse Glimmer applies the same pre-softcap multiplier under the name `output_multiplier`.
+        student_config = unwrapped_student.config.get_text_config()
+        student_logit_scale = getattr(student_config, "logit_scale", None)
+        if student_logit_scale is None:
+            student_logit_scale = getattr(student_config, "output_multiplier", None)
+        student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
+
+        if self.teacher_models is not None:
+            # Multi-teacher path: no teacher backbone runs here. The teachers scored these exact tokens in
+            # `_prepare_inputs`; what is left is to split the rows by teacher and run the same chunked loss once per
+            # group, with the group's CPU targets moved back to the device and the group's head uploaded through the
+            # one-entry cache. With a single teacher the one group is the whole microbatch, so the call below is the
+            # call the single-teacher path makes.
+            student_lm_head = unwrapped_student.get_output_embeddings()
+            mode = "train" if self.model.training else "eval"
+            loss = student_hidden_states.new_zeros((), dtype=torch.float32)
+            entropy_sum = student_hidden_states.new_zeros((), dtype=torch.float32)
+            n_valid = student_hidden_states.new_zeros((), dtype=torch.int64)
+            teacher_stats = student_hidden_states.new_zeros((3, len(self.teacher_models)), dtype=torch.float32)
+            for teacher_index, targets in self._teacher_targets[mode][self._teacher_targets_index].items():
+                rows = (inputs["teacher_index"] == teacher_index).nonzero(as_tuple=True)[0]
+                teacher_id = self._teacher_ids[teacher_index]
+                teacher_config = self.teacher_models[teacher_id].config.get_text_config()
+                teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
+                if teacher_logit_scale is None:
+                    teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
+                teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
+                teacher_lm_head_weight, teacher_lm_head_bias = self._teacher_head_on_device(teacher_id)
+                group_loss, group_entropy_sum, group_n_valid = _chunked_divergence_loss(
+                    student_hidden_states[rows],
+                    targets.to(student_hidden_states.device),
+                    student_lm_head.weight,
+                    teacher_lm_head_weight,
+                    loss_mask[rows],
+                    self.beta,
+                    _CHUNKED_LM_HEAD_CHUNK_SIZE,
+                    num_items_in_batch=num_items_in_batch,
+                    student_lm_head_bias=student_lm_head.bias,
+                    teacher_lm_head_bias=teacher_lm_head_bias,
+                    student_logit_scale=student_logit_scale,
+                    teacher_logit_scale=teacher_logit_scale,
+                    student_final_logit_softcapping=getattr(student_config, "final_logit_softcapping", None),
+                    teacher_final_logit_softcapping=getattr(teacher_config, "final_logit_softcapping", None),
+                    temperature=self.temperature,
+                )
+                loss = loss + group_loss
+                entropy_sum = entropy_sum + group_entropy_sum
+                n_valid = n_valid + group_n_valid
+                # `_chunked_divergence_loss` normalizes the divergence sum it accumulated; undo that here rather than
+                # widen its return, so the per-teacher `teacher_jsd/<id>` metric is a plain per-token mean.
+                normalizer = group_n_valid.clamp(min=1) if num_items_in_batch is None else num_items_in_batch
+                teacher_stats[0, teacher_index] = group_loss.detach() * normalizer
+                teacher_stats[1, teacher_index] = group_entropy_sum.detach()
+                teacher_stats[2, teacher_index] = group_n_valid
+            # Same contract as the single-teacher return, plus the `[3, num_teachers]` statistics `compute_loss`
+            # reduces across ranks. Detached: the metrics are gradient-free.
+            return loss, entropy_sum.detach(), n_valid, teacher_stats
+
         # Route the teacher backbone through its own wrapper via `_forward_redirection` too, so FSDP/DeepSpeed
         # materialize its sharded parameters before the forward runs (the backbone call would otherwise see shards).
         self.teacher_model.eval()
@@ -1872,18 +2283,11 @@ class DistillationTrainer(_BaseTrainer):
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
-        # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
-        student_config = unwrapped_student.config.get_text_config()
+        # Read the teacher's logit post-processing the same way as the student's, above.
         teacher_config = unwrapped_teacher.config.get_text_config()
-        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
-        # as-is. Muse Glimmer applies the same pre-softcap multiplier under the name `output_multiplier`.
-        student_logit_scale = getattr(student_config, "logit_scale", None)
-        if student_logit_scale is None:
-            student_logit_scale = getattr(student_config, "output_multiplier", None)
         teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
         if teacher_logit_scale is None:
             teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
-        student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
         loss, entropy_sum, n_valid = _chunked_divergence_loss(
             student_hidden_states,
@@ -1906,6 +2310,28 @@ class DistillationTrainer(_BaseTrainer):
         # returns (see there). Detached: the metric is gradient-free.
         return loss, entropy_sum.detach(), n_valid
 
+    def _teacher_head_on_device(self, teacher_id: str) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Upload one teacher's `lm_head` to the device, replacing whatever the one-entry cache holds.
+
+        The uploaded weight stays alive as long as a checkpointed chunk that captured it can be replayed, so a
+        microbatch routed to several teachers holds one head per teacher present in it — never a head per registered
+        teacher, and never a teacher body.
+
+        Args:
+            teacher_id (`str`):
+                Routing ID of the teacher whose head is needed.
+
+        Returns:
+            `tuple[torch.Tensor, torch.Tensor | None]`: the `(V, H)` weight and the optional `(V,)` bias, on device.
+        """
+        if self._teacher_head is None or self._teacher_head[0] != teacher_id:
+            lm_head = self.teacher_models[teacher_id].get_output_embeddings()
+            device = self.accelerator.device
+            bias = None if lm_head.bias is None else lm_head.bias.to(device)
+            self._teacher_head = (teacher_id, lm_head.weight.to(device), bias)
+        return self._teacher_head[1], self._teacher_head[2]
+
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
         output = super().training_step(model, inputs, num_items_in_batch)
@@ -1926,6 +2352,28 @@ class DistillationTrainer(_BaseTrainer):
                 loss = self.compute_loss(model, inputs)
             loss = loss.mean().detach()
         return loss, None, None
+
+    def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
+        # The teachers are part of the run: resuming with a different checkpoint, revision or dtype under the same
+        # routing ID would silently continue training against another target distribution, so it is refused.
+        if self.teacher_models is not None and resume_from_checkpoint not in (None, False):
+            checkpoint = (
+                resume_from_checkpoint
+                if isinstance(resume_from_checkpoint, str)
+                else get_last_checkpoint(self.args.output_dir)
+            )
+            with open(os.path.join(checkpoint, "teacher_manifest.json"), encoding="utf-8") as f:
+                saved = {entry["id"]: entry["source_key"] for entry in json.load(f)["teachers"]}
+            current = {entry["id"]: entry["source_key"] for entry in self._teacher_manifest}
+            differing = sorted(
+                set(saved) ^ set(current) | {key for key in set(saved) & set(current) if saved[key] != current[key]}
+            )
+            if differing:
+                raise ValueError(
+                    f"The registered teachers are incompatible with the checkpoint {checkpoint}: {differing} differ. "
+                    f"Registered {current}, saved {saved}."
+                )
+        return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval)
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
@@ -1994,3 +2442,11 @@ class DistillationTrainer(_BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+        # Teacher identities travel with the student checkpoint so a resume can be checked against them; no teacher
+        # weights, targets or caches are saved.
+        if self.teacher_models is not None and self.accelerator.is_main_process:
+            checkpoint_dir = os.path.join(
+                self._get_output_dir(trial=trial), f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            )
+            with open(os.path.join(checkpoint_dir, "teacher_manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"teachers": self._teacher_manifest}, f, indent=2, sort_keys=True)
