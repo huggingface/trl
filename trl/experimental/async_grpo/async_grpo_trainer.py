@@ -1200,7 +1200,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, args.dtype)
+        precision = self.accelerator.mixed_precision
+        dtype = {
+            "bf16": "bfloat16",
+            "fp16": "float16",
+            "no": str(self.model.dtype).removeprefix("torch."),
+        }.get(precision, precision)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
