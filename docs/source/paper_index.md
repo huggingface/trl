@@ -1230,6 +1230,30 @@ trainer.train()
 
 Papers relating to the [`SFTTrainer`]
 
+### TailSFT: Filtered Fine-Tuning Improves Post-Training Performance
+
+**📜 Paper**: https://huggingface.co/papers/2608.25756
+
+TailSFT preserves response coverage for subsequent reinforcement learning by filtering the sequences whose
+length-normalized loss has improved the most relative to the initial policy. TRL implements the paper's distributed
+selection-batch filtering with `loss_type="tail_sft"`; the training dataset must contain an `initial_loss` column with
+the initial policy's mean cross-entropy over each sequence's target tokens.
+
+```python
+from trl import SFTConfig, SFTTrainer
+
+training_args = SFTConfig(
+    loss_type="tail_sft",
+    tail_sft_filter_fraction=0.5,  # The paper's selected math and OCI runs ramp to a 0.5 filtering fraction.
+    tail_sft_filter_schedule="ramp",  # "...raises the fraction linearly from 0 at the first step to f at the last"
+)
+trainer = SFTTrainer(
+    ...,
+    args=training_args,
+    train_dataset=dataset_with_initial_loss,
+)
+```
+
 ### EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
 **📜 Paper**: https://huggingface.co/papers/2508.00180

@@ -428,6 +428,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             and needs each token's global position.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
+        use_tail_sft (`bool`, *optional*, defaults to `False`):
+            Whether to include each example's `initial_loss` value in the batch for TailSFT.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -471,6 +473,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     padding_free: bool = False
     return_position_ids: bool = False
     pad_to_multiple_of: int | None = None
+    use_tail_sft: bool = False
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -509,6 +512,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
+        if self.use_tail_sft and "initial_loss" in examples[0]:
+            output["initial_loss"] = torch.tensor([example["initial_loss"] for example in examples])
         if self.padding_free:
             output["position_ids"] = pad(
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
@@ -1234,6 +1239,7 @@ class SFTTrainer(_BaseTrainer):
                 pad_token_id=self._tokenizer.pad_token_id,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
+                use_tail_sft=args.loss_type == "tail_sft",
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(
@@ -1321,7 +1327,7 @@ class SFTTrainer(_BaseTrainer):
 
         # Loss function
         if not args.use_liger_kernel:  # liger supports dft loss by just passing use_token_scaling=True
-            if args.loss_type == "nll":
+            if args.loss_type in {"nll", "tail_sft"}:
                 pass  # use the default loss
             elif args.loss_type == "dft":
                 if compute_loss_func is not None:
@@ -1355,11 +1361,26 @@ class SFTTrainer(_BaseTrainer):
                 _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
-                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
-                    "'chunked_nll'."
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', 'tail_sft', "
+                    "and 'chunked_nll'."
                 )
         elif args.loss_type == "chunked_nll":
             raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
+
+        if args.loss_type == "tail_sft":
+            if args.packing or self.padding_free:
+                raise ValueError("`loss_type='tail_sft'` is not compatible with packing or padding-free training.")
+            if self._is_vision_dataset:
+                raise ValueError("`loss_type='tail_sft'` is not supported for vision datasets.")
+            if args.use_liger_kernel:
+                raise ValueError("`loss_type='tail_sft'` is not compatible with `use_liger_kernel=True`.")
+            if compute_loss_func is not None:
+                raise ValueError("`loss_type='tail_sft'` is not compatible with a custom `compute_loss_func`.")
+            if "initial_loss" not in get_dataset_column_names(train_dataset):
+                raise ValueError(
+                    "`loss_type='tail_sft'` requires an `initial_loss` column containing the initial policy's mean "
+                    "cross-entropy over the target tokens of each training example."
+                )
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1383,6 +1404,20 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        if args.loss_type == "tail_sft":
+            # TailSFT computes its own token-normalized loss, so Trainer must apply gradient-accumulation scaling.
+            self.model_accepts_loss_kwargs = False
+            if not _is_package_version_below("accelerate", "1.10.1"):
+                parallelism_config = self.accelerator.parallelism_config
+                cp_enabled = parallelism_config is not None and parallelism_config.cp_enabled
+                sp_enabled = (
+                    Version(accelerate.__version__) >= Version("1.12.0")
+                    and parallelism_config is not None
+                    and parallelism_config.sp_enabled
+                )
+                if cp_enabled or sp_enabled:
+                    raise ValueError("`loss_type='tail_sft'` is not compatible with context or sequence parallelism.")
 
         # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
         # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents
@@ -1707,7 +1742,7 @@ class SFTTrainer(_BaseTrainer):
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths"]
+                self._signature_columns = ["input_ids", "labels", "seq_lengths", "initial_loss"]
 
     def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
         # This guard may look defensive, but it covers a behavior change introduced when label building moved from
@@ -1788,6 +1823,8 @@ class SFTTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             inputs["output_router_logits"] = True
 
+        initial_loss = inputs.pop("initial_loss", None)
+
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
             # Avoid materializing full logits during eval unless explicitly needed.
@@ -1811,9 +1848,49 @@ class SFTTrainer(_BaseTrainer):
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
         try:
-            (loss, outputs) = super().compute_loss(
-                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-            )
+            if mode == "train" and self.args.loss_type == "tail_sft":
+                if initial_loss is None:
+                    raise ValueError("TailSFT requires the data collator to return `initial_loss` for every example.")
+                model_inputs = {key: value for key, value in inputs.items() if key not in {"labels", "shift_labels"}}
+                outputs = model(**model_inputs)
+                shift_logits = outputs.logits[..., :-1, :]
+                shift_labels = inputs["labels"][..., 1:]
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+                loss_mask = shift_labels != -100
+                per_token_loss = F.cross_entropy(
+                    shift_logits.transpose(1, 2), shift_labels, ignore_index=-100, reduction="none"
+                )
+                per_example_loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1)
+
+                margins = per_example_loss.detach() - initial_loss.to(per_example_loss.device)
+                gathered_margins = self.accelerator.gather(margins)
+                if self.args.tail_sft_filter_schedule == "ramp":
+                    progress = self.state.global_step / max(self.state.max_steps - 1, 1)
+                    filter_fraction = self.args.tail_sft_filter_fraction * progress
+                else:
+                    filter_fraction = self.args.tail_sft_filter_fraction
+                # The paper rounds the requested count to the nearest example. Keep one survivor for partial batches.
+                num_filtered = min(int(gathered_margins.numel() * filter_fraction + 0.5), gathered_margins.numel() - 1)
+                keep = torch.ones_like(gathered_margins, dtype=torch.bool)
+                keep[gathered_margins.argsort()[:num_filtered]] = False
+                batch_size = margins.size(0)
+                start = self.accelerator.process_index * batch_size
+                local_keep = keep[start : start + batch_size]
+
+                selected_tokens = loss_mask * local_keep.unsqueeze(1)
+                global_num_tokens = self.accelerator.gather(selected_tokens.sum()).sum()
+                loss = (per_token_loss * selected_tokens).sum() / (global_num_tokens / self.accelerator.num_processes)
+                if self.aux_loss_enabled:
+                    loss = loss + self.args.router_aux_loss_coef * outputs.aux_loss
+                self._metrics[mode]["tail_sft_filtered_fraction"].append(1 - keep.float().mean().item())
+            else:
+                (loss, outputs) = super().compute_loss(
+                    model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+                )
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(

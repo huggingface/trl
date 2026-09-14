@@ -265,6 +265,17 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
+    def test_tail_sft_initial_loss(self):
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, use_tail_sft=True)
+        examples = [
+            {"input_ids": [1, 2, 3], "labels": [1, 2, 3], "initial_loss": 1.25},
+            {"input_ids": [4, 5], "labels": [4, 5], "initial_loss": 2.5},
+        ]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["initial_loss"], torch.tensor([1.25, 2.5]))
+
     def test_single_example_single_doc(self):
         batch_seq_lengths = [[5]]
         result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
@@ -503,6 +514,60 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_tail_sft_loss(self):
+        dataset = Dataset.from_dict(
+            {
+                "input_ids": [[0, 1, 2], [0, 2, 3]],
+                "labels": [[0, 1, 2], [0, 2, 3]],
+                # The first example has the smallest current-minus-initial margin and is therefore filtered.
+                "initial_loss": [100.0, 0.0],
+            }
+        )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="tail_sft",
+            tail_sft_filter_fraction=0.5,
+            max_steps=1,
+            per_device_train_batch_size=2,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        batch = trainer.data_collator([trainer.train_dataset[0], trainer.train_dataset[1]])
+        batch = {key: value.to(trainer.model.device) for key, value in batch.items()}
+        trainer.model.train()
+
+        with torch.no_grad():
+            torch.manual_seed(0)
+            logits = trainer.model(
+                input_ids=batch["input_ids"], attention_mask=batch["attention_mask"], use_cache=False
+            ).logits[..., :-1, :]
+            per_token_loss = F.cross_entropy(
+                logits.transpose(1, 2), batch["labels"][..., 1:], ignore_index=-100, reduction="none"
+            )
+            expected_loss = per_token_loss[1].mean()
+            torch.manual_seed(0)
+            actual_loss = trainer.compute_loss(trainer.model, batch)
+
+        torch.testing.assert_close(actual_loss, expected_loss, atol=1e-2, rtol=1e-3)
+        assert trainer._metrics["train"]["tail_sft_filtered_fraction"] == [0.5]
+
+        trainer.train()
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_tail_sft_requires_initial_loss(self):
+        dataset = Dataset.from_dict({"input_ids": [[0, 1, 2]], "labels": [[0, 1, 2]]})
+
+        with pytest.raises(ValueError, match="requires an `initial_loss` column"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SFTConfig(output_dir=self.tmp_dir, loss_type="tail_sft", report_to="none"),
+                train_dataset=dataset,
+            )
 
     @require_peft
     def test_train_nll_loss_peft(self):
