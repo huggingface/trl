@@ -545,11 +545,11 @@ class _AsyncRolloutLoop:
             metrics={},
         )
 
-    async def _generate_one_turn(self, prompt_ids: list[int]) -> list[int]:
+    async def _generate_one_turn(self, prompt_ids: list[int], max_tokens: int | None = None) -> list[int]:
         payload = {
             "model": self.model_name,
             "prompt": prompt_ids,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,

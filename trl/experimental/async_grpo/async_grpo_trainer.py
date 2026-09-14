@@ -1489,6 +1489,39 @@ class AsyncGRPOTrainer(_BaseTrainer):
             aux_loss = outputs["aux_loss"]
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
+        self._log_loss_metrics(
+            inputs,
+            coef_1=coef_1,
+            log_ratio=log_ratio,
+            entropy=entropy,
+            advantages=advantages,
+            completion_mask=completion_mask,
+            position_ids=position_ids,
+            aux_loss=aux_loss if self.aux_loss_enabled else None,
+        )
+        return loss
+
+    def _log_loss_metrics(
+        self,
+        inputs,
+        *,
+        coef_1,
+        log_ratio,
+        entropy,
+        advantages,
+        completion_mask,
+        position_ids,
+        aux_loss=None,
+    ):
+        """Log one micro-batch's diagnostics and fold its counts into the per-step accounting.
+
+        Kept apart from `compute_loss` so a trainer optimizing a different RL loss gets the same ratio, KL, entropy and
+        throughput numbers without copying them. The clipping metrics describe the clipped-surrogate objective; a loss
+        that does not clip that way should log its own alongside them.
+        """
+        world_size = self.accelerator.num_processes
+        global_n_tokens = inputs["global_n_tokens"][0]
+
         with torch.no_grad():
             valid_mask = completion_mask > 0
             local_count = valid_mask.sum().float()
@@ -1569,7 +1602,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
         self._step_samples += n_forward_tokens / mean_seq_len
         self._step_forward_s += self._last_forward_time_s
-        return loss
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()

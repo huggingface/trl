@@ -958,11 +958,13 @@ class _AsyncRolloutLoop:
         self._rates["tools/parallel_calls_mean"][1] += 1
         return tool_messages, n_calls, n_failures
 
-    async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
+    async def _generate_one_turn(
+        self, prompt_ids: list[int], max_tokens: int | None = None
+    ) -> tuple[list[int], list[float]]:
         payload = {
             "model": self._request_model,
             "prompt": prompt_ids,
-            "max_tokens": self.max_tokens,
+            "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,

@@ -498,6 +498,21 @@ training_args = GRPOConfig(
 )
 ```
 
+The full recipe — forced length interruptions, No-Positive-Resampling, zero-variance filtering, batch-level
+advantage normalization and prompt-level loss aggregation on top of CISPO — is available as
+[`experimental.async_grpo.ScaleRLTrainer`], which pairs with a [`experimental.async_grpo.ScaleRLRolloutWorker`]:
+
+```python
+from trl.experimental.async_grpo import ScaleRLConfig, ScaleRLRolloutWorker, ScaleRLTrainer
+
+training_args = ScaleRLConfig(
+    epsilon_high=5.0,  # CISPO clips the importance weight, so this is a ratio cap and not a trust-region width
+    num_generations=16,
+    max_staleness=8,  # PipelineRL-8
+    learning_rate=5e-7,
+)
+```
+
 ### It Takes Two: Your GRPO Is Secretly DPO
 
 **📜 Paper**: https://huggingface.co/papers/2510.00977
