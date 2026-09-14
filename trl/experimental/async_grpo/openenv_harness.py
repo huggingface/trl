@@ -79,6 +79,9 @@ class HarnessTurn:
     """One agent turn from the trace, passed to `train_turn_fn` to decide whether it is trained."""
 
     messages: list[Message]  # the conversation sent to the model this turn (the prompt)
+    tools: list[dict] | None  # tools available to the model this turn
+    content: str  # the assistant's text content this turn
+    tool_calls: list[dict]  # the tool calls the assistant emitted (empty for a pure-text turn)
 
 
 @dataclass
@@ -86,9 +89,6 @@ class _CancellationToken:
     event: threading.Event = field(default_factory=threading.Event)
     session: object | None = None
     sampling_future: Future | None = None
-    tools: list[dict] | None  # tools available to the model this turn
-    content: str  # the assistant's text content this turn
-    tool_calls: list[dict]  # the tool calls the assistant emitted (empty for a pure-text turn)
 
 
 def _tools_to_schema(tools: list) -> list[dict] | None:
