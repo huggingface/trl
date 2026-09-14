@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
@@ -357,6 +358,7 @@ TWO_TEACHERS = {"math": "http://math:8002", "code": "http://code:8003"}
 
 
 def _rollout_loop(dataset, **kwargs):
+    PartialState()
     ctx = mp.get_context("spawn")
     loop_kwargs = dict(
         model_name="test",
