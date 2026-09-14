@@ -1243,14 +1243,26 @@ class TestChunkedLogProbFunction:
         hidden = torch.randn(self.N, self.H)
         weight = torch.randn(self.V, self.H)
         labels = torch.randint(0, self.V, (self.N,))
+        chunk_rows = []
+        torch_mm = torch.mm
 
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
+        def record_chunk(input, mat2, *, out=None):
+            chunk_rows.append(input.size(0))
+            return torch_mm(input, mat2, out=out)
+
+        with (
+            patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17),
+            patch("trl.trainer.utils.torch.mm", side_effect=record_chunk),
+        ):
+            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
+            )
         logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
 
         torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
+        assert max(chunk_rows) <= 17
+        assert chunk_rows[-1] == 13
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, temperature):
@@ -1298,6 +1310,50 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
 
+    def test_backward_bfloat16_hidden_float32_weight(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
+        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+        logprobs.sum().backward()
+        grad_hidden = hidden.grad.clone()
+        grad_weight = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+        reference, _ = self._reference_logprobs_and_entropy(hidden, weight.to(hidden.dtype), labels, 1.0)
+        reference.sum().backward()
+
+        torch.testing.assert_close(logprobs, reference, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-2, rtol=1e-2)
+
+    def test_backward_uses_autocast_hidden_for_weight_gradient(self):
+        torch.manual_seed(42)
+        hidden = torch.linspace(1.0, 2.0, self.N * self.H).reshape(self.N, self.H).to(torch.bfloat16).float()
+        perturbed_hidden = hidden + 1e-4
+        assert torch.equal(hidden.to(torch.bfloat16), perturbed_hidden.to(torch.bfloat16))
+        hidden.requires_grad_()
+        perturbed_hidden.requires_grad_()
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        perturbed_weight = weight.detach().clone().requires_grad_()
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Autocast gives both inputs identical projected values. Their weight gradients must therefore also match;
+        # using the original fp32 hidden states in backward would make the gradients depend on the discarded bits.
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+            perturbed_logprobs, _ = _ChunkedLogProbFunction.apply(
+                perturbed_hidden, perturbed_weight, None, labels, 1.0, self.CHUNK_SIZE
+            )
+        logprobs.sum().backward()
+        perturbed_logprobs.sum().backward()
+
+        torch.testing.assert_close(logprobs, perturbed_logprobs, rtol=0, atol=0)
+        torch.testing.assert_close(weight.grad, perturbed_weight.grad, rtol=0, atol=0)
+
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward_entropy(self, temperature):
         """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
@@ -1332,10 +1388,11 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         # Chunked backward
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
-        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
+        with patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17):
+            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
+            )
+            (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
 
@@ -1372,6 +1429,46 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=atol, rtol=rtol)
         for actual, expected in zip(chunked_grads, (hidden.grad, weight.grad, bias.grad), strict=True):
             torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
+
+    def test_backward_skips_frozen_parameter_gradients(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H)
+        bias = torch.randn(self.V)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
+        with patch.object(torch, "zeros", wraps=torch.zeros) as mock_zeros:
+            logprobs.sum().backward()
+
+        # A frozen LM head should not allocate full-vocabulary gradient buffers. These shapes are distinct from the
+        # per-token accumulators and the hidden-state gradient allocated by the same backward pass.
+        allocated_shapes = [call.args[0] for call in mock_zeros.call_args_list]
+        assert weight.shape not in allocated_shapes
+        assert bias.shape not in allocated_shapes
+        assert hidden.grad is not None
+
+    @pytest.mark.parametrize("requires_grad", [(True, False, False), (False, True, False), (False, False, True)])
+    def test_backward_with_partially_frozen_inputs(self, requires_grad):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=requires_grad[0])
+        weight = torch.randn(self.V, self.H, requires_grad=requires_grad[1])
+        bias = torch.randn(self.V, requires_grad=requires_grad[2])
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
+        logprobs.sum().backward()
+        chunked_grads = hidden.grad, weight.grad, bias.grad
+
+        hidden_ref = hidden.detach().clone().requires_grad_(requires_grad[0])
+        weight_ref = weight.detach().clone().requires_grad_(requires_grad[1])
+        bias_ref = bias.detach().clone().requires_grad_(requires_grad[2])
+        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden_ref, weight_ref, labels, 1.0, bias_ref)
+        logprobs_ref.sum().backward()
+
+        for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
+            if expected is not None:
+                torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 class _FakeTransformerModel(nn.Module):

@@ -32,12 +32,14 @@ MODEL_ID = "tiiuae/falcon-mamba-7b-instruct"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = FalconMambaConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=65024,
     hidden_size=8,
-    num_attention_heads=4,
-    num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    tie_word_embeddings=False,
+    bos_token_id=8,
+    eos_token_id=11,
+    pad_token_id=0,
 )
 model = FalconMambaForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
