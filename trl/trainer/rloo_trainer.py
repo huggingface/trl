@@ -1178,6 +1178,10 @@ class RLOOTrainer(_BaseTrainer):
     def _tokenize_prompts(self, prompts: list):
         """Tokenize prompts and extract images/multimodal fields for generation."""
         if is_conversational({"prompt": prompts[0]}):
+            # Normalize string content to content blocks for VLM processors that don't handle plain strings.
+            if self._is_vlm:
+                prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
+
             # Extract images from messages for VLM support
             images = []
             has_images = False
