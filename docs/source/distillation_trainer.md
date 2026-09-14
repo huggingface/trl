@@ -301,7 +301,7 @@ trainer.train()
 ### Requirements
 
 - Every teacher must share the student's tokenizer — identical tokenization and identical special-token roles/IDs — and the same `vocab_size`. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs.
-- Teachers must be dense checkpoints: quantization (`load_in_8bit`, `load_in_4bit`, a `quantization_config`) and `device_map` are rejected at initialization, since scoring moves a teacher to the accelerator as a whole and projects through its plain head weight.
+- Teachers must be dense checkpoints: quantization (`load_in_8bit`, `load_in_4bit`, a `quantization_config`) and `device_map` are rejected at initialization, since scoring moves a teacher to the accelerator as a whole module and back to CPU after every generation batch, a round trip quantized and dispatched models cannot make.
 - Students must be text-only. VLM students are not supported in multi-teacher mode; use the single `teacher_model` argument for VLM distillation.
 - DeepSpeed ZeRO-3 is rejected: the teacher head is uploaded as a plain device tensor, while the chunked loss only knows how to gather a ZeRO-partitioned head. Use ZeRO stage 1 or 2, or the single `teacher_model` argument.
 

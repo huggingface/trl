@@ -811,9 +811,9 @@ class DistillationTrainer(_BaseTrainer):
                 present = sorted(key for key in unsupported if key in kwargs)
                 if present:
                     raise ValueError(
-                        f"Multi-teacher distillation does not support the teacher loading options {present}: a "
-                        f"quantized or device-mapped teacher has no dense parameters to score with, and no plain head "
-                        f"weight to project through. Register dense checkpoints instead."
+                        f"Multi-teacher distillation does not support the teacher loading options {present}: teachers "
+                        f"are moved to the accelerator as whole modules for scoring and back to CPU afterwards, a round "
+                        f"trip quantized and device-mapped models cannot make. Register dense checkpoints instead."
                     )
             if self._is_vlm:
                 raise ValueError(
@@ -1032,10 +1032,14 @@ class DistillationTrainer(_BaseTrainer):
                 f"tokenizer, or GOLD for cross-tokenizer distillation."
             )
 
-        # The single-teacher path hands its teacher to `prepare_deepspeed`, whose engine casts the module to the
-        # plugin's dtype; mirror that so both paths compute their targets in the same precision under a ZeRO engine.
+        # The single-teacher path hands its teacher to `prepare_deepspeed`, whose engine casts the parameters to the
+        # plugin's dtype and leaves buffers alone (the rotary inverse frequencies stay float32); mirror that exactly so
+        # both paths compute their targets in the same precision under a ZeRO engine. `Module.to(dtype)` would also
+        # round the buffers and shift every position embedding by a bf16 ulp.
         if self.is_deepspeed_enabled and self.accelerator.mixed_precision in ("bf16", "fp16"):
-            teacher = teacher.to(torch.bfloat16 if self.accelerator.mixed_precision == "bf16" else torch.float16)
+            dtype = torch.bfloat16 if self.accelerator.mixed_precision == "bf16" else torch.float16
+            for parameter in teacher.parameters():
+                parameter.data = parameter.data.to(dtype)
 
         # What this routing ID trains against: where the weights came from, the commit its revision resolved to
         # (`None` for a local path or an instantiated model), and the dtype they materialized in. No content hashing,
