@@ -24,7 +24,6 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -325,15 +324,15 @@ def _tokenizer_payload(tokenizer: PreTrainedTokenizerBase) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _functional_teacher(teacher: PreTrainedModel, device_state: dict[str, torch.Tensor]) -> SimpleNamespace:
+def _functional_teacher(teacher: PreTrainedModel, device_state: dict[str, torch.Tensor]) -> torch.nn.Module:
     """
     Wrap a CPU teacher so its backbone runs on device copies of its tensors, leaving the CPU module untouched.
 
-    `_get_last_hidden_state` only reads `.base_model` off the model it is handed, so a stand-in carrying the
-    reparametrized call is all it needs: `torch.func.functional_call` substitutes `device_state` for the module's
-    parameters and buffers for the duration of each call, so the teacher itself is never moved or mutated and the
-    device copies are freed with `device_state`. Scoring therefore runs the same code, with the same shapes, as the
-    single-teacher loss's own teacher forward.
+    `_get_last_hidden_state` only reads `.base_model` off the model it is handed, so an empty module carrying the
+    reparametrized call there is all it needs: `torch.func.functional_call` substitutes `device_state` for the
+    backbone's parameters and buffers for the duration of each call, so the teacher itself is never moved or mutated
+    and the device copies are freed with `device_state`. Scoring therefore runs the same code, and sees the same
+    shapes, as the single-teacher loss's own teacher forward.
 
     Args:
         teacher ([`~transformers.PreTrainedModel`]):
@@ -342,13 +341,15 @@ def _functional_teacher(teacher: PreTrainedModel, device_state: dict[str, torch.
             Device copies of the backbone's parameters and buffers, keyed by their names in the backbone.
 
     Returns:
-        `SimpleNamespace`: stand-in accepted by `_get_last_hidden_state` in place of a model.
+        [`~torch.nn.Module`]: stand-in accepted by `_get_last_hidden_state` in place of a model.
     """
 
     def backbone(**model_inputs):
         return torch.func.functional_call(teacher.base_model, device_state, kwargs=model_inputs)
 
-    return SimpleNamespace(base_model=backbone)
+    stand_in = torch.nn.Module()
+    stand_in.base_model = backbone
+    return stand_in
 
 
 class DistillationTrainer(_BaseTrainer):
