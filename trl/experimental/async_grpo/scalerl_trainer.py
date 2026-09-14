@@ -16,55 +16,14 @@ import math
 import random
 import time
 import uuid
-from dataclasses import dataclass, field
 
 import torch
 
-from .async_grpo_config import AsyncGRPOConfig
 from .async_grpo_trainer import AsyncGRPOTrainer
 from .async_rollout_worker import AsyncRolloutWorker, TrainingSequence, _AsyncRolloutLoop
 
 
 INTERRUPTION = "Okay, time is up. Let me stop thinking and formulate a final answer now.</think>"
-
-
-@dataclass
-class ScaleRLConfig(AsyncGRPOConfig):
-    r"""
-    Configuration class for the [`experimental.async_grpo.ScaleRLTrainer`].
-
-    This class includes only the parameters ScaleRL adds on top of [`AsyncGRPOConfig`]. For a full list of training
-    arguments, please refer to the [`~transformers.TrainingArguments`] documentation.
-
-    Parameters:
-        think_budget (`tuple[int, int]`, *optional*, defaults to `(10240, 12288)`):
-            Range the thinking budget is sampled from, per rollout. A generation that has not closed `</think>` within
-            its budget is interrupted with [`INTERRUPTION`] and given `answer_budget` tokens to conclude.
-        answer_budget (`int`, *optional*, defaults to `2048`):
-            Tokens granted for the final answer after an interruption.
-        pass_rate_cap (`float`, *optional*, defaults to `0.9`):
-            No-Positive-Resampling: a prompt whose historical pass rate reaches this is dropped from later epochs.
-        advantage_std_decay (`float`, *optional*, defaults to `0.001`):
-            EMA rate for the running advantage second moment used as the batch-level `Â_std`. The default averages over
-            roughly the last 1000 completions, close to the paper's 768-completion batch.
-    """
-
-    think_budget: tuple[int, int] = field(
-        default=(10240, 12288),
-        metadata={"help": "Range the thinking budget is sampled from, per rollout."},
-    )
-    answer_budget: int = field(
-        default=2048,
-        metadata={"help": "Tokens granted for the final answer after an interruption."},
-    )
-    pass_rate_cap: float = field(
-        default=0.9,
-        metadata={"help": "Drop prompts whose historical pass rate reaches this from later epochs."},
-    )
-    advantage_std_decay: float = field(
-        default=0.001,
-        metadata={"help": "EMA rate for the running advantage second moment used as the batch-level std."},
-    )
 
 
 class ScaleRLRolloutLoop(_AsyncRolloutLoop):
@@ -83,18 +42,24 @@ class ScaleRLRolloutLoop(_AsyncRolloutLoop):
             Tokens granted for the final answer after an interruption.
         pass_rate_cap (`float`, *optional*, defaults to `0.9`):
             Prompts whose historical pass rate reaches this are skipped in later epochs.
-        std_decay (`float`, *optional*, defaults to `0.001`):
+        advantage_std_decay (`float`, *optional*, defaults to `0.001`):
             EMA rate for the running advantage second moment.
     """
 
     def __init__(
-        self, *args, think_budget=(10240, 12288), answer_budget=2048, pass_rate_cap=0.9, std_decay=0.001, **kwargs
+        self,
+        *args,
+        think_budget=(10240, 12288),
+        answer_budget=2048,
+        pass_rate_cap=0.9,
+        advantage_std_decay=0.001,
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self._think_budget = think_budget
         self._answer_budget = answer_budget
         self._pass_rate_cap = pass_rate_cap
-        self._std_decay = std_decay
+        self._std_decay = advantage_std_decay
         self._interruption_ids = self.tokenizer.encode(INTERRUPTION, add_special_tokens=False)
         self._pass_rate: dict[int, float] = {}
         self._group_row: dict[int, int] = {}
@@ -243,9 +208,9 @@ class ScaleRLTrainer(AsyncGRPOTrainer):
     ```python
     from transformers import AutoTokenizer
 
-    from trl.experimental.async_grpo import ScaleRLConfig, ScaleRLRolloutWorker, ScaleRLTrainer
+    from trl.experimental.async_grpo import AsyncGRPOConfig, ScaleRLRolloutWorker, ScaleRLTrainer
 
-    args = ScaleRLConfig(output_dir="scalerl-8b", num_generations=16, epsilon_high=5.0)
+    args = AsyncGRPOConfig(output_dir="scalerl-8b", num_generations=16, epsilon_high=5.0, max_staleness=8)
     worker = ScaleRLRolloutWorker(
         model_name=model_id,
         dataset=dataset,
@@ -254,7 +219,10 @@ class ScaleRLTrainer(AsyncGRPOTrainer):
         num_generations=args.num_generations,
         max_inflight_tasks=256,
         max_tokens=args.max_completion_length,
-        think_budget=args.think_budget,
+        think_budget=(10240, 12288),
+        answer_budget=2048,
+        pass_rate_cap=0.9,
+        advantage_std_decay=0.001,
     )
     trainer = ScaleRLTrainer(
         model=model_id, args=args, train_dataset=dataset, reward_funcs=[reward_correct], rollout_worker=worker
@@ -293,27 +261,50 @@ class ScaleRLTrainer(AsyncGRPOTrainer):
         # gradient averaging DDP/FSDP applies across ranks.
         clamped_ratios = torch.clamp(coef_1, max=self.epsilon_high).detach()
         per_token_loss = -clamped_ratios * advantages * log_probs
-        loss = (per_token_loss * completion_mask).sum() * self.accelerator.num_processes
+        world_size = self.accelerator.num_processes
+        loss = (per_token_loss * completion_mask).sum() * world_size
         loss = loss / self.current_gradient_accumulation_steps
 
-        aux_loss = None
         if self.aux_loss_enabled:
             aux_loss = outputs["aux_loss"]
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
-        self._log_loss_metrics(
-            inputs,
-            coef_1=coef_1,
-            log_ratio=log_ratio,
-            entropy=entropy,
-            advantages=advantages,
-            completion_mask=completion_mask,
-            position_ids=position_ids,
-            aux_loss=aux_loss,
-        )
         with torch.no_grad():
-            valid = completion_mask > 0
-            stats = torch.stack([((coef_1 > self.epsilon_high) & (advantages > 0))[valid].sum(), valid.sum()]).float()
-            clipped, count = self.accelerator.reduce(stats, reduction="sum").unbind(0)
-            self._metrics["train"]["cispo_clip_ratio"].append((clipped / count.clamp(min=1.0)).item())
+            valid_mask = completion_mask > 0
+            local_count = valid_mask.sum().float()
+
+            # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
+            local_ratio_sum = coef_1[valid_mask].sum()
+            # Approx KL: http://joschu.net/blog/kl-approx.html
+            local_kl_sum = ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+            local_entropy_sum = entropy[valid_mask].sum()
+
+            # CISPO has no trust region, so the clipping metrics of the parent's surrogate do not apply. What is
+            # worth watching is how often the weight is truncated on a token that would otherwise be reinforced.
+            local_clip_sum = ((coef_1 > self.epsilon_high) & (advantages > 0))[valid_mask].float().sum()
+
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, clip_sum, count]
+            stats = torch.stack([local_ratio_sum, local_kl_sum, local_entropy_sum, local_clip_sum, local_count])
+            stats = self.accelerator.reduce(stats, reduction="sum")
+            global_ratio_sum, global_kl_sum, global_entropy_sum, global_clip_sum, global_count = stats.unbind(0)
+            self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
+            self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
+            self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
+            self._metrics["train"]["cispo_clip_ratio"].append((global_clip_sum / global_count).item())
+
+            if self.aux_loss_enabled:
+                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
+
+        # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
+        # `training_step`. The counts are batch-wide (the collator broadcasts one value per rank), so they are read off
+        # rank-local inputs without a collective. Sample rewards and packing metrics are NOT gathered here — rank 0
+        # already logged them in the collator.
+        n_forward_tokens = float(inputs["global_n_forward_tokens"][0])
+        mean_seq_len = float(inputs["mean_seq_len"][0])
+        self._step_forward_tokens += n_forward_tokens
+        self._step_trained_tokens += float(inputs["global_n_tokens"][0])
+        self._step_seq_len_weighted += mean_seq_len * n_forward_tokens
+        self._step_samples += n_forward_tokens / mean_seq_len
+        self._step_forward_s += self._last_forward_time_s
         return loss

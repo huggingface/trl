@@ -503,15 +503,19 @@ advantage normalization and prompt-level loss aggregation on top of CISPO — is
 [`experimental.async_grpo.ScaleRLTrainer`], which pairs with a [`experimental.async_grpo.ScaleRLRolloutWorker`]:
 
 ```python
-from trl.experimental.async_grpo import ScaleRLConfig, ScaleRLRolloutWorker, ScaleRLTrainer
+from trl.experimental.async_grpo import AsyncGRPOConfig, ScaleRLRolloutWorker, ScaleRLTrainer
 
-training_args = ScaleRLConfig(
+training_args = AsyncGRPOConfig(
     epsilon_high=5.0,  # CISPO clips the importance weight, so this is a ratio cap and not a trust-region width
     num_generations=16,
     max_staleness=8,  # PipelineRL-8
     learning_rate=5e-7,
 )
 ```
+
+The generation-side settings of the recipe — the thinking budget that triggers an interruption, the pass rate above
+which a prompt is retired, and the decay of the running advantage standard deviation — are arguments of
+[`experimental.async_grpo.ScaleRLRolloutWorker`], which consumes them.
 
 ### It Takes Two: Your GRPO Is Secretly DPO
 

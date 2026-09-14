@@ -14,4 +14,4 @@
 
 from .async_grpo_config import AsyncGRPOConfig
 from .async_grpo_trainer import AsyncGRPOTrainer
-from .scalerl_trainer import ScaleRLConfig, ScaleRLRolloutLoop, ScaleRLRolloutWorker, ScaleRLTrainer
+from .scalerl_trainer import ScaleRLRolloutLoop, ScaleRLRolloutWorker, ScaleRLTrainer
