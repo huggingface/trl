@@ -1,9 +1,7 @@
 name: Labeler
 
 on:
-  # pull_request_target so pull requests from forks get labelled too: the token on a forked
-  # `pull_request` run is read-only. The action reads no pull request content and runs no code from
-  # it, only the file list, so the elevated token is not exposed to the branch being labelled.
+  # pull_request_target: the token on a forked `pull_request` run cannot write labels.
   pull_request_target:
     types: [opened, synchronize, reopened]
 
@@ -15,10 +13,8 @@ jobs:
   labeler:
     runs-on: ubuntu-latest
     steps:
-      # .github/labeler.yml is read from the base branch, not from the pull request, so a pull
-      # request cannot relabel itself by editing the config.
+      # The config is read from the base branch, so a pull request cannot relabel itself.
       - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
         with:
-          # remove the label again when a docs-only pull request grows a code change. Only labels
-          # named in labeler.yml are synced, so anything applied by hand is left alone.
+          # Drop the label again when a docs-only pull request grows a code change.
           sync-labels: true
