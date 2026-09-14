@@ -1,0 +1,28 @@
+# Labels that follow from the changed paths alone, to keep the release notes sections in
+# .github/release.yml populated without hand-labelling every pull request. The labels that need
+# judgement (✨ enhancement, 🐛 bug, 💥 breaking) are deliberately absent: a diff does not say
+# whether a change to trl/ is a feature or a fix.
+#
+# `any-glob-to-all-files` requires *every* changed file to match one of the globs, so a pull
+# request that also touches trl/ gets no label here. That is on purpose: release.yml files a pull
+# request under the first category it matches, so a wrong label is silently wrong, while no label
+# falls through to "Other", which is what the flat list already gives.
+
+"📚 documentation":
+  - changed-files:
+      - any-glob-to-all-files:
+          - "docs/**"
+
+"🔧 maintenance":
+  - changed-files:
+      - any-glob-to-all-files:
+          - ".github/**"
+          - "docker/**"
+          - "scripts/**"
+          - "tests/**"
+          - ".pre-commit-config.yaml"
+          - ".gitignore"
+          - "Makefile"
+          - "MANIFEST.in"
+          - "pyproject.toml"
+          - "RELEASE.md"
