@@ -149,8 +149,8 @@ class AsyncDistillationConfig(_BaseConfig):
             `-1` (auto), which sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps *
             num_processes`.
         max_staleness (`int`, *optional*, defaults to `4`):
-            Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            an in-flight sample is cancelled or a queued sample is discarded.
+            Maximum number of weight update steps a rollout sample can lag behind the current model version before an
+            in-flight sample is cancelled or a queued sample is discarded.
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
