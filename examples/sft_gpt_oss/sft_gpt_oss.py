@@ -26,9 +26,8 @@ pip install –-upgrade kernels
 
 Example:
 
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_gpt_oss/sft_gpt_oss.py \
+torchrun --nproc_per_node 8 examples/sft_gpt_oss/sft_gpt_oss.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --dtype bfloat16 \
     --model_name_or_path openai/gpt-oss-20b \
     --packing \

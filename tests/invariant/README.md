@@ -10,7 +10,7 @@ Recording the references is a separate concern from testing them, so it's a sepa
 
 Each config is a `trl <method>` CLI invocation with a fixed set of args. The harness shells out (`subprocess.run(["trl", method, ...])`), the CLI runs end to end, writes `trainer_state.json` to its `--output_dir`, and the harness parses the `log_history` into a `Trajectory`.
 
-This means the suite tests the actual user-facing entry point, not the Python API. Catches CLI-only bugs (arg parsing, defaults, dispatch) for free. Distributed runs are an additive change: prepend `accelerate launch --config_file <strategy>.yaml` to the same command.
+This means the suite tests the actual user-facing entry point, not the Python API. Catches CLI-only bugs (arg parsing, defaults, dispatch) for free. Distributed runs are an additive change: append `--nproc_per_node <n>` and `--deepspeed <config>.json` or `--fsdp` to the same command.
 
 ## Scope (initial)
 

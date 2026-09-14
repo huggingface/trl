@@ -6,7 +6,8 @@ Basic single-trainer training scripts are not examples: they live in [`trl/scrip
 
 Shared resources sit at the root of `examples/`:
 
-- [`examples/accelerate_configs`](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs): 🤗 Accelerate configuration files for multi-GPU, DeepSpeed ZeRO, FSDP, and context-parallel setups, used by many examples.
+- [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs): DeepSpeed ZeRO configuration files, passed with `--deepspeed`, used by many examples.
+- [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs): FSDP configuration files, passed with `--fsdp --fsdp_config`.
 - [`examples/datasets`](https://github.com/huggingface/trl/tree/main/examples/datasets): the scripts used to generate the `trl-lib` datasets used across the examples.
 
 **Getting Started**
@@ -70,16 +71,16 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 
 ## Distributed Training
 
-You can run the example scripts on multiple GPUs with 🤗 Accelerate:
+You can run the example scripts on multiple GPUs with torchrun:
 
 ```shell
-accelerate launch --config_file=examples/accelerate_configs/multi_gpu.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+torchrun --nproc_per_node {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
 ```
 
 For DeepSpeed ZeRO-{1,2,3}:
 
 ```shell
-accelerate launch --config_file=examples/accelerate_configs/deepspeed_zero{1,2,3}.yaml --num_processes {NUM_GPUS} path_to_script.py --all_arguments_of_the_script
+torchrun --nproc_per_node {NUM_GPUS} path_to_script.py --deepspeed examples/deepspeed_configs/zero{1,2,3}.json --all_arguments_of_the_script
 ```
 
 Adjust `NUM_GPUS` and `--all_arguments_of_the_script` as needed.

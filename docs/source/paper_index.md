@@ -1323,8 +1323,8 @@ $$
 i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/sft_diffusion_gemma/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
 
 ```bash
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+torchrun --nproc_per_node 8 examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --use_peft \
     --gradient_checkpointing \
     --model_prediction_type mean_loo \
@@ -1911,16 +1911,17 @@ ZeRO (Zero Redundancy Optimizer) eliminates memory redundancies in data- and mod
 
 TRL supports ZeRO via the [DeepSpeed integration](deepspeed_integration). To use it, provide a DeepSpeed configuration file with your desired settings,
 
-```yaml
-# config.yaml
-distributed_type: DEEPSPEED
-num_processes: 2
-deepspeed_config:
-  zero_stage: 3
+```json
+{
+  "zero_optimization": {"stage": 3},
+  "bf16": {"enabled": "auto"},
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto"
+}
 ```
 
-and launch the training script using `accelerate launch --config_file config_file`.
+set `deepspeed="zero3.json"` in the training config, and launch the training script with torchrun.
 
 ```sh
-accelerate launch --config_file config.yaml train.py
+torchrun --nproc_per_node 2 train.py
 ```

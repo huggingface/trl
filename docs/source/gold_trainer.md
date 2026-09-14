@@ -218,12 +218,12 @@ Use [`examples/gold_qwen3_vl/gold_qwen3_vl.py`](https://github.com/huggingface/t
 
 ```bash
 # Same-family distillation (JSD loss, vLLM enabled)
-accelerate launch examples/gold_qwen3_vl/gold_qwen3_vl.py \
+torchrun --nproc_per_node 8 examples/gold_qwen3_vl/gold_qwen3_vl.py \
     --student_model_name Qwen/Qwen3-VL-2B-Instruct \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct
 
 # Cross-family distillation (ULD loss, local generation)
-accelerate launch examples/gold_qwen3_vl/gold_qwen3_vl.py \
+torchrun --nproc_per_node 8 examples/gold_qwen3_vl/gold_qwen3_vl.py \
     --student_model_name LiquidAI/LFM2.5-VL-1.6B \
     --teacher_model_name Qwen/Qwen3-VL-8B-Instruct \
     --use_uld_loss \

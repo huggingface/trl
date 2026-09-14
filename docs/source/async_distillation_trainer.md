@@ -115,7 +115,7 @@ CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instr
 
 ```bash
 # Terminal 3: training on GPU 2
-CUDA_VISIBLE_DEVICES=2 accelerate launch train_async_distillation.py
+CUDA_VISIBLE_DEVICES=2 python train_async_distillation.py
 ```
 
 ## Logged metrics

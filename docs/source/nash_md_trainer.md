@@ -46,7 +46,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_nash_md.py
+torchrun --nproc_per_node 8 train_nash_md.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 3 hours.
