@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Two-rank CPU check of managed multi-teacher distillation (the `teacher_models` constructor argument): two gloo
+Two-rank CPU check of multi-teacher distillation (the `teacher_models` constructor argument): two gloo
 processes on CPU, compared against a single-process reference trained on the same global batch and the same tokens
 (see `distillation_multi_teacher_script.py`).
 
@@ -104,11 +104,9 @@ class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
         # Within tolerance: the same global update, summed by the cross-rank `accelerator.reduce` of the per-teacher
         # statistics in a different order (two ranks x one microbatch each vs. one process x two rows), and over
         # different microbatch shapes, than the single process does. Floating-point addition is not associative.
-        # `atol=1e-6`, `rtol=1e-5` starts from the tolerance used for the equivalent managed-DDP check (`atol=1e-7`,
-        # which observed a worst-case absolute difference of 3.7e-9), loosened because this managed path runs an
-        # additional per-teacher `accelerator.reduce` that the plain DDP gradient all-reduce does not. The observed
-        # worst case here is a loss difference of 6.2e-10 and a parameter difference of 1.5e-8
-        # (`model.layers.0.self_attn.k_proj.weight`), both well inside tolerance.
+        # `atol=1e-6`, `rtol=1e-5`: the two runs sum floating-point contributions in a different order (per-rank
+        # averaging, plus the per-teacher `accelerator.reduce`), so results can only be expected to match up to
+        # floating-point summation order, not bit-for-bit.
         torch.testing.assert_close(
             torch.tensor(multi["train_losses"]), torch.tensor(reference["train_losses"]), atol=1e-6, rtol=1e-5
         )

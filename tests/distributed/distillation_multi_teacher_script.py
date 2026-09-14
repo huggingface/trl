@@ -15,12 +15,12 @@
 """
 Two-rank CPU worker for the multi-teacher `DistillationTrainer` collective/normalization check.
 
-Launched by `tests/distributed/test_distillation_trainer_multi_teacher.py`, twice through `accelerate launch`: once
-with the two-process `multi_cpu.yaml` config (gloo, `--mode multi`) and once with `--num_processes 1` on the same
-config (`--mode reference`), with the same *global* batch in both. Completions are replaced by a deterministic
-function of the prompt tokens (`FixedCompletionTrainer`), so both runs train on exactly the same (prompt, completion)
-pairs and the comparison isolates the cross-rank reduction from sampling. Rank 0 writes a JSON summary and the final
-student parameters.
+Launched by `tests/distributed/test_distillation_trainer_multi_teacher.py`, twice through
+`python -m torch.distributed.run`: once with two ranks (gloo, `--mode multi`) and once with a single rank
+(`--mode reference`), with the same *global* batch in both. Completions are replaced by a deterministic function of
+the prompt tokens (`FixedCompletionTrainer`), so both runs train on exactly the same (prompt, completion) pairs and
+the comparison isolates the cross-rank reduction from sampling. Rank 0 writes a JSON summary and the final student
+parameters to the `--out` path (and a sibling `-params.pt` file).
 
 The two teacher checkpoints are built by every process, deterministically (a fixed seed and a fixed per-parameter
 rescale, no sampling involved), so every rank ends up with bit-identical teachers without needing a shared

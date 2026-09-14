@@ -1546,7 +1546,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
 
 class TestDistillationTrainerMultiTeacher(TrlTestCase):
     """
-    End-to-end tests for managed multi-teacher distillation, i.e. the `teacher_models` constructor argument.
+    End-to-end tests for multi-teacher distillation, i.e. the `teacher_models` constructor argument.
 
     Teachers are two local checkpoints saved from the same tiny fixture, each with every weight scaled by a different
     factor so that their targets — and therefore their divergences — really differ from the student's and from each
