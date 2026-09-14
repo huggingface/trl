@@ -271,11 +271,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.packed_single_row = "linear_attention" in (
             getattr(model.config.get_text_config(), "layer_types", None) or []
         )
-        # How many rollouts to keep generating. The trainer finds this itself: see `_adapt_rollouts_in_flight`.
-        # It starts at two batches, which is enough to keep the engine busy while the first step trains.
-        self._rollouts_in_flight = 2 * args.per_device_train_batch_size
-        self._quiet_steps = 0
-        self._alloc_retries_seen = 0
+        self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
 
         # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
@@ -435,7 +431,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             if self._manager is not None:
                 # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
                 # the process would never exit. A flush would wait for every rollout still in flight, and there are
-                # always some, since the trainer keeps rollouts generating throughout; none of them will be
+                # always some, since the trainer keeps `rollouts_in_flight` rollouts generating; none of them will be
                 # trained on now. The engine cannot stop while it is paused, so generation resumes first.
                 self._resume_generation()
                 self._manager.stop(block=True, timeout=30, hard_stop=True)
@@ -511,7 +507,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._enqueue_group(example)
 
     def _fill_slots(self) -> None:
-        """Keep the target number of rollouts generating, starting the next one the moment one finishes.
+        """Keep `rollouts_in_flight` rollouts generating, starting the next one the moment one finishes.
 
         A decode step costs about the same whatever number of sequences it carries: it reads the whole model and pays
         the per-layer all-reduces either way. Letting the batch drain between optimizer steps and refill in one burst
@@ -519,53 +515,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         rather than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so
         the members of a group already see more than one version of the policy.
         """
-        while len(self._inflight) < self._rollouts_in_flight and self._pending:
+        while len(self._inflight) < self.rollouts_in_flight and self._pending:
             rollout = self._pending.popleft()
             request_id = self._next_request_id()
             self._manager.add_request(
                 rollout["prompt_ids"], request_id=request_id, max_new_tokens=self.max_completion_length
             )
             self._inflight[request_id] = rollout
-
-    # A rollout that waits for the trainer costs nothing; a trainer that waits for rollouts costs a step. So the
-    # target is the smallest number of rollouts that keeps the trainer from waiting, and no larger: every extra
-    # rollout in flight lives across more optimizer steps, and zero-sync updates the weights underneath it, so it
-    # drifts further from the policy being trained.
-    _WAIT_TOLERANCE_S = 0.005  # a wait shorter than this is the engine keeping up, not falling behind
-    _QUIET_STEPS_BEFORE_TRIM = 10  # how long the engine must keep up before giving a rollout back
-
-    def _adapt_rollouts_in_flight(self, waited: float, retries: int, num_samples: int) -> None:
-        """Move the number of rollouts in flight towards the fewest that keep the trainer fed.
-
-        Additive increase and multiplicative decrease, because the two directions are not symmetric: falling behind
-        costs a fraction of a step and is worth correcting gently, while crowding the KV cache makes every decode
-        step slower and is worth leaving quickly.
-        """
-        starved = retries > self._alloc_retries_seen
-        self._alloc_retries_seen = retries
-
-        # Every rank must hold the same target or the replicas would submit different amounts and their batches
-        # would come apart. Within a tensor parallel group the engine delivers the same results to every rank, so
-        # the inputs already agree there; across replicas they are reduced. The gloo group is the one the wait loop
-        # above already uses, so this adds no new collective point.
-        if self._replica_cpu_group is not None:
-            signal = torch.tensor([waited, float(starved)])
-            torch.distributed.all_reduce(signal, op=torch.distributed.ReduceOp.MAX, group=self._replica_cpu_group)
-            waited, starved = float(signal[0]), bool(signal[1])
-
-        floor = num_samples  # a batch has to be in flight, or the trainer waits by construction
-        if starved:
-            # The cache is full: the rollouts already in flight are the ones competing for it, so give some back.
-            self._rollouts_in_flight = max(floor, int(self._rollouts_in_flight * 0.8))
-            self._quiet_steps = 0
-        elif waited > self._WAIT_TOLERANCE_S:
-            self._rollouts_in_flight += max(1, self._rollouts_in_flight // 8)
-            self._quiet_steps = 0
-        else:
-            self._quiet_steps += 1
-            if self._quiet_steps >= self._QUIET_STEPS_BEFORE_TRIM:
-                self._rollouts_in_flight = max(floor, self._rollouts_in_flight - 1)
-                self._quiet_steps = 0
 
     def _next_request_id(self) -> str:
         """Name a request identically on every rank.
@@ -783,7 +739,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Prompts arrive a batch at a time while rollouts finish one at a time, so the queue is kept a batch deeper
         # than the slots: without that spare a burst of completions would leave slots idle until the next batch.
         exhausted = False
-        while len(self._pending) < self._rollouts_in_flight + num_samples:
+        while len(self._pending) < self.rollouts_in_flight + num_samples:
             try:
                 self._enqueue_group_batch(next(prompts))
             except StopIteration:
@@ -794,8 +750,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             return []
 
         # Time spent waiting for the engine. Near zero means the samples were ready before the trainer asked; a large
-        # value means the engine is the bottleneck, which `_adapt_rollouts_in_flight` answers by keeping more
-        # rollouts generating at once, up to what the KV pool holds.
+        # value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at once)
+        # or give it a bigger KV pool.
         wait_start = time.perf_counter()
         if self._replica_group is None:
             while len(self._ready) < num_samples:
@@ -811,15 +767,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if int(counts.item()) >= num_samples * self.dp_size:
                     break
                 self._drain(timeout=0.2)
-        waited = time.perf_counter() - wait_start
-        self._metrics[mode]["generation_wait_s"].append(waited)
+        self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
         # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
         # and the training step are fighting over memory, which slows both.
-        retries = torch.cuda.memory_stats().get("num_alloc_retries", 0)
-        self._metrics[mode]["memory/alloc_retries"].append(retries)
-        if mode == "train":
-            self._adapt_rollouts_in_flight(waited, retries, num_samples)
-            self._metrics[mode]["generation/rollouts_in_flight"].append(self._rollouts_in_flight)
+        self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
         self._pause_generation(mode)
         # The engine paused at the same step on every rank of a tensor parallel group and delivered the same results
         # to each, but the loop above stops on a count, so one rank may have read a result its peer has not yet. The
