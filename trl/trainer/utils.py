@@ -1709,87 +1709,76 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
 # with the additional NVIDIA GPUs offered by Hugging Face Jobs. More specific names must precede their prefixes.
 _PEAK_FLOPS_BY_DEVICE = (
     # NVIDIA
-    ("GB300", {torch.bfloat16: 2.5e15}),
-    ("GB200", {torch.bfloat16: 2.5e15}),
-    ("B300", {torch.bfloat16: 2.25e15}),
-    ("B200", {torch.bfloat16: 2.25e15}),
-    ("H100 NVL", {torch.float16: 835e12, torch.bfloat16: 835e12}),
-    ("H100 PCIe", {torch.float16: 756e12, torch.bfloat16: 756e12}),
-    ("H100", {torch.float16: 989e12, torch.bfloat16: 989e12}),
-    ("H200 NVL", {torch.float16: 835e12, torch.bfloat16: 835e12}),
-    ("H200", {torch.float16: 989e12, torch.bfloat16: 989e12}),
-    ("H20", {torch.float16: 148e12, torch.bfloat16: 148e12}),
-    ("RTX PRO 6000", {torch.float16: 500e12, torch.bfloat16: 500e12}),
-    ("A100", {torch.float16: 312e12, torch.bfloat16: 312e12}),
-    ("A6000", {torch.float16: 154.85e12, torch.bfloat16: 154.85e12}),
-    ("A10G", {torch.float16: 125e12, torch.bfloat16: 125e12}),
-    ("A10", {torch.float16: 125e12, torch.bfloat16: 125e12}),
-    ("L40S", {torch.float16: 362e12, torch.bfloat16: 362e12}),
-    ("L4", {torch.float16: 121e12, torch.bfloat16: 121e12}),
-    ("T4", {torch.float16: 65e12}),
+    ("GB300", {"bfloat16": 2.5e15}),
+    ("GB200", {"bfloat16": 2.5e15}),
+    ("B300", {"bfloat16": 2.25e15}),
+    ("B200", {"bfloat16": 2.25e15}),
+    ("H100 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H100 PCIe", {"float16": 756e12, "bfloat16": 756e12}),
+    ("H100", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H200 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H200", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H20", {"float16": 148e12, "bfloat16": 148e12}),
+    ("RTX PRO 6000", {"float16": 500e12, "bfloat16": 500e12}),
+    ("A100", {"float16": 312e12, "bfloat16": 312e12}),
+    ("A6000", {"float16": 154.85e12, "bfloat16": 154.85e12}),
+    ("A10G", {"float16": 125e12, "bfloat16": 125e12}),
+    ("A10", {"float16": 125e12, "bfloat16": 125e12}),
+    ("L40S", {"float16": 362e12, "bfloat16": 362e12}),
+    ("L4", {"float16": 121e12, "bfloat16": 121e12}),
+    ("T4", {"float16": 65e12}),
     # AMD
-    ("MI355X", {torch.bfloat16: 2500e12}),
-    ("MI325X", {torch.bfloat16: 1300e12}),
-    ("MI300X", {torch.bfloat16: 1300e12}),
-    ("MI250X", {torch.bfloat16: 191.5e12}),
+    ("MI355X", {"bfloat16": 2500e12}),
+    ("MI325X", {"bfloat16": 1300e12}),
+    ("MI300X", {"bfloat16": 1300e12}),
+    ("MI250X", {"bfloat16": 191.5e12}),
     # AWS Trainium and Inferentia
-    ("trn1n", {torch.bfloat16: 90e12}),
-    ("trn1", {torch.bfloat16: 90e12}),
-    ("inf2", {torch.bfloat16: 90e12}),
-    ("trn2n", {torch.bfloat16: 158e12}),
-    ("trn2u", {torch.bfloat16: 158e12}),
-    ("trn2", {torch.bfloat16: 158e12}),
-    ("trn3u", {torch.bfloat16: 158e12}),
-    ("trn3", {torch.bfloat16: 158e12}),
+    ("trn1n", {"bfloat16": 90e12}),
+    ("trn1", {"bfloat16": 90e12}),
+    ("inf2", {"bfloat16": 90e12}),
+    ("trn2n", {"bfloat16": 158e12}),
+    ("trn2u", {"bfloat16": 158e12}),
+    ("trn2", {"bfloat16": 158e12}),
+    ("trn3u", {"bfloat16": 158e12}),
+    ("trn3", {"bfloat16": 158e12}),
     # Google TPU
-    ("TPU v4", {torch.bfloat16: 275e12}),
-    ("TPU v5e", {torch.bfloat16: 197e12}),
-    ("TPU v5p", {torch.bfloat16: 459e12}),
-    ("TPU v6e", {torch.bfloat16: 918e12}),
-    ("TPU v7", {torch.bfloat16: 2307e12 / 2}),
+    ("TPU v4", {"bfloat16": 275e12}),
+    ("TPU v5e", {"bfloat16": 197e12}),
+    ("TPU v5p", {"bfloat16": 459e12}),
+    ("TPU v6e", {"bfloat16": 918e12}),
+    ("TPU v7", {"bfloat16": 2307e12 / 2}),
 )
 
-_PVC_BF16_FLOPS_PER_COMPUTE_UNIT = 512 * 1_300_000_000
 
-
-def get_peak_flops(device_name: str, dtype: torch.dtype) -> float | None:
+def get_peak_flops(device_name: str, dtype: str) -> float | None:
     """
     Get the theoretical dense accelerator peak FLOPs for a device and dtype.
 
     Args:
         device_name (`str`):
             Device name as returned by the accelerator runtime.
-        dtype (`torch.dtype`):
+        dtype (`str`):
             Floating-point dtype used by the model's matrix multiplications.
 
     Returns:
         `float` or `None`: Peak FLOPs, or `None` when the device or dtype is not in the lookup table.
     """
     device_name = device_name.casefold()
-    if re.search(r"\bdata center gpu max 1550\b", device_name):
-        if dtype != torch.bfloat16:
-            return None
-        max_compute_units = torch.xpu.get_device_properties("xpu").max_compute_units
-        return _PVC_BF16_FLOPS_PER_COMPUTE_UNIT * max_compute_units
     for model_name, peak_flops_by_dtype in _PEAK_FLOPS_BY_DEVICE:
         if re.search(rf"\b{re.escape(model_name.casefold())}\b", device_name):
             return peak_flops_by_dtype.get(dtype)
     return None
 
 
-def get_peak_flops_per_device(accelerator: Accelerator, model_dtype: torch.dtype) -> float | None:
+def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | None:
     """
     Resolve the mean theoretical dense peak FLOPs per training device.
 
-    Uses the accelerator's mixed precision, or the model dtype when mixed precision is disabled. All training ranks
-    must call this function; their device capacities are gathered so that multiplying the result by the number of ranks
-    gives the total training capacity. External rollout and teacher devices are not included.
-
     Args:
         accelerator ([`~accelerate.Accelerator`]):
-            Accelerator managing the training devices and precision.
-        model_dtype (`torch.dtype`):
-            Model dtype to use when mixed precision is disabled.
+            Accelerator managing the training devices.
+        dtype (`str`):
+            Configured model dtype.
 
     Returns:
         `float` or `None`: Mean peak FLOPs per device, or `None` if any training device or precision is unsupported.
@@ -1797,12 +1786,9 @@ def get_peak_flops_per_device(accelerator: Accelerator, model_dtype: torch.dtype
     device = accelerator.device
     if device.type == "cuda":
         device_name = torch.cuda.get_device_name(device)
-    elif device.type == "xpu":
-        device_name = torch.xpu.get_device_name(device)
     else:
         device_name = device.type
-    dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "no": model_dtype}.get(accelerator.mixed_precision)
-    peak_flops = get_peak_flops(device_name, dtype) if dtype is not None else None
+    peak_flops = get_peak_flops(device_name, dtype)
     peaks = gather_object([peak_flops])
     if any(peak is None for peak in peaks):
         logger.info(

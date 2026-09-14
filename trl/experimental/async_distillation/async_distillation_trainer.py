@@ -1011,7 +1011,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.model.dtype)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, args.dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset

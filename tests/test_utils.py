@@ -1753,37 +1753,37 @@ class TestGetPeakFlops:
     @pytest.mark.parametrize(
         ("device_name", "dtype", "expected"),
         [
-            ("NVIDIA GB300", torch.bfloat16, 2.5e15),
-            ("NVIDIA GB200", torch.bfloat16, 2.5e15),
-            ("NVIDIA B300", torch.bfloat16, 2.25e15),
-            ("NVIDIA B200", torch.bfloat16, 2.25e15),
-            ("NVIDIA H100 NVL", torch.bfloat16, 835e12),
-            ("NVIDIA H100 PCIe", torch.float16, 756e12),
-            ("NVIDIA H100 80GB HBM3", torch.bfloat16, 989e12),
-            ("NVIDIA H200 NVL", torch.float16, 835e12),
-            ("NVIDIA H200", torch.bfloat16, 989e12),
-            ("NVIDIA H20", torch.float16, 148e12),
-            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", torch.bfloat16, 500e12),
-            ("NVIDIA A100-SXM4-80GB", torch.float16, 312e12),
-            ("NVIDIA RTX A6000", torch.bfloat16, 154.85e12),
-            ("NVIDIA A10G", torch.bfloat16, 125e12),
-            ("NVIDIA A10", torch.bfloat16, 125e12),
-            ("NVIDIA L40S", torch.float16, 362e12),
-            ("NVIDIA L4", torch.bfloat16, 121e12),
-            ("Tesla T4", torch.float16, 65e12),
-            ("AMD Instinct MI355X", torch.bfloat16, 2500e12),
-            ("AMD Instinct MI325X", torch.bfloat16, 1300e12),
-            ("AMD Instinct MI300X", torch.bfloat16, 1300e12),
-            ("AMD Instinct MI250X", torch.bfloat16, 191.5e12),
-            ("trn1n", torch.bfloat16, 90e12),
-            ("inf2", torch.bfloat16, 90e12),
-            ("trn2u", torch.bfloat16, 158e12),
-            ("trn3u", torch.bfloat16, 158e12),
-            ("TPU v4", torch.bfloat16, 275e12),
-            ("TPU v5e", torch.bfloat16, 197e12),
-            ("TPU v5p", torch.bfloat16, 459e12),
-            ("TPU v6e", torch.bfloat16, 918e12),
-            ("TPU v7", torch.bfloat16, 1153.5e12),
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+            ("trn1n", "bfloat16", 90e12),
+            ("inf2", "bfloat16", 90e12),
+            ("trn2u", "bfloat16", 158e12),
+            ("trn3u", "bfloat16", 158e12),
+            ("TPU v4", "bfloat16", 275e12),
+            ("TPU v5e", "bfloat16", 197e12),
+            ("TPU v5p", "bfloat16", 459e12),
+            ("TPU v6e", "bfloat16", 918e12),
+            ("TPU v7", "bfloat16", 1153.5e12),
         ],
     )
     def test_known_device(self, device_name, dtype, expected):
@@ -1792,61 +1792,47 @@ class TestGetPeakFlops:
     @pytest.mark.parametrize(
         ("device_name", "dtype"),
         [
-            ("Tesla T4", torch.bfloat16),
-            ("NVIDIA A10G", torch.float32),
-            ("Unknown accelerator", torch.bfloat16),
-            ("NVIDIA L40", torch.bfloat16),
-            ("NVIDIA A1000", torch.bfloat16),
-            ("NVIDIA XA100", torch.bfloat16),
-            ("Intel Data Center GPU Max 15500", torch.bfloat16),
-            ("Intel Data Center GPU Max 1550", torch.float16),
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
         ],
     )
     def test_unsupported_device_or_dtype(self, device_name, dtype):
         assert get_peak_flops(device_name, dtype) is None
 
-    @pytest.mark.parametrize(
-        ("max_compute_units", "expected"),
-        [
-            (448, 298.1888e12),
-            (512, 340.7872e12),
-        ],
-    )
-    def test_intel_pvc_uses_available_compute_units(self, max_compute_units, expected):
-        with patch("torch.xpu.get_device_properties") as get_device_properties:
-            get_device_properties.return_value.max_compute_units = max_compute_units
-            assert get_peak_flops("Intel Data Center GPU Max 1550", torch.bfloat16) == expected
-
 
 class TestGetPeakFlopsPerDevice:
     @pytest.mark.parametrize(
-        ("device_name", "mixed_precision", "model_dtype", "expected"),
+        ("device_name", "dtype", "expected"),
         [
-            ("NVIDIA A100", "bf16", torch.float32, 312e12),
-            ("Tesla T4", "fp16", torch.float32, 65e12),
-            ("NVIDIA A100", "no", torch.bfloat16, 312e12),
-            ("Tesla T4", "bf16", torch.float16, None),
-            ("NVIDIA A100", "fp8", torch.bfloat16, None),
+            ("NVIDIA A100", "bfloat16", 312e12),
+            ("Tesla T4", "float16", 65e12),
+            ("NVIDIA A100", "float32", None),
+            ("Tesla T4", "bfloat16", None),
+            ("NVIDIA A100", "auto", None),
         ],
     )
-    def test_training_precision_overrides_storage_dtype(self, device_name, mixed_precision, model_dtype, expected):
-        accelerator = SimpleNamespace(device=torch.device("cuda:0"), mixed_precision=mixed_precision)
+    def test_configured_dtype(self, device_name, dtype, expected):
+        accelerator = SimpleNamespace(device=torch.device("cuda:0"))
         with (
             patch("torch.cuda.get_device_name", return_value=device_name),
             patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks),
             patch("trl.trainer.utils.logger.info"),
         ):
-            assert get_peak_flops_per_device(accelerator, model_dtype) == expected
+            assert get_peak_flops_per_device(accelerator, dtype) == expected
 
     @pytest.mark.parametrize("other_peak", [989e12, None])
     def test_distributed_capacity_requires_every_rank(self, other_peak):
-        accelerator = SimpleNamespace(device=torch.device("cuda:0"), mixed_precision="bf16")
+        accelerator = SimpleNamespace(device=torch.device("cuda:0"))
         with (
             patch("torch.cuda.get_device_name", return_value="NVIDIA A100"),
             patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks + [other_peak]),
             patch("trl.trainer.utils.logger.info"),
         ):
-            peak = get_peak_flops_per_device(accelerator, torch.float32)
+            peak = get_peak_flops_per_device(accelerator, "bfloat16")
         if other_peak is None:
             assert peak is None
         else:
