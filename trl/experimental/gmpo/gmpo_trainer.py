@@ -38,6 +38,12 @@ class GMPOTrainer(GRPOTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             args = GMPOConfig(f"{model_name.split('/')[-1]}-GMPO")
 
+        if args.use_liger_kernel:
+            raise ValueError(
+                "`use_liger_kernel=True` is not supported with GMPOTrainer. The inherited Liger path runs the GRPO "
+                "fused loss and silently skips the geometric-mean objective. Set `use_liger_kernel=False`."
+            )
+
         super().__init__(model, reward_funcs, args=args, **kwargs)
 
     def _compute_loss(self, model, inputs):
