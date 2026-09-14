@@ -262,6 +262,86 @@ Tested with:
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
+## Multiple teachers (MOPD)
+
+[`DistillationTrainer`] also supports multi-teacher on-policy distillation (MOPD), described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](https://huggingface.co/papers/2606.30406). MOPD's own setting fuses several frozen, independently trained domain experts (e.g. a math expert and a code expert) into a single student: each training row is scored by exactly one teacher, never averaged or ensembled across teachers.
+
+Pass `teacher_models` instead of `teacher_model` — a mapping from a routing ID to a checkpoint path, Hub ID, or an already-instantiated teacher. Each dataset row's `teacher_id` column selects which teacher scores it. With a single entry in `teacher_models`, `teacher_id` is optional and every row uses that one teacher.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            "What is the derivative of x^2?",
+            "Write a function that reverses a string.",
+        ],
+        "teacher_id": ["math", "code"],
+    }
+)
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    teacher_models={
+        "math": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+        "code": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+    },
+    train_dataset=dataset,
+    args=DistillationConfig(
+        output_dir="mopd-student",
+        # Route one teacher to a specific revision while the rest load normally.
+        teacher_model_init_kwargs_by_teacher={"code": {"revision": "<commit-sha>"}},
+    ),
+)
+trainer.train()
+```
+
+### Requirements
+
+- Every teacher must share the student's tokenizer — identical tokenization and identical special-token roles/IDs — and the same `vocab_size`. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs.
+- Teachers must be dense checkpoints: quantization (`load_in_8bit`, `load_in_4bit`, a `quantization_config`) and `device_map` are rejected at initialization, since scoring substitutes device copies of a teacher's own parameters directly into its forward pass.
+- Students must be text-only. VLM students are not supported in multi-teacher mode; use the single `teacher_model` argument for VLM distillation.
+
+### Memory
+
+Teachers are inference-only sources: they never enter the student's module tree, the optimizer, or the accelerator's model preparation.
+
+- **CPU** holds every registered teacher for the whole run, plus one generation batch's worth of completion hidden-state targets. Those targets are computed once per generation batch and reused by every accumulation step drawn from it, sized as:
+
+  ```
+  per_device_train_batch_size × gradient_accumulation_steps × max_completion_length × hidden_size × dtype_bytes
+  ```
+
+- **Device, while scoring**: one teacher body at a time. A teacher's parameters and buffers are copied to the device, every row routed to it is scored, and the copy is freed before the next teacher — so device memory is bounded by the *largest* registered teacher, never the sum of all of them. This costs one device upload per teacher per generation batch.
+- **Device, while computing the loss**: only the output heads (`lm_head` weight and bias) of the teachers present in the current microbatch, one at a time:
+
+  ```
+  vocab_size × hidden_size × dtype_bytes
+  ```
+
+  A microbatch routed to several teachers holds one head per teacher present in it — never a head per registered teacher, and never a teacher body.
+
+### Metrics
+
+Multi-teacher runs additionally log, per registered teacher:
+
+- `teacher_jsd/<id>`: the mean divergence (at the configured `beta`) over the tokens that teacher scored in the accumulated window.
+- `teacher_token_frac/<id>`: that teacher's share of the accumulated window's valid (trained) tokens.
+
+A teacher absent from a window still logs `teacher_token_frac/<id> = 0.0`, but its `teacher_jsd/<id>` is left out entirely rather than reported as a misleading zero.
+
+### Checkpointing
+
+Each checkpoint saves a `teacher_manifest.json` alongside the student weights, recording every registered teacher's routing ID, source, resolved revision, and dtype (no teacher weights are saved). On resume, the current run's manifest is compared against the saved one entry by entry; a teacher whose source, revision, or dtype changed under the same routing ID raises, rather than silently continuing training against a different target distribution.
+
+### Precision and distributed training
+
+Teachers are scored under the same precision context the loss uses for its own forward passes, so a single registered teacher is numerically identical to passing `teacher_model=` directly. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
+
+Distributed training does not change the student side: it is the same generation and optimization loop as single-teacher distillation. Each rank scores only its own rows, against its own CPU copy of every teacher.
+
 ## Command line interface
 
 Use the [`trl distillation` CLI](clis) to launch distillation training from the command line. It supports full training and LoRA via the standard `ModelConfig` flags.
