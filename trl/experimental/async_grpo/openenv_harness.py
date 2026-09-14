@@ -242,6 +242,15 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 timed_out=timed_out,
             )
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
+            if self._rollout_reward_fn is not None and env_reward is not None:
+                # Keep the VERIFIER's score visible on its own. `rollout_reward_fn` replaces `env_reward` wholesale,
+                # and the column it feeds is already named `rewards/harness_reward`, so with a shaping term in play
+                # `reward` and `rewards/harness_reward` are the SAME shaped number and raw correctness is logged
+                # nowhere. Every shaping term then looks exactly like progress: a reward that climbs because the
+                # policy got faster is indistinguishable from one that climbs because it solved more, which is the
+                # one question the run exists to answer.
+                self._rates["rollout/correctness_mean"][0] += float(env_reward)
+                self._rates["rollout/correctness_mean"][1] += 1.0
             sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
             # Same rollout-structure metrics the built-in loop reports, for `_generate_one` to push on the loop.
