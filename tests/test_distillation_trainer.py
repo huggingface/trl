@@ -1729,7 +1729,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
         assert step_logs, "no training step was logged"
         for entry in step_logs:
-            for family in ("teacher_jsd", "teacher_entropy", "teacher_token_frac"):
+            for family in ("teacher_jsd", "teacher_token_frac"):
                 for teacher_id in ("a", "b"):
                     assert f"{family}/{teacher_id}" in entry, f"{family}/{teacher_id} missing from {sorted(entry)}"
             # The two checkpoints differ, so their divergences must differ too.
@@ -1741,8 +1741,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-        # A window that routes to "a" only reports no divergence/entropy for "b": a mean over zero tokens is
-        # undefined, so those keys are omitted rather than logged as zero. `teacher_token_frac` is defined for an
+        # A window that routes to "a" only reports no divergence for "b": a mean over zero tokens is
+        # undefined, so that key is omitted rather than logged as zero. `teacher_token_frac` is defined for an
         # absent teacher and is logged as exactly 0.0.
         training_args = DistillationConfig(
             output_dir=self.tmp_dir,
@@ -1765,7 +1765,6 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         for entry in only_a_logs:
             assert "teacher_jsd/a" in entry
             assert "teacher_jsd/b" not in entry, f"unexpected teacher_jsd/b in {sorted(entry)}"
-            assert "teacher_entropy/b" not in entry, f"unexpected teacher_entropy/b in {sorted(entry)}"
             assert entry["teacher_token_frac/b"] == 0.0
 
     @pytest.mark.parametrize(
@@ -1851,9 +1850,9 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         with open(os.path.join(self.tmp_dir, "checkpoint-1", "teacher_manifest.json")) as handle:
             manifest = json.load(handle)
         entries = {teacher["id"]: teacher for teacher in manifest["teachers"]}
-        assert entries["a"]["source_dtype"] == "torch.float32"
-        assert entries["b"]["source_dtype"] == "torch.bfloat16"
-        assert entries["a"]["source_key"] != entries["b"]["source_key"]
+        assert entries["a"]["dtype"] == "torch.float32"
+        assert entries["b"]["dtype"] == "torch.bfloat16"
+        assert entries["a"] != entries["b"]
 
         # A revision override is meaningless for a local checkpoint and is refused rather than ignored.
         bad_args = DistillationConfig(
