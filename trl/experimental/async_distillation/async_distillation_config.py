@@ -150,7 +150,7 @@ class AsyncDistillationConfig(_BaseConfig):
             num_processes`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being discarded.
+            an in-flight sample is cancelled or a queued sample is discarded.
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
@@ -358,7 +358,7 @@ class AsyncDistillationConfig(_BaseConfig):
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model "
-            "version before being discarded."
+            "version before an in-flight sample is cancelled or a queued sample is discarded."
         },
     )
     queue_maxsize: int = field(

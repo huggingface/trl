@@ -17,11 +17,12 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import threading
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict, cast
 
 from accelerate.logging import get_logger
@@ -78,6 +79,13 @@ class HarnessTurn:
     """One agent turn from the trace, passed to `train_turn_fn` to decide whether it is trained."""
 
     messages: list[Message]  # the conversation sent to the model this turn (the prompt)
+
+
+@dataclass
+class _CancellationToken:
+    event: threading.Event = field(default_factory=threading.Event)
+    session: object | None = None
+    sampling_future: Future | None = None
     tools: list[dict] | None  # tools available to the model this turn
     content: str  # the assistant's text content this turn
     tool_calls: list[dict]  # the tool calls the assistant emitted (empty for a pure-text turn)
@@ -147,14 +155,30 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         self._session_pool = ThreadPoolExecutor(
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
-        # In-flight sessions, so `_run_loops` can close them on stop (see there). set ops are atomic under the GIL.
+        # In-flight sessions, so `_run_loops` can close them on stop (see there). Set ops are atomic under the GIL.
         self._live_sessions: set = set()
 
     async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
         # TODO(@openenv): provide an async version for performance
         #  OpenEnv's harness layer is synchronous, so run the whole session on the pool.
         loop = asyncio.get_running_loop()
-        result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
+        token = _CancellationToken()
+        future = loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id, token)
+        try:
+            result, metrics = await asyncio.shield(future)
+        except asyncio.CancelledError:
+            # Executor cancellation does not stop its thread, and white-box sampling runs in a separate event-loop
+            # future. Signal both paths, then keep the worker slot occupied until its thread has unwound.
+            token.event.set()
+            if token.sampling_future is not None:
+                token.sampling_future.cancel()
+            if token.session is not None:
+                try:
+                    await asyncio.to_thread(token.session.close)
+                except Exception:
+                    logger.warning("closing cancelled harness session failed", exc_info=True)
+            await asyncio.gather(future, return_exceptions=True)
+            raise
         # Pushed here and not in `_run_session`: the accumulators are plain dicts, and the pool runs many sessions at
         # once, so a push off the event loop would race the score loop's.
         if metrics is not None:
@@ -179,7 +203,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         finally:
             self._session_pool.shutdown(wait=True)
 
-    def _run_session(self, prompt, group_id=0):
+    def _run_session(self, prompt, group_id=0, token: _CancellationToken | None = None):
         """Drive one OpenEnv session to completion, on a pool thread.
 
         Returns `(the _generate_one tuple, rollout metrics or None)`. The metrics are handed back rather than pushed
@@ -202,16 +226,20 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         except Exception:
             logger.warning("harness session create failed; scoring rollout as unscorable", exc_info=True)
             return self._EMPTY_ROLLOUT, None
-        self._live_sessions.add(session)  # tracked so a stop can close it (unblocks wait_for_completion below)
+        token = token or _CancellationToken()
+        token.session = session
+        self._live_sessions.add(session)
         timed_out = False
         trace: list[TraceEntry] = []
         tool_calls_by_name: dict[str, int] = {}
         try:
+            if token.event.is_set():
+                return self._EMPTY_ROLLOUT, None
             if self._adapter is not None:
                 # white-box: the adapter runs the tool loop, calling `_sample_turn` each turn.
                 turns: list[TurnRecord] = []
                 result = self._adapter.run_white_box(
-                    functools.partial(self._sample_turn, turns), session, self._limits
+                    functools.partial(self._sample_turn, turns, token), session, self._limits
                 )
                 completion = result.messages
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
@@ -267,7 +295,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             except Exception:
                 logger.warning("harness session close failed", exc_info=True)
 
-    def _sample_turn(self, turns: list[TurnRecord], messages, tools, sampling) -> ModelStepResult:
+    def _sample_turn(
+        self, turns: list[TurnRecord], token: _CancellationToken, messages, tools, sampling
+    ) -> ModelStepResult:
         """OpenEnv `ModelStep`: sample one assistant turn against vLLM and record a `TurnRecord` into `turns`."""
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
@@ -279,7 +309,14 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
+        future = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop)
+        token.sampling_future = future
+        if token.event.is_set():
+            future.cancel()
+        try:
+            turn_ids, logprobs = future.result()
+        finally:
+            token.sampling_future = None
         turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
         message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
         return ModelStepResult(

@@ -533,13 +533,16 @@ class _AsyncRolloutLoop:
                         for group_id, group in pending_groups.items()
                         if version - group.model_version > self.max_staleness
                     }
-                    for task, (group_id, slot, name, environment, _prompt) in list(inflight_tasks.items()):
-                        if group_id in stale:
-                            task.cancel()
-                            del inflight_tasks[task]
-                            free_slots.add(slot)
-                            if environment is not None:
-                                self._environment_pool[name].append(environment)
+                    stale_tasks = [task for task, values in inflight_tasks.items() if values[0] in stale]
+                    for task in stale_tasks:
+                        task.cancel()
+                    if stale_tasks:
+                        await asyncio.gather(*stale_tasks, return_exceptions=True)
+                    for task in stale_tasks:
+                        _group_id, slot, name, environment, _prompt = inflight_tasks.pop(task)
+                        free_slots.add(slot)
+                        if environment is not None:
+                            self._environment_pool[name].append(environment)
                     for group_id in stale:
                         del pending_groups[group_id]
                         del pending_completed[group_id]
@@ -549,6 +552,10 @@ class _AsyncRolloutLoop:
 
                 while free_slots and not stop_event.is_set():
                     group_id, index, row = next(work_iter)
+                    # Missing state at a nonzero index means stale cancellation discarded the group's earlier work.
+                    # Do not dispatch a lone remainder: it cannot produce a group-relative advantage.
+                    if group_id not in pending_groups and self.num_generations - index < 2:
+                        continue
                     slot = free_slots.pop()
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the

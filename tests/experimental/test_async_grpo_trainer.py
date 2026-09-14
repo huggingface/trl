@@ -1457,13 +1457,21 @@ class TestGenerateLoop(TrlTestCase):
 
     def test_stale_in_flight_groups_are_cancelled_when_the_policy_advances(self):
         loop = self._loop(num_generations=2, max_inflight_tasks=4, max_staleness=1)
+        cancelled = []
 
         async def generate_one(prompt, tool_dict, tools, group_id):
             if loop.model_version == 0:
-                await asyncio.Event().wait()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    await asyncio.sleep(0)
+                    cancelled.append(group_id)
+                    raise
+            assert len(cancelled) == 4
             return _ROLLOUT
 
         groups = asyncio.run(self._groups(loop, generate_one, 2, bump_version_to=2))
+        assert len(cancelled) == 4
         assert [g.group_id for g in groups] == [2, 3]
         assert [g.model_version for g in groups] == [2, 2]
 
@@ -1478,6 +1486,20 @@ class TestGenerateLoop(TrlTestCase):
         (group,) = asyncio.run(self._groups(loop, generate_one, 1, bump_version_to=1))
         assert group.group_id == 0
         assert len(group.completions) == 2
+        assert group.model_version == 1
+
+    def test_stale_group_with_one_undispatched_rollout_is_skipped(self):
+        loop = self._loop(num_generations=4, max_inflight_tasks=3, max_staleness=0)
+
+        async def generate_one(prompt, tool_dict, tools, group_id):
+            if loop.model_version == 0:
+                await asyncio.Event().wait()
+            if group_id == 0:
+                raise RuntimeError("the stale tail must not be dispatched")
+            return _ROLLOUT
+
+        (group,) = asyncio.run(self._groups(loop, generate_one, 1, bump_version_to=1))
+        assert group.group_id == 1
         assert group.model_version == 1
 
     def test_reward_kwargs_are_trimmed_to_the_surviving_rollouts(self):

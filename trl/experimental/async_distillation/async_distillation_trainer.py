@@ -1133,6 +1133,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     teacher_top_k=self.args.teacher_top_k,
                     teacher_temperature=self.args.teacher_temperature,
                     max_tokens=self.args.max_completion_length,
+                    max_staleness=self.args.max_staleness,
                     temperature=self.args.temperature,
                     top_p=self.args.top_p,
                     top_k=self.args.top_k,
