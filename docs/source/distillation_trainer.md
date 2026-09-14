@@ -341,7 +341,7 @@ Each checkpoint saves a `teacher_manifest.json` alongside the student weights, r
 
 ### Precision and distributed training
 
-Teachers are scored under the same precision context the loss uses for its own forward passes. On a single process and under DDP, a single registered teacher therefore reproduces `teacher_model=` bitwise; ZeRO-1/2 is expected to match as well but is not covered by the CPU test suite. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
+Teachers are scored under the same precision context the loss uses for its own forward passes. On a single process and under DDP, a single registered teacher therefore reproduces `teacher_model=` bitwise; DeepSpeed ZeRO-2 was measured bitwise identical on two GPUs as well; ZeRO-1 shares the same mechanism but was not measured. Neither is covered by the CPU test suite. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
 
 With several teachers, the microbatch rows are grouped per teacher and each group is a separate call into the same loss, so the order in which the per-token divergences are summed differs from one ungrouped call; the result agrees to within floating-point noise rather than bitwise.
 
