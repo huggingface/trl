@@ -2088,7 +2088,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             swapped.train(resume_from_checkpoint=checkpoint)
         assert "'a'" in str(exc_info.value), "the error does not name the offending teacher ID"
 
-    @pytest.mark.parametrize("unsupported", [{"device_map": "auto"}, {"load_in_8bit": True}])
+    @pytest.mark.parametrize("unsupported", [{"device_map": "auto"}, {"quantization_config": {"load_in_8bit": True}}])
     def test_rejects_unsupported_teacher_kwargs(self, teachers, unsupported):
         # Managed teachers are loaded as plain dense CPU models and scored through their own head, so quantized and
         # device-mapped teachers are refused before anything is loaded.
@@ -2103,15 +2103,6 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs=inert)
         trainer = DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
         assert list(trainer.teacher_models) == ["a"]
-
-    def test_inactive_load_in_8bit_passes_the_guard(self, teachers):
-        # `load_in_8bit=False` requests no quantization, so the guard does not fire on it. Transformers dropped the
-        # argument itself in v5 and raises its own `TypeError` further down, which is not the guard's `ValueError`.
-        args = DistillationConfig(
-            output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs={"load_in_8bit": False}
-        )
-        with pytest.raises(TypeError, match="load_in_8bit"):
-            DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
 
     def test_rejects_unsupported_per_teacher_override(self, teachers):
         # The effective value is the merge of the common kwargs with the per-teacher ones, so an override that turns

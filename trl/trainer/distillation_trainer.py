@@ -806,12 +806,12 @@ class DistillationTrainer(_BaseTrainer):
         # The student side is the single-teacher loss, so only the teacher side is constrained.
         self.teacher_models = None
         if teacher_models is not None:
-            unsupported = ("quantization_config", "load_in_8bit", "load_in_4bit", "device_map")
+            unsupported = ("quantization_config", "device_map")
             per_teacher_kwargs = (args.teacher_model_init_kwargs_by_teacher or {}).values()
             merged_kwargs = [{**teacher_model_init_kwargs, **per_teacher} for per_teacher in per_teacher_kwargs]
             for kwargs in [teacher_model_init_kwargs, *merged_kwargs]:
                 # The effective value after the per-teacher override wins, not the mere presence of the key: an inert
-                # `device_map=None` or `load_in_8bit=False` asks for nothing that is unsupported.
+                # `device_map=None` or `quantization_config=None` asks for nothing that is unsupported.
                 active = sorted(key for key in unsupported if kwargs.get(key))
                 if active:
                     raise ValueError(
