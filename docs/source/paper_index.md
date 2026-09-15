@@ -1810,7 +1810,7 @@ Two loss formulations are provided:
 | Variant | `xtoken_loss_type` | Description |
 |---------|-------------------|-------------|
 | P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
-| H-KL | `"h_kl"` | Hybrid: forward KL on a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+| H-KL | `"h_kl"` | Hybrid: forward KL on renormalized distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
 
 First build the projection matrix with the prep scripts in `examples/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
 
@@ -1826,10 +1826,12 @@ Then train with the example script (off-policy, no vLLM needed):
 
 ```bash
 python examples/xtoken/xtoken.py \
-    --student-model meta-llama/Llama-3.2-1B-Instruct \
-    --teacher-model Qwen/Qwen3-4B \
-    --projection-matrix cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt \
-    --loss-type p_kl
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen3-4B \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --xtoken_loss_type p_kl \
+    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt \
+    --lmbda 0.0
 ```
 
 or pass the path to `GOLDConfig` directly:
