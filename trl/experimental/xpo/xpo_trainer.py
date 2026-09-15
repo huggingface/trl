@@ -36,7 +36,7 @@ from ...data_utils import maybe_apply_chat_template
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.utils import selective_log_softmax
 from ..online_dpo import OnlineDPOTrainer
-from ..utils import empty_cache, get_reward, truncate_right
+from ..utils import empty_cache, get_reward_from_policy_tokens, truncate_right
 from .xpo_config import XPOConfig
 
 
@@ -253,12 +253,23 @@ class XPOTrainer(OnlineDPOTrainer):
         return model_data, ref_data
 
     def _compute_rewards(self, model_data, ref_data, context_length):
+        reward_processing_class = self.reward_processing_classes[0]
         with torch.no_grad():
-            _, model_scores, _ = get_reward(
-                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+            model_scores = get_reward_from_policy_tokens(
+                self.reward_funcs,
+                model_data["input_ids"],
+                context_length,
+                model_data["raw"],
+                self.processing_class,
+                reward_processing_class,
             )
-            _, ref_scores, _ = get_reward(
-                self.reward_funcs, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
+            ref_scores = get_reward_from_policy_tokens(
+                self.reward_funcs,
+                ref_data["input_ids"],
+                context_length,
+                ref_data["raw"],
+                self.processing_class,
+                reward_processing_class,
             )
 
         # Apply EOS penalty if needed

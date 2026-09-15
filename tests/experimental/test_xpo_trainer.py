@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+import torch
 from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available
@@ -173,3 +174,50 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+
+class TestXPOTrainerRewardProcessingClass(TrlTestCase):
+    def setup_method(self):
+        self.policy_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.reward_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        self.model = AutoModelForCausalLM.from_pretrained(self.policy_id, dtype="float32")
+        self.ref_model = AutoModelForCausalLM.from_pretrained(self.policy_id)
+        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_id, num_labels=1)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.policy_id)
+        self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_id)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        if self.reward_tokenizer.pad_token is None:
+            self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
+
+    def test_compute_rewards_with_distinct_reward_tokenizer(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = XPOConfig(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=1)
+        trainer = XPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+            train_dataset=dataset,
+        )
+
+        assert trainer.reward_processing_classes[0].pad_token_id == self.reward_tokenizer.pad_token_id
+
+        prompt = "hello"
+        completion = " world"
+        device = trainer.accelerator.device
+        prompt_ids = self.tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"].to(device)
+        completion_ids = self.tokenizer(completion, add_special_tokens=False, return_tensors="pt")["input_ids"].to(
+            device
+        )
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        data = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "raw": [prompt],
+        }
+        model_scores, ref_scores = trainer._compute_rewards(data, data, prompt_ids.shape[1])
+        assert model_scores.shape == (1,)
+        assert ref_scores.shape == (1,)
+        assert torch.isfinite(model_scores).all()
