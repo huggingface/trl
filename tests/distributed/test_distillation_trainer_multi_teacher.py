@@ -13,14 +13,18 @@
 # limitations under the License.
 
 """
-Two-rank CPU check of multi-teacher distillation (the `teacher_models` constructor argument): two gloo
-processes on CPU, compared against a single-process reference trained on the same global batch and the same tokens
-(see `distillation_multi_teacher_script.py`).
+Two-rank CPU checks of the multi-teacher `DistillationTrainer`, both launched against the single worker
+`distillation_multi_teacher_script.py` (see its module docstring for what each `--mode` does):
+
+* `TestDistillationTrainerMultiTeacherTwoRankCpu`: a two-process update (`--mode multi`) against a single-process
+  reference (`--mode reference`) trained on the same global batch and tokens.
+* `TestDistillationTrainerDTensorHeadTwoRankCpu`: the multi-teacher loss with a sharded `DTensor` student head,
+  routing a different number of teacher groups to each rank (`--mode dtensor-head`).
 
 Launched with `python -m torch.distributed.run` rather than `accelerate launch`: this environment has no
 `mpirun`/`mpiexec`/`mpi4py`, and `accelerate launch`'s non-MPI multi-process spawn is only wired up for
 `MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process
-launcher. `ACCELERATE_USE_CPU=1` is set explicitly so `Accelerator()` still resolves to `MULTI_CPU`/gloo.
+launcher.
 """
 
 import json
@@ -38,23 +42,38 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "distillation_multi_teacher_script.py")
 
 
+def _run_worker(script_args, num_processes, env_overrides):
+    """Launch the worker under `torch.distributed.run` (or plain `python` for one rank); assert a clean exit."""
+    environment = dict(
+        os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", TOKENIZERS_PARALLELISM="false", **env_overrides
+    )
+    if num_processes > 1:
+        command = [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            f"--nproc_per_node={num_processes}",
+            SCRIPT,
+            *script_args,
+        ]
+    else:
+        command = [sys.executable, SCRIPT, *script_args]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=1800, env=environment, cwd=ROOT)
+    assert result.returncode == 0, f"run failed:\n{result.stdout[-4000:]}\n{result.stderr[-8000:]}"
+    return result
+
+
 @pytest.mark.slow
 class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
     def test_two_rank_update_matches_a_single_process_reference(self):
-        environment = dict(
-            os.environ,
-            OMP_NUM_THREADS="1",
-            MKL_NUM_THREADS="1",
-            TOKENIZERS_PARALLELISM="false",
-            # Makes `Accelerator()` resolve to `MULTI_CPU`/gloo instead of trying (and, on this CPU-only torch
-            # build, failing) a GPU backend. See the module docstring for why this bypasses `accelerate launch`.
-            ACCELERATE_USE_CPU="1",
-        )
+        # Makes `Accelerator()` resolve to `MULTI_CPU`/gloo instead of trying (and, on this CPU-only torch build,
+        # failing) a GPU backend. See the module docstring for why this bypasses `accelerate launch`.
+        env_overrides = {"ACCELERATE_USE_CPU": "1"}
 
         def run(mode, num_processes):
             output = os.path.join(self.tmp_dir, f"{mode}.json")
             script_args = [
-                SCRIPT,
                 "--mode",
                 mode,
                 "--out",
@@ -62,19 +81,7 @@ class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
                 "--output-dir",
                 os.path.join(self.tmp_dir, f"out-{mode}"),
             ]
-            if num_processes > 1:
-                command = [
-                    sys.executable,
-                    "-m",
-                    "torch.distributed.run",
-                    "--standalone",
-                    f"--nproc_per_node={num_processes}",
-                    *script_args,
-                ]
-            else:
-                command = [sys.executable, *script_args]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=1800, env=environment, cwd=ROOT)
-            assert result.returncode == 0, f"{mode} run failed:\n{result.stdout[-4000:]}\n{result.stderr[-8000:]}"
+            _run_worker(script_args, num_processes, env_overrides)
             with open(output) as handle:
                 summary = json.load(handle)
             parameters = torch.load(os.path.splitext(output)[0] + "-params.pt", weights_only=True)
@@ -127,3 +134,12 @@ class TestDistillationTrainerMultiTeacherTwoRankCpu(TrlTestCase):
                     f"{differences[name]:.3e} (worst is {worst} by {differences[worst]:.3e})"
                 ),
             )
+
+
+@pytest.mark.slow
+class TestDistillationTrainerDTensorHeadTwoRankCpu(TrlTestCase):
+    @pytest.mark.parametrize("equal_groups", [False, True])
+    def test_sharded_student_head_loss_runs_with_unequal_teacher_groups(self, equal_groups):
+        script_args = ["--mode", "dtensor-head", *(["--equal-groups"] if equal_groups else [])]
+        # Turns a rank-dependent number of collectives into a reported mismatch instead of a hang.
+        _run_worker(script_args, num_processes=2, env_overrides={"TORCH_DISTRIBUTED_DEBUG": "DETAIL"})
