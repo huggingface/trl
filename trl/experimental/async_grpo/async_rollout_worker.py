@@ -943,7 +943,7 @@ class _AsyncRolloutLoop:
             t0 = time.monotonic()
             try:
                 arguments = function.get("arguments", {})
-                if inspect.iscoroutinefunction(tool):
+                if inspect.iscoroutinefunction(tool) or inspect.iscoroutinefunction(tool.__call__):
                     result = await tool(**arguments)
                 else:
                     result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))

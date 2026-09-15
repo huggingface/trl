@@ -20,6 +20,7 @@ import multiprocessing as mp
 import os
 import queue
 from collections import OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -1018,6 +1019,70 @@ class TestWorkerMetricPush(TrlTestCase):
         loop._metrics_queue = mp.Queue(maxsize=1)
         for _ in range(50):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
+
+
+class _AsyncCallableTool:
+    async def __call__(self, value: int) -> str:
+        await asyncio.sleep(0)
+        return f"callable:{value}"
+
+
+class TestToolExecution(TrlTestCase):
+    def _loop(self):
+        loop = object.__new__(_AsyncRolloutLoop)
+        loop._counters = defaultdict(float)
+        loop._rates = defaultdict(lambda: [0.0, 0.0])
+        loop._tool_pool = ThreadPoolExecutor(max_workers=4)
+        return loop
+
+    @staticmethod
+    def _call(name, **arguments):
+        return {"type": "function", "function": {"name": name, "arguments": arguments}}
+
+    def test_every_tool_shape_runs_and_calls_keep_their_order(self):
+        def sync_tool(value: int) -> str:
+            return f"sync:{value}"
+
+        async def async_tool(value: int) -> str:
+            await asyncio.sleep(0)
+            return f"async:{value}"
+
+        async def failing_tool(value: int) -> str:
+            raise RuntimeError(f"boom:{value}")
+
+        loop = self._loop()
+        tool_dict = {
+            "sync_tool": sync_tool,
+            "async_tool": async_tool,
+            "callable_tool": _AsyncCallableTool(),
+            "failing_tool": failing_tool,
+        }
+        calls = [
+            self._call("sync_tool", value=1),
+            self._call("async_tool", value=2),
+            self._call("callable_tool", value=3),
+            self._call("failing_tool", value=4),
+            self._call("missing_tool", value=5),
+        ]
+        messages, n_calls, n_failures = asyncio.run(loop._execute_tool_calls(calls, tool_dict))
+
+        assert n_calls == 5
+        assert n_failures == 2
+        assert [m["name"] for m in messages] == [
+            "sync_tool",
+            "async_tool",
+            "callable_tool",
+            "failing_tool",
+            "missing_tool",
+        ]
+        assert messages[0]["content"] == "sync:1"
+        assert messages[1]["content"] == "async:2"
+        assert messages[2]["content"] == "callable:3"
+        assert "boom:4" in messages[3]["content"]
+        assert "unknown tool" in messages[4]["content"]
+        assert loop._counters["tools/failing_tool_failure_total"] == 1
+        assert loop._counters["tools/unknown_name_total"] == 1
+        assert loop._rates["tools/latency_s"][1] == 4
 
 
 class TestReconciler(TrlTestCase):
