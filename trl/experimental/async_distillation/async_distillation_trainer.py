@@ -427,7 +427,8 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
 
 
 class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncDistillationTrainer`].
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to
+    [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol`].
 
@@ -454,7 +455,7 @@ class RolloutWorkerProtocol(Protocol):
 
 class WeightTransferProtocol(Protocol):
     """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`AsyncDistillationTrainer`].
+    [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.WeightTransferProtocol`]. The default
     [`WeightTransferClient`] streams the student's weights into its vLLM server over NCCL; pass a no-op implementation
@@ -904,7 +905,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
             [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the student
             model on its vLLM server.
-        args ([`AsyncDistillationConfig`], *optional*):
+        args ([`experimental.async_distillation.AsyncDistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. Must include a `"prompt"` column
@@ -989,8 +990,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 

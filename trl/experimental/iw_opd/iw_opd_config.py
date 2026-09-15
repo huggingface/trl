@@ -22,7 +22,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class IWOPDConfig(_BaseConfig):
     r"""
-    Configuration class for the [`IWOPDTrainer`].
+    Configuration class for the [`experimental.iw_opd.IWOPDTrainer`].
 
     Extends [`~transformers.TrainingArguments`] with parameters specific to knowledge distillation. This config is
     independent of [`SFTConfig`] — all necessary fields are declared here.

@@ -23,7 +23,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SDPOConfig(_BaseConfig):
     r"""
-    Configuration class for the [`SDPOTrainer`].
+    Configuration class for the [`experimental.sdpo.SDPOTrainer`].
 
     Parameters:
         > Parameters that control the online policy objective

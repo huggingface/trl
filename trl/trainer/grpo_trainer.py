@@ -393,8 +393,8 @@ class GRPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
@@ -962,7 +962,7 @@ class GRPOTrainer(_BaseTrainer):
             optimizers=optimizers,
             # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
             # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
-            # global accumulated batch. To control scaling ourselves, we must disable Trainer’s built-in scaling. The
+            # global accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The
             # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
             # that behavior without rewriting `training_step`.
             compute_loss_func="non-None value to disable scaling",
