@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.nn.functional as F
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
@@ -3659,19 +3660,19 @@ class TestXTokenLoss(TrlTestCase):
         torch.testing.assert_close(mapping["uncommon_student"], torch.tensor([2, 3]))
         torch.testing.assert_close(mapping["uncommon_teacher"], torch.tensor([2]))
 
-    def test_h_kl_floors_negative_topk_approximation(self):
+    def test_h_kl_renormalizes_common_distribution(self):
         projection_path = Path(self.tmp_dir) / "hybrid.pt"
         torch.save(
             {
                 "indices": torch.tensor([[0], [1], [2]]),
-                "likelihoods": torch.tensor([[1.0], [0.5], [0.5]]),
+                "likelihoods": torch.tensor([[1.0], [1.0], [0.5]]),
             },
             projection_path,
         )
         config = self._config(projection_path, loss_type="h_kl")
         config.xtoken_uncommon_topk = 1
         loss_fn = XTokenLoss(config, student_vocab_size=3, teacher_vocab_size=3)
-        student_logits = torch.tensor([[0.8, 0.1, 0.1]]).log()
+        student_logits = torch.tensor([[0.8, 0.1, 0.1]]).log().requires_grad_()
         teacher_logits = torch.tensor([[0.4, 0.3, 0.3]]).log()
 
         loss = loss_fn._compute_h_kl(
@@ -3682,7 +3683,18 @@ class TestXTokenLoss(TrlTestCase):
             T=1.0,
         )
 
-        torch.testing.assert_close(loss, torch.tensor(0.0))
+        student_common = torch.tensor([0.8, 0.1])
+        teacher_common = torch.tensor([0.4, 0.3])
+        student_common = student_common / student_common.sum()
+        teacher_common = teacher_common / teacher_common.sum()
+        expected_kl = F.kl_div(student_common.log(), teacher_common.log(), reduction="sum", log_target=True)
+        expected_l1 = torch.tensor(0.2)
+        torch.testing.assert_close(loss, expected_kl + expected_l1)
+        assert loss > 0
+
+        loss.backward()
+        assert student_logits.grad is not None
+        assert student_logits.grad.abs().sum() > 0
 
     def test_ce_is_kept_without_teacher_span_and_only_actual_eos_is_skipped(self):
         projection_path = Path(self.tmp_dir) / "identity.pt"

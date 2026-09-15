@@ -1171,7 +1171,7 @@ class XTokenLoss(nn.Module):
         return per_chunk_kl.mean() * (T * T), proj_acc_n, proj_acc_d
 
     def _compute_h_kl(self, s_logits, t_logits, paired, device, T):
-        """H-KL: relaxed common-set forward KL + uncommon sorted-L1, T² scaling.
+        """H-KL: renormalized common-set forward KL + uncommon sorted-L1, T² scaling.
 
         Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3) and Eq. (5) from
         https://huggingface.co/papers/2605.21699.
@@ -1189,9 +1189,11 @@ class XTokenLoss(nn.Module):
         t_chunks = self._chunk_average(t_log, t_groups)
 
         if common_s.numel() > 0:
-            kl_per_chunk = F.kl_div(
-                s_chunks[:, common_s], t_chunks[:, common_t], reduction="none", log_target=True
-            ).sum(dim=-1)
+            s_common = s_chunks[:, common_s]
+            t_common = t_chunks[:, common_t]
+            s_common = s_common - torch.logsumexp(s_common, dim=-1, keepdim=True)
+            t_common = t_common - torch.logsumexp(t_common, dim=-1, keepdim=True)
+            kl_per_chunk = F.kl_div(s_common, t_common, reduction="none", log_target=True).sum(dim=-1)
             kl_common = kl_per_chunk.mean()
         else:
             kl_common = s_chunks.new_zeros(())
@@ -1210,10 +1212,7 @@ class XTokenLoss(nn.Module):
         else:
             l1_uncommon = s_chunks.new_zeros(())
 
-        # The common term is the paper's partial full-vocabulary KL sum, so a top-k approximation of the balancing
-        # uncommon L1 term can make the hybrid estimate slightly negative. A divergence must not reward moving farther
-        # from the teacher; floor that approximation at zero before dynamic loss scaling.
-        return (kl_common + l1_uncommon).clamp_min(0.0) * (T * T)
+        return (kl_common + l1_uncommon) * (T * T)
 
 
 class GOLDTrainer(SFTTrainer):
@@ -3016,7 +3015,7 @@ class GOLDTrainer(SFTTrainer):
                     self.teacher_tokenizer,
                     prompt_texts,
                     completion_texts,
-                    use_extended_uld=self.uld_loss_fn.use_extended_uld,
+                    use_extended_uld=self.args.use_extended_uld,
                 )
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
