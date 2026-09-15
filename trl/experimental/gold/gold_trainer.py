@@ -2734,7 +2734,7 @@ class GOLDTrainer(SFTTrainer):
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
                     "max_length": args.max_length,
-                    "use_extended_uld": args.use_extended_uld,
+                    "use_extended_uld": args.use_extended_uld or args.xtoken_loss_type != "none",
                 },
                 **map_kwargs,
             )
@@ -2895,7 +2895,8 @@ class GOLDTrainer(SFTTrainer):
             padding=True,
             return_tensors="pt",
         )
-        if self.uld_loss_fn.use_extended_uld:
+        use_byte_offsets = self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld
+        if use_byte_offsets:
             # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
             # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
             backend = self.teacher_tokenizer.backend_tokenizer
@@ -2927,7 +2928,7 @@ class GOLDTrainer(SFTTrainer):
             offsets = [(0, 0)] * len(prompt_ids) + completion_offs
             if eos_token_id is not None:
                 sequence.append(eos_token_id)
-                offsets.append((content_len, content_len) if self.uld_loss_fn.use_extended_uld else (0, 0))
+                offsets.append((content_len, content_len) if use_byte_offsets else (0, 0))
 
             seq_tensor = torch.tensor(sequence, dtype=torch.long)
             sequences.append(seq_tensor)
@@ -3015,7 +3016,7 @@ class GOLDTrainer(SFTTrainer):
                     self.teacher_tokenizer,
                     prompt_texts,
                     completion_texts,
-                    use_extended_uld=self.args.use_extended_uld,
+                    use_extended_uld=self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld,
                 )
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)

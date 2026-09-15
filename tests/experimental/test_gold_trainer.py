@@ -3816,6 +3816,7 @@ def test_xtoken_train_step_smoke(tmp_path, loss_type):
         temperature=1.0,
         num_generations=1,
         use_vllm=False,
+        use_extended_uld=False,
         xtoken_loss_type=loss_type,
         xtoken_projection_matrix_path=str(projection_path),
         teacher_tokenizer_name_or_path=_TINY_LLAMA,
