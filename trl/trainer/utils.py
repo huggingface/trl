@@ -17,6 +17,7 @@ import copy
 import functools
 import hashlib
 import importlib.resources as pkg_resources
+import inspect
 import os
 import random
 import socket
@@ -232,6 +233,20 @@ def get_callable_name(func: Callable) -> str:
     while isinstance(func, functools.partial):
         func = func.func
     return getattr(func, "__name__", type(func).__name__)
+
+
+def is_async_callable(func: Callable) -> bool:
+    """
+    Return whether calling `func` returns a coroutine, for the same forms as [`get_callable_name`]: module-level
+    functions, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to
+    the wrapped callable), and callable class instances (which carry the `async` on their `__call__`).
+
+    `inspect.iscoroutinefunction` alone covers only the first two: it inspects the instance itself, not its `__call__`,
+    so an async callable class reads as synchronous and its coroutine is never awaited.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(func.__call__)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
