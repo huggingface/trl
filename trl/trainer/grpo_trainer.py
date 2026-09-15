@@ -1361,6 +1361,8 @@ class GRPOTrainer(_BaseTrainer):
         pixel_attention_mask=None,
         spatial_shapes=None,
         image_sizes=None,
+        token_type_ids=None,
+        mm_token_type_ids=None,
         image_position_ids=None,
     ):
         if is_peft_model(unwrapped_model):
@@ -1384,6 +1386,10 @@ class GRPOTrainer(_BaseTrainer):
         # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
+        if token_type_ids is not None:
+            model_inputs["token_type_ids"] = token_type_ids
+        if mm_token_type_ids is not None:
+            model_inputs["mm_token_type_ids"] = mm_token_type_ids
         if image_position_ids is not None:
             model_inputs["image_position_ids"] = image_position_ids
 
@@ -2974,12 +2980,14 @@ class GRPOTrainer(_BaseTrainer):
             input_ids,
             attention_mask,
             logits_to_keep,
-            inputs.get("pixel_values"),
-            inputs.get("image_grid_thw"),
-            inputs.get("pixel_attention_mask"),
-            inputs.get("spatial_shapes"),
-            inputs.get("image_sizes"),
-            inputs.get("image_position_ids"),
+            pixel_values=inputs.get("pixel_values"),
+            image_grid_thw=inputs.get("image_grid_thw"),
+            pixel_attention_mask=inputs.get("pixel_attention_mask"),
+            spatial_shapes=inputs.get("spatial_shapes"),
+            image_sizes=inputs.get("image_sizes"),
+            token_type_ids=inputs.get("token_type_ids"),
+            mm_token_type_ids=inputs.get("mm_token_type_ids"),
+            image_position_ids=inputs.get("image_position_ids"),
         )
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
