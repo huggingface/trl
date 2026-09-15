@@ -494,8 +494,9 @@ def unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    if isinstance(dataset, DatasetDict):
-        column_names = next(iter(dataset.values())).column_names
+    if isinstance(dataset, (DatasetDict, IterableDatasetDict)):
+        first_split = next(iter(dataset.values()))
+        column_names = first_split.column_names or list(next(iter(first_split)).keys())
     elif isinstance(dataset, Dataset):
         column_names = dataset.column_names
     else:  # IterableDataset
@@ -544,11 +545,14 @@ def maybe_unpair_preference_dataset(
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
     """
-    if isinstance(dataset, DatasetDict):
-        column_names = dataset[list(dataset.keys())[0]].column_names
+    if isinstance(dataset, (DatasetDict, IterableDatasetDict)):
+        first_split = next(iter(dataset.values()))
+        column_names = first_split.column_names or list(next(iter(first_split)).keys())
     else:
         column_names = dataset.column_names
     if "chosen" in column_names and "rejected" in column_names:
+        if isinstance(dataset, IterableDatasetDict):
+            return unpair_preference_dataset(dataset)
         return unpair_preference_dataset(dataset, num_proc=num_proc, desc=desc)
     else:
         return dataset
