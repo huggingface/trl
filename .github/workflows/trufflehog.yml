@@ -29,6 +29,8 @@ jobs:
       with:
         # the action runs the scanner as a container and defaults to the mutable `:latest` tag, so the SHA above
         # pins only the wrapper. pin the image by digest too, and bump it together with the action SHA.
+        # Upstream issue: https://github.com/trufflesecurity/trufflehog/issues/4857
+        # Remove once: the action defaults `version` to its own release, making this pin redundant
         version: 3.97.4@sha256:562bc231afa9de3d04de44cfe624252b08207de1fc3cebc5e7ed92bed7f279e4
         # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
         extra_args: --results=verified,unknown --fail-on-scan-errors
