@@ -952,16 +952,10 @@ class DistillationTrainer(_BaseTrainer):
         init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # Teachers stay on CPU and are uploaded one at a time, so they are always loaded unmapped.
         init_kwargs["device_map"] = None
-        revision = init_kwargs.get("revision")
         commit = None
         if not isinstance(source, str):
             teacher, source = source, get_config_model_id(source.config)
         else:
-            if os.path.isdir(source) and revision is not None:
-                raise ValueError(
-                    f"Teacher {teacher_id!r} is the local path {source!r} but was given `revision` {revision!r}. "
-                    f"Local paths carry no revision; drop it, or register the Hub repository instead."
-                )
             teacher = create_model_from_path(source, **init_kwargs)
             # Pin the branch/tag to the commit it resolved to, so the identity saved in the manifest is immutable and
             # a resume cannot silently follow a moved branch. Transformers stamps the resolved commit on the config

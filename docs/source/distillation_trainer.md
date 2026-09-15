@@ -292,7 +292,7 @@ trainer = DistillationTrainer(
     args=DistillationConfig(
         output_dir="mopd-student",
         # Route one teacher to a specific revision while the rest load normally.
-        teacher_model_init_kwargs_by_teacher={"code": {"revision": "<commit-sha>"}},
+        teacher_model_init_kwargs_by_teacher={"code": {"revision": "<revision-name>"}},
     ),
 )
 trainer.train()

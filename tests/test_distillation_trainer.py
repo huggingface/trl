@@ -1930,15 +1930,6 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert entries["b"]["dtype"] == "torch.bfloat16"
         assert entries["a"] != entries["b"]
 
-        # A revision override is meaningless for a local checkpoint and is refused rather than ignored.
-        bad_args = DistillationConfig(
-            output_dir=self.tmp_dir,
-            report_to="none",
-            teacher_model_init_kwargs_by_teacher={"a": {"revision": "main"}},
-        )
-        with pytest.raises(ValueError, match="Local paths carry no revision"):
-            DistillationTrainer(model=self.model_id, args=bad_args, teacher_models={"a": teachers["a"]})
-
     def test_gradient_accumulation_matches_teacher_model(self, teachers):
         # One generation batch is split into `gradient_accumulation_steps` micro-batches, and the multi-teacher path
         # schedules teacher scoring across that whole batch. The resulting update must still be the single-teacher
