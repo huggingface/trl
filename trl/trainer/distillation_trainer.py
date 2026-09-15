@@ -47,7 +47,7 @@ from transformers import (
     is_trackio_available,
     is_wandb_available,
 )
-from transformers.trainer_utils import get_last_checkpoint
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, get_last_checkpoint
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..chat_template_utils import (
@@ -2443,16 +2443,16 @@ class DistillationTrainer(_BaseTrainer):
         else:
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
-        super()._save_checkpoint(model, trial)
-
-    def _save(self, output_dir=None, state_dict=None):
-        super()._save(output_dir, state_dict)
-        # Teacher identities travel with the student weights so a resume can be checked against them; no teacher
-        # weights, targets or caches are saved. Written here, as part of serialization, rather than after
-        # `_save_checkpoint`: the parent schedules the checkpoint folder's Hub push before returning from it, and a
-        # manifest written afterwards can miss the upload. This also covers a bare `save_model()`. The parent only
-        # calls `_save` on the saving process, so no rank check is needed.
-        if self.teacher_models is not None:
-            output_dir = self.args.output_dir if output_dir is None else output_dir
-            with open(os.path.join(output_dir, "teacher_manifest.json"), "w", encoding="utf-8") as f:
+        # Teacher identities travel with the student checkpoint so a resume can be checked against them; no teacher
+        # weights, targets or caches are saved. Written before the parent runs, into the directory it is about to
+        # fill: the parent reaches the student's weights by different routes (`_save` for a full state dict,
+        # `save_fsdp_model` for a sharded one), and schedules the folder's Hub push before returning, so a manifest
+        # written by one of those hooks, or afterwards, can be missing from a sharded checkpoint or from an upload.
+        if self.teacher_models is not None and self.accelerator.is_main_process:
+            checkpoint_dir = os.path.join(
+                self._get_output_dir(trial=trial), f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            )
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            with open(os.path.join(checkpoint_dir, "teacher_manifest.json"), "w", encoding="utf-8") as f:
                 json.dump({"teachers": self._teacher_manifest}, f, indent=2, sort_keys=True)
+        super()._save_checkpoint(model, trial)

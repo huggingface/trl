@@ -1837,17 +1837,38 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert entry["source"] == self.model_id
         assert re.fullmatch(r"[0-9a-f]{40}", entry["revision"]), entry
 
-    def test_save_model_writes_the_teacher_manifest(self, tmp_path, teachers):
-        # The manifest is written during serialization, not after `_save_checkpoint` returns: by then the parent has
-        # already scheduled the checkpoint folder's Hub push. Writing it in `_save` also covers a bare `save_model()`.
+    def test_checkpoint_manifest_is_written_before_the_parent_serializes(self, teachers):
+        # The manifest must be on disk before the parent checkpoint routine is entered. The parent reaches the
+        # student's weights by different routes — `_save` for a full state dict, `save_fsdp_model` for a sharded one,
+        # which never calls `_save` — and schedules the folder's Hub push before returning, so a manifest written by
+        # one of those hooks, or afterwards, can be missing from a sharded checkpoint or from an upload.
+        present_on_entry = []
+        parent_save_checkpoint = transformers.Trainer._save_checkpoint
+
+        def record_then_save(trainer, model, trial):
+            checkpoint = os.path.join(trainer.args.output_dir, f"checkpoint-{trainer.state.global_step}")
+            present_on_entry.append(os.path.exists(os.path.join(checkpoint, "teacher_manifest.json")))
+            return parent_save_checkpoint(trainer, model, trial)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_completion_length=4,
+            max_steps=1,
+            save_strategy="steps",
+            save_steps=1,
+            report_to="none",
+        )
         trainer = DistillationTrainer(
             model=self.model_id,
-            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            args=training_args,
+            train_dataset=self._unrouted_dataset(8),
             teacher_models={"a": teachers["a"]},
         )
-        destination = str(tmp_path / "saved-model")
-        trainer.save_model(destination)
-        with open(os.path.join(destination, "teacher_manifest.json")) as handle:
+        with patch.object(transformers.Trainer, "_save_checkpoint", record_then_save):
+            trainer.train()
+        assert present_on_entry == [True]
+        with open(os.path.join(self.tmp_dir, "checkpoint-1", "teacher_manifest.json")) as handle:
             assert [entry["id"] for entry in json.load(handle)["teachers"]] == ["a"]
 
     def test_teacher_jsd_is_the_token_weighted_window_mean(self, teachers):
