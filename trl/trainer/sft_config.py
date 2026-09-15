@@ -111,7 +111,8 @@ class SFTConfig(_BaseConfig):
             - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
             - `"tail_sft"`: TailSFT, which filters sequences whose loss has decreased the most relative to their
               initial-policy loss, as described in [this paper](https://huggingface.co/papers/2608.25756). Requires an
-              `"initial_loss"` column in the training dataset.
+              `"initial_loss"` column in the training dataset. The LM-head projection is computed in chunks to reduce
+              peak activation memory.
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.

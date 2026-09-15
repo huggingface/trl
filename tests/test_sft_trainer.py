@@ -532,8 +532,11 @@ class TestSFTTrainer(TrlTestCase):
             per_device_train_batch_size=2,
             report_to="none",
         )
+        reference_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32
+        )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            model=copy.deepcopy(reference_model),
             args=training_args,
             train_dataset=dataset,
         )
@@ -543,7 +546,7 @@ class TestSFTTrainer(TrlTestCase):
 
         with torch.no_grad():
             torch.manual_seed(0)
-            logits = trainer.model(
+            logits = reference_model(
                 input_ids=batch["input_ids"], attention_mask=batch["attention_mask"], use_cache=False
             ).logits[..., :-1, :]
             per_token_loss = F.cross_entropy(
@@ -551,9 +554,12 @@ class TestSFTTrainer(TrlTestCase):
             )
             expected_loss = per_token_loss[1].mean()
             torch.manual_seed(0)
-            actual_loss = trainer.compute_loss(trainer.model, batch)
+            actual_loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
 
         torch.testing.assert_close(actual_loss, expected_loss, atol=1e-2, rtol=1e-3)
+        assert outputs.logits is None
+        assert outputs.per_example_loss_sum.shape == (2,)
+        assert outputs.per_example_num_tokens.tolist() == [2, 2]
         assert trainer._metrics["train"]["tail_sft_filtered_fraction"] == [0.5]
 
         trainer.train()
@@ -2897,6 +2903,44 @@ class TestChunkedCrossEntropyLoss:
 
         torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
+
+    def test_per_example_losses_support_tail_sft_filtering(self):
+        """Per-example chunked losses select the same sequences and propagate the same masked gradients as full CE."""
+        hidden_c, weight_c, labels = self._inputs(ignore_positions=slice(0, 3), requires_grad=True)
+        hidden_r = hidden_c.detach().clone().requires_grad_(True)
+        weight_r = weight_c.detach().clone().requires_grad_(True)
+        initial_loss = torch.tensor([100.0, 0.0])
+
+        outputs = _chunked_cross_entropy_loss(
+            hidden_c, weight_c, self.CHUNK_SIZE, labels, return_per_example_losses=True
+        )
+        per_example_loss_sum, per_example_num_tokens = outputs[4:]
+        per_example_loss = per_example_loss_sum / per_example_num_tokens
+        keep = torch.ones(self.B, dtype=torch.bool)
+        keep[(per_example_loss.detach() - initial_loss).argsort()[:1]] = False
+        loss_c = (per_example_loss_sum * keep).sum() / (per_example_num_tokens * keep).sum()
+        loss_c.backward()
+
+        shift_h = hidden_r[..., :-1, :]
+        shift_l = labels[..., 1:]
+        per_token_loss = F.cross_entropy(
+            (shift_h @ weight_r.t()).transpose(1, 2), shift_l, ignore_index=-100, reduction="none"
+        )
+        valid = shift_l != -100
+        loss_sum_r = (per_token_loss * valid).sum(-1)
+        num_tokens_r = valid.sum(-1)
+        per_example_loss_r = loss_sum_r / num_tokens_r
+        keep_r = torch.ones(self.B, dtype=torch.bool)
+        keep_r[(per_example_loss_r.detach() - initial_loss).argsort()[:1]] = False
+        loss_r = (loss_sum_r * keep_r).sum() / (num_tokens_r * keep_r).sum()
+        loss_r.backward()
+
+        torch.testing.assert_close(per_example_loss, per_example_loss_r, atol=1e-5, rtol=1e-5)
+        assert torch.equal(keep, keep_r)
+        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
+        assert hidden_c.grad[~keep].abs().sum().item() == 0.0
 
     def test_all_ignored_returns_zero(self):
         """If every label is ignored, loss/correct/entropy_sum are all zero and backward still works.

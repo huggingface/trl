@@ -1237,7 +1237,8 @@ Papers relating to the [`SFTTrainer`]
 TailSFT preserves response coverage for subsequent reinforcement learning by filtering the sequences whose
 length-normalized loss has improved the most relative to the initial policy. TRL implements the paper's distributed
 selection-batch filtering with `loss_type="tail_sft"`; the training dataset must contain an `initial_loss` column with
-the initial policy's mean cross-entropy over each sequence's target tokens.
+the initial policy's mean cross-entropy over each sequence's target tokens. Its LM-head projection is computed in
+chunks, preserving the paper's per-sequence selection while avoiding full sequence-by-vocabulary logits.
 
 ```python
 from trl import SFTConfig, SFTTrainer
