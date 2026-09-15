@@ -262,6 +262,91 @@ Tested with:
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 
+## Multiple teachers (MOPD)
+
+[`DistillationTrainer`] also supports multi-teacher on-policy distillation (MOPD), described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](https://huggingface.co/papers/2606.30406). MOPD's own setting fuses several frozen, independently trained domain experts (e.g. a math expert and a code expert) into a single student: each training row is scored by exactly one teacher, never averaged or ensembled across teachers.
+
+Pass `teacher_models` instead of `teacher_model` — a mapping from a routing ID to a checkpoint path, Hub ID, or an already-instantiated teacher. Each dataset row's `teacher_id` column selects which teacher scores it. With a single entry in `teacher_models`, `teacher_id` is optional and every row uses that one teacher.
+
+```python
+from datasets import Dataset
+from trl import DistillationConfig, DistillationTrainer
+
+dataset = Dataset.from_dict(
+    {
+        "prompt": [
+            "What is the derivative of x^2?",
+            "Write a function that reverses a string.",
+        ],
+        "teacher_id": ["math", "code"],
+    }
+)
+
+trainer = DistillationTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    teacher_models={
+        "math": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+        "code": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+    },
+    train_dataset=dataset,
+    args=DistillationConfig(
+        output_dir="mopd-student",
+        # Route one teacher to a specific revision while the rest load normally.
+        teacher_model_init_kwargs_by_teacher={"code": {"revision": "<revision-name>"}},
+    ),
+)
+trainer.train()
+```
+
+### Requirements
+
+- Every teacher must share the student's vocabulary, i.e. the same `vocab_size`. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs, so a teacher trained on a different tokenizer is training the student against the wrong tokens. Use [GOLD](gold_trainer) for cross-tokenizer distillation.
+- Teachers must be unquantized teachers loaded without device dispatch or offload hooks. Teachers move between CPU and the accelerator as complete modules, and the loss reads their output heads as dense matrices; quantized and dispatched teacher backends have not been integrated or validated. A `quantization_config` and an active `device_map` are rejected at initialization, per teacher after the per-teacher overrides are merged, and every loaded teacher is checked for quantization and device dispatch — including one loaded from a checkpoint that carries its quantization in its own config. `device_map=None` is allowed.
+- Students must be text-only. VLM students are not supported in multi-teacher mode; use the single `teacher_model` argument for VLM distillation.
+- DeepSpeed ZeRO-3 is rejected: the teacher head is uploaded as a plain device tensor, while the chunked loss only knows how to gather a ZeRO-partitioned head. Use ZeRO stage 1 or 2, or the single `teacher_model` argument.
+
+### Memory
+
+Teachers are inference-only sources: they never enter the student's module tree, the optimizer, or the accelerator's model preparation.
+
+- **CPU** holds every registered teacher for the whole run, plus one generation batch's worth of completion hidden-state targets. Those targets are computed once per generation batch and reused by every accumulation step drawn from it, sized as:
+
+  ```
+  per_device_train_batch_size × gradient_accumulation_steps × max_completion_length × teacher_hidden_size × dtype_bytes
+  ```
+
+  where `teacher_hidden_size` is the *teacher's* hidden size (a teacher may be wider or narrower than the student; only the vocabulary has to match).
+
+- **Device, while scoring**: one teacher body at a time. A teacher is moved to the device, every row routed to it is scored, and it is moved back to CPU before the next teacher — so device memory is bounded by the *largest* registered teacher, never the sum of all of them. This costs one device round trip per teacher per generation batch.
+- **Device, while computing the loss**: only the output heads (`lm_head` weight and bias) of the teachers present in the current microbatch, one at a time:
+
+  ```
+  vocab_size × teacher_hidden_size × dtype_bytes
+  ```
+
+  A microbatch routed to several teachers holds one head per teacher present in it — never a head per registered teacher, and never a teacher body.
+
+### Metrics
+
+Multi-teacher runs additionally log, per registered teacher:
+
+- `teacher_jsd/<id>`: the token-weighted mean divergence (at the configured `beta`) over the tokens that teacher scored in the accumulated window — the window's total divergence divided by its total scored tokens, so microbatches of unequal size do not count equally.
+- `teacher_token_frac/<id>`: that teacher's share of the accumulated window's valid (trained) tokens.
+
+A teacher absent from a window still logs `teacher_token_frac/<id> = 0.0`, but its `teacher_jsd/<id>` is left out entirely rather than reported as a misleading zero.
+
+### Checkpointing
+
+Each checkpoint saves a `teacher_manifest.json` alongside the student weights, recording every registered teacher's routing ID, source, resolved revision, and dtype (no teacher weights are saved). On resume, the current run's manifest is compared against the saved one entry by entry; a teacher whose source, revision, or dtype changed under the same routing ID raises, rather than silently continuing training against a different target distribution.
+
+### Precision and distributed training
+
+Teachers are scored under the same precision context the loss uses for its own forward passes. On a single process and under DDP, a single registered teacher therefore reproduces `teacher_model=` bitwise; DeepSpeed ZeRO-2 was measured bitwise identical on two GPUs as well; ZeRO-1 shares the same mechanism but was not measured. Neither is covered by the CPU test suite. Under DeepSpeed, teachers are cast to the training engine's mixed-precision dtype, the same as the single-teacher `teacher_model` path.
+
+With several teachers, the microbatch rows are grouped per teacher and each group is a separate call into the same loss, so the order in which the per-token divergences are summed differs from one ungrouped call; the result agrees to within floating-point noise rather than bitwise.
+
+Distributed training does not change the student side: it is the same generation and optimization loop as single-teacher distillation. Each rank scores only its own rows, against its own CPU copy of every teacher.
+
 ## Command line interface
 
 Use the [`trl distillation` CLI](clis) to launch distillation training from the command line. It supports full training and LoRA via the standard `ModelConfig` flags.
