@@ -1819,6 +1819,22 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 teacher_models={"a": teachers["a"], "mismatched": mismatched},
             )
 
+    def test_teacher_tokenizer_without_a_pad_token_matches_the_student(self, tmp_path):
+        # The trainer gives the student's tokenizer the EOS token as its pad token when it has none, while the
+        # teacher's is compared as loaded. Padding is not tokenization identity, so two copies of the same pad-less
+        # tokenizer must still compare equal.
+        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+        assert AutoTokenizer.from_pretrained(model_id).pad_token is None
+        teacher = str(tmp_path / "pad-less-teacher")
+        AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).save_pretrained(teacher)
+        AutoTokenizer.from_pretrained(model_id).save_pretrained(teacher)
+        trainer = DistillationTrainer(
+            model=model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            teacher_models={"a": teacher},
+        )
+        assert list(trainer.teacher_models) == ["a"]
+
     def test_teacher_model_and_teacher_models_are_exclusive(self, teachers):
         # The singular and the mapping entry points have different teacher lifecycles; a run may only use one.
         with pytest.raises(ValueError, match="Pass only one"):

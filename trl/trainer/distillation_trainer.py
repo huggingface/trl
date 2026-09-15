@@ -303,7 +303,9 @@ def _tokenizer_payload(tokenizer: PreTrainedTokenizerBase) -> str:
     processing class and every teacher scores those exact IDs, so a teacher that renders text differently is
     training against the wrong tokens. The backend's `padding` and `truncation` sections are dropped because they
     are call-time state — a fast tokenizer records the strategy of the last call that used them — not identity, and
-    `padding_side` / `truncation_side` are excluded for the same reason.
+    `padding_side` / `truncation_side` are excluded for the same reason. The pad token is excluded too: it decides
+    how a batch is filled out, not how text becomes IDs, and the trainer gives the student's tokenizer the EOS token
+    as its pad token when it has none, which would otherwise make an unmodified copy of that same tokenizer differ.
 
     Args:
         tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
@@ -318,7 +320,6 @@ def _tokenizer_payload(tokenizer: PreTrainedTokenizerBase) -> str:
     payload["special_tokens"] = {
         "bos": (tokenizer.bos_token, tokenizer.bos_token_id),
         "eos": (tokenizer.eos_token, tokenizer.eos_token_id),
-        "pad": (tokenizer.pad_token, tokenizer.pad_token_id),
         "unk": (tokenizer.unk_token, tokenizer.unk_token_id),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
