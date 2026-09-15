@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
@@ -354,6 +355,24 @@ def _bare_loop(tokenizer, teacher_server_urls):
 
 ONE_TEACHER = {"default": "http://default:8001"}
 TWO_TEACHERS = {"math": "http://math:8002", "code": "http://code:8003"}
+
+
+def _rollout_loop(dataset, **kwargs):
+    PartialState()
+    ctx = mp.get_context("spawn")
+    loop_kwargs = dict(
+        model_name="test",
+        dataset=dataset,
+        processing_class=MagicMock(),
+        rollout_buffer=ctx.Queue(),
+        metrics_queue=ctx.Queue(),
+        model_version_value=ctx.Value("i", 0),
+        heartbeat_value=ctx.Value("d", 0.0),
+        failed_event=ctx.Event(),
+        exception_info_queue=ctx.Queue(),
+    )
+    loop_kwargs.update(kwargs)
+    return _AsyncRolloutLoop(**loop_kwargs)
 
 
 class TestWorkerMetrics:
@@ -922,6 +941,39 @@ class TestEpochStop:
         assert control.should_training_stop is should_stop
 
 
+class TestGenerateLoop(TrlTestCase):
+    def test_stale_in_flight_samples_are_cancelled_when_the_policy_advances(self):
+        loop = _rollout_loop(
+            Dataset.from_dict({"prompt": [f"q{i}" for i in range(8)]}), max_inflight_tasks=2, max_staleness=0
+        )
+        cancelled = []
+
+        async def run():
+            stop = asyncio.Event()
+
+            async def generate_and_score_one(prompt_id, row):
+                version = loop.model_version
+                if version == 0:
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        cancelled.append(prompt_id)
+                        raise
+                stop.set()
+                return types.SimpleNamespace(completion_mask=[1], model_version=version, enqueued_at=None)
+
+            loop._generate_and_score_one = generate_and_score_one
+            task = asyncio.create_task(loop._generate_loop(stop))
+            await asyncio.sleep(0.1)
+            loop._model_version_value.value = 1
+            await asyncio.wait_for(task, 5)
+
+        asyncio.run(run())
+        assert len(cancelled) == 2
+        assert loop.rollout_buffer.get(timeout=5).model_version == 1
+        assert loop._metrics_queue.get(timeout=5)["rollout/stale_samples_total"] == 2
+
+
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
 
@@ -974,17 +1026,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert written_before_super == [True]
 
     def test_rollout_loop_skips_to_start_index(self):
-        ctx = mp.get_context("spawn")
-        loop = _AsyncRolloutLoop(
-            model_name="test",
-            dataset=Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]}),
-            processing_class=MagicMock(),
-            rollout_buffer=ctx.Queue(),
-            model_version_value=ctx.Value("i", 0),
-            heartbeat_value=ctx.Value("d", 0.0),
-            failed_event=ctx.Event(),
-            exception_info_queue=ctx.Queue(),
-            metrics_queue=ctx.Queue(),
+        loop = _rollout_loop(
+            Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]}),
             dataset_start_index=3,
         )
         _prompt_id, row = next(loop._repeat_iterator())

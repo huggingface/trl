@@ -208,6 +208,7 @@ class _AsyncRolloutLoop:
         teacher_top_k: int = 8,
         teacher_temperature: float = 1.0,
         max_tokens: int = 32,
+        max_staleness: int = 4,
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = 0,
@@ -243,6 +244,7 @@ class _AsyncRolloutLoop:
         self.max_inflight_tasks = max_inflight_tasks
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
+        self.max_staleness = max_staleness
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
@@ -321,19 +323,41 @@ class _AsyncRolloutLoop:
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
-        inflight_tasks: dict[asyncio.Task, int] = {}
+        # Keep the dispatch version beside the slot: a sample does not expose its model version until its task returns.
+        inflight_tasks: dict[asyncio.Task, tuple[int, int]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
+        last_version = self.model_version
 
         self._generation_start_time = time.monotonic()
         try:
             while True:
                 self._heartbeat_value.value = time.time()
+
+                version = self.model_version
+                if version != last_version:
+                    last_version = version
+                    stale_tasks = [
+                        task
+                        for task, (_slot, task_version) in inflight_tasks.items()
+                        if version - task_version > self.max_staleness
+                    ]
+                    for task in stale_tasks:
+                        task.cancel()
+                    if stale_tasks:
+                        await asyncio.gather(*stale_tasks, return_exceptions=True)
+                    for task in stale_tasks:
+                        slot, _task_version = inflight_tasks.pop(task)
+                        free_slots.add(slot)
+                    if stale_tasks:
+                        self._counters["rollout/stale_samples_total"] += len(stale_tasks)
+                        logger.info(f"cancelled {len(stale_tasks)} stale rollout(s) at version {version}")
+
                 while free_slots and not stop_event.is_set():
                     prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
                     task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
-                    inflight_tasks[task] = slot
+                    inflight_tasks[task] = (slot, self.model_version)
 
                 if not inflight_tasks:
                     if stop_event.is_set():
@@ -346,7 +370,7 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    slot = inflight_tasks.pop(task)
+                    slot, _task_version = inflight_tasks.pop(task)
                     free_slots.add(slot)
                     if task.exception() is not None:
                         raise task.exception()
