@@ -121,7 +121,10 @@ class GRPOTrainer(_GRPOTrainer):
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
             loss = loss / normalizer
         elif self.loss_type == "dapo":
+            # `num_items_in_batch` spans the generation batch, so rescale it to one accumulation window
             normalizer = inputs["num_items_in_batch"].clamp(min=1.0) / self.accelerator.num_processes
+            if mode == "train":  # in eval, the batch is neither split across steps nor accumulated
+                normalizer = normalizer * self.current_gradient_accumulation_steps / self.args.steps_per_generation
             loss = (per_token_loss * mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")

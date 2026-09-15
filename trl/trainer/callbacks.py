@@ -73,15 +73,22 @@ def _generate_completions(
     Generates completions for a list of pre-formatted prompts from the given model.
 
     Args:
-        prompts (list[str]): A list of input prompts for which completions are to be generated.
-        model (PreTrainedModel): The pre-trained model to be used for generation.
-        tokenizer (PreTrainedTokenizerBase): The tokenizer to be used for encoding and decoding.
-        accelerator (Accelerator): The accelerator to be used for model execution.
-        generation_config (GenerationConfig): Configuration for text generation.
-        batch_size (int, *optional*): The number of prompts to process in each batch. Default is 1.
+        prompts (`list[str]`):
+            A list of input prompts for which completions are to be generated.
+        model ([`~transformers.PreTrainedModel`]):
+            The pre-trained model to be used for generation.
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            The tokenizer to be used for encoding and decoding.
+        accelerator ([`~accelerate.Accelerator`]):
+            The accelerator to be used for model execution.
+        generation_config ([`~transformers.GenerationConfig`]):
+            Configuration for text generation.
+        batch_size (`int`, *optional*, defaults to `1`):
+            The number of prompts to process in each batch.
 
     Returns:
-        list[str]: A list of generated text completions corresponding to the input prompts.
+        `list[str]`:
+            A list of generated text completions corresponding to the input prompts.
     """
     completions = []
     # TODO: Override model.generation_config with generation_kwargs
@@ -144,7 +151,7 @@ class SyncRefModelCallback(TrainerCallback):
 
 class RichProgressCallback(TrainerCallback):
     """
-    A [`TrainerCallback`] that displays the progress of training or evaluation using Rich.
+    A [`~transformers.TrainerCallback`] that displays the progress of training or evaluation using Rich.
     """
 
     def __init__(self):
@@ -400,9 +407,9 @@ class WeaveCallback(TrainerCallback):
             have signature: `scorer(prompt: str, completion: str) -> float | int`
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config to use for generating completions.
-        num_prompts (`int` or `None`, *optional*):
-            Number of prompts to generate completions for. If not provided, defaults to the number of examples in the
-            evaluation dataset.
+        num_prompts (`int`, *optional*):
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
         dataset_name (`str`, *optional*, defaults to `"eval_dataset"`):
             Name for the dataset metadata in Weave.
         model_name (`str`, *optional*):
@@ -613,7 +620,9 @@ class BEMACallback(TrainerCallback):
         ema_power (`float`, *optional*, defaults to `0.5`):
             Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper. To disable EMA, set this to `0.0`.
         bias_power (`float`, *optional*, defaults to `0.2`):
-            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
+            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. A large value (e.g.
+            `8.0`) makes  \\( \alpha_t \\) decay to `0`, approximating disabled bias-correction; `0.0`
+            instead pins  \\( \alpha_t \\) at `1` for every step (maximum, undecayed correction).
         lag (`int`, *optional*, defaults to `10`):
             Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
             starting age for the updates. Denoted as  \\( \rho \\) in the paper.

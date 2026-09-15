@@ -77,8 +77,6 @@ def iter_params(module, recurse=False):
 
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
-    import deepspeed
-
     if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
         return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
@@ -96,11 +94,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         if not coordinator.is_invalid_trace():
             coordinator._invalidate_trace()
 
-    if Version(deepspeed.__version__) >= Version("0.16.4"):
-        # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
-        optimizer_offload._register_deepspeed_module(optimizer_offload.module)
-    else:
-        optimizer_offload._register_hooks_recursively(optimizer_offload.module)
+    optimizer_offload._register_deepspeed_module(optimizer_offload.module)
 
 
 @contextmanager
@@ -167,8 +161,10 @@ def _override_model_generation_config(model, generation_kwargs=None):
     their intended inference behavior.
 
     Args:
-        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
-        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+        model ([`~transformers.PreTrainedModel`]):
+            The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (`dict`):
+            Generation kwargs to be used to override model's generation config.
     """
     if (
         # Issue fixed in transformers v5 by PR transformers#42702
@@ -216,7 +212,7 @@ def unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
-        generation_kwargs (dict, *optional*):
+        generation_kwargs (`dict`, *optional*):
             If provided, temporarily overrides the model's generation_config during generation. The original config is
             automatically restored when exiting the context. This is useful for using different generation parameters
             during training vs. inference.
@@ -263,6 +259,12 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
                 }
             )
 
+    # No optimizer is passed below, so drop the training-only blocks (as transformers does for inference-mode
+    # deepspeed_init). Otherwise DeepSpeed builds a CPUAdam on GPU params from `optimizer` + `offload_optimizer`, or
+    # an LR scheduler with no optimizer to attach to from `scheduler`, and the run dies before training.
+    config_kwargs.pop("optimizer", None)
+    config_kwargs.pop("scheduler", None)
+    config_kwargs["zero_optimization"].pop("offload_optimizer", None)
     # If ZeRO-3 is used, we shard both the active and reference model.
     # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO
     # disabled (stage 0)
@@ -380,7 +382,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
     Args:
         model (`PreTrainedModel`):
             Model for which to temporarily disable gradient checkpointing.
-        gradient_checkpointing_kwargs (`dict` or `None`, *optional*):
+        gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
     was_enabled = model.is_gradient_checkpointing

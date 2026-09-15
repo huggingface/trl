@@ -51,7 +51,7 @@ Distillation: Empowering Small Models
 A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
 
 
-You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline. 
+You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline.
 ```python
 from trl import GRPOConfig, GRPOTrainer
 
@@ -88,7 +88,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
+    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306
     epsilon=3e-4,  # GSPO paper (v2), section 5.1
     epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
     gradient_accumulation_steps=1,
@@ -98,7 +98,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
+TRL also provides an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -557,7 +557,7 @@ $$
 \right).
 $$
 
-To enable this feature, set the `use_bias_correction_kl` parameter to `True` in the [`GRPOConfig`], and `beta > 0`:
+This feature is enabled by default (`use_bias_correction_kl=True` in the [`GRPOConfig`]), so you only need to set `beta > 0`:
 
 ```python
 from trl import GRPOConfig
@@ -565,7 +565,6 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     ...,
     beta=0.001,  # the paper doesn't specify the value used, so we use the value from "DeepSeek-R1 incentivizes reasoning in LLMs through reinforcement learning"
-    use_bias_correction_kl=True,
 )
 ```
 
@@ -593,7 +592,7 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...,
-    off_policy_mask_threshold=0.5, 
+    off_policy_mask_threshold=0.5,
 )
 ```
 
@@ -683,37 +682,6 @@ training_args = GRPOConfig(
     vespo_lambda_neg=2.0,  # decay factor (c2 in paper Section 3.4) for negative advantages
 )
 ```
-
-
-### Rethinking the Trust Region in LLM Reinforcement Learning
-
-**📜 Paper**: https://huggingface.co/papers/2602.04879
-
-DPPO replaces PPO/GRPO's heuristic ratio-clipping with a principled trust region based on direct policy divergence estimates. PPO-style clipping masks tokens based on the probability ratio π/μ, which over-penalizes low-probability tokens and under-penalizes high-probability ones. DPPO instead masks based on direct approximations of policy divergence (TV or KL), ensuring updates stay within a theoretically grounded trust region. Four divergence approximations are supported: `binary_tv`, `binary_kl`, `topk_tv`, and `topk_kl`.
-
-```python
-from trl.experimental.dppo import DPPOConfig, DPPOTrainer
-
-training_args = DPPOConfig(
-    divergence_type="binary_tv",  # divergence approximation
-    divergence_topk=20,  # K for top-K divergence modes (Section 7 / Appendix G.2 of the paper)
-    epsilon=0.15,  # δ_low threshold (Appendix F of the paper)
-    epsilon_high=0.15,  # δ_high threshold (Appendix F of the paper)
-    clip_ratio_c=20.0,  # IS ratio upper bound C (Section 5.4 of the paper)
-    beta=0.0,  # KL regularization coefficient
-    use_vllm=True,
-)
-
-trainer = DPPOTrainer(
-    model="your-model",
-    reward_funcs=[...],
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-The official code [sail-sg/Stable-RL](https://github.com/sail-sg/Stable-RL)
 
 ## Optimal Advantage Regression
 
@@ -1185,7 +1153,7 @@ $$
 l_p=\min(|y_w|,|y_l|).
 $$
 
-Setting  \\( \alpha=1 \\) recovers standard  \\( \alpha \\) reduces verbosity while preserving preference quality.
+Setting  \\( \alpha=1 \\) recovers standard DPO; smaller  \\( \alpha \\) reduces verbosity while preserving preference quality.
 The optimal  \\( \alpha \\) depends on the model family and whether you’re training a base vs. instruct model, but the paper suggests  \\( \alpha=0.5 \\) as a strong default starting point.
 
 ```python
@@ -1340,6 +1308,27 @@ training_args = SFTConfig(
     packing=True,  # enable sequence packing (Section 3.5.2 of the paper)
     max_length=512,  # packed sequence length (Section 3.5.2 of the paper)
 )
+```
+
+### Reparameterizing Uniform Diffusion Models: the Leave-One-Out Denoiser
+
+**📜 Paper**: https://huggingface.co/papers/2605.22765
+
+For uniform discrete diffusion models, the usual plug-in cross-entropy does not learn the plain denoiser \\( \mathbb{E}[X_0 \mid X_t] \\) but the leave-one-out (LOO) posterior, which predicts each token without using its own corrupted value. The paper derives exact conversions between the denoiser, the LOO posterior, and the score, so a network can be trained as either parameterization with the same cross-entropy. Given logits \\( f_\theta \\) whose softmax parameterizes the LOO posterior, the denoiser used in the loss is
+
+$$
+d_\theta(x_t, t)^\ell = \mathrm{softmax}\!\left( f_\theta(x_t, t)^\ell + \log\!\left(1 + \frac{K\,\alpha_t}{1 - \alpha_t}\, x_t^\ell\right) \right),
+$$
+
+i.e. an additive correction on the logit of the observed token, where \\( K \\) is the vocabulary size and \\( \alpha_t \\) the probability the uniform forward keeps the clean token. The paper reports that the LOO parameterization consistently improves generation. The block-diffusion SFT example [`examples/sft_diffusion_gemma/sft_diffusion_gemma.py`](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py) exposes both parameterizations via `--model_prediction_type` (`mean` for the plain denoiser, matching the released checkpoint, or `mean_loo` for the LOO posterior):
+
+```bash
+accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
+    --use_peft \
+    --gradient_checkpointing \
+    --model_prediction_type mean_loo \
+    --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 ```
 
 ## Parameter-Efficient Fine-Tuning (PEFT)
@@ -1632,7 +1621,7 @@ dataset = dataset.map(add_margin)
 
 ## Online Direct Preference Optimization
 
-Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
+Papers relating to the [`experimental.online_dpo.OnlineDPOTrainer`]
 
 ### Direct Language Model Alignment from Online AI Feedback
 
@@ -1640,7 +1629,7 @@ Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
 
 Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
 
-To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
+To use Online DPO, you can use the [`experimental.online_dpo.OnlineDPOTrainer`].
 
 ### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
 
@@ -1665,13 +1654,13 @@ Papers relating to training a student model with the help of a teacher model.
 
 **📜 Paper**: https://huggingface.co/papers/2306.13649
 
-Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.distillation.DistillationTrainer`] and [`experimental.gkd.GKDTrainer`]. To reproduce the paper's setting, use this configuration:
+Introduces Generalized Knowledge Distillation (GKD), which addresses distribution mismatch in KD for auto-regressive models by training the student on its own generated outputs with teacher feedback, instead of a fixed set of sequences. GKD supports flexible loss functions (e.g. beyond KL when the student cannot match the teacher) and integrates with RL fine-tuning (RLHF). The paper reports results on summarization, translation, arithmetic reasoning, and instruction-tuning. Used in TRL via [`experimental.gkd.GKDTrainer`], which exposes the paper's on/off-policy mixing (`lmbda`). [`DistillationTrainer`] implements the same generalized-JSD objective for the always-on-policy case. To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl.experimental.gkd import GKDConfig
 
 # XSum summarization task (Table A.1 of the paper)
-training_args = DistillationConfig(
+training_args = GKDConfig(
     lmbda=0.5,  # λ student data fraction (Section 3 of the paper)
     beta=0.5,  # β Generalized JSD interpolation, 0=KL, 1=reverse KL (Section 3 of the paper)
     temperature=1.0,  # student training temperature (Appendix A of the paper)
@@ -1679,23 +1668,29 @@ training_args = DistillationConfig(
     learning_rate=3e-4,  # learning rate (Table A.1 of the paper)
     per_device_train_batch_size=32,  # batch size (Table A.1 of the paper)
     warmup_steps=2000,  # warm-up steps (Table A.1 of the paper)
-    max_completion_length=64,  # max output tokens (Table A.1 of the paper)
+    max_new_tokens=64,  # max output tokens (Table A.1 of the paper)
 )
 ```
+
+### MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training
+
+**📜 Paper**: https://huggingface.co/papers/2606.30406
+
+Structures post-training as three stages: general SFT, independent per-domain RL training of one expert per domain (e.g. verifiable-answer RL for math, sandboxed agent RL for software engineering), and a final MOPD stage that fuses the frozen domain experts into a single unified student. In that final stage, the student generates a trajectory per prompt, each trajectory is dispatched to its corresponding domain teacher (never averaged or ensembled across teachers), and the student is updated by minimizing the per-token reverse KL against that one teacher's distribution along the trajectory. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`], which implements this third, fusion stage: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which (already-trained) teacher scores it. Use `beta=1.0` to match the paper's reverse-KL objective.
 
 ### On the Position Bias of On-Policy Distillation
 
 **📜 Paper**: https://huggingface.co/papers/2606.22600
 
-Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.distillation.DistillationTrainer`] with `distillation_objective="iw_opd"`.
+Introduces Importance-Weighted On-Policy Distillation (IW-OPD), which addresses the position bias in OPD by reweighting sampled-token distillation updates according to accumulated teacher-student prefix discrepancy. Early tokens keep larger weights, while later tokens after high drift are downweighted. Used in TRL via [`experimental.iw_opd.IWOPDTrainer`] with `distillation_objective="iw_opd"`.
 
-The paper reports its main experiments with a verl PPO trainer and vLLM rollouts. `DistillationTrainer` exposes the matching distillation and rollout settings below; PPO-specific settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `DistillationConfig` parameters.
+The paper optimizes IW-OPD with a clipped policy-gradient setup (verl) and vLLM rollouts. `IWOPDTrainer` exposes the matching distillation and rollout settings below; policy-optimization settings from the paper such as clipping range `0.2`, dual-clip constant `3.0`, inner PPO epochs, entropy coefficient, KL reward penalty, auxiliary KL, and rollout importance correction are not `IWOPDConfig` parameters.
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl.experimental.iw_opd import IWOPDConfig
 
-# Table 6 and Algorithm 1 of the paper, mapped to DistillationConfig where available.
-training_args = DistillationConfig(
+# Table 6 and Algorithm 1 of the paper, mapped to IWOPDConfig where available.
+training_args = IWOPDConfig(
     distillation_objective="iw_opd",
     iw_opd_gamma=0.5,  # γ amplification, Algorithm 1 and Appendix C.3
     lmbda=1.0,  # fully on-policy rollouts
@@ -1731,13 +1726,12 @@ On-Policy Distillation has been shown to outperform SFT, GRPO and can be used to
 
 Additionally on-policy distillation is more compute efficient and is less prone to overfitting when trained with limited data.
 
-To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`experimental.distillation.DistillationTrainer`] and [`experimental.distillation.DistillationConfig`]:
+To train a model with on-policy distillation using TRL, you can use the following configuration, with the [`DistillationTrainer`] and [`DistillationConfig`]:
 
 ```python
-from trl.experimental.distillation import DistillationConfig
+from trl import DistillationConfig
 
 training_args = DistillationConfig(
-    lmbda=1.0,  # student produces rollouts for all batches
     beta=1.0,  # to ensure reverse-kl as the loss function
     teacher_model_name_or_path="teacher-model",  # specify the teacher model
 )
@@ -1755,16 +1749,21 @@ training_args = GKDConfig(
 )
 ```
 
-You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use [`experimental.gold.GOLDTrainer`] for on-policy distillation; see [Unlocking On-Policy Distillation for Any Model Family](#unlocking-on-policy-distillation-for-any-model-family).
+
+### Unlocking On-Policy Distillation for Any Model Family
+
+**🌐 Project**: https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation
+
+Introduces General Online Logit Distillation (GOLD), which extends on-policy distillation to student/teacher pairs with different tokenizers and model families. GOLD aligns textual spans across tokenizers and can apply Universal Logit Distillation (ULD) so completion tokens are not dropped. Used in TRL via [`experimental.gold.GOLDTrainer`].
 
 ```python
 from trl.experimental.gold import GOLDConfig
 
-config = GOLDConfig(
-    lmbda=1.0, # student produces rollouts for all batches
-    beta=1.0, # to ensure reverse-kl as the loss function
-    teacher_model_name_or_path="teacher-model", # specify the teacher model
-
+training_args = GOLDConfig(
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    use_uld_loss=True,  # Universal Logit Distillation for cross-tokenizer pairs
 )
 ```
 
@@ -1924,27 +1923,4 @@ and launch the training script using `accelerate launch --config_file config_fil
 
 ```sh
 accelerate launch --config_file config.yaml train.py
-```
-
-## Proximal Policy Optimization
-
-Papers relating to the [`experimental.ppo.PPOTrainer`]
-
-### Proximal Policy Optimization Algorithms
-
-**📜 Paper**: https://huggingface.co/papers/1707.06347
-
-Introduces Proximal Policy Optimization (PPO): policy gradient methods that alternate between collecting rollouts and optimizing a clipped surrogate objective over multiple minibatch epochs. PPO retains benefits of trust-region methods (e.g. TRPO) with simpler implementation and strong empirical sample efficiency, and was validated on robotics and Atari benchmarks. Used in TRL via [`experimental.ppo.PPOTrainer`]. To use PPO with TRL, use this configuration:
-
-```python
-from trl.experimental.ppo import PPOConfig
-
-training_args = PPOConfig(
-    cliprange=0.2,  # ε clipping range (Section 3 and Table 3 of the paper, Mujoco setting)
-    num_ppo_epochs=4,  # K epochs of minibatch updates (TRL default; paper uses K=10 Mujoco, K=3 Atari)
-    gamma=1.0,  # γ discount factor (TRL default for LLM tasks; paper uses γ=0.99)
-    lam=0.95,  # λ GAE parameter (Table 3 of the paper, Mujoco setting)
-    kl_coef=0.05,  # KL penalty coefficient (Section 4 of the paper discusses adaptive KL)
-    vf_coef=0.1,  # c₁ value function loss weight (Equation 9 of the paper)
-)
 ```

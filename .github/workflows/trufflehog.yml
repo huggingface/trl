@@ -1,18 +1,37 @@
 on:
+  # scan the pushed commits, not the whole history: on `pull_request` and on a push to main the action
+  # derives a base commit, while a bare `push` has none on a new branch and walks every commit ever
+  # made. if a base is ever set explicitly, pass a sha: a ref name does not resolve in the scanner clone.
+  pull_request:
   push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'  # weekly full-history sweep, so history stays in scope
 
 name: Secret Leaks
+
+permissions:
+  contents: read
 
 jobs:
   trufflehog:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         fetch-depth: 0
+        # the scan step mounts this directory, `.git/config` included, into a third-party container
+        persist-credentials: false
     - name: Secret Scanning
-      uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55  # v3.95.9
+      uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c  # v3.97.4
       with:
-        # exclude buggy postgres detector that is causing false positives and not relevant to our codebase
-        extra_args: --results=verified,unknown --exclude-detectors=postgres
+        # the action only wraps the scanner, which runs as a container selected by `version`
+        # its default, `:latest`, is mutable, so the SHA pins the wrapper and this digest the scanner
+        # Dependabot bumps only the SHA, so both are kept in sync by hand
+        # Upstream issue: https://github.com/trufflesecurity/trufflehog/issues/4857
+        # Remove once: the action defaults `version` to its own release, making this pin redundant
+        version: 3.97.4@sha256:562bc231afa9de3d04de44cfe624252b08207de1fc3cebc5e7ed92bed7f279e4
+        # without --fail-on-scan-errors, a scan that errors out and covers nothing passes as a scan that found nothing.
+        extra_args: --results=verified,unknown --fail-on-scan-errors

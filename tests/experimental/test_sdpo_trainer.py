@@ -18,7 +18,7 @@ import logging
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
-from transformers import TrainerCallback
+from transformers import HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
@@ -408,6 +408,46 @@ class TestSDPOTrainer(TrlTestCase):
         assert "{{" not in capture_callback.captured_teacher_input_text
         assert "}}" not in capture_callback.captured_teacher_input_text
 
+    def test_scale_rewards_accepts_string_via_cli(self):
+        parser = HfArgumentParser((SDPOConfig,))
+        (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "batch"])
+        assert args.scale_rewards == "batch"
+        (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "none"])
+        assert args.scale_rewards == "none"
+
+    def test_warns_when_feedback_available_but_disabled(self, caplog):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2."],
+                "privileged_context": ["The correct answer is 4."],
+            }
+        )
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            include_environment_feedback=False,
+            max_steps=1,
+            report_to="none",
+        )
+
+        def reward(**kwargs):
+            return [0.0] * len(kwargs["prompts"])
+
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        with caplog.at_level(logging.WARNING, logger="trl.experimental.sdpo.sdpo_trainer"):
+            trainer.train()
+
+        assert any("include_environment_feedback" in record.message for record in caplog.records)
+
     def test_train_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(
             {
@@ -615,3 +655,26 @@ class TestSDPOTrainer(TrlTestCase):
         loss.backward()
         assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
         assert trainer.teacher_client.calls[0]["top_logprobs"] == 2
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+
+        training_args = SDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id

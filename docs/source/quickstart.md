@@ -133,7 +133,7 @@ training_args = GRPOConfig(
     per_device_train_batch_size=1,  # Start small
     gradient_accumulation_steps=8,  # Maintain effective batch size
     num_generations=4,              # Reduce from default 8 (GRPO generates num_generations completions per prompt)
-    max_completion_length=256,      # Tune based on task; longer sequences cost more memory
+    max_completion_length=512,      # Tune based on task; longer sequences cost more memory
 )
 ```
 

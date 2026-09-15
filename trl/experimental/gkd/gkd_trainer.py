@@ -20,6 +20,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -33,8 +34,9 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import ModelOutput, is_liger_kernel_available, is_peft_available
+from transformers.utils import ModelOutput, is_peft_available
 
+from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
 from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
@@ -43,12 +45,11 @@ from ..utils import DataCollatorForChatML, empty_cache
 from .gkd_config import GKDConfig
 
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
-
-
 if is_peft_available():
     from peft import PeftConfig
+
+
+logger = get_logger(__name__)
 
 
 class GKDTrainer(SFTTrainer):
@@ -146,7 +147,7 @@ class GKDTrainer(SFTTrainer):
         if args.use_liger_kernel:
             # Match the non-Liger path: pure JSD (no hard CE component) and no temperature
             # scaling, since `generalized_jsd_loss` is called without a `temperature` argument.
-            self.liger_loss = LigerFusedLinearJSDLoss(
+            self.liger_loss = FusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
                 compiled=False,
@@ -212,6 +213,20 @@ class GKDTrainer(SFTTrainer):
         self.beta = args.beta
         self.temperature = args.temperature
         self.seq_kd = args.seq_kd
+
+        # With `lmbda=1.0` training is fully on-policy and `seq_kd` is never reached, and with `temperature=1.0` the
+        # sampling temperature matches the one `DistillationTrainer` also applies to the divergence. In that setting,
+        # `DistillationTrainer` covers this run and additionally supports vLLM generation and a chunked loss that
+        # never materializes the full logits.
+        if self.lmbda == 1.0 and self.temperature == 1.0:
+            logger.warning(
+                "This GKD configuration (`lmbda=1.0`, `temperature=1.0`) is fully covered by `DistillationTrainer`, "
+                "which is maintained in the main codebase and supports vLLM generation and a memory-efficient "
+                "chunked loss. Consider migrating: replace `GKDConfig`/`GKDTrainer` with "
+                "`DistillationConfig`/`DistillationTrainer`, `max_new_tokens` with `max_completion_length`, and set "
+                f"`beta={self.beta}` explicitly (`beta` means the same in both, but defaults to 0.5 here and 1.0 "
+                "there)."
+            )
 
         generation_kwargs = {
             "max_new_tokens": args.max_new_tokens,
