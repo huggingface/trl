@@ -64,6 +64,12 @@ class TurnRecord:
     prompt_ids: list[int]
     output_ids: list[int]
     output_log_probs: list[float] = field(default_factory=list)
+    # Per-token trainability over `output_ids`. None means "train all of them", which is what a
+    # locally-driven turn always wants because the loop just sampled every one of those tokens.
+    # A CAPTURED turn is different: the producer may mask a turn out while keeping its tokens as
+    # context -- e.g. its logprobs were rejected on ingest -- and that is not inferable here.
+    # Training those positions anyway means training against a logprob of 0.0, i.e. p = 1.0.
+    output_mask: list[int] | None = None
 
 
 @dataclass
@@ -123,7 +129,11 @@ class _SampleBuilder:
         else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
             self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
         self.last_response_start_idx = len(self.tokens)
-        self._append(turn.output_ids, mask=1, logprobs=turn.output_log_probs)
+        self._append(
+            turn.output_ids,
+            mask=turn.output_mask if turn.output_mask is not None else 1,
+            logprobs=turn.output_log_probs,
+        )
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         matched = _common_prefix_len(self.tokens, prompt_ids)
@@ -132,9 +142,15 @@ class _SampleBuilder:
         self.loss_mask[matched:] = [0] * len(tail)
         self.logprobs[matched:] = [0.0] * len(tail)
 
-    def _append(self, ids: list[int], *, mask: int, logprobs: list[float] | None = None) -> None:
+    def _append(self, ids: list[int], *, mask: int | list[int], logprobs: list[float] | None = None) -> None:
+        """`mask` is either one value for every id, or one value PER id when the producer marked them individually."""
         self.tokens.extend(ids)
-        self.loss_mask.extend([mask] * len(ids))
+        if isinstance(mask, int):
+            self.loss_mask.extend([mask] * len(ids))
+        else:
+            if len(mask) != len(ids):
+                raise ValueError(f"loss mask has {len(mask)} entries for {len(ids)} tokens")
+            self.loss_mask.extend(mask)
         self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
 
     def has_trained_token(self) -> bool:
