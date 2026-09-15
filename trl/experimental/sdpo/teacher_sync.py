@@ -109,11 +109,25 @@ class PEFTAdapterEMACallback(TrainerCallback):
             model = self.accelerator.unwrap_model(self.model)
         else:
             model = self.model
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin if self.accelerator is not None else None
+        trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+        should_gather = (
+            deepspeed_plugin is not None
+            and deepspeed_plugin.zero_stage == 3
+            and any(parameter.numel() == 0 for parameter in trainable_parameters)
+        )
+        if should_gather:
+            from deepspeed import zero
+
+            with zero.GatheredParameters(trainable_parameters, modifier_rank=None):
+                state_dict = get_peft_model_state_dict(model)
+                return {key: value.detach().clone() for key, value in state_dict.items()}
+
         return get_peft_model_state_dict(model)
 
     def _initialize_teacher_adapter(self):
         """Create teacher adapter with zero weights initialized from student adapter."""
-        from peft import get_peft_model_state_dict, set_peft_model_state_dict
+        from peft import set_peft_model_state_dict
 
         if self._initialized:
             return
@@ -129,7 +143,7 @@ class PEFTAdapterEMACallback(TrainerCallback):
 
         self.teacher_adapter_config = model.peft_config.get(adapter_name)
 
-        student_state = get_peft_model_state_dict(model)
+        student_state = self._get_student_state_dict()
 
         teacher_state = {k: torch.zeros_like(v) for k, v in student_state.items()}
 
@@ -173,10 +187,31 @@ class PEFTAdapterEMACallback(TrainerCallback):
         else:
             unwrapped_model = self.model
 
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin if self.accelerator is not None else None
+        teacher_parameters = [
+            parameter
+            for name, parameter in unwrapped_model.named_parameters()
+            if f".{self.teacher_adapter_name}." in name
+        ]
+        should_gather = (
+            deepspeed_plugin is not None
+            and deepspeed_plugin.zero_stage == 3
+            and any(parameter.numel() == 0 for parameter in teacher_parameters)
+        )
         original_adapter = unwrapped_model.active_adapter
-        unwrapped_model.set_adapter(self.teacher_adapter_name)
-        set_peft_model_state_dict(unwrapped_model, self.shadow_weights, adapter_name=self.teacher_adapter_name)
-        unwrapped_model.set_adapter(original_adapter)
+        try:
+            unwrapped_model.set_adapter(self.teacher_adapter_name)
+            if should_gather:
+                from deepspeed import zero
+
+                with zero.GatheredParameters(teacher_parameters, modifier_rank=0):
+                    set_peft_model_state_dict(
+                        unwrapped_model, self.shadow_weights, adapter_name=self.teacher_adapter_name
+                    )
+            else:
+                set_peft_model_state_dict(unwrapped_model, self.shadow_weights, adapter_name=self.teacher_adapter_name)
+        finally:
+            unwrapped_model.set_adapter(original_adapter)
 
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if self.accelerator is None and "accelerator" in kwargs:
