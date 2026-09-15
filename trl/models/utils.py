@@ -161,8 +161,10 @@ def _override_model_generation_config(model, generation_kwargs=None):
     their intended inference behavior.
 
     Args:
-        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
-        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+        model ([`~transformers.PreTrainedModel`]):
+            The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (`dict`):
+            Generation kwargs to be used to override model's generation config.
     """
     if (
         # Issue fixed in transformers v5 by PR transformers#42702
@@ -210,7 +212,7 @@ def unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
-        generation_kwargs (dict, *optional*):
+        generation_kwargs (`dict`, *optional*):
             If provided, temporarily overrides the model's generation_config during generation. The original config is
             automatically restored when exiting the context. This is useful for using different generation parameters
             during training vs. inference.
@@ -380,7 +382,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
     Args:
         model (`PreTrainedModel`):
             Model for which to temporarily disable gradient checkpointing.
-        gradient_checkpointing_kwargs (`dict` or `None`, *optional*):
+        gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
     was_enabled = model.is_gradient_checkpointing

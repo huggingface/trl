@@ -23,7 +23,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SSDConfig(_BaseConfig):
     r"""
-    Configuration class for [`SSDTrainer`].
+    Configuration class for [`experimental.ssd.SSDTrainer`].
 
     Implements Simple Self-Distillation (SSD) from [*Embarrassingly Simple Self-Distillation Improves Code
     Generation*](https://huggingface.co/papers/2604.01193). SSD samples completions from the model at a training-time

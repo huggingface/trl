@@ -387,8 +387,8 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
@@ -721,7 +721,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         """Generate completions using vLLM colocate mode"""
         if self.args.vllm_enable_sleep_mode:
             # wake up colocated vLLM instances if needed
-            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
 
         # Update model weights if needed - only after gradient accumulation completes
