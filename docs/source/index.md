@@ -71,7 +71,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 #### Offline methods
 
 - [BEMA for Reference Model](bema_for_reference_model)
-- [`BCOTrainer`](bco_trainer)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
 - [`TPOTrainer`](tpo_trainer)
