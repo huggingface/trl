@@ -24,7 +24,7 @@
 
 # docstyle-ignore
 """
-LoRA SFT of a large MoE on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
+LoRA SFT of REDACTED on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
 across all 64, and each rank trains on its own slice of the batch. 14.1 s/step, 131k tokens/step, 40 GB per GPU.
 
     sbatch sft_moe_expert_parallel.slurm
@@ -38,7 +38,7 @@ from transformers.distributed import DistributedConfig
 from trl import SFTConfig, SFTTrainer
 
 
-# The checkpoint, staged on every node's local disk. The model this was measured on is not public.
+# The checkpoint, staged on every node's local disk.
 MODEL = "REDACTED"
 
 # Read the dataset before loading the model: 64 GPUs holding a loaded model is the most expensive place to wait
