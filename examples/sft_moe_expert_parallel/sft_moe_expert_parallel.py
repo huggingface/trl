@@ -30,7 +30,6 @@ across all 64, and each rank trains on its own slice of the batch. 14.1 s/step, 
     sbatch sft_moe_expert_parallel.slurm
 """
 
-import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers.distributed import DistributedConfig
@@ -48,7 +47,8 @@ train_dataset = load_dataset("allenai/tulu-3-sft-mixture", split="train[:500000]
 training_args = SFTConfig(
     output_dir="REDACTED-SFT",
     model_init_kwargs={
-        "dtype": torch.bfloat16,
+        # TRL loads a model id in float32 unless told otherwise; "auto" keeps the checkpoint's dtype.
+        "dtype": "auto",
         "distributed_config": DistributedConfig(
             tp_size=1,
             fsdp_size=64,
