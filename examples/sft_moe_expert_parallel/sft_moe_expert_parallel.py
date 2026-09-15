@@ -15,8 +15,9 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "transformers @ git+https://github.com/huggingface/transformers.git@ep-fsdp-2d-mesh",
-#     "peft @ git+https://github.com/huggingface/peft.git",
+#     "transformers @ git+https://github.com/huggingface/transformers.git@ep-mesh",
+#     "peft>=0.21.0",
+#     "accelerate>=1.15.0",
 #     "trackio",
 # ]
 # ///
@@ -25,14 +26,14 @@
 """
 LoRA SFT of a large MoE on 64 H100s across 8 nodes.
 
-`DistributedConfig(tp_size=8, fsdp_size=8, enable_expert_parallel=True, expert_parallel_dispatch=True)` splits the
-experts across 8 GPUs and shards everything across all 64 with FSDP2 on a 2-D mesh; with dispatch every rank
-trains on its own slice of the batch and tokens travel to the rank owning their expert. Measured: 22.3 s/step at
-per-device batch 4 (23k tokens/s), 43.7 s with gradient accumulation 2, loss 1.26 -> 0.6 over 100 steps on tulu-3.
+`ep_size=8` gives each group of 8 GPUs a distinct slice of the experts, `fsdp_size=64` shards everything else
+across all 64, and the `ep_dispatch_experts` rule makes every rank train on its own slice of the batch, sending
+each token to the rank owning its expert. Measured at per-device batch 1: 14.1 s/step (131k tokens/step),
+40 GB per GPU, loss 1.80 -> 0.72 over 100 steps on tulu-3.
 
-Stage the checkpoint on node-local disk first: sharded loading took 29 s from NVMe and did not finish in 40 min
-from a network mount. Gradient checkpointing has to stay on: weights, optimizer state and FSDP buffers already
-take 66-70 GB per GPU. Needs transformers `ep-fsdp-2d-mesh` (#48204) and peft main (#3578), as the header pins.
+Stage the checkpoint on node-local disk first: sharded loading took 23 s from NVMe and did not finish in 40 min
+from a network mount. Gradient checkpointing has to stay on. Needs transformers `ep-mesh` (#48792), as the
+header pins; peft 0.21.0 and accelerate 1.15.0 carry the FSDP2 fixes this relies on.
 
 Launch from this directory:
 
@@ -59,10 +60,14 @@ training_args = SFTConfig(
     model_init_kwargs={
         "dtype": torch.bfloat16,
         "distributed_config": DistributedConfig(
-            tp_size=8, fsdp_size=8, enable_expert_parallel=True, expert_parallel_dispatch=True
+            tp_size=1,
+            fsdp_size=64,
+            ep_size=8,
+            # The rule selects token dispatch, and its key is the module's full path.
+            ep_plan={"model.layers.*.mlp.experts": "ep_dispatch_experts"},
         ),
     },
-    per_device_train_batch_size=4,
+    per_device_train_batch_size=1,
     gradient_accumulation_steps=2,
     max_steps=500,
     max_length=2048,
