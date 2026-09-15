@@ -1558,20 +1558,15 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
     model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
     @staticmethod
-    def _save_teacher(path: str, scale: float | None = None, extra_token: str | None = None) -> str:
-        """Save a standalone tiny teacher checkpoint, optionally rescaled and/or with an extra tokenizer token."""
+    def _save_teacher(path: str, scale: float | None = None) -> str:
+        """Save a standalone tiny teacher checkpoint, optionally rescaled."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
         if scale is not None:
             with torch.no_grad():
                 for parameter in model.parameters():
                     parameter.mul_(scale)
         model.save_pretrained(path)
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-        if extra_token is not None:
-            # Changes the tokenizer serialization without resizing the model: `config.vocab_size` still matches the
-            # student's, so the tokenizer check is what fires rather than the vocabulary check.
-            tokenizer.add_tokens([extra_token])
-        tokenizer.save_pretrained(path)
+        AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").save_pretrained(path)
         return path
 
     @classmethod
@@ -1809,15 +1804,14 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    def test_teacher_tokenizer_must_match_student(self, tmp_path, teachers):
-        # Prompts are rendered once with the student's processing class and the teacher scores those exact token IDs,
-        # so a teacher whose tokenizer renders text differently is rejected at construction.
-        mismatched = self._save_teacher(str(tmp_path / "mismatched-tokenizer"), extra_token="<extra_0>")
-        with pytest.raises(ValueError, match="tokenizer serialization and special-token roles/IDs must be identical"):
+    def test_teacher_vocab_size_must_match_student(self, teachers):
+        # The loss compares full next-token distributions, so a registered teacher defined over a different
+        # vocabulary is rejected at construction (use GOLD for cross-tokenizer distillation).
+        with pytest.raises(ValueError, match="vocab_size"):
             DistillationTrainer(
                 model=self.model_id,
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                teacher_models={"a": teachers["a"], "mismatched": mismatched},
+                teacher_models={"a": teachers["a"], "other": "trl-internal-testing/tiny-LlamaForCausalLM-3.2"},
             )
 
     def test_cached_hub_teacher_loads_offline(self):
@@ -1892,22 +1886,6 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             trainer.compute_loss(trainer.model, {})
         trainer.log({"loss": 1.0})
         assert trainer.state.log_history[-1]["teacher_jsd/a"] == pytest.approx((1.0 + 27.0) / (1 + 9))
-
-    def test_teacher_tokenizer_without_a_pad_token_matches_the_student(self, tmp_path):
-        # The trainer gives the student's tokenizer the EOS token as its pad token when it has none, while the
-        # teacher's is compared as loaded. Padding is not tokenization identity, so two copies of the same pad-less
-        # tokenizer must still compare equal.
-        model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-        assert AutoTokenizer.from_pretrained(model_id).pad_token is None
-        teacher = str(tmp_path / "pad-less-teacher")
-        AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).save_pretrained(teacher)
-        AutoTokenizer.from_pretrained(model_id).save_pretrained(teacher)
-        trainer = DistillationTrainer(
-            model=model_id,
-            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-            teacher_models={"a": teacher},
-        )
-        assert list(trainer.teacher_models) == ["a"]
 
     def test_teacher_model_and_teacher_models_are_exclusive(self, teachers):
         # The singular and the mapping entry points have different teacher lifecycles; a run may only use one.

@@ -37,7 +37,6 @@ from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
-    AutoTokenizer,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -294,36 +293,6 @@ def _chunked_divergence_loss(
     return loss, entropy_sum, n_valid_tensor
 
 
-def _tokenizer_payload(tokenizer: PreTrainedTokenizerBase) -> str:
-    """
-    Canonical serialization of everything that decides how a tokenizer turns text into token IDs.
-
-    Used to compare a teacher's tokenizer against the student's: prompts are rendered once with the student's
-    processing class and every teacher scores those exact IDs, so a teacher that renders text differently is
-    training against the wrong tokens. The backend's `padding` and `truncation` sections are dropped because they
-    are call-time state — a fast tokenizer records the strategy of the last call that used them — not identity, and
-    `padding_side` / `truncation_side` are excluded for the same reason. The pad token is excluded too: it decides
-    how a batch is filled out, not how text becomes IDs, and the trainer gives the student's tokenizer the EOS token
-    as its pad token when it has none, which would otherwise make an unmodified copy of that same tokenizer differ.
-
-    Args:
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            Fast (Rust-backed) tokenizer to serialize.
-
-    Returns:
-        `str`: the serialization, with key order and whitespace normalized so only real differences compare unequal.
-    """
-    payload = json.loads(tokenizer.backend_tokenizer.to_str())
-    payload.pop("padding", None)
-    payload.pop("truncation", None)
-    payload["special_tokens"] = {
-        "bos": (tokenizer.bos_token, tokenizer.bos_token_id),
-        "eos": (tokenizer.eos_token, tokenizer.eos_token_id),
-        "unk": (tokenizer.unk_token, tokenizer.unk_token_id),
-    }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 class DistillationTrainer(_BaseTrainer):
     """
     Trainer for knowledge distillation. The student is trained on-policy — it generates the completions itself — to
@@ -414,12 +383,8 @@ class DistillationTrainer(_BaseTrainer):
             registered), and per-teacher `teacher_jsd/<id>` and `teacher_token_frac/<id>` metrics are logged. The
             teachers are held on CPU and uploaded to the device one at a time, so device memory is bounded by the
             largest teacher rather than their sum. Several IDs may point at the same checkpoint with different
-            `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must share the student's tokenizer
-            and vocabulary size. Mutually exclusive with `teacher_model`.
-        teacher_tokenizers (`dict[str, PreTrainedTokenizerBase]`, *optional*):
-            [`~transformers.PreTrainedTokenizerBase`] for the `teacher_models` entries whose tokenizer cannot be
-            loaded from the checkpoint itself, i.e. already instantiated teachers. Only valid together with
-            `teacher_models`.
+            `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must share the student's
+            vocabulary. Mutually exclusive with `teacher_model`.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -453,7 +418,6 @@ class DistillationTrainer(_BaseTrainer):
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         teacher_models: "dict[str, str | PreTrainedModel] | None" = None,
-        teacher_tokenizers: dict[str, PreTrainedTokenizerBase] | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -468,10 +432,10 @@ class DistillationTrainer(_BaseTrainer):
                 "or `args.teacher_model_name_or_path`. Pass only one: register every teacher in `teacher_models` "
                 '(e.g. `teacher_models={"teacher": ...}`), or drop `teacher_models`.'
             )
-        if teacher_models is None and (teacher_tokenizers is not None or args.teacher_model_init_kwargs_by_teacher):
+        if teacher_models is None and args.teacher_model_init_kwargs_by_teacher:
             raise ValueError(
-                "`teacher_tokenizers` and `args.teacher_model_init_kwargs_by_teacher` only apply to multi-teacher "
-                "distillation. Pass `teacher_models` as well, or drop them."
+                "`args.teacher_model_init_kwargs_by_teacher` only applies to multi-teacher distillation. Pass "
+                "`teacher_models` as well, or drop it."
             )
 
         # Student model loading
@@ -840,9 +804,7 @@ class DistillationTrainer(_BaseTrainer):
             # state synchronization. Each rank scores with its own complete teacher, so it is off while they load.
             with patch_environment(FSDP_CPU_RAM_EFFICIENT_LOADING="false"):
                 for teacher_id, source in teacher_models.items():
-                    self.teacher_models[teacher_id] = self._load_teacher(
-                        teacher_id, source, teacher_model_init_kwargs, teacher_tokenizers or {}
-                    )
+                    self.teacher_models[teacher_id] = self._load_teacher(teacher_id, source, teacher_model_init_kwargs)
             self._teacher_ids = list(self.teacher_models)
             self._teacher_id_to_idx = {teacher_id: index for index, teacher_id in enumerate(self._teacher_ids)}
             # Completion hidden states scored ahead of the loss in `_prepare_inputs`, kept on CPU and keyed per mode
@@ -969,7 +931,6 @@ class DistillationTrainer(_BaseTrainer):
         teacher_id: str,
         source: "str | PreTrainedModel",
         common_init_kwargs: dict,
-        teacher_tokenizers: dict[str, PreTrainedTokenizerBase],
     ) -> PreTrainedModel:
         """
         Load one teacher on CPU, check it against the student, and record its identity for the manifest.
@@ -982,9 +943,6 @@ class DistillationTrainer(_BaseTrainer):
             common_init_kwargs (`dict`):
                 `args.teacher_model_init_kwargs`, under this teacher's `args.teacher_model_init_kwargs_by_teacher`
                 entry.
-            teacher_tokenizers (`dict[str, PreTrainedTokenizerBase]`):
-                [`~transformers.PreTrainedTokenizerBase`] to check against the student's, for the teachers that have
-                none of their own.
 
         Returns:
             [`~transformers.PreTrainedModel`]: the frozen CPU teacher.
@@ -995,9 +953,8 @@ class DistillationTrainer(_BaseTrainer):
         # Teachers stay on CPU and are uploaded one at a time, so they are always loaded unmapped.
         init_kwargs["device_map"] = None
         revision = init_kwargs.get("revision")
-        preloaded = not isinstance(source, str)
         commit = None
-        if preloaded:
+        if not isinstance(source, str):
             teacher, source = source, get_config_model_id(source.config)
         else:
             if os.path.isdir(source) and revision is not None:
@@ -1035,28 +992,6 @@ class DistillationTrainer(_BaseTrainer):
                 f"{teacher_vocab_size}. Distillation compares the teacher's full next-token distribution, which "
                 f"requires a shared vocabulary. Use a teacher with the same vocab_size, or GOLD for cross-tokenizer "
                 f"distillation."
-            )
-        # An instantiated teacher carries no tokenizer of its own; pass one in `teacher_tokenizers` to have it checked.
-        tokenizer = teacher_tokenizers.get(teacher_id)
-        if tokenizer is None and not preloaded:
-            # The tokenizer lives in the repository the weights came from, so it is fetched with the same access and
-            # caching options the model was loaded with; anything else can resolve somewhere the model did not.
-            tokenizer = AutoTokenizer.from_pretrained(
-                source,
-                revision=commit,
-                trust_remote_code=init_kwargs["trust_remote_code"],
-                token=init_kwargs.get("token"),
-                cache_dir=init_kwargs.get("cache_dir"),
-                local_files_only=init_kwargs.get("local_files_only", False),
-                subfolder=init_kwargs.get("subfolder", ""),
-            )
-        if tokenizer is not None and _tokenizer_payload(tokenizer) != _tokenizer_payload(self._tokenizer):
-            raise ValueError(
-                f"Teacher {teacher_id!r} does not share the student's tokenizer. Prompts are rendered once with the "
-                f"student's processing class and every teacher scores those exact token IDs, so the tokenizer "
-                f"serialization and special-token roles/IDs must be identical — except the padding configuration, "
-                f"which is excluded from the comparison. Use a teacher trained on the student's tokenizer, or GOLD "
-                f"for cross-tokenizer distillation."
             )
 
         # The single-teacher path hands its teacher to `prepare_deepspeed`, whose engine casts the parameters to the
