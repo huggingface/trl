@@ -21,7 +21,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class AsyncDistillationConfig(_BaseConfig):
     r"""
-    Configuration class for the [`AsyncDistillationTrainer`].
+    Configuration class for the [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     This class includes only the parameters that are specific to asynchronous on-policy distillation. For a full list
     of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default

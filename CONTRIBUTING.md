@@ -275,10 +275,10 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
             Number of times to replicate the string.
         sep (`str`, *optional*, defaults to `" "`):
             Separator to use between each replication.
-    
+
     Returns:
         `str`: The replicated string.
-    
+
     Examples:
     ```python
     >>> replicate_str("hello", 3)
@@ -317,20 +317,20 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
     def calculate_statistics(data: list[float], precision: int = 2, include_variance: bool = False) -> dict[str, float]:
         r"""
         Calculates basic statistics for a given dataset.
-    
+
         Args:
             > Data inputs
-    
+
             data (`list[float]`):
                 A list of numerical values to analyze.
-    
+
             > Configuration parameters
-    
+
             precision (`int`, *optional*, defaults to `2`):
                 Number of decimal places to round the results.
             include_variance (`bool`, *optional*, defaults to `False`):
                 Whether to include the variance of the dataset in the results.
-    
+
         Returns:
             `dict[str, float]`:
                 A dictionary containing calculated statistics such as mean, median, and optionally variance.

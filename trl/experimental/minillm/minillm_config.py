@@ -22,7 +22,7 @@ from ...trainer.grpo_config import GRPOConfig
 @dataclass
 class MiniLLMConfig(GRPOConfig):
     """
-    Configuration class for [`MiniLLMTrainer`].
+    Configuration class for [`experimental.minillm.MiniLLMTrainer`].
 
     This class includes only the parameters that are specific to MiniLLM training. For a full list of training
     arguments, please refer to the [`~transformers.TrainingArguments`] and [`GRPOConfig`] documentation.
