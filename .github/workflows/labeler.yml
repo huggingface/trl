@@ -1,0 +1,24 @@
+name: Labeler
+
+on:
+  # pull_request_target: the token on a forked `pull_request` run cannot write labels.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  labeler:
+    runs-on: ubuntu-latest
+    steps:
+      # The config is read from the base branch, so a pull request cannot relabel itself.
+      # sync-labels stays off: it strips these two labels when set by hand, and a docstring-only
+      # change is documentation that no glob can reach.
+      #
+      # SECURITY WARNING: This workflow uses pull_request_target which grants access to secrets.
+      # If you add actions/checkout in the future, you MUST use:
+      #   ref: ${{ github.event.pull_request.base.sha }}
+      # to checkout only trusted base branch code, NOT the untrusted PR code.
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0

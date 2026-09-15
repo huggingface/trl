@@ -36,8 +36,9 @@ class RewardConfig(_BaseConfig):
         > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`RewardTrainer`] is provided as a string.
+            Keyword arguments for [`~transformers.AutoModelForSequenceClassification.from_pretrained`], used when the
+            `model` argument of the [`RewardTrainer`] is provided as a string. The `revision` value is also used when
+            loading the tokenizer.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForSequenceClassification.from_pretrained`] and
@@ -66,8 +67,8 @@ class RewardConfig(_BaseConfig):
         > Parameters that control the training
 
         center_rewards_coefficient (`float`, *optional*):
-            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
-            https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
+            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by [this
+            paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -102,8 +103,9 @@ class RewardConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string."
+            "help": "Keyword arguments for `AutoModelForSequenceClassification.from_pretrained`, used when the "
+            "`model` argument of the `RewardTrainer` is provided as a string. The `revision` value is also used when "
+            "loading the tokenizer."
         },
     )
     trust_remote_code: bool = field(
@@ -141,8 +143,8 @@ class RewardConfig(_BaseConfig):
     max_length: int | None = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the right. If `None`, no truncation is applied."
+            "help": "Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected "
+            "sequence exceeds this value. If `None`, no filtering is applied."
         },
     )
     pad_to_multiple_of: int | None = field(
@@ -155,7 +157,7 @@ class RewardConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "
-            "https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`."
+            "[this paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`."
         },
     )
     activation_offloading: bool = field(

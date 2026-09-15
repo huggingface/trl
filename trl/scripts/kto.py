@@ -43,7 +43,6 @@ python trl/scripts/kto.py \
 
 # QLoRA:
 ```bash
-# QLoRA:
 python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \

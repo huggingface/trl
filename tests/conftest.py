@@ -101,6 +101,7 @@ def apply_model_revisions(monkeypatch):
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,
@@ -127,11 +128,12 @@ def apply_model_revisions(monkeypatch):
         # Re-wrap as classmethod
         return classmethod(wrapper)
 
-    # Patch all transformers Auto* classes
+    # Patch the transformers Auto* classes and the base classes they dispatch to
     for cls in [
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
         ProcessorMixin,
