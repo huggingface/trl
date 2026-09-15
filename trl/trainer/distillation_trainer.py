@@ -2177,6 +2177,18 @@ class DistillationTrainer(_BaseTrainer):
             # one-entry cache. With a single teacher the one group is the whole microbatch, so the call below is the
             # call the single-teacher path makes.
             student_lm_head = unwrapped_student.get_output_embeddings()
+            # Under FSDP2 the student head is a `DTensor`, and the `full_tensor()` that `_chunked_divergence_loss`
+            # would run on it is a collective. Routing is local, so the number of groups this rank holds is not the
+            # number another rank holds ([a, b] here, [a, a] there): gathering inside the loop would issue a
+            # rank-dependent number of collectives, in forward and in backward. Gather once per microbatch instead
+            # and hand every group the same plain tensor. `full_tensor` is differentiable; the cast to the hidden
+            # states' dtype is the one `_chunked_divergence_loss` applies, kept here for the same reason.
+            student_lm_head_weight = student_lm_head.weight
+            student_lm_head_bias = student_lm_head.bias
+            if isinstance(student_lm_head_weight, torch.distributed.tensor.DTensor):
+                student_lm_head_weight = student_lm_head_weight.full_tensor().to(student_hidden_states.dtype)
+                if student_lm_head_bias is not None:
+                    student_lm_head_bias = student_lm_head_bias.full_tensor()
             mode = "train" if self.model.training else "eval"
             loss = student_hidden_states.new_zeros((), dtype=torch.float32)
             entropy_sum = student_hidden_states.new_zeros((), dtype=torch.float32)
@@ -2209,13 +2221,13 @@ class DistillationTrainer(_BaseTrainer):
                 group_loss, group_entropy_sum, group_n_valid = _chunked_divergence_loss(
                     student_hidden_states[rows],
                     targets.to(student_hidden_states.device),
-                    student_lm_head.weight,
+                    student_lm_head_weight,
                     teacher_lm_head_weight,
                     loss_mask[rows],
                     self.beta,
                     _CHUNKED_LM_HEAD_CHUNK_SIZE,
                     num_items_in_batch=denominator,
-                    student_lm_head_bias=student_lm_head.bias,
+                    student_lm_head_bias=student_lm_head_bias,
                     teacher_lm_head_bias=teacher_lm_head_bias,
                     student_logit_scale=student_logit_scale,
                     teacher_logit_scale=teacher_logit_scale,
