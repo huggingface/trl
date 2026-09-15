@@ -49,13 +49,8 @@ training_args = SFTConfig(
     model_init_kwargs={
         # TRL loads a model id in float32 unless told otherwise; "auto" keeps the checkpoint's dtype.
         "dtype": "auto",
-        "distributed_config": DistributedConfig(
-            fsdp_size=64,
-            ep_size=8,
-            # The rule selects token dispatch. Its key is the experts module's full path, which on a
-            # composite model carries the sub-model prefix.
-            ep_plan={"model.language_model.layers.*.mlp.experts": "ep_dispatch_experts"},
-        ),
+        # The model's own expert plan selects token dispatch, so the sizes are the whole configuration.
+        "distributed_config": DistributedConfig(fsdp_size=64, ep_size=8),
     },
     per_device_train_batch_size=1,
     gradient_accumulation_steps=2,
