@@ -195,6 +195,7 @@ class TailSFTTrainer(SFTTrainer):
         # The paper drops round(world_size * batch_size * f) examples; keep one so the token average stays defined.
         keep = torch.ones_like(margins, dtype=torch.bool)
         keep[margins.argsort()[: min(round(margins.numel() * fraction), margins.numel() - 1)]] = False
+        filtered_fraction = 1 - keep.float().mean().item()
         keep = keep.view(self.accelerator.num_processes, -1)[self.accelerator.process_index]
 
         # Algorithm 1, line 8: token-averaged cross-entropy over the survivors. The average runs over the whole selection
@@ -203,7 +204,7 @@ class TailSFTTrainer(SFTTrainer):
         num_tokens = self.accelerator.gather(loss_mask.sum()).sum()
         loss = (per_token_loss * loss_mask).sum() * self.accelerator.num_processes / num_tokens
 
-        self._metrics["train"]["filtered_fraction"].append(1 - keep.float().mean().item())
+        self._metrics["train"]["filtered_fraction"].append(filtered_fraction)
         return (loss, outputs) if return_outputs else loss
 
 
