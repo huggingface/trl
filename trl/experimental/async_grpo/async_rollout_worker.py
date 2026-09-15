@@ -493,6 +493,7 @@ class _AsyncRolloutLoop:
             logger.exception(f"Worker process failed: {e}")
             raise
         finally:
+            self._tool_pool.shutdown(wait=True, cancel_futures=True)
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
