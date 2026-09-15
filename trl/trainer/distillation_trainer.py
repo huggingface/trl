@@ -33,7 +33,6 @@ import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, patch_environment, set_seed
 from datasets import Dataset, IterableDataset
-from huggingface_hub import HfApi
 from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
@@ -994,18 +993,18 @@ class DistillationTrainer(_BaseTrainer):
         commit = None
         if preloaded:
             teacher, source = source, get_config_model_id(source.config)
-        elif os.path.isdir(source):
-            if revision is not None:
+        else:
+            if os.path.isdir(source) and revision is not None:
                 raise ValueError(
                     f"Teacher {teacher_id!r} is the local path {source!r} but was given `revision` {revision!r}. "
                     f"Local paths carry no revision; drop it, or register the Hub repository instead."
                 )
             teacher = create_model_from_path(source, **init_kwargs)
-        else:
-            # Pin the branch/tag to the commit it resolves to now, so the identity saved in the manifest is immutable
-            # and a resume cannot silently follow a moved branch.
-            commit = HfApi().model_info(source, revision=revision).sha
-            teacher = create_model_from_path(source, **{**init_kwargs, "revision": commit})
+            # Pin the branch/tag to the commit it resolved to, so the identity saved in the manifest is immutable and
+            # a resume cannot silently follow a moved branch. Transformers stamps the resolved commit on the config
+            # while loading, so reading it here costs no second request and works under `local_files_only` and
+            # `HF_HUB_OFFLINE`; a local path carries none and leaves it `None`.
+            commit = teacher.config._commit_hash
         teacher = teacher.to("cpu").eval().requires_grad_(False)
 
         # The divergence compares the full next-token distribution of the student against the teacher's, so both must
@@ -1022,8 +1021,16 @@ class DistillationTrainer(_BaseTrainer):
         # An instantiated teacher carries no tokenizer of its own; pass one in `teacher_tokenizers` to have it checked.
         tokenizer = teacher_tokenizers.get(teacher_id)
         if tokenizer is None and not preloaded:
+            # The tokenizer lives in the repository the weights came from, so it is fetched with the same access and
+            # caching options the model was loaded with; anything else can resolve somewhere the model did not.
             tokenizer = AutoTokenizer.from_pretrained(
-                source, revision=commit, trust_remote_code=init_kwargs["trust_remote_code"]
+                source,
+                revision=commit,
+                trust_remote_code=init_kwargs["trust_remote_code"],
+                token=init_kwargs.get("token"),
+                cache_dir=init_kwargs.get("cache_dir"),
+                local_files_only=init_kwargs.get("local_files_only", False),
+                subfolder=init_kwargs.get("subfolder", ""),
             )
         if tokenizer is not None and _tokenizer_payload(tokenizer) != _tokenizer_payload(self._tokenizer):
             raise ValueError(

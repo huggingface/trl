@@ -14,6 +14,7 @@
 
 import json
 import os
+import re
 from unittest.mock import patch
 
 import pytest
@@ -1818,6 +1819,23 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
                 teacher_models={"a": teachers["a"], "mismatched": mismatched},
             )
+
+    def test_cached_hub_teacher_loads_offline(self):
+        # Registering a Hub ID resolves the teacher's identity from the config transformers stamps while loading, not
+        # from a metadata request, so a fully cached teacher loads with the Hub unreachable and still pins a commit.
+        with patch("huggingface_hub.constants.HF_HUB_OFFLINE", True):
+            trainer = DistillationTrainer(
+                model=self.model_id,
+                args=DistillationConfig(
+                    output_dir=self.tmp_dir,
+                    report_to="none",
+                    teacher_model_init_kwargs={"local_files_only": True},
+                ),
+                teacher_models={"a": self.model_id},
+            )
+        (entry,) = trainer._teacher_manifest
+        assert entry["source"] == self.model_id
+        assert re.fullmatch(r"[0-9a-f]{40}", entry["revision"]), entry
 
     def test_save_model_writes_the_teacher_manifest(self, tmp_path, teachers):
         # The manifest is written during serialization, not after `_save_checkpoint` returns: by then the parent has
