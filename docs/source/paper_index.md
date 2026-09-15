@@ -1230,6 +1230,16 @@ trainer.train()
 
 Papers relating to the [`SFTTrainer`]
 
+### TailSFT: Filtered Fine-Tuning Improves Post-Training Performance
+
+**📜 Paper**: https://huggingface.co/papers/2608.25756
+
+TailSFT preserves response coverage for subsequent reinforcement learning by filtering the sequences whose length-normalized loss has improved the most relative to the initial policy. The [`tail_sft_gsm8k`](https://github.com/huggingface/trl/tree/main/examples/tail_sft_gsm8k) example implements the paper's distributed selection-batch filtering by subclassing [`SFTTrainer`]. It records each sequence's initial-policy loss before training and filters examples independently in every selection batch.
+
+```sh
+python examples/tail_sft_gsm8k/tail_sft.py
+```
+
 ### EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
 **📜 Paper**: https://huggingface.co/papers/2508.00180
