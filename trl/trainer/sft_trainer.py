@@ -1416,8 +1416,11 @@ class SFTTrainer(_BaseTrainer):
                     and parallelism_config is not None
                     and parallelism_config.sp_enabled
                 )
-                if cp_enabled or sp_enabled:
-                    raise ValueError("`loss_type='tail_sft'` is not compatible with context or sequence parallelism.")
+                tp_enabled = parallelism_config is not None and parallelism_config.tp_size > 1
+                if cp_enabled or sp_enabled or tp_enabled:
+                    raise ValueError(
+                        "`loss_type='tail_sft'` is not compatible with context, sequence, or tensor parallelism."
+                    )
 
         # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
         # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents
