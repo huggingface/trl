@@ -1819,6 +1819,19 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 teacher_models={"a": teachers["a"], "mismatched": mismatched},
             )
 
+    def test_save_model_writes_the_teacher_manifest(self, tmp_path, teachers):
+        # The manifest is written during serialization, not after `_save_checkpoint` returns: by then the parent has
+        # already scheduled the checkpoint folder's Hub push. Writing it in `_save` also covers a bare `save_model()`.
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            teacher_models={"a": teachers["a"]},
+        )
+        destination = str(tmp_path / "saved-model")
+        trainer.save_model(destination)
+        with open(os.path.join(destination, "teacher_manifest.json")) as handle:
+            assert [entry["id"] for entry in json.load(handle)["teachers"]] == ["a"]
+
     def test_teacher_jsd_is_the_token_weighted_window_mean(self, teachers):
         # The logged value is the window's total divergence over its total scored tokens, not a mean of per-microbatch
         # means: a one-token microbatch must not weigh as much as a nine-token one.
