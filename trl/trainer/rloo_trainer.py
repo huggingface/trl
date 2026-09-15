@@ -650,6 +650,18 @@ class RLOOTrainer(_BaseTrainer):
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
+            if self.padding_free:
+                # The packed forward carries no attention mask and separates the samples through position-id
+                # resets, so the reference model has to honor them just like the policy. It is built from the path
+                # above, and only picks up `attn_implementation` when it was passed through
+                # `args.model_init_kwargs`, which are ignored when the caller instantiates the model itself.
+                ref_attn_implementation = self.ref_model.config._attn_implementation.split("@")[0].split(":")[0]
+                if ref_attn_implementation not in FLASH_ATTENTION_VARIANTS:
+                    raise ValueError(
+                        "`padding_free=True` requires a Flash Attention implementation for the reference model, "
+                        f"got {ref_attn_implementation!r}. Set `attn_implementation` in `model_init_kwargs` so that "
+                        "the reference model is created with it, or disable `padding_free`."
+                    )
 
         # Disable dropout in the models
         if args.disable_dropout:

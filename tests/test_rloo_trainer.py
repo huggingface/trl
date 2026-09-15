@@ -2359,6 +2359,16 @@ class TestRLOOTrainerPaddingFree(TrlTestCase):
         with pytest.raises(ValueError, match="requires a Flash Attention implementation, got 'sdpa'"):
             RLOOTrainer(model=model, reward_funcs=reward_length, args=training_args, train_dataset=dataset)
 
+    def test_padding_free_requires_flash_attention_for_reference_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        model.config._attn_implementation = "flash_attention_2"  # pass the policy guard; no forward runs here
+        # A non-zero `beta` creates a reference model from the path. It does not inherit the attention
+        # implementation the caller set on the policy, so it lands on the default and the guard must fire.
+        training_args = RLOOConfig(output_dir=self.tmp_dir, padding_free=True, beta=0.1, report_to="none")
+        with pytest.raises(ValueError, match="requires a Flash Attention implementation for the reference model"):
+            RLOOTrainer(model=model, reward_funcs=reward_length, args=training_args, train_dataset=dataset)
+
     @require_vision
     def test_padding_free_rejects_vision_language_models(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
