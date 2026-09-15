@@ -46,7 +46,7 @@ MODEL = "REDACTED"
 train_dataset = load_dataset("allenai/tulu-3-sft-mixture", split="train[:500000]")
 
 training_args = SFTConfig(
-    output_dir="sft_moe_expert_parallel",
+    output_dir="REDACTED-SFT",
     model_init_kwargs={
         "dtype": torch.bfloat16,
         "distributed_config": DistributedConfig(
