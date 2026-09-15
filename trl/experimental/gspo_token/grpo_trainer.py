@@ -111,14 +111,17 @@ class GRPOTrainer(_GRPOTrainer):
         if self.loss_type == "grpo":
             loss = ((per_token_loss * mask).sum(-1) / mask.sum(-1).clamp(min=1.0)).mean()
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
+            policy_loss = loss.detach()
             loss = loss / normalizer
         elif self.loss_type == "dapo":
             # `num_items_in_batch` spans the generation batch, so rescale it to one accumulation window
@@ -126,10 +129,13 @@ class GRPOTrainer(_GRPOTrainer):
             if mode == "train":  # in eval, the batch is neither split across steps nor accumulated
                 normalizer = normalizer * self.current_gradient_accumulation_steps / self.args.steps_per_generation
             loss = (per_token_loss * mask).sum() / normalizer
+            policy_loss = loss.detach()
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
+        self._metrics[mode]["policy_loss"].append(self.accelerator.gather(policy_loss).nanmean().item())
+
         def masked_seq_mean(x):
             if x.shape[1] == 1:  # when importance_sampling_level == "sequence": already one value per sequence
                 return x.squeeze(1)
