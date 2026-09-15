@@ -27,8 +27,6 @@
 LoRA SFT of a large MoE on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
 across all 64, and each rank trains on its own slice of the batch. 14.1 s/step, 131k tokens/step, 40 GB per GPU.
 
-Stage the checkpoint on node-local disk first, and keep gradient checkpointing on.
-
     sbatch sft_moe_expert_parallel.slurm
 """
 
@@ -55,8 +53,9 @@ training_args = SFTConfig(
             tp_size=1,
             fsdp_size=64,
             ep_size=8,
-            # The rule selects token dispatch, and its key is the module's full path.
-            ep_plan={"model.layers.*.mlp.experts": "ep_dispatch_experts"},
+            # The rule selects token dispatch. Its key is the experts module's full path, which on a
+            # composite model carries the sub-model prefix.
+            ep_plan={"model.language_model.layers.*.mlp.experts": "ep_dispatch_experts"},
         ),
     },
     per_device_train_batch_size=1,
