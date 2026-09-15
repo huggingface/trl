@@ -2096,6 +2096,47 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         with pytest.raises(ValueError, match=next(iter(unsupported))):
             DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
 
+    @pytest.mark.parametrize("inert", [{"device_map": None}, {"quantization_config": None}])
+    def test_accepts_inert_teacher_kwargs(self, teachers, inert):
+        # The guard reads the effective value, not the key: `device_map=None` is exactly what managed teachers are
+        # loaded with, and an explicit `quantization_config=None` asks for no quantization at all.
+        args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs=inert)
+        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+        assert list(trainer.teacher_models) == ["a"]
+
+    def test_inactive_load_in_8bit_passes_the_guard(self, teachers):
+        # `load_in_8bit=False` requests no quantization, so the guard does not fire on it. Transformers dropped the
+        # argument itself in v5 and raises its own `TypeError` further down, which is not the guard's `ValueError`.
+        args = DistillationConfig(
+            output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs={"load_in_8bit": False}
+        )
+        with pytest.raises(TypeError, match="load_in_8bit"):
+            DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+
+    def test_rejects_unsupported_per_teacher_override(self, teachers):
+        # The effective value is the merge of the common kwargs with the per-teacher ones, so an override that turns
+        # an inert option active is caught as well.
+        args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            teacher_model_init_kwargs={"device_map": None},
+            teacher_model_init_kwargs_by_teacher={"a": {"device_map": "auto"}},
+        )
+        with pytest.raises(ValueError, match="device_map"):
+            DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+
+    def test_rejects_preloaded_quantized_teacher(self, teachers):
+        # A checkpoint can carry its quantization in its config, so the loading options are not the whole answer: the
+        # state of an already-instantiated teacher is checked too.
+        teacher = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
+        teacher.hf_quantizer = object()  # what transformers sets on a model a quantizer loaded
+        with pytest.raises(ValueError, match="quantized or dispatched"):
+            DistillationTrainer(
+                model=self.model_id,
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                teacher_models={"a": teacher},
+            )
+
     @require_vision
     def test_rejects_vlm_student(self, teachers):
         # A vision-language student has no multi-teacher adapter either: image expansion and completion alignment

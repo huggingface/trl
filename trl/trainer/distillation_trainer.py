@@ -807,13 +807,33 @@ class DistillationTrainer(_BaseTrainer):
         self.teacher_models = None
         if teacher_models is not None:
             unsupported = ("quantization_config", "load_in_8bit", "load_in_4bit", "device_map")
-            for kwargs in [teacher_model_init_kwargs, *(args.teacher_model_init_kwargs_by_teacher or {}).values()]:
-                present = sorted(key for key in unsupported if key in kwargs)
-                if present:
+            per_teacher_kwargs = (args.teacher_model_init_kwargs_by_teacher or {}).values()
+            merged_kwargs = [{**teacher_model_init_kwargs, **per_teacher} for per_teacher in per_teacher_kwargs]
+            for kwargs in [teacher_model_init_kwargs, *merged_kwargs]:
+                # The effective value after the per-teacher override wins, not the mere presence of the key: an inert
+                # `device_map=None` or `load_in_8bit=False` asks for nothing that is unsupported.
+                active = sorted(key for key in unsupported if kwargs.get(key))
+                if active:
                     raise ValueError(
-                        f"Multi-teacher distillation does not support the teacher loading options {present}: teachers "
+                        f"Multi-teacher distillation does not support the teacher loading options {active}: teachers "
                         f"are moved to the accelerator as whole modules for scoring and back to CPU afterwards, a round "
-                        f"trip quantized and device-mapped models cannot make. Register dense checkpoints instead."
+                        f"trip quantized and device-mapped models cannot make. Register unquantized teachers loaded "
+                        f"without device dispatch or offload hooks instead."
+                    )
+            for teacher_id, source in teacher_models.items():
+                # A checkpoint can carry its quantization in its config, and an already-instantiated teacher can be
+                # dispatched, so the loading options are not the whole answer. Transformers and Accelerate set
+                # `hf_quantizer` and `hf_device_map` only on a model that is quantized or dispatched — there is no
+                # class-level default to read — so `getattr` is the only way to ask.
+                if not isinstance(source, str) and (
+                    getattr(source, "hf_quantizer", None) is not None
+                    or getattr(source, "hf_device_map", None) is not None
+                ):
+                    raise ValueError(
+                        f"Teacher {teacher_id!r} is quantized or dispatched across devices. Multi-teacher "
+                        f"distillation supports unquantized teachers loaded without device dispatch or offload "
+                        f"hooks: teachers are moved to the accelerator as whole modules for scoring and back to CPU "
+                        f"afterwards, a round trip quantized and device-mapped models cannot make."
                     )
             if self._is_vlm:
                 raise ValueError(
