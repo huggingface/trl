@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import types
 from collections import OrderedDict, defaultdict
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -42,6 +43,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _balance_by_squared_length,
+    _EpochStopCallback,
     _iter_vllm_named_params,
     _reduce_metric,
     round_lora_rank,
@@ -157,6 +159,22 @@ class _StubWeightTransfer:
 
     def destroy(self):
         pass
+
+
+class TestEpochStopOnResume:
+    def test_stops_before_the_first_step_when_the_checkpoint_reached_the_target(self):
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer.accelerator = types.SimpleNamespace(device="cpu", reduce=lambda tensor, reduction: tensor)
+        trainer._trained_groups = set()
+        trainer._groups_before_resume = 4
+        trainer.control = types.SimpleNamespace(should_training_stop=False)
+
+        _EpochStopCallback(trainer, target_groups=4).on_train_begin(None, None, trainer.control)
+
+        assert trainer.control.should_training_stop
+        with patch.object(_BaseTrainer, "_run_epoch") as run_epoch:
+            trainer._run_epoch()
+        run_epoch.assert_not_called()
 
 
 class FakeVLLMServer:
