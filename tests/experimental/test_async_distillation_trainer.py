@@ -42,6 +42,7 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     _jsd_divergence,
     _narrow_top1_actual_support,
     _reduce_metric,
+    _send_full_tensors_lockstep,
 )
 from trl.experimental.async_distillation.async_rollout_worker import (
     AsyncRolloutWorker,
@@ -1014,3 +1015,22 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer._prompts_before_resume == 77
         # The worker restarts `prompt_id` at 0, so ids left over from an earlier run would collide with this one's.
         assert trainer._trained_prompts == set()
+
+
+class TestLockstepWeightSend:
+    def test_lockstep_send_forwards_every_item(self):
+        sent = []
+
+        class _WT:
+            def send_weights(self, iterator):
+                sent.extend(name for name, _ in iterator)
+
+        class _Acc:
+            is_main_process = True
+
+            def wait_for_everyone(self):
+                return None
+
+        items = [("embed", torch.ones(2)), ("lm_head", torch.ones(3))]
+        _send_full_tensors_lockstep(_Acc(), _WT(), iter(items))
+        assert sent == ["embed", "lm_head"]
