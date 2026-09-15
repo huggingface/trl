@@ -23,7 +23,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SDFTConfig(_BaseConfig):
     r"""
-    Configuration class for the [`SDFTTrainer`].
+    Configuration class for the [`experimental.sdft.SDFTTrainer`].
 
     Parameters:
         > Parameters that control the SDFT loss
