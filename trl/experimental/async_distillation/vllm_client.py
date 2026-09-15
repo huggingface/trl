@@ -42,27 +42,38 @@ class VLLMClient:
         self.server_timeout = server_timeout
 
     def wait_for_server_ready(self, poll_interval_s: float = 2.0) -> None:
-        """Block until the server answers `/health`, or raise `TimeoutError` after `server_timeout` seconds."""
+        """Block until the server answers `/health`, or raise `TimeoutError` after `server_timeout` seconds. Each probe
+        is bounded by `poll_interval_s` and by what is left of the deadline, so a server that accepts the connection
+        and then stalls, or one that keeps answering 503 while it loads, cannot hold the wait past it."""
         logger.info(f"Waiting for vLLM server at {self.server_url} ...")
-        start = time.time()
+        start = time.monotonic()  # Deadlines use the monotonic clock so a system clock change cannot move them
+        timed_out = (
+            f"Timed out after {self.server_timeout:.0f}s waiting for vLLM server at {self.server_url}. "
+            "Make sure the vLLM server is running and reachable. If the server needs more time to load the "
+            "model, increase `vllm_server_timeout` in your AsyncDistillationConfig."
+        )
         while True:
-            elapsed = time.time() - start
+            elapsed = time.monotonic() - start
+            remaining = self.server_timeout - elapsed
             try:
-                response = requests.get(f"{self.server_url}/health", timeout=5)
+                response = requests.get(
+                    f"{self.server_url}/health",
+                    timeout=min(poll_interval_s, remaining) if remaining > 0 else poll_interval_s,
+                )
                 if response.status_code == 200:
                     logger.info(f"vLLM server ready after {elapsed:.1f}s")
                     return
             except (requests.ConnectionError, requests.Timeout, OSError):
                 pass
+            elapsed = time.monotonic() - start
             if elapsed >= self.server_timeout:
-                raise TimeoutError(
-                    f"Timed out after {self.server_timeout:.0f}s waiting for vLLM server at {self.server_url}. "
-                    "Make sure the vLLM server is running and reachable. If the server needs more time to load the "
-                    "model, increase `vllm_server_timeout` in your AsyncDistillationConfig."
-                )
+                raise TimeoutError(timed_out)
             if int(elapsed) % 10 < poll_interval_s:
                 logger.info(f"Still waiting for vLLM server... ({elapsed:.0f}s)")
-            time.sleep(poll_interval_s)
+            # Never sleep past the deadline, and never start a probe once it has passed
+            time.sleep(min(poll_interval_s, self.server_timeout - elapsed))
+            if time.monotonic() - start >= self.server_timeout:
+                raise TimeoutError(timed_out)
 
     def get_max_model_len(self) -> int:
         """Return the served model's `max_model_len` (the cap on prompt + completion tokens)."""
