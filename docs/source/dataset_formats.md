@@ -976,7 +976,7 @@ Example:
 
 # Vision dataset:
 "content": [
-    {"type": "image"}, 
+    {"type": "image"},
     {"type": "text", "text": "What color is the sky in the image?"}
 ]
 ```

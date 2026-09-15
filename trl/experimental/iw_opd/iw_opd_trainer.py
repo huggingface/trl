@@ -418,9 +418,11 @@ class IWOPDTrainer(_BaseTrainer):
             import json
 
             teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
+        model_revision = None
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -431,11 +433,15 @@ class IWOPDTrainer(_BaseTrainer):
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+                model_name_or_path, revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
+            # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+            # configs.
+            model.config.pad_token_id = processing_class.pad_token_id
+            model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # ── PEFT ──
         if peft_config is not None:
@@ -1830,7 +1836,7 @@ class IWOPDTrainer(_BaseTrainer):
                     self._on_policy_step_equiv,
                     self._off_policy_step_equiv,
                 ],
-                dtype=torch.float64,
+                dtype=torch.float32,
                 device=device,
             )
 

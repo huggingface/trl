@@ -481,6 +481,7 @@ class BCOTrainer(_BaseTrainer):
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_revision = model_init_kwargs.get("revision") if isinstance(model, str) else None
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -597,7 +598,7 @@ class BCOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if args.max_length is None:
             logger.warning(

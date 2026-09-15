@@ -23,8 +23,17 @@ from .vllm_client import VLLMClient
 
 
 if is_vllm_available(min_version="0.22.0"):
-    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip, get_open_port
+
+# vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
+# `trainer_send_weights` with a stateful trainer engine and moved `packed` from the per-update info to the init info.
+# The rendezvous and packed-broadcast helpers the statics were built on are still exposed, so they are called directly.
+_HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
+if _HAS_STATEFUL_TRAINER_ENGINE:
+    from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
+    from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
+elif is_vllm_available(min_version="0.22.0"):
+    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
 
 logger = get_logger(__name__)
@@ -66,6 +75,8 @@ class WeightTransferClient:
         self.vllm = vllm_client
         self.weight_sync_timeout = weight_sync_timeout
         self._weight_update_info = weight_update_info
+        if not _HAS_STATEFUL_TRAINER_ENGINE:
+            self._weight_update_info = {**weight_update_info, "packed": True}
         self.model_update_group = None
 
     def init_weight_transfer(self) -> None:
@@ -80,18 +91,17 @@ class WeightTransferClient:
             "rank_offset": 1,
             "world_size": world_size,
         }
+        if _HAS_STATEFUL_TRAINER_ENGINE:
+            init_info["packed"] = True
 
         error: list[BaseException] = []
 
         def trainer_init():
             try:
-                self.model_update_group = NCCLWeightTransferEngine.trainer_init(
-                    {
-                        "master_address": master_address,
-                        "master_port": master_port,
-                        "world_size": world_size,
-                    }
-                )
+                if _HAS_STATEFUL_TRAINER_ENGINE:
+                    self.model_update_group = open_trainer_endpoint(init_info)
+                else:
+                    self.model_update_group = NCCLWeightTransferEngine.trainer_init(init_info)
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)
 
@@ -122,10 +132,15 @@ class WeightTransferClient:
 
         def trainer_send_weights():
             try:
-                NCCLWeightTransferEngine.trainer_send_weights(
-                    iterator=iterator,
-                    trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
-                )
+                if _HAS_STATEFUL_TRAINER_ENGINE:
+                    packed_nccl_broadcast_producer(
+                        iterator=iterator, group=self.model_update_group, src=0, post_iter_func=lambda item: item[1]
+                    )
+                else:
+                    NCCLWeightTransferEngine.trainer_send_weights(
+                        iterator=iterator,
+                        trainer_args=NCCLTrainerSendWeightsArgs(group=self.model_update_group, packed=True),
+                    )
             except BaseException as exc:  # noqa: BLE001
                 error.append(exc)
 
