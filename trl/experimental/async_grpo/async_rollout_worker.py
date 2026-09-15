@@ -366,6 +366,15 @@ class _AsyncRolloutLoop:
         self._pushed_at = time.monotonic()
 
         self.num_generations = num_generations
+        if max_inflight_tasks < 1:
+            raise ValueError(
+                f"max_inflight_tasks must be at least 1, got {max_inflight_tasks}. The generate loop takes its "
+                "concurrency slots from `range(max_inflight_tasks)`, so a non-positive value dispatches nothing and "
+                "the trainer waits on an empty queue forever. `AsyncGRPOTrainer` resolves the `-1` default itself, "
+                "but only after the point where it builds the worker, so a worker constructed directly has to be "
+                "given a real value: `max(max_staleness, 1) * per_device_train_batch_size * "
+                "gradient_accumulation_steps * num_processes`."
+            )
         self.max_inflight_tasks = max_inflight_tasks
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
