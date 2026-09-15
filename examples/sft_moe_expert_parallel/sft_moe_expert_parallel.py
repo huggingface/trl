@@ -24,18 +24,10 @@
 
 # docstyle-ignore
 """
-LoRA SFT of a large MoE on 64 H100s across 8 nodes.
+LoRA SFT of a large MoE on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
+across all 64, and each rank trains on its own slice of the batch. 14.1 s/step, 131k tokens/step, 40 GB per GPU.
 
-`ep_size=8` gives each group of 8 GPUs a distinct slice of the experts, `fsdp_size=64` shards everything else
-across all 64, and the `ep_dispatch_experts` rule makes every rank train on its own slice of the batch, sending
-each token to the rank owning its expert. Measured at per-device batch 1: 14.1 s/step (131k tokens/step),
-40 GB per GPU, loss 1.80 -> 0.72 over 100 steps on tulu-3.
-
-Stage the checkpoint on node-local disk first: sharded loading took 23 s from NVMe and did not finish in 40 min
-from a network mount. Gradient checkpointing has to stay on. Needs transformers `ep-mesh` (#48792), as the
-header pins; peft 0.21.0 and accelerate 1.15.0 carry the FSDP2 fixes this relies on.
-
-Launch from this directory:
+Stage the checkpoint on node-local disk first, and keep gradient checkpointing on.
 
     sbatch sft_moe_expert_parallel.slurm
 """
