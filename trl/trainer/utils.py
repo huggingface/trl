@@ -19,6 +19,7 @@ import hashlib
 import importlib.resources as pkg_resources
 import os
 import random
+import re
 import socket
 import threading
 import types
@@ -33,8 +34,9 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
+from accelerate import Accelerator, PartialState
 from accelerate.logging import get_logger
+from accelerate.utils import gather_object
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
@@ -1703,11 +1705,105 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
     return 3 * forward_flops
 
 
+# Theoretical dense accelerator throughput. Values and sources follow TorchTitan's BF16 peak-FLOPs lookup, extended
+# with the additional NVIDIA GPUs offered by Hugging Face Jobs. More specific names must precede their prefixes.
+_PEAK_FLOPS_BY_DEVICE = (
+    # NVIDIA
+    ("GB300", {"bfloat16": 2.5e15}),
+    ("GB200", {"bfloat16": 2.5e15}),
+    ("B300", {"bfloat16": 2.25e15}),
+    ("B200", {"bfloat16": 2.25e15}),
+    ("H100 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H100 PCIe", {"float16": 756e12, "bfloat16": 756e12}),
+    ("H100", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H200 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H200", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H20", {"float16": 148e12, "bfloat16": 148e12}),
+    ("RTX PRO 6000", {"float16": 500e12, "bfloat16": 500e12}),
+    ("A100", {"float16": 312e12, "bfloat16": 312e12}),
+    ("A6000", {"float16": 154.85e12, "bfloat16": 154.85e12}),
+    ("A10G", {"float16": 125e12, "bfloat16": 125e12}),
+    ("A10", {"float16": 125e12, "bfloat16": 125e12}),
+    ("L40S", {"float16": 362e12, "bfloat16": 362e12}),
+    ("L4", {"float16": 121e12, "bfloat16": 121e12}),
+    ("T4", {"float16": 65e12}),
+    # AMD
+    ("MI355X", {"bfloat16": 2500e12}),
+    ("MI325X", {"bfloat16": 1300e12}),
+    ("MI300X", {"bfloat16": 1300e12}),
+    ("MI250X", {"bfloat16": 191.5e12}),
+    # AWS Trainium and Inferentia
+    ("trn1n", {"bfloat16": 90e12}),
+    ("trn1", {"bfloat16": 90e12}),
+    ("inf2", {"bfloat16": 90e12}),
+    ("trn2n", {"bfloat16": 158e12}),
+    ("trn2u", {"bfloat16": 158e12}),
+    ("trn2", {"bfloat16": 158e12}),
+    ("trn3u", {"bfloat16": 158e12}),
+    ("trn3", {"bfloat16": 158e12}),
+    # Google TPU
+    ("TPU v4", {"bfloat16": 275e12}),
+    ("TPU v5e", {"bfloat16": 197e12}),
+    ("TPU v5p", {"bfloat16": 459e12}),
+    ("TPU v6e", {"bfloat16": 918e12}),
+    ("TPU v7", {"bfloat16": 2307e12 / 2}),
+)
+
+
+def get_peak_flops(device_name: str, dtype: str) -> float | None:
+    """
+    Get the theoretical dense accelerator peak FLOPs for a device and dtype.
+
+    Args:
+        device_name (`str`):
+            Device name as returned by the accelerator runtime.
+        dtype (`str`):
+            Floating-point dtype used by the model's matrix multiplications.
+
+    Returns:
+        `float` or `None`: Peak FLOPs, or `None` when the device or dtype is not in the lookup table.
+    """
+    device_name = device_name.casefold()
+    for model_name, peak_flops_by_dtype in _PEAK_FLOPS_BY_DEVICE:
+        if re.search(rf"\b{re.escape(model_name.casefold())}\b", device_name):
+            return peak_flops_by_dtype.get(dtype)
+    return None
+
+
+def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | None:
+    """
+    Resolve the mean theoretical dense peak FLOPs per training device.
+
+    Args:
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator managing the training devices.
+        dtype (`str`):
+            Configured model dtype.
+
+    Returns:
+        `float` or `None`: Mean peak FLOPs per device, or `None` if any training device or precision is unsupported.
+    """
+    device = accelerator.device
+    if device.type == "cuda":
+        device_name = torch.cuda.get_device_name(device)
+    else:
+        device_name = device.type
+    peak_flops = get_peak_flops(device_name, dtype)
+    peaks = gather_object([peak_flops])
+    if any(peak is None for peak in peaks):
+        logger.info(
+            "MFU metrics are disabled because the peak FLOPs are unknown for at least one training device or "
+            "precision. Throughput and timing metrics are still reported."
+        )
+        return None
+    return sum(peaks) / len(peaks)
+
+
 def compute_mfu(
     flops_per_token: int,
     tokens_per_second: float,
     world_size: int,
-    peak_flops_per_device: float = 989.5e12,
+    peak_flops_per_device: float,
 ) -> float:
     """
     Compute Model FLOPs Utilization (MFU) as a percentage.
@@ -1723,8 +1819,9 @@ def compute_mfu(
             Aggregate tokens per second across all devices, after any parallelism corrections.
         world_size (`int`):
             Number of devices (GPUs).
-        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
-            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM5.
+        peak_flops_per_device (`float`):
+            Theoretical dense peak FLOPs per device for the training precision. For heterogeneous devices, pass the
+            mean peak across the training ranks.
 
     Returns:
         `float`: MFU as a percentage (0-100).

@@ -16,6 +16,7 @@ import copy
 import functools
 import textwrap
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -40,6 +41,8 @@ from trl.trainer.utils import (
     flush_left,
     generate_model_card,
     get_callable_name,
+    get_peak_flops,
+    get_peak_flops_per_device,
     get_peft_config,
     hash_module,
     nanstd,
@@ -1744,6 +1747,98 @@ class TestComputeFlopsPerToken(TrlTestCase):
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+            ("trn1n", "bfloat16", 90e12),
+            ("inf2", "bfloat16", 90e12),
+            ("trn2u", "bfloat16", 158e12),
+            ("trn3u", "bfloat16", 158e12),
+            ("TPU v4", "bfloat16", 275e12),
+            ("TPU v5e", "bfloat16", 197e12),
+            ("TPU v5p", "bfloat16", 459e12),
+            ("TPU v6e", "bfloat16", 918e12),
+            ("TPU v7", "bfloat16", 1153.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
+
+
+class TestGetPeakFlopsPerDevice:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA A100", "bfloat16", 312e12),
+            ("Tesla T4", "float16", 65e12),
+            ("NVIDIA A100", "float32", None),
+            ("Tesla T4", "bfloat16", None),
+            ("NVIDIA A100", "auto", None),
+        ],
+    )
+    def test_configured_dtype(self, device_name, dtype, expected):
+        accelerator = SimpleNamespace(device=torch.device("cuda:0"))
+        with (
+            patch("torch.cuda.get_device_name", return_value=device_name),
+            patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks),
+            patch("trl.trainer.utils.logger.info"),
+        ):
+            assert get_peak_flops_per_device(accelerator, dtype) == expected
+
+    @pytest.mark.parametrize("other_peak", [989e12, None])
+    def test_distributed_capacity_requires_every_rank(self, other_peak):
+        accelerator = SimpleNamespace(device=torch.device("cuda:0"))
+        with (
+            patch("torch.cuda.get_device_name", return_value="NVIDIA A100"),
+            patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks + [other_peak]),
+            patch("trl.trainer.utils.logger.info"),
+        ):
+            peak = get_peak_flops_per_device(accelerator, "bfloat16")
+        if other_peak is None:
+            assert peak is None
+        else:
+            # A workload equal to both devices' combined capacity must give 100%, not assume two A100s.
+            tokens_per_second = (312e12 + 989e12) / 100e9
+            assert compute_mfu(100e9, tokens_per_second, 2, peak) == pytest.approx(100.0)
 
 
 class TestComputeMfu(TrlTestCase):
