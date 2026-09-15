@@ -50,7 +50,6 @@ training_args = SFTConfig(
         # TRL loads a model id in float32 unless told otherwise; "auto" keeps the checkpoint's dtype.
         "dtype": "auto",
         "distributed_config": DistributedConfig(
-            tp_size=1,
             fsdp_size=64,
             ep_size=8,
             # The rule selects token dispatch. Its key is the experts module's full path, which on a
