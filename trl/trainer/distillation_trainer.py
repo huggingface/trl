@@ -1013,7 +1013,8 @@ class DistillationTrainer(_BaseTrainer):
             commit = teacher.config._commit_hash
         # A checkpoint can carry its quantization in its own config, so no loading kwarg reveals it and only the
         # loaded model does; an instantiated teacher can arrive already dispatched. Both are checked here, before the
-        # `.to("cpu")` that neither survives. Transformers and Accelerate set `hf_quantizer` and `hf_device_map` only
+        # device moves this mode relies on and has not validated for them. Transformers and Accelerate set
+        # `hf_quantizer` and `hf_device_map` only
         # on a model that is quantized or dispatched — there is no class-level default to read — so `getattr` is the
         # only way to ask.
         if getattr(teacher, "hf_quantizer", None) is not None or getattr(teacher, "hf_device_map", None) is not None:
