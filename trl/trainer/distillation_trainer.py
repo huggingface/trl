@@ -2113,13 +2113,14 @@ class DistillationTrainer(_BaseTrainer):
                 # policy, not of which teacher scored the sample. A teacher absent from this microbatch scored no
                 # token: its share of the tokens is a real zero, but its mean divergence is undefined, so that key is
                 # left out entirely.
-                # Logged as a `(numerator, denominator)` pair so the window reduces to the true share of tokens the
-                # teacher scored, rather than a mean of per-microbatch shares that microbatches of unequal size would
-                # skew. A teacher that scored nothing gets a real 0 share, since zero tokens is itself the answer.
+                # Both are logged as a `(numerator, denominator)` pair so the window reduces to the true ratio over
+                # the tokens the teacher scored, rather than a mean of per-microbatch ratios that microbatches of
+                # unequal size would skew. A teacher that scored nothing gets a real 0 share, since zero tokens is
+                # itself the answer.
                 self._metrics[mode][f"teacher_token_frac/{teacher_id}"].append((count.item(), total_count.item()))
                 if count > 0:
                     self._metrics[mode][f"teacher_jsd/{teacher_id}"].append(
-                        (divergence_sums[teacher_index] / count).item()
+                        (divergence_sums[teacher_index].item(), count.item())
                     )
         else:
             loss, entropy_sum, num_valid_tokens = outputs

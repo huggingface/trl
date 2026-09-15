@@ -1819,6 +1819,28 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 teacher_models={"a": teachers["a"], "mismatched": mismatched},
             )
 
+    def test_teacher_jsd_is_the_token_weighted_window_mean(self, teachers):
+        # The logged value is the window's total divergence over its total scored tokens, not a mean of per-microbatch
+        # means: a one-token microbatch must not weigh as much as a nine-token one.
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            teacher_models={"a": teachers["a"]},
+        )
+        trainer.model.train()  # `compute_loss` files its metrics under the mode the student is currently in
+        # Drives the metric path with known statistics rather than model math. `_compute_loss` returns the loss, the
+        # entropy sum, the valid-token count, and the `[2, num_teachers]` per-teacher (divergence sum, token count).
+        for count, divergence_sum in [(1, 1.0), (9, 27.0)]:
+            trainer._forward_redirection = lambda *args, count=count, divergence_sum=divergence_sum: (
+                torch.tensor(1.0),
+                torch.tensor(0.0),
+                torch.tensor(count),
+                torch.tensor([[divergence_sum], [float(count)]]),
+            )
+            trainer.compute_loss(trainer.model, {})
+        trainer.log({"loss": 1.0})
+        assert trainer.state.log_history[-1]["teacher_jsd/a"] == pytest.approx((1.0 + 27.0) / (1 + 9))
+
     def test_teacher_tokenizer_without_a_pad_token_matches_the_student(self, tmp_path):
         # The trainer gives the student's tokenizer the EOS token as its pad token when it has none, while the
         # teacher's is compared as loaded. Padding is not tokenization identity, so two copies of the same pad-less
