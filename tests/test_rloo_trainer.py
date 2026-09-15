@@ -32,6 +32,7 @@ from trl import RLOOConfig, RLOOTrainer
 
 from .testing_utils import (
     TrlTestCase,
+    get_vision_parameter_names,
     require_bitsandbytes,
     require_peft,
     require_peft_target_parameters,
@@ -1880,6 +1881,43 @@ class TestRLOOTrainerVLM(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+        ],
+    )
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_text_only_dataset_freezes_non_language_parameters(self, model_id, streaming):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        if streaming:
+            dataset = dataset.to_iterable_dataset()
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model=model_id,
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        frozen_parameter_names = {n for n, param in trainer.model.named_parameters() if not param.requires_grad}
+        assert vision_parameter_names
+        assert vision_parameter_names <= frozen_parameter_names
+        assert any(parameter.requires_grad for parameter in trainer.model.parameters())
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             pytest.param(
                 "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
@@ -1931,6 +1969,10 @@ class TestRLOOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+
+        vision_parameter_names = get_vision_parameter_names(trainer.model)
+        assert vision_parameter_names
+        assert all(trainer.model.get_parameter(name).requires_grad for name in vision_parameter_names)
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
