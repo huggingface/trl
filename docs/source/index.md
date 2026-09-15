@@ -61,10 +61,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 - [`XPOTrainer`](xpo_trainer)
 
-#### Reward modeling
-
-- [`PRMTrainer`](prm_trainer)
-
 </div>
 <div style="flex: 1; min-width: 0;">
 
