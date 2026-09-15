@@ -821,20 +821,6 @@ class DistillationTrainer(_BaseTrainer):
                         f"offload hooks, and quantized and dispatched teacher backends have not been integrated or "
                         f"validated."
                     )
-            for teacher_id, source in teacher_models.items():
-                # A checkpoint can carry its quantization in its config, and an already-instantiated teacher can be
-                # dispatched, so the loading options are not the whole answer. Transformers and Accelerate set
-                # `hf_quantizer` and `hf_device_map` only on a model that is quantized or dispatched — there is no
-                # class-level default to read — so `getattr` is the only way to ask.
-                if not isinstance(source, str) and (
-                    getattr(source, "hf_quantizer", None) is not None
-                    or getattr(source, "hf_device_map", None) is not None
-                ):
-                    raise ValueError(
-                        f"Teacher {teacher_id!r} is quantized or dispatched across devices. Multi-teacher "
-                        f"distillation supports unquantized teachers loaded without device dispatch or offload "
-                        f"hooks; quantized and dispatched teacher backends have not been integrated or validated."
-                    )
             if self._is_vlm:
                 raise ValueError(
                     "Multi-teacher distillation does not support vision-language students: teacher scoring carries "
@@ -1025,6 +1011,17 @@ class DistillationTrainer(_BaseTrainer):
             # while loading, so reading it here costs no second request and works under `local_files_only` and
             # `HF_HUB_OFFLINE`; a local path carries none and leaves it `None`.
             commit = teacher.config._commit_hash
+        # A checkpoint can carry its quantization in its own config, so no loading kwarg reveals it and only the
+        # loaded model does; an instantiated teacher can arrive already dispatched. Both are checked here, before the
+        # `.to("cpu")` that neither survives. Transformers and Accelerate set `hf_quantizer` and `hf_device_map` only
+        # on a model that is quantized or dispatched — there is no class-level default to read — so `getattr` is the
+        # only way to ask.
+        if getattr(teacher, "hf_quantizer", None) is not None or getattr(teacher, "hf_device_map", None) is not None:
+            raise ValueError(
+                f"Teacher {teacher_id!r} is quantized or dispatched across devices. Multi-teacher distillation "
+                f"supports unquantized teachers loaded without device dispatch or offload hooks; quantized and "
+                f"dispatched teacher backends have not been integrated or validated."
+            )
         teacher = teacher.to("cpu").eval().requires_grad_(False)
 
         # The divergence compares the full next-token distribution of the student against the teacher's, so both must
@@ -1056,8 +1053,9 @@ class DistillationTrainer(_BaseTrainer):
             raise ValueError(
                 f"Teacher {teacher_id!r} does not share the student's tokenizer. Prompts are rendered once with the "
                 f"student's processing class and every teacher scores those exact token IDs, so the tokenizer "
-                f"serialization and special-token roles/IDs must be identical. Use a teacher trained on the student's "
-                f"tokenizer, or GOLD for cross-tokenizer distillation."
+                f"serialization and special-token roles/IDs must be identical — except the padding configuration, "
+                f"which is excluded from the comparison. Use a teacher trained on the student's tokenizer, or GOLD "
+                f"for cross-tokenizer distillation."
             )
 
         # The single-teacher path hands its teacher to `prepare_deepspeed`, whose engine casts the parameters to the

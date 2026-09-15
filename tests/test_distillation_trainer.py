@@ -2160,6 +2160,23 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 teacher_models={"a": teacher},
             )
 
+    def test_rejects_quantized_teacher_checkpoint(self, teachers):
+        # A checkpoint can carry its quantization in its own config, so no loading kwarg reveals it: the teacher is
+        # checked after it is loaded. The loader is patched to return a quantized-looking model, which tests the
+        # validation control flow rather than a quantization backend.
+        quantized = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
+        quantized.hf_quantizer = object()
+        # The student is instantiated here so the patched loader only ever serves the teacher's string source.
+        student = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
+        with patch("trl.trainer.distillation_trainer.create_model_from_path", return_value=quantized):
+            with pytest.raises(ValueError, match="quantized or dispatched"):
+                DistillationTrainer(
+                    model=student,
+                    processing_class=AutoTokenizer.from_pretrained(self.model_id),
+                    args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                    teacher_models={"a": teachers["a"]},
+                )
+
     @require_vision
     def test_rejects_vlm_student(self, teachers):
         # A vision-language student has no multi-teacher adapter either: image expansion and completion alignment
