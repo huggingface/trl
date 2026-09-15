@@ -2126,8 +2126,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert list(trainer.teacher_models) == ["a"]
 
     def test_rejects_unsupported_per_teacher_override(self, teachers):
-        # The effective value is the merge of the common kwargs with the per-teacher ones, so an override that turns
-        # an inert option active is caught as well.
+        # The effective value is the merge of the common kwargs with this teacher's, so an override that turns an
+        # inert option active is caught as well.
         args = DistillationConfig(
             output_dir=self.tmp_dir,
             report_to="none",
@@ -2137,9 +2137,20 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         with pytest.raises(ValueError, match="device_map"):
             DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
 
+    def test_accepts_common_option_every_teacher_overrides(self, teachers):
+        # Only what each registered teacher will actually be loaded with is checked. The common dict is never judged
+        # on its own, so an active option that every teacher overrides back to an inert value is supported.
+        args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            teacher_model_init_kwargs={"device_map": "auto"},
+            teacher_model_init_kwargs_by_teacher={"a": {"device_map": None}},
+        )
+        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+        assert list(trainer.teacher_models) == ["a"]
+
     def test_rejects_preloaded_quantized_teacher(self, teachers):
-        # A checkpoint can carry its quantization in its config, so the loading options are not the whole answer: the
-        # state of an already-instantiated teacher is checked too.
+        # An already-instantiated teacher can arrive quantized or dispatched; the loading options say nothing about it.
         teacher = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32)
         teacher.hf_quantizer = object()  # what transformers sets on a model a quantizer loaded
         with pytest.raises(ValueError, match="quantized or dispatched"):

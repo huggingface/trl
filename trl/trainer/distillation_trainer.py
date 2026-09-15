@@ -807,18 +807,19 @@ class DistillationTrainer(_BaseTrainer):
         self.teacher_models = None
         if teacher_models is not None:
             unsupported = ("quantization_config", "device_map")
-            per_teacher_kwargs = (args.teacher_model_init_kwargs_by_teacher or {}).values()
-            merged_kwargs = [{**teacher_model_init_kwargs, **per_teacher} for per_teacher in per_teacher_kwargs]
-            for kwargs in [teacher_model_init_kwargs, *merged_kwargs]:
-                # The effective value after the per-teacher override wins, not the mere presence of the key: an inert
-                # `device_map=None` or `quantization_config=None` asks for nothing that is unsupported.
+            overrides = args.teacher_model_init_kwargs_by_teacher or {}
+            for teacher_id in teacher_models:
+                # What this teacher will actually be loaded with, not what the common dict says on its own: an inert
+                # `device_map=None` asks for nothing unsupported, and a per-teacher override replaces the common
+                # value in either direction.
+                kwargs = {**teacher_model_init_kwargs, **(overrides.get(teacher_id) or {})}
                 active = sorted(key for key in unsupported if kwargs.get(key))
                 if active:
                     raise ValueError(
-                        f"Multi-teacher distillation does not support the teacher loading options {active}: teachers "
-                        f"are moved to the accelerator as whole modules for scoring and back to CPU afterwards, a round "
-                        f"trip quantized and device-mapped models cannot make. Register unquantized teachers loaded "
-                        f"without device dispatch or offload hooks instead."
+                        f"Multi-teacher distillation does not support the teacher loading options {active} given for "
+                        f"teacher {teacher_id!r}: it supports unquantized teachers loaded without device dispatch or "
+                        f"offload hooks, and quantized and dispatched teacher backends have not been integrated or "
+                        f"validated."
                     )
             for teacher_id, source in teacher_models.items():
                 # A checkpoint can carry its quantization in its config, and an already-instantiated teacher can be
@@ -832,8 +833,7 @@ class DistillationTrainer(_BaseTrainer):
                     raise ValueError(
                         f"Teacher {teacher_id!r} is quantized or dispatched across devices. Multi-teacher "
                         f"distillation supports unquantized teachers loaded without device dispatch or offload "
-                        f"hooks: teachers are moved to the accelerator as whole modules for scoring and back to CPU "
-                        f"afterwards, a round trip quantized and device-mapped models cannot make."
+                        f"hooks; quantized and dispatched teacher backends have not been integrated or validated."
                     )
             if self._is_vlm:
                 raise ValueError(
