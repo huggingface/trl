@@ -870,6 +870,42 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert was_called[0] is True
 
+    def test_predict_does_not_leak_compute_metrics_buffers(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        seen = []
+
+        def compute_metrics(eval_pred):
+            seen.append(len(eval_pred.predictions))
+            return {}
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=compute_metrics,
+        )
+
+        trainer.evaluate()
+        baseline = seen[-1]
+        trainer.predict(dataset["test"])  # generates, but never reaches `log()`, so it drains nothing
+        trainer.evaluate()
+
+        assert seen[-1] == baseline
+
     def test_compute_metrics_none_does_not_break(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 

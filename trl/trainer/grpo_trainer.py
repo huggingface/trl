@@ -3432,6 +3432,14 @@ class GRPOTrainer(_BaseTrainer):
 
         return loss
 
+    # `Trainer.predict()` runs this loop too, but only `evaluate()` reaches `log()`, which is what drains the
+    # buffers that `_generate_and_score_completions` fills for `compute_metrics`. Clear them on entry so a
+    # `predict()` run cannot leak its generations and rewards into the next evaluation.
+    def evaluation_loop(self, *args, **kwargs):
+        self._completions_for_compute_metrics = []
+        self._rewards_for_compute_metrics = None
+        return super().evaluation_loop(*args, **kwargs)
+
     # During eval, Trainer calls prediction_step. If no labels are present in the inputs, it only runs forward and
     # returns logits. We override prediction_step to force compute_loss, because this trainer doesn't involve labels.
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
