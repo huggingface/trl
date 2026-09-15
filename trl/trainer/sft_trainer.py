@@ -94,8 +94,6 @@ class _ChunkedCELMHeadOutput(CausalLMOutputWithPast):
     num_correct_tokens: torch.Tensor | None = None
     entropy_sum: torch.Tensor | None = None
     num_valid_tokens: torch.Tensor | None = None
-    per_example_loss_sum: torch.Tensor | None = None
-    per_example_num_tokens: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
 
 
@@ -113,11 +111,11 @@ def _chunk(h, w, b, lbl, logit_scale, final_logit_softcapping):
         logits = final_logit_softcapping * torch.tanh(logits / final_logit_softcapping)
     log_p = F.log_softmax(logits, dim=-1)
     # A chunk's tail may be `-100` padding: `ignore_index` zeroes their loss; `valid` does the same for accuracy/entropy.
-    per_token_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="none")
+    chunk_loss = F.nll_loss(log_p, lbl, ignore_index=-100, reduction="sum")
     valid = lbl != -100
     chunk_correct = ((logits.argmax(dim=-1) == lbl) & valid).sum().float()
     chunk_entropy = (-(log_p.exp() * log_p).sum(dim=-1) * valid).sum()
-    return per_token_loss, chunk_correct, chunk_entropy
+    return chunk_loss, chunk_correct, chunk_entropy
 
 
 def _chunked_cross_entropy_loss(
@@ -130,8 +128,7 @@ def _chunked_cross_entropy_loss(
     logit_scale: float = 1.0,
     final_logit_softcapping: float | None = None,
     lm_head_bias: torch.Tensor | None = None,
-    return_per_example_losses: bool = False,
-) -> tuple[torch.Tensor, ...]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Memory-efficient next-token cross-entropy over hidden states and an `lm_head` weight.
 
@@ -173,32 +170,21 @@ def _chunked_cross_entropy_loss(
             matching the `final_logit_softcapping` behavior of Gemma-style models. Applied after `logit_scale`.
         lm_head_bias (`torch.Tensor`, *optional*):
             Bias of the `lm_head` linear layer, shape `(V,)`. Added to each chunk's logits when provided.
-        return_per_example_losses (`bool`, *optional*, defaults to `False`):
-            Whether to additionally return each sequence's summed loss and number of valid target tokens.
 
     Returns:
-        `tuple[torch.Tensor, ...]`: Scalar loss, number of correctly-predicted tokens (count), sum of per-token Shannon
-        entropy (in nats), and number of valid (non-`-100`) target tokens — all over the local batch. When
-        `return_per_example_losses=True`, each sequence's summed loss and valid-token count are appended. Raw sums are
-        returned so callers can reduce correctly across ranks.
+        `tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]`: scalar loss, number of correctly-predicted
+        tokens (count), sum of per-token Shannon entropy (in nats), and number of valid (non-`-100`) target tokens —
+        all over the local batch. Raw sums are returned so callers can reduce correctly across ranks.
     """
     if labels is None and shift_labels is None:
         raise ValueError("At least one of `labels` or `shift_labels` must be provided.")
 
     if shift_labels is not None:
-        per_example_num_tokens = (shift_labels != -100).sum(-1)
-        example_ids = (
-            torch.arange(shift_labels.size(0), device=shift_labels.device).unsqueeze(1).expand_as(shift_labels)
-        )
         hidden = hidden_states.reshape(-1, hidden_states.size(-1))
         labels = shift_labels.reshape(-1)
     else:
-        shifted_labels = labels[..., 1:]
-        per_example_num_tokens = (shifted_labels != -100).sum(-1)
-        example_ids = torch.arange(labels.size(0), device=labels.device).unsqueeze(1).expand_as(shifted_labels)
         hidden = hidden_states[..., :-1, :].reshape(-1, hidden_states.size(-1))
-        labels = shifted_labels.reshape(-1)
-    example_ids = example_ids.reshape(-1)
+        labels = labels[..., 1:].reshape(-1)
 
     valid = labels != -100
     n_valid_tensor = valid.sum()
@@ -211,7 +197,6 @@ def _chunked_cross_entropy_loss(
     order = valid.to(torch.int8).argsort(descending=True, stable=True)
     hidden = hidden[order]
     labels = labels[order]
-    example_ids = example_ids[order]
 
     # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
     # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
@@ -219,13 +204,11 @@ def _chunked_cross_entropy_loss(
     n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
 
     loss = hidden.new_zeros((), dtype=torch.float32)
-    if return_per_example_losses:
-        per_example_loss_sum = hidden.new_zeros(per_example_num_tokens.size(0), dtype=torch.float32)
 
     for start in range(0, n_padded, chunk_size):
         h_chunk = hidden[start : start + chunk_size]
         lbl_chunk = labels[start : start + chunk_size]
-        chunk_per_token_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
+        chunk_loss, chunk_correct, chunk_entropy = torch.utils.checkpoint.checkpoint(
             _chunk,
             h_chunk,
             lm_head_weight,
@@ -235,11 +218,7 @@ def _chunked_cross_entropy_loss(
             final_logit_softcapping,
             use_reentrant=False,
         )
-        loss = loss + chunk_per_token_loss.sum()
-        if return_per_example_losses:
-            per_example_loss_sum = per_example_loss_sum.scatter_add(
-                0, example_ids[start : start + chunk_size], chunk_per_token_loss
-            )
+        loss = loss + chunk_loss
         correct = correct + chunk_correct
         entropy_sum = entropy_sum + chunk_entropy
 
@@ -250,15 +229,10 @@ def _chunked_cross_entropy_loss(
         if isinstance(num_items_in_batch, torch.Tensor):
             num_items_in_batch = num_items_in_batch.to(loss.device)
         loss = loss / num_items_in_batch
-    result = (loss, correct, entropy_sum, n_valid_tensor)
-    if return_per_example_losses:
-        result += (per_example_loss_sum, per_example_num_tokens)
-    return result
+    return loss, correct, entropy_sum, n_valid_tensor
 
 
-def _patch_chunked_ce_lm_head(
-    model: torch.nn.Module, chunk_size: int, is_vlm: bool = False, return_per_example_losses: bool = False
-) -> None:
+def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: bool = False) -> None:
     """
     Patch `model.forward` to compute the LM loss via [`_chunked_cross_entropy_loss`].
 
@@ -283,8 +257,6 @@ def _patch_chunked_ce_lm_head(
             Set to `True` for VLMs. Only used for the transformers < 5.0.0 fallbacks: VLMs set `base_model_prefix = ""`
             there (so the backbone must be read off `model.model`), and they take the config-level MoE aux-loss
             parameters rather than the model-level ones.
-        return_per_example_losses (`bool`, *optional*, defaults to `False`):
-            Whether to additionally return each sequence's summed loss and valid-token count for TailSFT filtering.
     """
     # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`. The MoE
     # `output_router_logits` flag lives there too, and is read off the same config below.
@@ -354,7 +326,7 @@ def _patch_chunked_ce_lm_head(
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
-        loss_outputs = _chunked_cross_entropy_loss(
+        loss, num_correct_tokens, entropy_sum, num_valid_tokens = _chunked_cross_entropy_loss(
             hidden_states,
             lm_head_weight,
             chunk_size,
@@ -364,13 +336,7 @@ def _patch_chunked_ce_lm_head(
             logit_scale=logit_scale,
             final_logit_softcapping=final_logit_softcapping,
             lm_head_bias=lm_head_bias,
-            return_per_example_losses=return_per_example_losses,
         )
-        loss, num_correct_tokens, entropy_sum, num_valid_tokens = loss_outputs[:4]
-        if return_per_example_losses:
-            per_example_loss_sum, per_example_num_tokens = loss_outputs[4:]
-        else:
-            per_example_loss_sum = per_example_num_tokens = None
 
         aux_loss = None
         if output_router_logits:
@@ -411,8 +377,6 @@ def _patch_chunked_ce_lm_head(
             num_correct_tokens=num_correct_tokens,
             entropy_sum=entropy_sum,
             num_valid_tokens=num_valid_tokens,
-            per_example_loss_sum=per_example_loss_sum,
-            per_example_num_tokens=per_example_num_tokens,
             aux_loss=aux_loss,
         )
 
@@ -464,8 +428,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             and needs each token's global position.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        use_tail_sft (`bool`, *optional*, defaults to `False`):
-            Whether to include each example's `initial_loss` value in the batch for TailSFT.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -509,7 +471,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     padding_free: bool = False
     return_position_ids: bool = False
     pad_to_multiple_of: int | None = None
-    use_tail_sft: bool = False
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
@@ -548,8 +509,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
-        if self.use_tail_sft and "initial_loss" in examples[0]:
-            output["initial_loss"] = torch.tensor([example["initial_loss"] for example in examples])
         if self.padding_free:
             output["position_ids"] = pad(
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
@@ -1275,7 +1234,6 @@ class SFTTrainer(_BaseTrainer):
                 pad_token_id=self._tokenizer.pad_token_id,
                 padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
-                use_tail_sft=args.loss_type == "tail_sft",
             )
         elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(
@@ -1373,7 +1331,7 @@ class SFTTrainer(_BaseTrainer):
                         "passing a `compute_loss_func` is not allowed."
                     )
                 compute_loss_func = dft_loss
-            elif args.loss_type in {"chunked_nll", "tail_sft"}:
+            elif args.loss_type == "chunked_nll":
                 # Same math as `"nll"` but the `lm_head` matmul is skipped on ignored tokens and the CE is computed in
                 # chunks of tokens. Implemented by patching the model's forward before `super().__init__` so accelerate
                 # wraps the patched forward.
@@ -1389,39 +1347,19 @@ class SFTTrainer(_BaseTrainer):
 
                     if isinstance(target.get_output_embeddings(), BaseTunerLayer):
                         raise ValueError(
-                            f"`loss_type='{args.loss_type}'` is not supported when `lm_head` is wrapped by a PEFT adapter "
+                            "`loss_type='chunked_nll'` is not supported when `lm_head` is wrapped by a PEFT adapter "
                             "(e.g. `target_modules='all-linear'` or explicitly including `'lm_head'`). Either remove "
                             "`lm_head` from `target_modules`, or switch to `loss_type='nll'`. If this is a real use "
                             "case for you, please open an issue at https://github.com/huggingface/trl/issues."
                         )
-                _patch_chunked_ce_lm_head(
-                    target,
-                    chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE,
-                    is_vlm=self._is_vlm,
-                    return_per_example_losses=args.loss_type == "tail_sft",
-                )
+                _patch_chunked_ce_lm_head(target, chunk_size=_CHUNKED_LM_HEAD_CHUNK_SIZE, is_vlm=self._is_vlm)
             else:
                 raise ValueError(
-                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', 'tail_sft', "
-                    "and 'chunked_nll'."
+                    f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll', 'dft', and "
+                    "'chunked_nll'."
                 )
         elif args.loss_type == "chunked_nll":
             raise ValueError("`loss_type='chunked_nll'` is not compatible with `use_liger_kernel=True`.")
-
-        if args.loss_type == "tail_sft":
-            if args.packing or self.padding_free:
-                raise ValueError("`loss_type='tail_sft'` is not compatible with packing or padding-free training.")
-            if self._is_vision_dataset:
-                raise ValueError("`loss_type='tail_sft'` is not supported for vision datasets.")
-            if args.use_liger_kernel:
-                raise ValueError("`loss_type='tail_sft'` is not compatible with `use_liger_kernel=True`.")
-            if compute_loss_func is not None:
-                raise ValueError("`loss_type='tail_sft'` is not compatible with a custom `compute_loss_func`.")
-            if "initial_loss" not in get_dataset_column_names(train_dataset):
-                raise ValueError(
-                    "`loss_type='tail_sft'` requires an `initial_loss` column containing the initial policy's mean "
-                    "cross-entropy over the target tokens of each training example."
-                )
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -1445,23 +1383,6 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
-        if args.loss_type == "tail_sft":
-            # TailSFT computes its own token-normalized loss, so Trainer must apply gradient-accumulation scaling.
-            self.model_accepts_loss_kwargs = False
-            if not _is_package_version_below("accelerate", "1.10.1"):
-                parallelism_config = self.accelerator.parallelism_config
-                cp_enabled = parallelism_config is not None and parallelism_config.cp_enabled
-                sp_enabled = (
-                    Version(accelerate.__version__) >= Version("1.12.0")
-                    and parallelism_config is not None
-                    and parallelism_config.sp_enabled
-                )
-                tp_enabled = parallelism_config is not None and parallelism_config.tp_size > 1
-                if cp_enabled or sp_enabled or tp_enabled:
-                    raise ValueError(
-                        "`loss_type='tail_sft'` is not compatible with context, sequence, or tensor parallelism."
-                    )
 
         # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
         # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents
@@ -1786,7 +1707,7 @@ class SFTTrainer(_BaseTrainer):
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "initial_loss"]
+                self._signature_columns = ["input_ids", "labels", "seq_lengths"]
 
     def _reject_skip_prepare_without_labels(self, datasets: dict[str, Dataset], data_collator) -> None:
         # This guard may look defensive, but it covers a behavior change introduced when label building moved from
@@ -1867,8 +1788,6 @@ class SFTTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             inputs["output_router_logits"] = True
 
-        initial_loss = inputs.pop("initial_loss", None)
-
         # Request token accuracy from Liger kernel and set token scaling if using DFT loss
         if self.args.use_liger_kernel:
             # Avoid materializing full logits during eval unless explicitly needed.
@@ -1892,39 +1811,9 @@ class SFTTrainer(_BaseTrainer):
             inputs["use_token_scaling"] = self.args.loss_type == "dft"
 
         try:
-            if mode == "train" and self.args.loss_type == "tail_sft":
-                if initial_loss is None:
-                    raise ValueError("TailSFT requires the data collator to return `initial_loss` for every example.")
-                outputs = model(**inputs)
-                per_example_loss = outputs.per_example_loss_sum / outputs.per_example_num_tokens
-
-                margins = per_example_loss.detach() - initial_loss.to(per_example_loss.device)
-                gathered_margins = self.accelerator.gather(margins)
-                if self.args.tail_sft_filter_schedule == "ramp":
-                    progress = self.state.global_step / max(self.state.max_steps - 1, 1)
-                    filter_fraction = self.args.tail_sft_filter_fraction * progress
-                else:
-                    filter_fraction = self.args.tail_sft_filter_fraction
-                # The paper rounds the requested count to the nearest example. Keep one survivor for partial batches.
-                num_filtered = min(int(gathered_margins.numel() * filter_fraction + 0.5), gathered_margins.numel() - 1)
-                keep = torch.ones_like(gathered_margins, dtype=torch.bool)
-                keep[gathered_margins.argsort()[:num_filtered]] = False
-                batch_size = margins.size(0)
-                start = self.accelerator.process_index * batch_size
-                local_keep = keep[start : start + batch_size]
-
-                selected_num_tokens = outputs.per_example_num_tokens * local_keep
-                global_num_tokens = self.accelerator.gather(selected_num_tokens.sum()).sum()
-                loss = (outputs.per_example_loss_sum * local_keep).sum() / (
-                    global_num_tokens / self.accelerator.num_processes
-                )
-                if self.aux_loss_enabled:
-                    loss = loss + self.args.router_aux_loss_coef * outputs.aux_loss
-                self._metrics[mode]["tail_sft_filtered_fraction"].append(1 - keep.float().mean().item())
-            else:
-                (loss, outputs) = super().compute_loss(
-                    model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-                )
+            (loss, outputs) = super().compute_loss(
+                model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+            )
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(
@@ -1935,7 +1824,7 @@ class SFTTrainer(_BaseTrainer):
             raise
 
         # Compute entropy
-        if self.args.loss_type in {"chunked_nll", "tail_sft"}:
+        if self.args.loss_type == "chunked_nll":
             # Use `num_valid_tokens` from the patched forward rather than recomputing from `labels`. Prompt-learning
             # PEFT (PromptTuning, P-Tuning) prepends `-100`-padded virtual tokens before delegating into the patched
             # forward, so the valid-token count over the padded labels can differ from the un-padded `labels[..., 1:]`
@@ -1994,7 +1883,7 @@ class SFTTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        if self.args.loss_type in {"chunked_nll", "tail_sft"}:
+        if self.args.loss_type == "chunked_nll":
             correct = self.accelerator.gather_for_metrics(outputs.num_correct_tokens).sum()
             accuracy = (correct / num_valid).item() if num_valid > 0 else 0.0
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)

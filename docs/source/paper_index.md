@@ -1235,23 +1235,31 @@ Papers relating to the [`SFTTrainer`]
 **📜 Paper**: https://huggingface.co/papers/2608.25756
 
 TailSFT preserves response coverage for subsequent reinforcement learning by filtering the sequences whose
-length-normalized loss has improved the most relative to the initial policy. TRL implements the paper's distributed
-selection-batch filtering with `loss_type="tail_sft"`; the training dataset must contain an `initial_loss` column with
-the initial policy's mean cross-entropy over each sequence's target tokens. Its LM-head projection is computed in
-chunks, preserving the paper's per-sequence selection while avoiding full sequence-by-vocabulary logits.
+length-normalized loss has improved the most relative to the initial policy. The
+[`tail_sft_gsm8k`](https://github.com/huggingface/trl/tree/main/examples/tail_sft_gsm8k) example implements the paper's
+distributed selection-batch filtering by subclassing [`SFTTrainer`]. It records each sequence's initial-policy loss
+before training and filters examples independently in every selection batch.
 
 ```python
-from trl import SFTConfig, SFTTrainer
+from examples.tail_sft_gsm8k.tail_sft import TailSFTConfig, TailSFTTrainer
 
-training_args = SFTConfig(
-    loss_type="tail_sft",
-    tail_sft_filter_fraction=0.5,  # The paper's selected math and OCI runs ramp to a 0.5 filtering fraction.
-    tail_sft_filter_schedule="ramp",  # "...raises the fraction linearly from 0 at the first step to f at the last"
+training_args = TailSFTConfig(
+    learning_rate=3e-5,
+    num_train_epochs=2,
+    per_device_train_batch_size=2,  # Paper: a 16-example selection batch on 8 GPUs.
+    gradient_accumulation_steps=4,  # Paper: an effective batch size of 64.
+    max_length=4096,
+    weight_decay=0.1,
+    adam_beta2=0.95,
+    warmup_steps=0.03,
+    lr_scheduler_type="constant_with_warmup",
+    filter_fraction=0.5,  # The selected math and OCI runs ramp to a 0.5 filtering fraction.
+    filter_schedule="ramp",  # "...raises the fraction linearly from 0 at the first step to f at the last"
 )
-trainer = SFTTrainer(
+trainer = TailSFTTrainer(
     ...,
     args=training_args,
-    train_dataset=dataset_with_initial_loss,
+    train_dataset=dataset,
 )
 ```
 

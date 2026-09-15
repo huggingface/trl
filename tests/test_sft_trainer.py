@@ -265,17 +265,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_tail_sft_initial_loss(self):
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, use_tail_sft=True)
-        examples = [
-            {"input_ids": [1, 2, 3], "labels": [1, 2, 3], "initial_loss": 1.25},
-            {"input_ids": [4, 5], "labels": [4, 5], "initial_loss": 2.5},
-        ]
-
-        result = collator(examples)
-
-        torch.testing.assert_close(result["initial_loss"], torch.tensor([1.25, 2.5]))
-
     def test_single_example_single_doc(self):
         batch_seq_lengths = [[5]]
         result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
@@ -514,66 +503,6 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_tail_sft_loss(self):
-        dataset = Dataset.from_dict(
-            {
-                "input_ids": [[0, 1, 2], [0, 2, 3]],
-                "labels": [[0, 1, 2], [0, 2, 3]],
-                # The first example has the smallest current-minus-initial margin and is therefore filtered.
-                "initial_loss": [100.0, 0.0],
-            }
-        )
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            loss_type="tail_sft",
-            tail_sft_filter_fraction=0.5,
-            max_steps=1,
-            per_device_train_batch_size=2,
-            report_to="none",
-        )
-        reference_model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32
-        )
-        trainer = SFTTrainer(
-            model=copy.deepcopy(reference_model),
-            args=training_args,
-            train_dataset=dataset,
-        )
-        batch = trainer.data_collator([trainer.train_dataset[0], trainer.train_dataset[1]])
-        batch = {key: value.to(trainer.model.device) for key, value in batch.items()}
-        trainer.model.train()
-
-        with torch.no_grad():
-            torch.manual_seed(0)
-            logits = reference_model(
-                input_ids=batch["input_ids"], attention_mask=batch["attention_mask"], use_cache=False
-            ).logits[..., :-1, :]
-            per_token_loss = F.cross_entropy(
-                logits.transpose(1, 2), batch["labels"][..., 1:], ignore_index=-100, reduction="none"
-            )
-            expected_loss = per_token_loss[1].mean()
-            torch.manual_seed(0)
-            actual_loss, outputs = trainer.compute_loss(trainer.model, batch, return_outputs=True)
-
-        torch.testing.assert_close(actual_loss, expected_loss, atol=1e-2, rtol=1e-3)
-        assert outputs.logits is None
-        assert outputs.per_example_loss_sum.shape == (2,)
-        assert outputs.per_example_num_tokens.tolist() == [2, 2]
-        assert trainer._metrics["train"]["tail_sft_filtered_fraction"] == [0.5]
-
-        trainer.train()
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-    def test_tail_sft_requires_initial_loss(self):
-        dataset = Dataset.from_dict({"input_ids": [[0, 1, 2]], "labels": [[0, 1, 2]]})
-
-        with pytest.raises(ValueError, match="requires an `initial_loss` column"):
-            SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=SFTConfig(output_dir=self.tmp_dir, loss_type="tail_sft", report_to="none"),
-                train_dataset=dataset,
-            )
 
     @require_peft
     def test_train_nll_loss_peft(self):
@@ -2903,44 +2832,6 @@ class TestChunkedCrossEntropyLoss:
 
         torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
-
-    def test_per_example_losses_support_tail_sft_filtering(self):
-        """Per-example chunked losses select the same sequences and propagate the same masked gradients as full CE."""
-        hidden_c, weight_c, labels = self._inputs(ignore_positions=slice(0, 3), requires_grad=True)
-        hidden_r = hidden_c.detach().clone().requires_grad_(True)
-        weight_r = weight_c.detach().clone().requires_grad_(True)
-        initial_loss = torch.tensor([100.0, 0.0])
-
-        outputs = _chunked_cross_entropy_loss(
-            hidden_c, weight_c, self.CHUNK_SIZE, labels, return_per_example_losses=True
-        )
-        per_example_loss_sum, per_example_num_tokens = outputs[4:]
-        per_example_loss = per_example_loss_sum / per_example_num_tokens
-        keep = torch.ones(self.B, dtype=torch.bool)
-        keep[(per_example_loss.detach() - initial_loss).argsort()[:1]] = False
-        loss_c = (per_example_loss_sum * keep).sum() / (per_example_num_tokens * keep).sum()
-        loss_c.backward()
-
-        shift_h = hidden_r[..., :-1, :]
-        shift_l = labels[..., 1:]
-        per_token_loss = F.cross_entropy(
-            (shift_h @ weight_r.t()).transpose(1, 2), shift_l, ignore_index=-100, reduction="none"
-        )
-        valid = shift_l != -100
-        loss_sum_r = (per_token_loss * valid).sum(-1)
-        num_tokens_r = valid.sum(-1)
-        per_example_loss_r = loss_sum_r / num_tokens_r
-        keep_r = torch.ones(self.B, dtype=torch.bool)
-        keep_r[(per_example_loss_r.detach() - initial_loss).argsort()[:1]] = False
-        loss_r = (loss_sum_r * keep_r).sum() / (num_tokens_r * keep_r).sum()
-        loss_r.backward()
-
-        torch.testing.assert_close(per_example_loss, per_example_loss_r, atol=1e-5, rtol=1e-5)
-        assert torch.equal(keep, keep_r)
-        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
-        assert hidden_c.grad[~keep].abs().sum().item() == 0.0
 
     def test_all_ignored_returns_zero(self):
         """If every label is ignored, loss/correct/entropy_sum are all zero and backward still works.

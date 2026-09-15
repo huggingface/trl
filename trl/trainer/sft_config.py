@@ -109,19 +109,9 @@ class SFTConfig(_BaseConfig):
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
-            - `"tail_sft"`: TailSFT, which filters sequences whose loss has decreased the most relative to their
-              initial-policy loss, as described in [this paper](https://huggingface.co/papers/2608.25756). Requires an
-              `"initial_loss"` column in the training dataset. The LM-head projection is computed in chunks to reduce
-              peak activation memory.
             - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
               only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
               in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
-        tail_sft_filter_fraction (`float`, *optional*, defaults to `0.5`):
-            Fraction of each distributed selection batch to filter when `loss_type="tail_sft"`.
-        tail_sft_filter_schedule (`str`, *optional*, defaults to `"static"`):
-            Filtering schedule used by TailSFT. A `"static"` schedule uses `tail_sft_filter_fraction` throughout
-            training, while `"ramp"` increases it linearly from zero at the first step to the configured fraction at
-            the last step.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -298,20 +288,7 @@ class SFTConfig(_BaseConfig):
             "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
             "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
             "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
-            "`lm_head`, architectures with a non-standard head are not supported), and `'tail_sft'` (TailSFT, "
-            "https://huggingface.co/papers/2608.25756; requires an `initial_loss` dataset column)."
-        },
-    )
-    tail_sft_filter_fraction: float = field(
-        default=0.5,
-        metadata={"help": "Fraction of each distributed selection batch filtered by TailSFT."},
-    )
-    tail_sft_filter_schedule: str = field(
-        default="static",
-        metadata={
-            "help": "TailSFT filtering schedule. `static` uses the configured fraction throughout training; `ramp` "
-            "increases it linearly from zero.",
-            "choices": ["static", "ramp"],
+            "`lm_head`, architectures with a non-standard head are not supported)."
         },
     )
     activation_offloading: bool = field(
@@ -355,7 +332,3 @@ class SFTConfig(_BaseConfig):
         # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
         if self.loss_type is None:
             self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"
-        if not 0.0 <= self.tail_sft_filter_fraction < 1.0:
-            raise ValueError("`tail_sft_filter_fraction` must be in the range [0, 1).")
-        if self.tail_sft_filter_schedule not in {"static", "ramp"}:
-            raise ValueError("`tail_sft_filter_schedule` must be either 'static' or 'ramp'.")
