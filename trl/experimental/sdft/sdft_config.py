@@ -23,7 +23,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SDFTConfig(_BaseConfig):
     r"""
-    Configuration class for the [`SDFTTrainer`].
+    Configuration class for the [`experimental.sdft.SDFTTrainer`].
 
     Parameters:
         > Parameters that control the SDFT loss
@@ -63,7 +63,8 @@ class SDFTConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
-            of the `SDFTTrainer` is provided as a string.
+            of the `SDFTTrainer` is provided as a string. The `revision` value is also used when loading the processing
+            class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`],
@@ -184,7 +185,9 @@ class SDFTConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `SDFTTrainer` is provided as a string."
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
+            "argument of the `SDFTTrainer` is provided as a string. The `revision` value is also used when loading the "
+            "processing class."
         },
     )
     trust_remote_code: bool = field(

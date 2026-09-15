@@ -6,15 +6,15 @@
 
 In this guide, you'll learn how to:
 
-* Use [TRL Jobs](https://github.com/huggingface/trl-jobs) to easily run pre-optimized TRL training
-* Run any TRL training script with uv scripts
+- Use [TRL Jobs](https://github.com/huggingface/trl-jobs) to easily run pre-optimized TRL training
+- Run any TRL training script with uv scripts
 
 For general details about Hugging Face Jobs (hardware selection, job monitoring, etc.), see the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/guides/jobs).
 
 ## Requirements
 
-* A Hugging Face account with a positive [credit balance](https://huggingface.co/settings/billing). Jobs is pay-as-you-go—you only pay for the seconds you use.
-* Logged in to the Hugging Face Hub (`hf auth login`)
+- A Hugging Face account with a positive [credit balance](https://huggingface.co/settings/billing). Jobs is pay-as-you-go—you only pay for the seconds you use.
+- Logged in to the Hugging Face Hub (`hf auth login`)
 
 ## Using TRL Jobs
 
@@ -80,8 +80,8 @@ run_uv_job(
 
 To run successfully, the script needs:
 
-* **TRL installed**: Use the `--with trl` flag or the `dependencies` argument. uv installs these dependencies automatically before running the script.
-* **An authentication token**: Required to push the trained model (or perform other authenticated operations). Provide it with the `--secrets HF_TOKEN` flag or the `secrets` argument.
+- **TRL installed**: Use the `--with trl` flag or the `dependencies` argument. uv installs these dependencies automatically before running the script.
+- **An authentication token**: Required to push the trained model (or perform other authenticated operations). Provide it with the `--secrets HF_TOKEN` flag or the `secrets` argument.
 
 > [!WARNING]
 > When training with Jobs, be sure to:

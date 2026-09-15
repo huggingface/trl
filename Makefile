@@ -1,8 +1,4 @@
-.PHONY: test precommit common_tests slow_tests tests_gpu test_experimental claude clean-ai
-
-check_dirs := examples tests trl
-
-ACCELERATE_CONFIG_PATH = `pwd`/examples/accelerate_configs
+.PHONY: test precommit slow_tests test_experimental claude clean-ai
 
 # Transient infrastructure errors that are worth retrying, matched against "<ExceptionType>: <message>":
 #  - OSError, Timeout, HTTPError 502/504: Hub flakiness
