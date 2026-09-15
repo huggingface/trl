@@ -42,8 +42,10 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _balance_by_squared_length,
+    _iter_from_send_queue,
     _iter_vllm_named_params,
     _reduce_metric,
+    _send_full_tensors_lockstep,
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
@@ -1861,3 +1863,45 @@ def _any_adapter_merged(model) -> bool:
     from peft.tuners.tuners_utils import BaseTunerLayer
 
     return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+
+
+class TestLockstepWeightSend:
+    def test_iter_from_send_queue_stops_at_sentinel(self):
+        q = queue.Queue()
+        q.put(("a", torch.zeros(1)))
+        q.put(None)
+        assert [name for name, _ in _iter_from_send_queue(q)] == ["a"]
+
+    def test_lockstep_send_forwards_every_item(self):
+        sent = []
+
+        class _WT:
+            def send_weights(self, iterator):
+                sent.extend(name for name, _ in iterator)
+
+        class _Acc:
+            is_main_process = True
+
+            def wait_for_everyone(self):
+                return None
+
+        items = [("embed", torch.ones(2)), ("lm_head", torch.ones(3))]
+        _send_full_tensors_lockstep(_Acc(), _WT(), iter(items))
+        assert sent == ["embed", "lm_head"]
+
+    def test_lockstep_send_propagates_send_failure(self):
+        class _WT:
+            def send_weights(self, iterator):
+                next(iterator)
+                raise RuntimeError("transfer blew up")
+
+        class _Acc:
+            is_main_process = True
+
+            def wait_for_everyone(self):
+                return None
+
+        items = [("a", torch.zeros(1)), ("b", torch.zeros(1))]
+        with pytest.raises(RuntimeError, match="transfer blew up"):
+            _send_full_tensors_lockstep(_Acc(), _WT(), iter(items))
+
