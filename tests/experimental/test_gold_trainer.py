@@ -39,7 +39,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase, require_jmespath, require_liger_kernel
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_response_parsing
 
 
 @pytest.fixture(scope="module")
@@ -284,6 +284,14 @@ def qwen_tokenizer():
 @pytest.fixture(scope="session")
 def smollm_tokenizer():
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
+
+
+@pytest.fixture(scope="session")
+def gemma4_tokenizer():
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -971,6 +979,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
         max_length=max_length,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer._tool_chat_template = None
@@ -1026,6 +1035,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
         max_length=max_length,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer._tool_chat_template = None
@@ -1062,6 +1072,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         max_length=512,
         packing_strategy="bfd",
         use_liger_kernel=False,
+        use_extended_uld=True,
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer._tool_chat_template = None
@@ -1088,6 +1099,163 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         completion_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
     )
     assert decoded_completion == row["original_completion_text"]
+
+
+def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
+    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=True,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer._tool_chat_template = None
+
+    row = trainer._prepare_dataset_with_original_text(
+        dataset,
+        qwen_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    completion_offsets = [
+        offset for offset, mask in zip(row["byte_offsets"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert row["original_completion_text"] == "Answer."
+    assert qwen_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
+    assert completion_ids.count(qwen_tokenizer.eos_token_id) == 1
+    assert completion_offsets[0] == [0, len(b"Answer")]
+    assert completion_offsets[-1] == [len(b"Answer."), len(b"Answer.")]
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        qwen_tokenizer,
+        [row["original_prompt_text"]],
+        [row["original_completion_text"]],
+        use_extended_uld=True,
+    )
+    teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
+    assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
+
+
+def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
+    dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer._tool_chat_template = None
+
+    prepared = trainer._prepare_dataset_with_original_text(
+        dataset,
+        gemma4_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )
+    row = prepared[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert row["original_completion_text"] == "Answer."
+    assert completion_ids[-1] == gemma4_tokenizer.eos_token_id
+    assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
+    assert row["byte_offsets"] == [[0, 0]] * len(row["input_ids"])
+
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
+        qwen_tokenizer,
+        [row["original_prompt_text"]],
+        [row["original_completion_text"]],
+        use_extended_uld=False,
+    )
+    teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
+    assert qwen_tokenizer.decode(teacher_completion_ids) == "Answer." + qwen_tokenizer.eos_token
+
+
+def test_build_teacher_inputs_positional_uld_supports_sentencepiece(gemma4_tokenizer):
+    input_ids, labels, _, byte_offsets = build_teacher_inputs_from_texts(
+        gemma4_tokenizer,
+        ["Question: "],
+        ["Answer."],
+        use_extended_uld=False,
+    )
+
+    completion_ids = input_ids[0][labels[0] != -100].tolist()
+    assert completion_ids.count(gemma4_tokenizer.eos_token_id) == 1
+    assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
+    assert byte_offsets.tolist() == [[[0, 0]] * input_ids.shape[1]]
+
+
+class _NoBackendTokenizer:
+    """Wraps a tokenizer but hides `backend_tokenizer`, standing in for a slow tokenizer with no fast backend."""
+
+    def __init__(self, tokenizer):
+        self._tokenizer = tokenizer
+
+    def __getattr__(self, name):
+        if name == "backend_tokenizer":
+            raise AttributeError(name)
+        return getattr(self._tokenizer, name)
+
+    def __call__(self, *args, **kwargs):
+        return self._tokenizer(*args, **kwargs)
+
+
+def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
+    slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
+
+    input_ids, labels, _, _ = build_teacher_inputs_from_texts(
+        slow_tokenizer,
+        ["Question: "],
+        ["Answer."],
+        use_extended_uld=False,
+    )
+
+    completion_ids = input_ids[0][labels[0] != -100].tolist()
+    assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
+
+
+def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
+    slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
+    dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
+    args = SimpleNamespace(
+        dataset_num_proc=None,
+        dataset_text_field="text",
+        max_length=64,
+        packing_strategy="bfd",
+        use_liger_kernel=False,
+        use_extended_uld=False,
+    )
+    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer._tool_chat_template = None
+
+    row = trainer._prepare_dataset_with_original_text(
+        dataset,
+        slow_tokenizer,
+        args,
+        packing=False,
+        formatting_func=None,
+        dataset_name="train",
+    )[0]
+
+    completion_ids = [
+        token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
+    ]
+    assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
 
 
 def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
@@ -1811,6 +1979,7 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(qwen3
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer._teacher_processor = qwen3_vl_processor
     trainer.teacher_tokenizer = qwen3_vl_processor.tokenizer
+    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
 
     images, prompts = trainer._extract_images_and_prompts(vlm_examples)
@@ -3590,6 +3759,42 @@ def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 
+_TINY_QWEN2 = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+_TINY_QWEN2_REVISION = "8913f5819566"
+
+
+def _uld_revision_trainer(tmp_path, teacher_tokenizer_name_or_path):
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        use_vllm=False,
+        use_uld_loss=True,
+        teacher_model_revision=_TINY_QWEN2_REVISION,
+        teacher_tokenizer_name_or_path=teacher_tokenizer_name_or_path,
+    )
+    return GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=args,
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]"),
+    )
+
+
+def test_uld_teacher_tokenizer_keeps_the_teacher_revision_within_one_repo(tmp_path):
+    trainer = _uld_revision_trainer(tmp_path, _TINY_QWEN2)
+
+    assert len(trainer.teacher_tokenizer.chat_template) == 2558
+
+
+def test_uld_teacher_tokenizer_drops_the_teacher_revision_across_repos(tmp_path):
+    """A teacher commit exists only in the teacher's own repo, so pointing ULD's cross-tokenizer setup at another
+    repo must not carry it over: `revision` would 404 there.
+    """
+    trainer = _uld_revision_trainer(tmp_path, _TINY_LLAMA)
+
+    assert trainer.teacher_tokenizer.name_or_path == _TINY_LLAMA
+
+
 class TestGOLDTrainerLoss(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -3882,7 +4087,7 @@ def test_smollm3_collator_masks_tool_results_supervises_assistant(smollm_tokeniz
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_tools_lmbda_below_one_requires_tool_data(tmp_path):
     # Off-policy slices (lmbda < 1) consume dataset completions, so a dataset without tool-calling data must be
     # rejected up front.
@@ -3908,7 +4113,7 @@ def test_gold_tools_lmbda_below_one_requires_tool_data(tmp_path):
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_tools_lmbda_below_one_accepts_tool_data(tmp_path):
     # A dataset that carries a full tool-calling conversation (tools column + tool_calls/tool messages) is accepted
     # for off-policy (lmbda < 1) tool training.
@@ -3947,7 +4152,7 @@ def test_gold_tools_lmbda_below_one_accepts_tool_data(tmp_path):
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_tools_lmbda_below_one_rejects_pretokenized_without_tool_mask(tmp_path):
     # A pretokenized dataset (input_ids present) skips GOLD's own tokenization, which is what emits `tool_mask`;
     # without that column the collator would silently supervise tool-result tokens, so it must be rejected up front.
@@ -3986,7 +4191,7 @@ def test_gold_tools_lmbda_below_one_rejects_pretokenized_without_tool_mask(tmp_p
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_tools_reject_seq_kd(tmp_path):
     with pytest.raises(ValueError, match="seq_kd"):
         GOLDTrainer(
@@ -4003,7 +4208,7 @@ def test_gold_tools_reject_seq_kd(tmp_path):
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_tools_reject_uld_loss(tmp_path):
     # Tools are only supported for same-family (shared tokenizer) distillation; cross-tokenizer ULD is rejected.
     with pytest.raises(ValueError, match="same-family"):
@@ -4021,7 +4226,7 @@ def test_gold_tools_reject_uld_loss(tmp_path):
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_on_policy_tool_loop_smoke(tmp_path):
     # Pure on-policy (lmbda=1.0) tool training: the student generates 3 completions, 2 of which are valid tool calls
     # (one succeeds, one fails on a wrong argument name) and 1 is a plain answer. The tool loop executes the calls,
@@ -4111,7 +4316,7 @@ def test_gold_on_policy_tool_loop_smoke(tmp_path):
     reason="Environment factory support is not available in transformers versions below 5.2.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_on_policy_environment_factory(tmp_path):
     # On-policy tool training driven by an environment factory: the environment exposes an `increment` method as a
     # tool. One rollout increments (succeeds), one calls a non-existent tool (fails), one makes no call. We assert the
@@ -4200,7 +4405,7 @@ def test_gold_on_policy_environment_factory(tmp_path):
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_offpolicy_tool_masking_with_non_prefix_preserving_template(tmp_path):
     # Off-policy tool masking through the real prep + collator with the recognized Qwen3 template, which is NOT
     # prefix-preserving (it drops the empty <think></think> block from historical assistant turns). Two regressions:
@@ -4263,7 +4468,7 @@ def test_gold_offpolicy_tool_masking_with_non_prefix_preserving_template(tmp_pat
     reason="Tool parsing is not supported in transformers versions below 5.0.0",
     strict=True,
 )
-@require_jmespath
+@require_response_parsing
 def test_gold_tools_reject_multimodal_tool_response(tmp_path):
     # Tools that return images (multimodal content blocks) are out of scope for GOLD; the text on-policy path must
     # raise like the VLM path instead of silently dropping the images.
@@ -4340,6 +4545,7 @@ def test_prepare_dataset_liger_with_tools_keeps_all_columns():
         max_length=1024,
         packing_strategy="bfd",
         use_liger_kernel=True,
+        use_extended_uld=True,
     )
 
     trainer = GOLDTrainer.__new__(GOLDTrainer)

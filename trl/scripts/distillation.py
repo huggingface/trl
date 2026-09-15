@@ -23,7 +23,7 @@
 
 """
 # Full training
-```
+```bash
 python trl/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \
@@ -34,7 +34,7 @@ python trl/scripts/distillation.py \
 ```
 
 # LoRA
-```
+```bash
 python trl/scripts/distillation.py \
     --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen2.5-1.5B-Instruct \

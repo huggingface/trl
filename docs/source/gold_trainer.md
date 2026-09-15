@@ -20,8 +20,8 @@ Key capabilities:
 
 ## Usage tips
 
-The [`GOLDTrainer`] subclasses [`SFTTrainer`] and accepts the same datasets as other TRL trainers (lists of ChatML style
-messages). Important configuration flags on [`GOLDConfig`] include:
+The [`experimental.gold.GOLDTrainer`] subclasses [`SFTTrainer`] and accepts the same datasets as other TRL trainers (lists of ChatML style
+messages). Important configuration flags on [`experimental.gold.GOLDConfig`] include:
 
 * `use_uld_loss` – toggles Universal Logit Distillation. Set this to `True` for cross-tokenizer setups.
 * `teacher_tokenizer_name_or_path` – required when `use_uld_loss=True`; GOLD uses the teacher tokenizer to align tokens.
@@ -178,7 +178,7 @@ python examples/gold_chatbot_arena/gold_chatbot_arena.py \
 
 ## Training Vision Language Models
 
-[`GOLDTrainer`] supports VLM-to-VLM distillation. Both student and teacher must be vision-language models. To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
+[`experimental.gold.GOLDTrainer`] supports VLM-to-VLM distillation. Both student and teacher must be vision-language models. To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision datasets](dataset_formats#vision-datasets) section.
 
 When the student and teacher share the same architecture and tokenizer (e.g. Qwen3-VL-8B to Qwen3-VL-2B), the standard generalized JSD loss applies directly. When they have different `model_type` (e.g. Qwen3-VL to LFM2.5-VL), set `use_uld_loss=True` to enable cross-tokenizer alignment via Universal Logit Distillation. Images are processed separately through each model's processor.
 
@@ -231,7 +231,7 @@ accelerate launch examples/gold_qwen3_vl/gold_qwen3_vl.py \
 ```
 
 > [!TIP]
-> For VLMs, `truncation_mode='keep_end'` is not supported because image tokens reside in the prompt portion of the sequence and may be silently dropped. Use `truncation_mode='keep_start'` (the default) or set `max_length=None` in the [`GOLDConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+> For VLMs, `truncation_mode='keep_end'` is not supported because image tokens reside in the prompt portion of the sequence and may be silently dropped. Use `truncation_mode='keep_start'` (the default) or set `max_length=None` in the [`experimental.gold.GOLDConfig`]. This allows the model to process the full sequence length without truncating image tokens.
 >
 > ```python
 > GOLDConfig(max_length=None, ...)
