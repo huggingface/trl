@@ -20,7 +20,7 @@ Each method pairs a `*Trainer` class with a `*Config` dataclass. Configs extend 
 | `KTOTrainer` | unpaired preference (per-sample bool label) |
 | `RewardTrainer` | preference (chosen/rejected pairs); trains a scalar reward model, not a policy |
 
-Many more trainers (PPO, OnlineDPO, ORPO, CPO, GKD, …) live in `trl.experimental` with unstable APIs: https://huggingface.co/docs/trl/experimental_overview
+Many more trainers (OnlineDPO, ORPO, CPO, GKD, …) live in `trl.experimental` with unstable APIs: https://huggingface.co/docs/trl/experimental_overview
 
 ```python
 from datasets import load_dataset
