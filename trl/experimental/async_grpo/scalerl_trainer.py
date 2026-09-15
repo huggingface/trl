@@ -36,8 +36,10 @@ class ScaleRLRolloutLoop(_AsyncRolloutLoop):
     running the tool-calling loop.
 
     Args:
-        think_budget (`tuple[int, int]`, *optional*, defaults to `(10240, 12288)`):
-            Range the thinking budget is sampled from, per rollout.
+        think_budget (`tuple[int, int]`, *optional*):
+            Range the thinking budget is sampled from, per rollout. Leave unset to disable interruptions, which is
+            required when the model emits no `</think>`, or when the server's `max_model_len` cannot hold `think_budget
+            + answer_budget` on top of the prompt.
         answer_budget (`int`, *optional*, defaults to `2048`):
             Tokens granted for the final answer after an interruption.
         pass_rate_cap (`float`, *optional*, defaults to `0.9`):
@@ -49,7 +51,7 @@ class ScaleRLRolloutLoop(_AsyncRolloutLoop):
     def __init__(
         self,
         *args,
-        think_budget=(10240, 12288),
+        think_budget=None,
         answer_budget=2048,
         pass_rate_cap=0.9,
         advantage_std_decay=0.001,
@@ -88,6 +90,9 @@ class ScaleRLRolloutLoop(_AsyncRolloutLoop):
         """
         Generate one response under a sampled thinking budget, interrupting it if it has not stopped thinking.
 
+        With `think_budget` unset this defers to the parent, which is what a run needs when the model has no thinking
+        block to close, or when `think_budget + answer_budget` would not fit the server's context.
+
         A generation that has not emitted `</think>` within its budget is continued from `prompt + thinking +
         [`INTERRUPTION`]`, so the model concludes instead of being cut off mid-trace. The injected phrase carries
         `completion_mask = 0`: it was not sampled from the policy, and its placeholder log-probability of `0.0` would
@@ -97,6 +102,9 @@ class ScaleRLRolloutLoop(_AsyncRolloutLoop):
             `tuple` of `(completion messages, completion token ids, training rows, tool calls, tool failures, rollout
             reward)`.
         """
+        if self._think_budget is None:
+            return await super()._generate_one(prompt, tool_dict, tools, group_id)
+
         t_dispatch = time.monotonic()
         prompt_ids = self.tokenizer.apply_chat_template(
             prompt,
@@ -219,7 +227,7 @@ class ScaleRLTrainer(AsyncGRPOTrainer):
         num_generations=args.num_generations,
         max_inflight_tasks=256,
         max_tokens=args.max_completion_length,
-        think_budget=(10240, 12288),
+        think_budget=(10240, 12288),  # omit to disable interruptions
         answer_budget=2048,
         pass_rate_cap=0.9,
         advantage_std_decay=0.001,
