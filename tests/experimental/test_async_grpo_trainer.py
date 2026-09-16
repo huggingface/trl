@@ -62,6 +62,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.trainer.base_trainer import _BaseTrainer
+from trl.trainer.utils import get_callable_name
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
 
@@ -1224,12 +1225,19 @@ def two_reward(completions, **kwargs):
     return [1.0, 3.0]
 
 
+class AsyncTwoReward:
+    # Same reward as `two_reward`, as an async callable class: the picklable form the docs recommend, and the one
+    # `inspect.iscoroutinefunction` does not see as asynchronous on its own.
+    async def __call__(self, completions, **kwargs):
+        return [1.0, 3.0]
+
+
 def _bare_loop(reward_funcs):
     # _score_group only reads reward_funcs / reward_func_names / _env_reward_types off self, so we skip the heavy
     # __init__ (tokenizer, asyncio loop, environments) and set just those.
     loop = object.__new__(_AsyncRolloutLoop)
     loop.reward_funcs = reward_funcs
-    loop.reward_func_names = [f.__name__ for f in reward_funcs]
+    loop.reward_func_names = [get_callable_name(f) for f in reward_funcs]
     loop._env_reward_types = []  # no environment owns a reward in these tests
     return loop
 
@@ -1284,6 +1292,19 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[2].input_ids == seq_b2.input_ids
 
         assert all(s.model_version == 7 for s in samples)
+
+    def test_async_callable_class_reward_func_is_awaited(self):
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+        group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+
+        samples = asyncio.run(_bare_loop([AsyncTwoReward()])._score_group(group))
+
+        # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
+        assert samples[0].metrics["rewards/AsyncTwoReward"] == 1.0
+        assert samples[1].metrics["rewards/AsyncTwoReward"] == 3.0
+        assert samples[0].advantage == pytest.approx(-1.0)
+        assert samples[1].advantage == pytest.approx(1.0)
 
     def test_metrics_are_per_conversation_and_independent(self):
         seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
