@@ -380,11 +380,11 @@ class DistillationTrainer(_BaseTrainer):
             Mapping from routing ID to a teacher checkpoint path / Hub ID, or to an already instantiated teacher.
             Passing it opts into multi-teacher on-policy distillation: every dataset row's `teacher_id` column
             selects the teacher that supplies its target (the column is optional when a single teacher is
-            registered), and per-teacher `teacher_jsd/<id>` and `teacher_token_frac/<id>` metrics are logged. The
-            teachers are held on CPU and uploaded to the device one at a time, so device memory is bounded by the
-            largest teacher rather than their sum. Several IDs may point at the same checkpoint with different
-            `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must share the student's
-            vocabulary. Mutually exclusive with `teacher_model`.
+            registered), and per-teacher `teacher_jsd/<id>`, `teacher_token_frac/<id>` and `teacher_score_s/<id>`
+            metrics are logged. The teachers are held on CPU and uploaded to the device one at a time, so device
+            memory is bounded by the largest teacher rather than their sum. Several IDs may point at the same
+            checkpoint with different `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must
+            share the student's vocabulary. Mutually exclusive with `teacher_model`.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -1081,6 +1081,7 @@ class DistillationTrainer(_BaseTrainer):
             ]
             if not any(rows.numel() for rows in rows_per_microbatch):
                 continue
+            start = time.perf_counter()
             teacher.to(device)
             for index, (inputs, rows) in enumerate(zip(microbatches, rows_per_microbatch, strict=True)):
                 if rows.numel() == 0:
@@ -1096,6 +1097,11 @@ class DistillationTrainer(_BaseTrainer):
                     )
                 targets[index][teacher_index] = hidden_states.to("cpu")
             teacher.to("cpu")
+            # The device round trip plus the scoring forwards, as a `(seconds, 1)` pair so the window reduction in
+            # `log` reports the mean seconds this teacher costs per generation batch rather than their sum.
+            self._metrics[mode][f"teacher_score_s/{self._teacher_ids[teacher_index]}"].append(
+                (time.perf_counter() - start, 1)
+            )
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -2088,9 +2094,11 @@ class DistillationTrainer(_BaseTrainer):
         if self.teacher_models is not None:
             loss, entropy_sum, num_valid_tokens, teacher_stats = outputs
             # `[2, num_teachers]` on every rank, with zero columns for the teachers this microbatch did not route to,
-            # so the shape is rank-independent and a plain sum-reduce is correct. `gather_for_metrics` must not be
-            # used: it trims the first dimension to the dataloader remainder, and here that is the statistic row, not
-            # an example count. Reduced after `_forward_redirection` returns, like the entropy gather below.
+            # so the shape is rank-independent and a plain sum-reduce is correct. Every rank takes this branch:
+            # `teacher_models` is configuration, identical on all ranks, so the collective count is rank-uniform too.
+            # `gather_for_metrics` must not be used: it trims the first dimension to the dataloader remainder, and
+            # here that is the statistic row, not an example count. Reduced after `_forward_redirection` returns,
+            # like the entropy gather below.
             divergence_sums, counts = self.accelerator.reduce(teacher_stats, reduction="sum")
             total_count = counts.sum()
             for teacher_index, teacher_id in enumerate(self._teacher_ids):

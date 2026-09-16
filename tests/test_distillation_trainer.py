@@ -1939,6 +1939,33 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 teacher_models={},
             )
 
+    def test_per_teacher_scoring_time_is_logged(self, teachers):
+        # Scoring cost is per teacher and is the reason device memory stays bounded, so it is measurable per routing
+        # ID: the seconds each teacher's device round trip and forwards took, averaged over the generation batches
+        # it appeared in.
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_completion_length=4,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            args=training_args,
+            train_dataset=self._routed_dataset(["a", "b"] * 4),
+            teacher_models=teachers,
+        )
+        trainer.train()
+
+        step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
+        assert step_logs, "no training step was logged"
+        for entry in step_logs:
+            for teacher_id in ("a", "b"):
+                assert f"teacher_score_s/{teacher_id}" in entry, sorted(entry)
+                assert entry[f"teacher_score_s/{teacher_id}"] > 0.0
+
     def test_teacher_model_and_teacher_models_are_exclusive(self, teachers):
         # The singular and the mapping entry points have different teacher lifecycles; a run may only use one.
         with pytest.raises(ValueError, match="Pass only one"):

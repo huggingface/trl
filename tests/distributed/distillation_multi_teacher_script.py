@@ -150,7 +150,11 @@ def _run_training(args):
         trainer.train()
 
         step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
-        teacher_metric_keys = sorted({key for entry in step_logs for key in entry if key.startswith("teacher_")})
+        # Only the cross-rank reduced families: `teacher_score_s/<id>` measures this rank's own scoring wall clock,
+        # so a rank that routes to no teacher "b" never logs a key for it and the set would be rank-dependent.
+        teacher_metric_keys = sorted(
+            {key for entry in step_logs for key in entry if key.startswith(("teacher_jsd/", "teacher_token_frac/"))}
+        )
         summary = {
             "mode": args.mode,
             "world_size": world_size,

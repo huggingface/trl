@@ -332,6 +332,7 @@ Multi-teacher runs additionally log, per registered teacher:
 
 - `teacher_jsd/<id>`: the token-weighted mean divergence (at the configured `beta`) over the tokens that teacher scored in the accumulated window — the window's total divergence divided by its total scored tokens, so microbatches of unequal size do not count equally.
 - `teacher_token_frac/<id>`: that teacher's share of the accumulated window's valid (trained) tokens.
+- `teacher_score_s/<id>`: the mean wall-clock seconds that teacher cost per generation batch it appeared in — its device upload, its scoring forwards and its eviction back to CPU.
 
 A teacher absent from a window still logs `teacher_token_frac/<id> = 0.0`, but its `teacher_jsd/<id>` is left out entirely rather than reported as a misleading zero.
 
