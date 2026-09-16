@@ -42,6 +42,7 @@ from trl.trainer.utils import (
     get_callable_name,
     get_peft_config,
     hash_module,
+    is_async_callable,
     nanstd,
     pad,
     patch_chunked_lm_head,
@@ -311,6 +312,47 @@ class TestGetCallableName(TrlTestCase):
 
     def test_lambda(self):
         assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
+
+
+class TestIsAsyncCallable(TrlTestCase):
+    def test_function(self):
+        def reward(completions):
+            return [0.0] * len(completions)
+
+        assert not is_async_callable(reward)
+
+    def test_async_function(self):
+        async def reward(completions):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(reward)
+
+    def test_partial(self):
+        async def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(reward, threshold=0.5))
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert not is_async_callable(LengthReward())
+
+    def test_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(LengthReward())
+
+    def test_partial_of_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions, threshold):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(LengthReward(), threshold=0.5))
 
 
 class TestNanStd(TrlTestCase):
