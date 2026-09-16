@@ -33,6 +33,8 @@ from openenv.core.harness import (
     ResourceSessionFactory,
     TraceEntry,
 )
+from openenv.core.harness.capture.upstream import training_sampling
+from openenv.core.harness.capture.validate import validate_training_turn
 from openenv.core.llm_client import LLMResponse, ToolCall
 
 from ...chat_template_utils import parse_response
@@ -121,13 +123,35 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
         train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
         agent_turn_fn: Callable[[list[TraceEntry]], list[TraceEntry]] | None = None,
+        lossless_capture: bool = True,
         **loop_kwargs,
     ):
+        # A re-rendered prompt is still an exact per-call training example. REALIGN can
+        # erase previously sampled, eligible tokens; fork instead when consuming capture.
+        if harness_adapter is None and lossless_capture:
+            loop_kwargs["fork_threshold_tokens"] = 0
         super().__init__(**loop_kwargs)
         self._factory = harness_session_factory
         # An adapter (e.g. MCPHarnessAdapter) selects white-box (TRL samples each turn); `None` selects loop-owning
         # (the agent runs its own loop and we read its proxy trace).
         self._adapter = harness_adapter
+        self._sampling_policy = None
+        if harness_adapter is None:
+            self._sampling_policy = training_sampling(
+                {
+                    "temperature": self.temperature,
+                    **{
+                        key: value
+                        for key, value in {
+                            "top_p": self.top_p,
+                            "top_k": self.top_k,
+                            "min_p": self.min_p,
+                            "repetition_penalty": self.repetition_penalty,
+                        }.items()
+                        if value is not None
+                    },
+                }
+            )
         self._limits = HarnessRunLimits(
             max_turns=self.max_tool_calling_iterations if self.max_tool_calling_iterations is not None else 8,
             sampling={"temperature": self.temperature, "max_tokens": self.max_tokens},
@@ -225,7 +249,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 # No tokenizer: prompts come from the capture as the engine tokenized them.
                 # require_engine_ids=True makes a trace without them a hard error rather than a
                 # silent re-render, which is decision 4 of the contract.
-                turns = _turns_from_trace(entries, self._train_turn_fn)
+                turns = _turns_from_trace(entries, self._train_turn_fn, sampling=self._sampling_policy)
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
                 tool_call_count = sum(tool_calls_by_name.values())
@@ -337,7 +361,10 @@ def _entry_to_turn(entry: TraceEntry) -> HarnessTurn:
 
 
 def _turns_from_trace(
-    entries: list[TraceEntry], train_turn_fn: Callable[[HarnessTurn], bool] | None = None
+    entries: list[TraceEntry],
+    train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
+    *,
+    sampling: dict[str, float | int] | None = None,
 ) -> list[TurnRecord]:
     """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns, using the ENGINE's own tokenization.
 
@@ -359,6 +386,13 @@ def _turns_from_trace(
         entries = [entry for entry in entries if train_turn_fn(_entry_to_turn(entry))]
     turns = []
     for entry in entries:
+        if sampling is not None:
+            captured = (entry.get("metadata") or {}).get("sampling_params") or {}
+            if any(captured.get(key) != value for key, value in sampling.items()):
+                raise ValueError(
+                    "capture sampling does not match the trainer policy; pass the trainer's temperature "
+                    "as sampling to HarborSessionFactory and use full-vocabulary sampling"
+                )
         prompt_ids = entry.get("prompt_token_ids")
         if not prompt_ids:
             raise ValueError(
@@ -370,7 +404,10 @@ def _turns_from_trace(
         # The producer masks over prompt+completion; keep the completion span. A turn masked out upstream (its logprobs
         # were rejected on ingest) arrives with zeros here, and that cannot be re-derived downstream.
         mask = entry.get("loss_mask")
-        output_mask = list(mask[len(prompt_ids) :]) if mask else None
+        if mask is None:
+            mask = [0] * len(prompt_ids) + [1] * len(output_ids)
+        validate_training_turn(prompt_ids, output_ids, entry.get("per_token_logps") or [], mask)
+        output_mask = list(mask[len(prompt_ids) :])
         turns.append(TurnRecord(list(prompt_ids), output_ids, entry.get("per_token_logps") or [], output_mask))
     return turns
 

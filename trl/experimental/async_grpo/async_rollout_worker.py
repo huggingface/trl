@@ -15,6 +15,7 @@
 import asyncio
 import enum
 import inspect
+import math
 import multiprocessing as mp
 import os
 import pickle
@@ -144,14 +145,24 @@ class _SampleBuilder:
 
     def _append(self, ids: list[int], *, mask: int | list[int], logprobs: list[float] | None = None) -> None:
         """`mask` is either one value for every id, or one value PER id when the producer marked them individually."""
+        masks = [mask] * len(ids) if isinstance(mask, int) else mask
+        if len(masks) != len(ids) or any(type(value) is not int or value not in (0, 1) for value in masks):
+            raise ValueError("loss mask must contain one binary integer per token")
+        if any(type(token) is not int or token < 0 for token in ids):
+            raise ValueError("token ids must be nonnegative integers")
+        if any(masks) and (logprobs is None or len(logprobs) != len(ids)):
+            raise ValueError("trainable tokens require one sampled logprob per token")
+        if logprobs is not None and (
+            len(logprobs) != len(ids)
+            or any(
+                isinstance(lp, bool) or not isinstance(lp, (int, float)) or not math.isfinite(lp) or lp > 0
+                for lp in logprobs
+            )
+        ):
+            raise ValueError("logprobs must be finite, nonpositive, and aligned with tokens")
         self.tokens.extend(ids)
-        if isinstance(mask, int):
-            self.loss_mask.extend([mask] * len(ids))
-        else:
-            if len(mask) != len(ids):
-                raise ValueError(f"loss mask has {len(mask)} entries for {len(ids)} tokens")
-            self.loss_mask.extend(mask)
-        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
+        self.loss_mask.extend(masks)
+        self.logprobs.extend(logprobs if logprobs is not None else [0.0] * len(ids))
 
     def has_trained_token(self) -> bool:
         return any(self.loss_mask)

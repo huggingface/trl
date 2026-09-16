@@ -32,25 +32,21 @@ one through a *real* coding agent — `mini-swe-agent` — running in an E2B san
       -> AsyncGRPO trains on them and syncs new weights back into that same vLLM
 
 The agent owns its own loop. TRL never calls `step()`; it stands up an endpoint, lets the agent drive, and
-reads back what happened. That is what makes any installed harness trainable without reimplementing it.
+reads back what happened. Qualified installed harnesses can provide training data without a new agent loop.
 
-Everything Harbor-specific lives in `harbor_env.harness` (OpenEnv). Nothing is added to TRL, so the file
-below is the whole integration, and every training-facing object is module-level (picklable) so the
-rollout worker can pickle the factory and reward into its spawned child.
+Harbor-specific session setup lives in `harbor_env.harness` (OpenEnv). TRL consumes the captured
+engine prompt IDs, sampled completion IDs, log probabilities and masks. Re-rendered prompts fork
+into separate training rows so eligible tokens are retained; this can increase memory use. Capture
+compatibility alone does not establish suitable batching or rollout weighting for every harness.
 
-WHY `mini-swe-agent`. Measured, not chosen by taste. Fifteen harnesses were probed; twelve produced
-usable rollouts and are the set referred to below. Across that sweep, on the same 50 tasks
-(`Qwen3.5-2B`, k=4) it was both the most accurate and the most turn-efficient — and, decisively for
-training, its prompt re-render is byte-exact against the engine's own `prompt_token_ids`. TRL re-renders
-each prompt locally because `TraceEntry` carries no prompt ids, and for three of the twelve harnesses
-measured that re-render drifts (`claude-code` +2 tokens, `gemini-cli` +2, `kimi-cli` -10 per tool call).
-A two-token drift is invisible for eval and forks the trajectory *every turn* when training. It is also
-the only harness that can express a step limit, which matters below.
+The default `mini-swe-agent` is a small installed-agent example. Other qualified harnesses can be
+selected with `--harness`; use the server's current capability and qualification reports to choose.
+The shared capture layer bounds model calls even when an agent has no native step-limit option.
 
-WHAT MAKES THE ROLLOUTS ON-POLICY. The agent's calls and the trainer's weight updates go to the SAME
-vLLM. The server is pointed at that engine per rollout, so changing engines needs no server restart, and
-the tier is decided by probing the endpoint: token ids plus processed logprobs mean `train`; anything
-less means `eval`, and the session yields no trainable turns rather than rows of zeros.
+The agent's inference requests and trainer weight updates must use the SAME vLLM instance. Training
+requires engine token IDs and processed logprobs; an evaluation-only endpoint is rejected. The trainer
+and capture proxy must use the same full-vocabulary sampling policy. Updates drain active inference
+requests before replacing weights, and AsyncGRPO bounds how old a completed rollout may be.
 
 THE REWARD. `harbor_reward` below is `correctness + 0.3 * tool_efficiency`, with efficiency gated on
 correctness — ungated, the cheapest way to look efficient is to do nothing. Suites that emit a reward
@@ -100,7 +96,7 @@ from harbor_env.harness import HarborSessionFactory
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.openenv_harness import HarnessRolloutOutcome, HarnessRolloutWorker, has_tool_call
+from trl.experimental.async_grpo.openenv_harness import HarnessRolloutOutcome, HarnessRolloutWorker
 
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -199,10 +195,8 @@ def parse_args() -> argparse.Namespace:
     # The only bound on a wedged rollout: it holds a generation slot for the whole call, and the task
     # file's own timeout covers the agent run but not sandbox setup.
     p.add_argument("--agent-timeout", type=float, default=300.0)
-    # Bounds the packed training row, not just the bill. Every turn re-sends the whole conversation, so a
-    # rollout's packed length grows with the SQUARE of its turn count; unbounded 58-turn rollouts were
-    # enough to OOM the loss step on an 80 GiB card. Only some harnesses can express this — the rest log
-    # a warning and run unbounded.
+    # Bound model calls as well as wall time. Rewritten histories may create multiple training rows;
+    # a call limit bounds rollout work but is not a guarantee that every row fits the trainer's memory.
     p.add_argument("--agent-step-limit", type=int, default=12)
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
     p.add_argument("--output-dir", default=None)
@@ -231,6 +225,7 @@ def main() -> None:
         agent_timeout_sec=args.agent_timeout,
         agent_step_limit=args.agent_step_limit,
         reward_key=args.reward_key,
+        sampling={"temperature": args.temperature, "top_p": 1.0, "top_k": -1},
         num_tasks=args.n_tasks,
         indices=task_indices(args.task_indices),
     )
@@ -259,6 +254,8 @@ def main() -> None:
         max_steps=args.max_steps,
         learning_rate=args.learning_rate,
         temperature=args.temperature,
+        top_p=1.0,
+        top_k=-1,
         max_staleness=args.max_staleness,
         vllm_server_base_url=args.vllm_url,
         optim="adamw_torch",
@@ -283,24 +280,21 @@ def main() -> None:
         # Loop-owning: the agent runs its own loop in the sandbox and we read what it did.
         harness_adapter=None,
         rollout_reward_fn=harbor_reward,
-        # Reinforce turns that took an ACTION, not prose — correct for a coding agent. It only works
-        # because `to_trace_entries` hands TRL tool calls in the nested OpenAI shape; flattened,
-        # `has_tool_call` is False for every turn and the whole rollout is silently discarded.
-        train_turn_fn=has_tool_call,
-        # No `agent_turn_fn`: the capture layer already dropped auxiliary calls and de-duplicated forked
-        # paths structurally, which a flat trace cannot do.
+        # Keep all eligible captured tokens; the capture contract carries per-token loss masks.
         model_name=args.model,
         dataset=dataset,
         reward_funcs=[],  # the reward is the task's own verifier, via `rollout_reward_fn`
         processing_class=tokenizer,
-        # Must match how the engine was served, or every prompt is re-rendered under a different template
-        # than the rollout was generated with — silent skew, not an error.
+        # Keep the worker's model configuration consistent with the served policy. Loop-owning
+        # prompts themselves use the captured engine IDs, without local template reconstruction.
         chat_template_kwargs={"enable_thinking": False},
         num_generations=args.num_generations,
         max_inflight_tasks=args.max_inflight,
         vllm_server_url=args.vllm_url,
         max_tokens=args.max_completion_length,
         temperature=args.temperature,
+        top_p=1.0,
+        top_k=-1,
         log_completions=True,
         num_completions_to_print=2,
     )
