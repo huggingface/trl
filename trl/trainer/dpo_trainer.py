@@ -1769,7 +1769,10 @@ class DPOTrainer(_BaseTrainer):
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
+                # DDP arms its gradient reducer in `DistributedDataParallel.forward()`, so running the loss on the
+                # unwrapped model leaves the reducer unarmed and the gradients are never all-reduced. FSDP2 modifies
+                # the model in place, so unwrapping preserves object identity and needs its own check.
+                if is_zero3 or self.is_fsdp_enabled or model is not unwrapped_model:
                     return self._forward_redirection(
                         model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
                     )

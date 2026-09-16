@@ -1179,6 +1179,31 @@ class TestKTOTrainer(TrlTestCase):
         assert redirected
 
     @require_liger_kernel
+    def test_compute_loss_redirects_wrapped_liger_model(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        wrapped_model = object()
+        redirected = False
+
+        monkeypatch.setattr(trainer.accelerator, "unwrap_model", lambda model: trainer.model)
+
+        def forward_redirection(wrapper, unwrapped, method, *args):
+            nonlocal redirected
+            redirected = True
+            assert wrapper is wrapped_model
+            assert unwrapped is trainer.model
+            return method(*args)
+
+        monkeypatch.setattr(trainer, "_forward_redirection", forward_redirection)
+        trainer.compute_loss(wrapped_model, inputs)
+
+        # DDP arms its gradient reducer inside `DistributedDataParallel.forward()`. Running the loss on the unwrapped
+        # model leaves the reducer unarmed, so gradients are never all-reduced and every rank keeps its own.
+        assert redirected
+
+    @require_liger_kernel
     def test_init_fails_with_moe_aux_loss_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
