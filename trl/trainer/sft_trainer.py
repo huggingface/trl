@@ -1273,10 +1273,10 @@ class SFTTrainer(_BaseTrainer):
         ):
             logger.warning(
                 "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
-                "the model may not learn to stop. Training will look healthy - the loss still goes down - but "
-                "generations may run until `max_new_tokens` at inference time, which is especially damaging for "
-                "structured outputs such as JSON or tool calls. To check this before launching a run, call "
-                "`is_chat_template_stop_token_trained(processing_class)` from `trl.chat_template_utils`."
+                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
+                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
+                "or edit the chat template so the end-of-turn token falls inside "
+                "`{% generation %}...{% endgeneration %}`."
             )
 
         # Dataset
