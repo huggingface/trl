@@ -1547,7 +1547,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
 
 class TestDistillationTrainerMultiTeacher(TrlTestCase):
     """
-    End-to-end tests for multi-teacher distillation, i.e. the `teacher_models` constructor argument.
+    End-to-end tests for multi-teacher distillation, i.e. a mapping of teachers as the `teacher_model` argument.
 
     Teachers are two local checkpoints saved from the same tiny fixture, each with every weight scaled by a different
     factor so that their targets — and therefore their divergences — really differ from the student's and from each
@@ -1607,7 +1607,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         return {name: param.detach().clone() for name, param in trainer.model.named_parameters()}
 
     def test_single_entry_matches_teacher_model(self, teachers):
-        # A one-entry `teacher_models` mapping must be the multi-teacher path applied to a single teacher, not a
+        # A one-entry `teacher_model` mapping must be the multi-teacher path applied to a single teacher, not a
         # different algorithm: same seed, same data, same two optimizer steps, bitwise-identical result. Bitwise and
         # not within a tolerance: the two paths schedule the teacher forwards differently, but neither the split into
         # scoring batches nor the projection through the teacher's head may change the arithmetic the student sees.
@@ -1632,7 +1632,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             return self._losses(trainer), self._params(trainer)
 
         single_losses, single_params = run(teacher_model=teachers["a"])
-        mapping_losses, mapping_params = run(teacher_models={"only": teachers["a"]})
+        mapping_losses, mapping_params = run(teacher_model={"only": teachers["a"]})
 
         assert mapping_losses == single_losses
         assert sorted(mapping_params) == sorted(single_params)
@@ -1671,7 +1671,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
 
         single = run(self._unrouted_dataset(rows), teacher_model=teachers["a"])
         routed = run(
-            self._routed_dataset(["a", "b"] * (rows // 2)), teacher_models={"a": teachers["a"], "b": teachers["a"]}
+            self._routed_dataset(["a", "b"] * (rows // 2)), teacher_model={"a": teachers["a"], "b": teachers["a"]}
         )
 
         # Not bitwise: grouping the microbatch rows per teacher changes the order in which the per-token divergences
@@ -1715,7 +1715,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             model=self.model_id,
             args=training_args,
             train_dataset=self._routed_dataset(["a", "b"] * 6),
-            teacher_models=teachers,
+            teacher_model=teachers,
         )
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -1753,7 +1753,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             model=self.model_id,
             args=training_args,
             train_dataset=self._routed_dataset(["a"] * 6),
-            teacher_models=teachers,
+            teacher_model=teachers,
         )
         only_a.train()
         only_a_logs = [entry for entry in only_a.state.log_history if "loss" in entry]
@@ -1782,9 +1782,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             report_to="none",
         )
         with pytest.raises(ValueError, match=error) as exc_info:
-            DistillationTrainer(
-                model=self.model_id, args=training_args, train_dataset=dataset, teacher_models=teachers
-            )
+            DistillationTrainer(model=self.model_id, args=training_args, train_dataset=dataset, teacher_model=teachers)
         assert "train_dataset" in str(exc_info.value)
         assert "['a', 'b']" in str(exc_info.value), "the error does not list the registered teachers"
 
@@ -1805,7 +1803,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 args=training_args,
                 train_dataset=self._routed_dataset(["a", "b"] * 3),
                 eval_dataset={"clean": self._routed_dataset(["a"]), "typo": self._routed_dataset(["nope"])},
-                teacher_models=teachers,
+                teacher_model=teachers,
             )
         assert "eval_dataset['typo']" in str(exc_info.value)
 
@@ -1823,7 +1821,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             model=self.model_id,
             args=training_args,
             train_dataset=self._routed_dataset(["a", "nope"] * 3).to_iterable_dataset(),
-            teacher_models=teachers,
+            teacher_model=teachers,
         )
         with pytest.raises(ValueError, match="Unknown teacher ID"):
             trainer.train()
@@ -1841,7 +1839,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             model=self.model_id,
             args=training_args,
             train_dataset=self._unrouted_dataset(6),
-            teacher_models={"a": teachers["a"]},
+            teacher_model={"a": teachers["a"]},
         )
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
@@ -1853,7 +1851,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             DistillationTrainer(
                 model=self.model_id,
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                teacher_models={"a": teachers["a"], "other": "trl-internal-testing/tiny-LlamaForCausalLM-3.2"},
+                teacher_model={"a": teachers["a"], "other": "trl-internal-testing/tiny-LlamaForCausalLM-3.2"},
             )
 
     def test_cached_hub_teacher_loads_offline(self):
@@ -1867,7 +1865,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                     report_to="none",
                     teacher_model_init_kwargs={"local_files_only": True},
                 ),
-                teacher_models={"a": self.model_id},
+                teacher_model={"a": self.model_id},
             )
         (entry,) = trainer._teacher_manifest
         assert entry["source"] == self.model_id
@@ -1899,7 +1897,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             model=self.model_id,
             args=training_args,
             train_dataset=self._unrouted_dataset(8),
-            teacher_models={"a": teachers["a"]},
+            teacher_model={"a": teachers["a"]},
         )
         with patch.object(transformers.Trainer, "_save_checkpoint", record_then_save):
             trainer.train()
@@ -1913,7 +1911,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         trainer = DistillationTrainer(
             model=self.model_id,
             args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-            teacher_models={"a": teachers["a"]},
+            teacher_model={"a": teachers["a"]},
         )
         trainer.model.train()  # `compute_loss` files its metrics under the mode the student is currently in
         # Drives the metric path with known statistics rather than model math. `_compute_loss` returns the loss, the
@@ -1929,14 +1927,14 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         trainer.log({"loss": 1.0})
         assert trainer.state.log_history[-1]["teacher_jsd/a"] == pytest.approx((1.0 + 27.0) / (1 + 9))
 
-    def test_empty_teacher_models_is_rejected(self, teachers):
+    def test_empty_teacher_model_mapping_is_rejected(self, teachers):
         # An empty mapping still opts into multi-teacher distillation, where it would leave every row without a
         # teacher and train at a loss of exactly zero; it is refused instead.
         with pytest.raises(ValueError, match="at least one"):
             DistillationTrainer(
                 model=self.model_id,
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                teacher_models={},
+                teacher_model={},
             )
 
     def test_per_teacher_scoring_time_is_logged(self, teachers):
@@ -1955,7 +1953,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             model=self.model_id,
             args=training_args,
             train_dataset=self._routed_dataset(["a", "b"] * 4),
-            teacher_models=teachers,
+            teacher_model=teachers,
         )
         trainer.train()
 
@@ -1966,15 +1964,60 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 assert f"teacher_score_s/{teacher_id}" in entry, sorted(entry)
                 assert entry[f"teacher_score_s/{teacher_id}"] > 0.0
 
-    def test_teacher_model_and_teacher_models_are_exclusive(self, teachers):
-        # The singular and the mapping entry points have different teacher lifecycles; a run may only use one.
-        with pytest.raises(ValueError, match="Pass only one"):
-            DistillationTrainer(
-                model=self.model_id,
-                teacher_model=teachers["a"],
-                teacher_models=teachers,
-                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-            )
+    def test_mapping_argument_wins_over_the_config_teacher(self, teachers):
+        # `args.teacher_model_name_or_path` is only read when the argument is omitted, exactly as for a single
+        # teacher, so a mapping passed to the constructor is the one that gets registered.
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model={"a": teachers["a"]},
+            args=DistillationConfig(
+                output_dir=self.tmp_dir, teacher_model_name_or_path=teachers["b"], report_to="none"
+            ),
+        )
+        assert list(trainer.teacher_models) == ["a"]
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (
+                '{"math": "org/math-teacher", "code": "org/code-teacher"}',
+                {"math": "org/math-teacher", "code": "org/code-teacher"},
+            ),
+            ("org/plain-teacher", "org/plain-teacher"),
+        ],
+    )
+    def test_config_parses_a_json_object_teacher_and_keeps_a_plain_id(self, value, expected):
+        # On the command line the mapping can only arrive as a string, so a JSON object is parsed into a dict while a
+        # plain model id — which is not valid JSON — is left untouched.
+        args = DistillationConfig(output_dir=self.tmp_dir, teacher_model_name_or_path=value, report_to="none")
+        assert args.teacher_model_name_or_path == expected
+
+    def test_teachers_from_the_config_mapping(self, teachers):
+        # A mapping set on the config, as the CLI produces it, registers the same teachers as the constructor
+        # argument and routes rows to them.
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            teacher_model_name_or_path={"a": teachers["a"], "b": teachers["b"]},
+            learning_rate=0.1,
+            per_device_train_batch_size=2,
+            max_completion_length=4,
+            max_steps=2,
+            logging_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            teacher_model=None,
+            args=training_args,
+            train_dataset=self._routed_dataset(["a", "b"] * 4),
+        )
+        assert list(trainer.teacher_models) == ["a", "b"]
+        trainer.train()
+
+        step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
+        assert step_logs, "no training step was logged"
+        for teacher_id in ("a", "b"):
+            assert step_logs[-1][f"teacher_jsd/{teacher_id}"] > 0.0
 
     def test_per_teacher_init_kwargs(self, teachers):
         # Per-ID loading overrides really reach the loader. Two observable effects through public API:
@@ -1998,7 +2041,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             args=training_args,
             train_dataset=self._routed_dataset(["a", "b"] * 3),
             # Deliberately the *same* checkpoint under both IDs: only the loading override distinguishes them.
-            teacher_models={"a": teachers["a"], "b": teachers["a"]},
+            teacher_model={"a": teachers["a"], "b": teachers["a"]},
         )
         trainer.train()
 
@@ -2037,7 +2080,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             return self._losses(trainer), self._params(trainer)
 
         single_losses, single_params = run(teacher_model=teachers["a"])
-        mapping_losses, mapping_params = run(teacher_models={"only": teachers["a"]})
+        mapping_losses, mapping_params = run(teacher_model={"only": teachers["a"]})
 
         assert mapping_losses == single_losses
         for name, single_param in single_params.items():
@@ -2066,7 +2109,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             args=training_args,
             train_dataset=self._routed_dataset(["a", "b"] * 6),
             eval_dataset=self._routed_dataset(["a", "b"]),
-            teacher_models=teachers,
+            teacher_model=teachers,
         )
 
         trainer.train()
@@ -2084,7 +2127,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
     def test_evaluation_loss_does_not_scale_with_the_number_of_groups(self, teachers):
         # Evaluation has no `num_items_in_batch`, so the per-teacher group losses must share one denominator: the
         # same rows split over two routing IDs must evaluate to the same loss as a single teacher scoring them all.
-        def run(train_dataset, eval_dataset, teacher_models):
+        def run(train_dataset, eval_dataset, teacher_model):
             training_args = DistillationConfig(
                 output_dir=self.tmp_dir,
                 learning_rate=0.0,  # no update, so both runs evaluate the same student
@@ -2103,7 +2146,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 args=training_args,
                 train_dataset=train_dataset,
                 eval_dataset=eval_dataset,
-                teacher_models=teacher_models,
+                teacher_model=teacher_model,
             )
             set_seed(7)
             trainer.train()
@@ -2137,21 +2180,21 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
 
         dataset = self._routed_dataset(["a"] * 8)
         trainer = DistillationTrainer(
-            model=self.model_id, args=args(1), train_dataset=dataset, teacher_models={"a": teachers["a"]}
+            model=self.model_id, args=args(1), train_dataset=dataset, teacher_model={"a": teachers["a"]}
         )
         trainer.train()
         checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
         assert os.path.exists(os.path.join(checkpoint, "teacher_manifest.json"))
 
         resumed = DistillationTrainer(
-            model=self.model_id, args=args(2), train_dataset=dataset, teacher_models={"a": teachers["a"]}
+            model=self.model_id, args=args(2), train_dataset=dataset, teacher_model={"a": teachers["a"]}
         )
         resumed.train(resume_from_checkpoint=checkpoint)
         assert resumed.state.global_step == 2
 
         # Same routing ID, different checkpoint content.
         swapped = DistillationTrainer(
-            model=self.model_id, args=args(2), train_dataset=dataset, teacher_models={"a": teachers["b"]}
+            model=self.model_id, args=args(2), train_dataset=dataset, teacher_model={"a": teachers["b"]}
         )
         with pytest.raises(ValueError, match="incompatible with the checkpoint") as exc_info:
             swapped.train(resume_from_checkpoint=checkpoint)
@@ -2159,7 +2202,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
 
     def test_resume_requires_a_teacher_manifest(self, teachers):
         # A checkpoint from a single-teacher run carries no manifest, so the teachers it was trained against are
-        # unknown and resuming it with `teacher_models` is refused rather than crashing on the missing file.
+        # unknown and resuming it with a mapping of teachers is refused rather than crashing on the missing file.
         def args(max_steps):
             return DistillationConfig(
                 output_dir=self.tmp_dir,
@@ -2181,7 +2224,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert not os.path.exists(os.path.join(checkpoint, "teacher_manifest.json"))
 
         resumed = DistillationTrainer(
-            model=self.model_id, args=args(2), train_dataset=dataset, teacher_models={"a": teachers["a"]}
+            model=self.model_id, args=args(2), train_dataset=dataset, teacher_model={"a": teachers["a"]}
         )
         with pytest.raises(ValueError, match="no `teacher_manifest.json`") as exc_info:
             resumed.train(resume_from_checkpoint=checkpoint)
@@ -2194,14 +2237,14 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         # device-mapped teachers are refused before anything is loaded.
         args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs=unsupported)
         with pytest.raises(ValueError, match=next(iter(unsupported))):
-            DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+            DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
 
     @pytest.mark.parametrize("inert", [{"device_map": None}, {"quantization_config": None}])
     def test_accepts_inert_teacher_kwargs(self, teachers, inert):
         # The guard reads the effective value, not the key: `device_map=None` is exactly what managed teachers are
         # loaded with, and an explicit `quantization_config=None` asks for no quantization at all.
         args = DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_init_kwargs=inert)
-        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
         assert list(trainer.teacher_models) == ["a"]
 
     def test_rejects_unsupported_per_teacher_override(self, teachers):
@@ -2214,7 +2257,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             teacher_model_init_kwargs_by_teacher={"a": {"device_map": "auto"}},
         )
         with pytest.raises(ValueError, match="device_map"):
-            DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+            DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
 
     def test_accepts_common_option_every_teacher_overrides(self, teachers):
         # Only what each registered teacher will actually be loaded with is checked. The common dict is never judged
@@ -2225,7 +2268,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             teacher_model_init_kwargs={"device_map": "auto"},
             teacher_model_init_kwargs_by_teacher={"a": {"device_map": None}},
         )
-        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_models={"a": teachers["a"]})
+        trainer = DistillationTrainer(model=self.model_id, args=args, teacher_model={"a": teachers["a"]})
         assert list(trainer.teacher_models) == ["a"]
 
     def test_rejects_preloaded_quantized_teacher(self, teachers):
@@ -2236,7 +2279,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             DistillationTrainer(
                 model=self.model_id,
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                teacher_models={"a": teacher},
+                teacher_model={"a": teacher},
             )
 
     def test_rejects_quantized_teacher_checkpoint(self, teachers):
@@ -2253,7 +2296,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                     model=student,
                     processing_class=AutoTokenizer.from_pretrained(self.model_id),
                     args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                    teacher_models={"a": teachers["a"]},
+                    teacher_model={"a": teachers["a"]},
                 )
 
     @require_vision
@@ -2264,7 +2307,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             DistillationTrainer(
                 model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
                 args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
-                teacher_models={"a": teachers["a"]},
+                teacher_model={"a": teachers["a"]},
             )
 
     @require_torch_accelerator
@@ -2279,7 +2322,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         # would cost at least a full extra `teacher_bytes`, which this bound excludes.
         accelerator_module = getattr(torch, torch_device, torch.cuda)
 
-        def peak_bytes(teacher_models, teacher_ids):
+        def peak_bytes(teacher_model, teacher_ids):
             training_args = DistillationConfig(
                 output_dir=self.tmp_dir,
                 learning_rate=0.1,
@@ -2294,7 +2337,7 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
                 model=self.model_id,
                 args=training_args,
                 train_dataset=self._routed_dataset(teacher_ids),
-                teacher_models=teacher_models,
+                teacher_model=teacher_model,
             )
             accelerator_module.empty_cache()
             accelerator_module.reset_peak_memory_stats()

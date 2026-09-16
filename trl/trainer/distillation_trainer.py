@@ -330,11 +330,19 @@ class DistillationTrainer(_BaseTrainer):
               from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
-        teacher_model (`str` or [`~transformers.PreTrainedModel`], *optional*):
+        teacher_model (`str`, [`~transformers.PreTrainedModel`], `dict[str, str]` or `dict[str, PreTrainedModel]`, *optional*):
             Teacher model whose next-token distribution the student is trained to match. Can be a *model id* / path
             (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
-            [`~transformers.PreTrainedModel`]. It must share the student's vocabulary. May be omitted by subclasses
-            that supply the teacher another way (e.g. a remote server).
+            [`~transformers.PreTrainedModel`], which is prepared with the accelerator and stays resident on it. A
+            mapping from routing ID to either of those instead opts into multi-teacher on-policy distillation: every
+            dataset row's `teacher_id` column selects the teacher that supplies its target (the column is optional
+            when a single teacher is registered), and per-teacher `teacher_jsd/<id>`, `teacher_token_frac/<id>` and
+            `teacher_score_s/<id>` metrics are logged. The type selects the teacher lifecycle, not the numerics: the
+            teachers of a mapping are held on CPU and moved to the accelerator one at a time — even for a single
+            entry, which trains identically to passing that teacher on its own — so device memory is bounded by the
+            largest teacher rather than their sum. Several IDs may point at the same checkpoint with different
+            `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must share the student's vocabulary.
+            May be omitted by subclasses that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -376,15 +384,6 @@ class DistillationTrainer(_BaseTrainer):
             https://huggingface.co/docs/transformers/en/chat_extras#passing-tools. The model uses the function's name,
             type hints, and docstring to determine how to call it. Ensure that the model's chat template supports tool
             use and that it has been fine-tuned for tool calling.
-        teacher_models (`dict[str, str]` or `dict[str, PreTrainedModel]`, *optional*):
-            Mapping from routing ID to a teacher checkpoint path / Hub ID, or to an already instantiated teacher.
-            Passing it opts into multi-teacher on-policy distillation: every dataset row's `teacher_id` column
-            selects the teacher that supplies its target (the column is optional when a single teacher is
-            registered), and per-teacher `teacher_jsd/<id>`, `teacher_token_frac/<id>` and `teacher_score_s/<id>`
-            metrics are logged. The teachers are held on CPU and uploaded to the device one at a time, so device
-            memory is bounded by the largest teacher rather than their sum. Several IDs may point at the same
-            checkpoint with different `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must
-            share the student's vocabulary. Mutually exclusive with `teacher_model`.
     """
 
     _tag_names = ["trl", "distillation"]
@@ -407,7 +406,7 @@ class DistillationTrainer(_BaseTrainer):
     def __init__(
         self,
         model: "str | PreTrainedModel | PeftModel",
-        teacher_model: str | PreTrainedModel | None = None,
+        teacher_model: "str | PreTrainedModel | dict[str, str | PreTrainedModel] | None" = None,
         args: DistillationConfig | None = None,
         train_dataset: Dataset | None = None,
         eval_dataset: Dataset | dict[str, Dataset] | None = None,
@@ -417,30 +416,29 @@ class DistillationTrainer(_BaseTrainer):
         quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
-        teacher_models: "dict[str, str | PreTrainedModel] | None" = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = DistillationConfig(f"{model_name}-Distillation")
 
-        # Multi-teacher mode is opted into by `teacher_models` and is exclusive with the singular teacher entry
-        # points, so a run can never carry two teacher sources with different lifecycles. Checked before any loading.
-        if teacher_models is not None and (teacher_model is not None or args.teacher_model_name_or_path is not None):
-            raise ValueError(
-                "You passed `teacher_models` (multi-teacher distillation) together with the singular `teacher_model` "
-                "or `args.teacher_model_name_or_path`. Pass only one: register every teacher in `teacher_models` "
-                '(e.g. `teacher_models={"teacher": ...}`), or drop `teacher_models`.'
-            )
-        if teacher_models is not None and not teacher_models:
-            raise ValueError(
-                "You passed an empty `teacher_models` mapping. Multi-teacher distillation needs at least one "
-                'teacher: register one (e.g. `teacher_models={"teacher": ...}`), or drop the argument.'
-            )
+        if teacher_model is None and isinstance(args.teacher_model_name_or_path, dict):
+            teacher_model = args.teacher_model_name_or_path
+        # The type of `teacher_model` selects the teacher lifecycle: a mapping — even a one-entry one — opts into
+        # multi-teacher distillation, where the teachers stay on CPU and are routed to one at a time, while a model
+        # id or an instantiated model keeps the single teacher resident on the accelerator. Checked before loading.
+        teacher_models = None
+        if isinstance(teacher_model, dict):
+            if not teacher_model:
+                raise ValueError(
+                    "You passed an empty `teacher_model` mapping. Multi-teacher distillation needs at least one "
+                    'teacher: register one (e.g. `teacher_model={"teacher": ...}`), or pass a single teacher.'
+                )
+            teacher_models, teacher_model = teacher_model, None
         if teacher_models is None and args.teacher_model_init_kwargs_by_teacher:
             raise ValueError(
-                "`args.teacher_model_init_kwargs_by_teacher` only applies to multi-teacher distillation. Pass "
-                "`teacher_models` as well, or drop it."
+                "`args.teacher_model_init_kwargs_by_teacher` only applies to multi-teacher distillation. Pass a "
+                "mapping of teachers as `teacher_model` as well, or drop it."
             )
 
         # Student model loading
@@ -1037,7 +1035,7 @@ class DistillationTrainer(_BaseTrainer):
         return teacher
 
     def _teacher_index(self, teacher_id: str | None) -> int:
-        """Index in `teacher_models` of the teacher that scores a row; the `teacher_id` column is optional with one."""
+        """Index in `self.teacher_models` of the teacher scoring a row; `teacher_id` is optional with one teacher."""
         if teacher_id is None:
             if len(self.teacher_models) > 1:
                 raise ValueError(
@@ -2095,7 +2093,8 @@ class DistillationTrainer(_BaseTrainer):
             loss, entropy_sum, num_valid_tokens, teacher_stats = outputs
             # `[2, num_teachers]` on every rank, with zero columns for the teachers this microbatch did not route to,
             # so the shape is rank-independent and a plain sum-reduce is correct. Every rank takes this branch:
-            # `teacher_models` is configuration, identical on all ranks, so the collective count is rank-uniform too.
+            # `self.teacher_models` is configuration, identical on all ranks, so the collective count is
+            # rank-uniform too.
             # `gather_for_metrics` must not be used: it trims the first dimension to the dataloader remainder, and
             # here that is the statistic row, not an example count. Reduced after `_forward_redirection` returns,
             # like the entropy gather below.
@@ -2327,7 +2326,7 @@ class DistillationTrainer(_BaseTrainer):
                     raise ValueError(
                         f"The checkpoint {checkpoint} has no `teacher_manifest.json`: it was not written by a "
                         f"multi-teacher run, so the teachers it was trained against are unknown. Resume it with the "
-                        f"singular `teacher_model` argument, or resume a checkpoint saved by a `teacher_models` run."
+                        f"singular `teacher_model` argument, or resume a checkpoint saved by a multi-teacher run."
                     )
                 with open(manifest, encoding="utf-8") as f:
                     saved = {entry["id"]: entry for entry in json.load(f)["teachers"]}

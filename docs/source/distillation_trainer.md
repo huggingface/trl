@@ -266,7 +266,7 @@ Tested with:
 
 [`DistillationTrainer`] also supports multi-teacher on-policy distillation (MOPD), described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](https://huggingface.co/papers/2606.30406). MOPD's own setting fuses several frozen, independently trained domain experts (e.g. a math expert and a code expert) into a single student: each training row is scored by exactly one teacher, never averaged or ensembled across teachers.
 
-Pass `teacher_models` instead of `teacher_model` — a mapping from a routing ID to a checkpoint path, Hub ID, or an already-instantiated teacher. Each dataset row's `teacher_id` column selects which teacher scores it. With a single entry in `teacher_models`, `teacher_id` is optional and every row uses that one teacher.
+Pass `teacher_model` a mapping from a routing ID to a checkpoint path, Hub ID, or an already-instantiated teacher instead of a single teacher. Each dataset row's `teacher_id` column selects which teacher scores it. With a single entry, `teacher_id` is optional and every row uses that one teacher. The type of `teacher_model` selects the teacher lifecycle: a single teacher is prepared with the accelerator and stays resident on it, while the teachers of a mapping — even a one-entry mapping, which trains identically — are held on CPU and moved to the accelerator one at a time.
 
 ```python
 from datasets import Dataset
@@ -284,7 +284,7 @@ dataset = Dataset.from_dict(
 
 trainer = DistillationTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",
-    teacher_models={
+    teacher_model={
         "math": "Qwen/Qwen2.5-Math-1.5B-Instruct",
         "code": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
     },
@@ -302,8 +302,8 @@ trainer.train()
 
 - Every teacher must share the student's vocabulary, i.e. the same `vocab_size`. Prompts are rendered once with the student's tokenizer, and every teacher scores those exact token IDs, so a teacher trained on a different tokenizer is training the student against the wrong tokens. Use [GOLD](gold_trainer) for cross-tokenizer distillation.
 - Teachers must be unquantized teachers loaded without device dispatch or offload hooks. Teachers move between CPU and the accelerator as complete modules, and the loss reads their output heads as dense matrices; quantized and dispatched teacher backends have not been integrated or validated. A `quantization_config` and an active `device_map` are rejected at initialization, per teacher after the per-teacher overrides are merged, and every loaded teacher is checked for quantization and device dispatch — including one loaded from a checkpoint that carries its quantization in its own config. `device_map=None` is allowed.
-- Students must be text-only. VLM students are not supported in multi-teacher mode; use the single `teacher_model` argument for VLM distillation.
-- DeepSpeed ZeRO-3 is rejected: the teacher head is uploaded as a plain device tensor, while the chunked loss only knows how to gather a ZeRO-partitioned head. Use ZeRO stage 1 or 2, or the single `teacher_model` argument.
+- Students must be text-only. VLM students are not supported in multi-teacher mode; pass a single teacher as `teacher_model` for VLM distillation.
+- DeepSpeed ZeRO-3 is rejected: the teacher head is uploaded as a plain device tensor, while the chunked loss only knows how to gather a ZeRO-partitioned head. Use ZeRO stage 1 or 2, or a single teacher.
 
 ### Memory
 

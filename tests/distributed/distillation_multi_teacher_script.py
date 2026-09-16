@@ -14,7 +14,8 @@
 
 """
 Two-rank CPU worker for `test_distillation_trainer_multi_teacher.py`, covering the multi-teacher
-`DistillationTrainer` (the `teacher_models` constructor argument) with three `--mode` values.
+`DistillationTrainer` (a mapping of teachers as the `teacher_model` constructor argument) with three `--mode`
+values.
 
 Launched with `python -m torch.distributed.run` rather than `accelerate launch`: this environment has no
 `mpirun`/`mpiexec`/`mpi4py`, and `accelerate launch`'s non-MPI multi-process spawn is only wired up for
@@ -134,7 +135,7 @@ def _run_training(args):
             model=MODEL_ID,
             args=training_args,
             train_dataset=build_dataset(TRAIN_TEACHER_IDS),
-            teacher_models={"a": teacher_a, "b": teacher_b},
+            teacher_model={"a": teacher_a, "b": teacher_b},
         )
         accelerator = trainer.accelerator
         world_size = accelerator.num_processes
