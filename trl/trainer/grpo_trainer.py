@@ -103,6 +103,64 @@ from .utils import (
 )
 
 
+def _get_reward_variance_filter_mask(
+    rewards: torch.Tensor,
+    num_generations: int,
+    strategy: str,
+    top_p: float,
+    top_k: int,
+    include_zero: bool = False,
+    selection_eps: float = 0.01,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return per-completion and per-group masks for reward-variance top-p or top-k filtering."""
+    if rewards.ndim != 1 or rewards.numel() % num_generations != 0:
+        raise ValueError(
+            f"rewards must be one-dimensional and divisible by num_generations={num_generations}, "
+            f"got shape {tuple(rewards.shape)}"
+        )
+    if strategy not in ("top_p", "top_k"):
+        raise ValueError(f"strategy must be 'top_p' or 'top_k', got {strategy!r}")
+    if not 0.0 < top_p <= 1.0:
+        raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+    if top_k < 1:
+        raise ValueError(f"top_k must be positive, got {top_k}")
+    if selection_eps < 0.0:
+        raise ValueError(f"selection_eps must be non-negative, got {selection_eps}")
+
+    grouped = rewards.view(-1, num_generations)
+    finite = torch.isfinite(grouped)
+    counts = finite.sum(dim=1)
+    safe_values = torch.where(finite, grouped, torch.zeros_like(grouped))
+    means = safe_values.sum(dim=1) / counts.clamp_min(1)
+    squared_deviations = torch.where(finite, (grouped - means.unsqueeze(1)).square(), 0.0).sum(dim=1)
+    variances = torch.where(counts > 1, squared_deviations / (counts - 1).clamp_min(1), 0.0)
+
+    selected_groups = torch.zeros_like(variances, dtype=torch.bool)
+    total_variance = variances.sum()
+    if total_variance <= 0:
+        if include_zero:
+            if strategy == "top_k":
+                selected_groups[:top_k] = True
+            else:
+                selected_groups.fill_(True)
+    elif strategy == "top_p" and include_zero and top_p == 1.0:
+        selected_groups.fill_(True)
+    else:
+        order = torch.argsort(variances, descending=True, stable=True)
+        if not include_zero:
+            order = order[variances[order] > 0]
+        if strategy == "top_k":
+            selected_groups[order[:top_k]] = True
+        else:
+            target = top_p * total_variance - selection_eps
+            # RAGEN uses this slack to skip near-zero-signal batches entirely.
+            if target > 0 and order.numel() > 0:
+                cutoff = int(torch.searchsorted(variances[order].cumsum(0), target).item())
+                selected_groups[order[: min(cutoff + 1, order.numel())]] = True
+
+    return selected_groups.repeat_interleave(num_generations), selected_groups, variances
+
+
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
@@ -749,6 +807,11 @@ class GRPOTrainer(_BaseTrainer):
         # Training arguments
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.reward_variance_filtering = args.reward_variance_filtering
+        self.reward_variance_top_p = args.reward_variance_top_p
+        self.reward_variance_top_k = args.reward_variance_top_k
+        self.reward_variance_filtering_include_zero = args.reward_variance_filtering_include_zero
+        self.reward_variance_filtering_selection_eps = args.reward_variance_filtering_selection_eps
         self.max_tool_calling_iterations = (
             args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
         )
@@ -2784,11 +2847,12 @@ class GRPOTrainer(_BaseTrainer):
         # which both biases the per-group baseline and hands the completion a spurious advantage. Mark these rows NaN
         # so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
         unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
+        raw_rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        raw_rewards[unscorable_mask] = torch.nan
 
         if self.multi_objective_aggregation == "sum_then_normalize":
             # Apply weights to each reward function's output and sum
-            rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-            rewards[unscorable_mask] = torch.nan
+            rewards = raw_rewards
             mean_grouped_rewards = torch.nanmean(rewards.view(-1, num_generations), dim=1)
             mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_generations, dim=0)
             if self.scale_rewards in ["group", "none"]:
@@ -2836,6 +2900,28 @@ class GRPOTrainer(_BaseTrainer):
         # so zero their advantage to keep them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
 
+        reward_variance_filter_mask = None
+        if mode == "train" and self.reward_variance_filtering is not None:
+            reward_variance_filter_mask, selected_groups, group_variances = _get_reward_variance_filter_mask(
+                raw_rewards,
+                num_generations,
+                self.reward_variance_filtering,
+                self.reward_variance_top_p,
+                self.reward_variance_top_k,
+                self.reward_variance_filtering_include_zero,
+                self.reward_variance_filtering_selection_eps,
+            )
+            advantages = advantages * reward_variance_filter_mask
+            selected_variance = group_variances[selected_groups].sum()
+            total_variance = group_variances.sum()
+            self._metrics[mode]["reward_variance_filtering/kept_group_ratio"].append(
+                selected_groups.float().mean().item()
+            )
+            self._metrics[mode]["reward_variance_filtering/selected_variance_ratio"].append(
+                (selected_variance / total_variance).item() if total_variance > 0 else 0.0
+            )
+            self._metrics[mode]["reward_variance_filtering/total_variance"].append(total_variance.item())
+
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
@@ -2843,6 +2929,10 @@ class GRPOTrainer(_BaseTrainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
+        if reward_variance_filter_mask is not None:
+            reward_variance_filter_mask = reward_variance_filter_mask[process_slice]
+            filtered_loss_mask = loss_mask * reward_variance_filter_mask.unsqueeze(1)
+            num_items_in_batch = self.accelerator.gather(filtered_loss_mask.sum()).sum().clamp_min(1)
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -2850,8 +2940,7 @@ class GRPOTrainer(_BaseTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
-        rewards = (rewards_per_func * self.reward_weights.to(rewards_per_func.device).unsqueeze(0)).nansum(dim=1)
-        rewards[unscorable_mask] = torch.nan  # exclude unscorable rows from the logged reward stats
+        rewards = raw_rewards  # exclude unscorable rows from the logged reward stats
         self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
@@ -2929,6 +3018,8 @@ class GRPOTrainer(_BaseTrainer):
             "advantages": advantages,
             "num_items_in_batch": num_items_in_batch,
         }
+        if reward_variance_filter_mask is not None:
+            output["reward_variance_filter_mask"] = reward_variance_filter_mask
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
         if self.use_vllm and self.vllm_importance_sampling_correction:
@@ -2985,6 +3076,8 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
         loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        if "reward_variance_filter_mask" in inputs:
+            loss_mask = loss_mask * inputs["reward_variance_filter_mask"].unsqueeze(1)
         lm_head_weight = unwrapped_model.lm_head.weight
         lm_head_bias = unwrapped_model.lm_head.bias
         # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
@@ -3119,6 +3212,8 @@ class GRPOTrainer(_BaseTrainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
+        if "reward_variance_filter_mask" in inputs:
+            mask = mask * inputs["reward_variance_filter_mask"].unsqueeze(1)
 
         # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies, aux_loss = self._get_per_token_logps_and_entropies(
