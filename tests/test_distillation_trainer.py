@@ -1871,6 +1871,44 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         assert entry["source"] == self.model_id
         assert re.fullmatch(r"[0-9a-f]{40}", entry["revision"]), entry
 
+    def test_teacher_model_revision_applies_to_mapped_teachers(self):
+        # `args.teacher_model_revision` is the common revision of every registered teacher, exactly as it is for the
+        # single-teacher argument. Pinning the commit the default branch resolves to loads the same weights either
+        # way, so the revision really reaching the loader is shown by a revision that does not exist: it can only
+        # fail the load if it was forwarded.
+        commit = AutoConfig.from_pretrained(self.model_id)._commit_hash
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_revision=commit),
+            teacher_model={"a": self.model_id},
+        )
+        (entry,) = trainer._teacher_manifest
+        assert entry["revision"] == commit
+
+        with pytest.raises(OSError, match="not a valid git identifier"):
+            DistillationTrainer(
+                model=self.model_id,
+                args=DistillationConfig(
+                    output_dir=self.tmp_dir, report_to="none", teacher_model_revision="does-not-exist"
+                ),
+                teacher_model={"a": self.model_id},
+            )
+
+        # A per-teacher `revision` replaces the common one rather than being merged next to it, so the teacher loads
+        # despite the unusable common revision.
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            args=DistillationConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                teacher_model_revision="does-not-exist",
+                teacher_model_init_kwargs_by_teacher={"a": {"revision": "main"}},
+            ),
+            teacher_model={"a": self.model_id},
+        )
+        (entry,) = trainer._teacher_manifest
+        assert entry["revision"] == commit
+
     def test_checkpoint_manifest_is_written_before_the_parent_serializes(self, teachers):
         # The manifest must be on disk before the parent checkpoint routine is entered. The parent reaches the
         # student's weights by different routes — `_save` for a full state dict, `save_fsdp_model` for a sharded one,

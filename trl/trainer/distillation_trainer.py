@@ -978,6 +978,8 @@ class DistillationTrainer(_BaseTrainer):
         """
         per_teacher = (self.args.teacher_model_init_kwargs_by_teacher or {}).get(teacher_id, {})
         init_kwargs = {**common_init_kwargs, **per_teacher}
+        if self.args.teacher_model_revision is not None:
+            init_kwargs.setdefault("revision", self.args.teacher_model_revision)
         init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
         # Teachers stay on CPU and are uploaded one at a time, so they are always loaded unmapped.
         init_kwargs["device_map"] = None
