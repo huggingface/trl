@@ -1247,15 +1247,14 @@ def get_config_model_id(config: PretrainedConfig) -> str:
 
 
 @contextmanager
-def prepare_dataset_first():
+def main_processes_first():
     """
-    Context manager that lets one process per dataset cache run the block first, so the others reuse its result
-    instead of recomputing it.
+    Context manager that lets the global main process run the block first, then the local main of each node, then
+    everyone else.
 
-    `Dataset.map` writes its result to the datasets cache, so a process only reuses another's work if it can read
-    that process's cache. The global main process goes first, which is enough when the cache is shared. The local
-    main of each node then goes first, which is what makes a node-local cache cost one preparation per node
-    rather than one per process.
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes
+    first, which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk
+    costs one pass per node rather than one per process.
     """
     state = PartialState()
     with state.main_process_first(), state.local_main_process_first():

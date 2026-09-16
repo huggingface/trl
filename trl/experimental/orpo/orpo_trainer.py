@@ -56,7 +56,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
     log_table_to_comet_experiment,
-    prepare_dataset_first,
+    main_processes_first,
     selective_log_softmax,
 )
 from ..utils import (
@@ -354,7 +354,7 @@ class ORPOTrainer(_BaseTrainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with prepare_dataset_first():
+        with main_processes_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(

@@ -73,9 +73,9 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    main_processes_first,
     maybe_gather_lm_head_ctx,
     pad,
-    prepare_dataset_first,
     selective_log_softmax,
 )
 
@@ -1473,7 +1473,7 @@ class SFTTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with prepare_dataset_first():
+        with main_processes_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
                 logger.warning(

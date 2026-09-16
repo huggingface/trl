@@ -67,9 +67,9 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    main_processes_first,
     maybe_gather_lm_head_ctx,
     pad,
-    prepare_dataset_first,
     selective_log_softmax,
     use_adapter,
 )
@@ -1026,7 +1026,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with prepare_dataset_first():
+        with main_processes_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:

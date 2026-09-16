@@ -71,8 +71,8 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
     identity,
+    main_processes_first,
     pad,
-    prepare_dataset_first,
     split_tensor_dict,
 )
 from ..utils import (
@@ -2049,7 +2049,7 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with prepare_dataset_first():
+        with main_processes_first():
             # Apply the formatting function if any
             if formatting_func is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`

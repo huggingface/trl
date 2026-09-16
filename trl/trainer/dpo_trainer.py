@@ -61,9 +61,9 @@ from .utils import (
     flush_left,
     get_config_model_id,
     hash_module,
+    main_processes_first,
     maybe_gather_lm_head_ctx,
     pad,
-    prepare_dataset_first,
     selective_log_softmax,
     use_adapter,
 )
@@ -1023,7 +1023,7 @@ class DPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with prepare_dataset_first():
+        with main_processes_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:
