@@ -627,6 +627,21 @@ class TestEntropyFromLogits(TrlTestCase):
         predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
         torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
 
+    @pytest.mark.parametrize(
+        "logits",
+        [
+            torch.tensor([[0.0, float("-inf")]]),
+            torch.tensor([[0.0, 0.0, float("-inf")]]),
+            torch.tensor([[65504.0, -65504.0]], dtype=torch.float16),
+        ],
+    )
+    def test_entropy_from_logits_zero_probability(self, logits):
+        predicted_entropy = entropy_from_logits(logits)
+        expected_entropy = torch.distributions.Categorical(logits=logits).entropy()
+
+        assert torch.isfinite(predicted_entropy).all()
+        torch.testing.assert_close(predicted_entropy, expected_entropy)
+
 
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):

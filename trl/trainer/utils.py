@@ -560,7 +560,8 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     entropies = []
     for chunk in flat_logits.split(chunk_size, dim=0):
         logps = F.log_softmax(chunk, dim=-1)
-        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
+        probs = torch.exp(logps)
+        chunk_entropy = -torch.xlogy(probs, probs).sum(-1)
         entropies.append(chunk_entropy)
 
     entropies = torch.cat(entropies, dim=0)
