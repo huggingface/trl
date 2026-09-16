@@ -74,6 +74,8 @@ training_args = SFTConfig(
     logging_steps=1,
     # Resuming is not supported for models sharded at load time, so the optimizer state cannot be checkpointed.
     save_only_model=True,
+    # About 25 min of work at risk. The adapter is 194 MB, so the save itself takes seconds.
+    save_steps=50,
     report_to="trackio",
 )
 trainer = SFTTrainer(
