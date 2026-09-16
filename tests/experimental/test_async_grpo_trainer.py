@@ -42,10 +42,8 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _balance_by_squared_length,
-    _iter_from_send_queue,
     _iter_vllm_named_params,
     _reduce_metric,
-    _send_full_tensors_lockstep,
     round_lora_rank,
     save_lora_adapter,
     select_adapter_sync,
@@ -63,6 +61,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
+from trl.experimental.async_grpo.weight_transfer import _iter_from_send_queue, _send_full_tensors_lockstep
 from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm

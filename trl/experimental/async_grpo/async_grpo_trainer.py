@@ -56,7 +56,7 @@ from ...trainer.utils import (
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
-from .weight_transfer import WeightTransferClient
+from .weight_transfer import WeightTransferClient, _send_full_tensors_lockstep
 
 
 logger = get_logger(__name__)
@@ -682,78 +682,6 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
             continue
         name = name.replace("modules_to_save.default.", "")
         yield name, param
-
-
-# Rank 0 keeps at most this many gathered tensors between `full_tensor()` and the NCCL send thread.
-_WEIGHT_SEND_QUEUE_MAXSIZE = 2
-
-
-def _iter_from_send_queue(send_queue: queue.Queue):
-    """Yield `(name, tensor)` from `send_queue` until a `None` sentinel. Consumed by the NCCL send thread."""
-    while True:
-        item = send_queue.get()
-        if item is None:
-            return
-        yield item
-
-
-def _send_full_tensors_lockstep(
-    accelerator, weight_transfer, gathered_params: Iterator[tuple[str, torch.Tensor]]
-) -> None:
-    """All-gather on the training thread; NCCL-send from a bounded queue.
-
-    [`WeightTransferClient.send_weights`] pulls its iterator on a daemon thread while the caller blocks on HTTP
-    `/update_weights`. Driving `full_tensor()` from that iterator therefore all-gathers on rank 0's NCCL thread and on
-    every other rank's training thread, and non-0 ranks start the next gather while rank 0 is still sending.
-
-    Every rank iterates `gathered_params` here (so `full_tensor()` stays on the training thread). Rank 0 `put`s into a
-    bounded queue that the send thread only `get`s. `wait_for_everyone()` after every put — and after the sentinel —
-    keeps non-0 ranks from running ahead when the queue is full.
-    """
-    send_queue: queue.Queue | None = None
-    send_thread: threading.Thread | None = None
-    send_error: list[BaseException] = []
-    send_failed = threading.Event()
-    do_send = accelerator.is_main_process and weight_transfer is not None
-
-    if do_send:
-        send_queue = queue.Queue(maxsize=_WEIGHT_SEND_QUEUE_MAXSIZE)
-
-        def _run_send():
-            try:
-                weight_transfer.send_weights(_iter_from_send_queue(send_queue))
-            except BaseException as exc:  # noqa: BLE001
-                send_error.append(exc)
-                send_failed.set()
-
-        send_thread = threading.Thread(target=_run_send, daemon=True)
-        send_thread.start()
-
-    for name, full in gathered_params:
-        if do_send:
-            while True:
-                try:
-                    send_queue.put((name, full), timeout=1.0)
-                    break
-                except queue.Full:
-                    if send_failed.is_set():
-                        break
-        accelerator.wait_for_everyone()
-
-    if do_send:
-        while True:
-            try:
-                send_queue.put(None, timeout=1.0)
-                break
-            except queue.Full:
-                if send_failed.is_set():
-                    break
-    accelerator.wait_for_everyone()
-
-    if send_thread is not None:
-        send_thread.join()
-    if send_error:
-        raise send_error[0]
 
 
 # Ranks vLLM builds stacked LoRA buffers for. Any other value crashes engine construction.
