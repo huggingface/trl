@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit from this directory: sbatch sft_moe_expert_parallel.slurm
+# Submit from this directory: sbatch sft_redacted.slurm
 #SBATCH --nodes=8
 #SBATCH --gres=gpu:8
 #SBATCH --ntasks-per-node=1
@@ -15,4 +15,4 @@ srun torchrun \
     --nproc_per_node 8 \
     --rdzv_backend c10d \
     --rdzv_endpoint "$MASTER_IP:29700" \
-    "$SLURM_SUBMIT_DIR/sft_moe_expert_parallel.py"
+    "$SLURM_SUBMIT_DIR/sft_redacted.py"

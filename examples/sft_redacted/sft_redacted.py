@@ -27,7 +27,7 @@
 LoRA SFT of REDACTED on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
 across all 64, and each rank trains on its own slice of the batch. 15.4 s/step, 131k tokens/step, 40.2 GB per GPU.
 
-    sbatch sft_moe_expert_parallel.slurm
+    sbatch sft_redacted.slurm
 """
 
 import transformers
