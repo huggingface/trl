@@ -1252,9 +1252,9 @@ def global_then_local_main_first():
     Context manager that lets the global main process run the block first, then the local main of each node, then
     everyone else. Both scopes of `PartialState.main_process_first`, one after the other.
 
-    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes
-    first, which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk
-    costs one pass per node rather than one per process.
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes first,
+    which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk costs one
+    pass per node rather than one per process.
     """
     state = PartialState()
     with state.main_process_first(), state.local_main_process_first():
