@@ -26,6 +26,7 @@ import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from torch.utils.data import DataLoader
+from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
@@ -122,7 +123,8 @@ class TailSFTTrainer(SFTTrainer):
     [`SFTTrainer`] with the sequence filtering of TailSFT.
 
     Reads the `initial_loss` column of the training dataset, and records it with the initial policy when the column is
-    absent. An evaluation dataset, if any, needs the column too.
+    absent. An evaluation dataset, if any, needs the column too. For Mixture-of-Experts models, the load-balancing loss
+    is computed only over the sequences kept by the filter.
     """
 
     def __init__(self, *args, **kwargs):
@@ -181,6 +183,8 @@ class TailSFTTrainer(SFTTrainer):
             return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
 
         labels = inputs.pop("labels")
+        if self.aux_loss_enabled:
+            inputs["output_router_logits"] = True
         outputs = model(**inputs, use_cache=False)
         per_token_loss, loss_mask = self.per_token_loss(outputs.logits, labels)
 
@@ -203,6 +207,23 @@ class TailSFTTrainer(SFTTrainer):
         loss_mask = loss_mask & keep.unsqueeze(-1)
         num_tokens = self.accelerator.gather(loss_mask.sum()).sum()
         loss = (per_token_loss * loss_mask).sum() * self.accelerator.num_processes / num_tokens
+
+        if self.aux_loss_enabled:
+            # The model's auxiliary loss includes every sequence from the forward pass. Recompute it with filtered
+            # sequences masked out so they do not update the router.
+            router_attention_mask = inputs["attention_mask"] * keep.unsqueeze(-1)
+            if router_attention_mask.any():
+                aux_loss = load_balancing_loss_func(
+                    outputs.router_logits,
+                    outputs.router_logits[0].shape[-1],
+                    self.model.config.get_text_config().num_experts_per_tok,
+                    router_attention_mask,
+                )
+            else:
+                aux_loss = outputs.router_logits[0].sum() * 0.0
+            loss = loss + self.args.router_aux_loss_coef * aux_loss.to(loss.device)
+            aux_loss = self.accelerator.gather_for_metrics(aux_loss.detach()).mean().item()
+            self._metrics["train"]["aux_loss"].append(aux_loss)
 
         self._metrics["train"]["filtered_fraction"].append(filtered_fraction)
         return (loss, outputs) if return_outputs else loss
