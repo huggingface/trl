@@ -432,6 +432,11 @@ class DistillationTrainer(_BaseTrainer):
                 "or `args.teacher_model_name_or_path`. Pass only one: register every teacher in `teacher_models` "
                 '(e.g. `teacher_models={"teacher": ...}`), or drop `teacher_models`.'
             )
+        if teacher_models is not None and not teacher_models:
+            raise ValueError(
+                "You passed an empty `teacher_models` mapping. Multi-teacher distillation needs at least one "
+                'teacher: register one (e.g. `teacher_models={"teacher": ...}`), or drop the argument.'
+            )
         if teacher_models is None and args.teacher_model_init_kwargs_by_teacher:
             raise ValueError(
                 "`args.teacher_model_init_kwargs_by_teacher` only applies to multi-teacher distillation. Pass "
@@ -2281,7 +2286,16 @@ class DistillationTrainer(_BaseTrainer):
             )
             # No checkpoint found: there is nothing to compare, and `super().train` raises the standard message.
             if checkpoint is not None:
-                with open(os.path.join(checkpoint, "teacher_manifest.json"), encoding="utf-8") as f:
+                manifest = os.path.join(checkpoint, "teacher_manifest.json")
+                # Only a multi-teacher run writes the manifest, so its absence means the checkpoint was trained
+                # against some other teacher source: there is nothing to compare the registered teachers against.
+                if not os.path.exists(manifest):
+                    raise ValueError(
+                        f"The checkpoint {checkpoint} has no `teacher_manifest.json`: it was not written by a "
+                        f"multi-teacher run, so the teachers it was trained against are unknown. Resume it with the "
+                        f"singular `teacher_model` argument, or resume a checkpoint saved by a `teacher_models` run."
+                    )
+                with open(manifest, encoding="utf-8") as f:
                     saved = {entry["id"]: entry for entry in json.load(f)["teachers"]}
                 current = {entry["id"]: entry for entry in self._teacher_manifest}
                 differing = sorted(

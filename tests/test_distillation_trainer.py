@@ -1887,6 +1887,16 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         trainer.log({"loss": 1.0})
         assert trainer.state.log_history[-1]["teacher_jsd/a"] == pytest.approx((1.0 + 27.0) / (1 + 9))
 
+    def test_empty_teacher_models_is_rejected(self, teachers):
+        # An empty mapping still opts into multi-teacher distillation, where it would leave every row without a
+        # teacher and train at a loss of exactly zero; it is refused instead.
+        with pytest.raises(ValueError, match="at least one"):
+            DistillationTrainer(
+                model=self.model_id,
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                teacher_models={},
+            )
+
     def test_teacher_model_and_teacher_models_are_exclusive(self, teachers):
         # The singular and the mapping entry points have different teacher lifecycles; a run may only use one.
         with pytest.raises(ValueError, match="Pass only one"):
@@ -2077,6 +2087,37 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         with pytest.raises(ValueError, match="incompatible with the checkpoint") as exc_info:
             swapped.train(resume_from_checkpoint=checkpoint)
         assert "'a'" in str(exc_info.value), "the error does not name the offending teacher ID"
+
+    def test_resume_requires_a_teacher_manifest(self, teachers):
+        # A checkpoint from a single-teacher run carries no manifest, so the teachers it was trained against are
+        # unknown and resuming it with `teacher_models` is refused rather than crashing on the missing file.
+        def args(max_steps):
+            return DistillationConfig(
+                output_dir=self.tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=2,
+                max_completion_length=4,
+                max_steps=max_steps,
+                save_strategy="steps",
+                save_steps=1,
+                report_to="none",
+            )
+
+        dataset = self._unrouted_dataset(8)
+        single = DistillationTrainer(
+            model=self.model_id, args=args(1), train_dataset=dataset, teacher_model=teachers["a"]
+        )
+        single.train()
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        assert not os.path.exists(os.path.join(checkpoint, "teacher_manifest.json"))
+
+        resumed = DistillationTrainer(
+            model=self.model_id, args=args(2), train_dataset=dataset, teacher_models={"a": teachers["a"]}
+        )
+        with pytest.raises(ValueError, match="no `teacher_manifest.json`") as exc_info:
+            resumed.train(resume_from_checkpoint=checkpoint)
+        assert checkpoint in str(exc_info.value)
+        assert "not written by a multi-teacher run" in str(exc_info.value)
 
     @pytest.mark.parametrize("unsupported", [{"device_map": "auto"}, {"quantization_config": {"load_in_8bit": True}}])
     def test_rejects_unsupported_teacher_kwargs(self, teachers, unsupported):
