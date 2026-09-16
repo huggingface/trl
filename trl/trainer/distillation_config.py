@@ -200,7 +200,7 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    teacher_model_name_or_path: str | dict[str, str] | None = field(
+    teacher_model_name_or_path: dict[str, str] | str | None = field(
         default=None,
         metadata={
             "help": "Model name or path for the teacher model, or a JSON object mapping a routing ID to a model "
