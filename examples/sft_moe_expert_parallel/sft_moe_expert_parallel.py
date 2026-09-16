@@ -43,7 +43,8 @@ from trl import SFTConfig, SFTTrainer
 MODEL = "REDACTED"
 
 # `ep_size` is not in a released transformers yet. Checked before the dataset is read, so 64 ranks fail in a
-# second rather than after preprocessing 500k rows.
+# second rather than after preprocessing 500k rows. Temporary: once it ships, pin `transformers>=5.18.0` in the
+# header above and drop this.
 if Version(transformers.__version__) < Version("5.18.0.dev0"):
     raise RuntimeError(
         f"This example needs expert parallelism, which is not in a released transformers yet. Install "
