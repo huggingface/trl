@@ -953,9 +953,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             Unlike [`GRPOTrainer`], rewards are computed in a spawned child process, so each reward function (along
             with `tools` and `environment_factory`) must be picklable: use a module-level function,
-            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
-            process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
-            trainer's GPU.
+            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. Tools are
+            registered under their `__name__`, so they must be module-level functions. The child process also runs
+            with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the trainer's GPU.
         args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
