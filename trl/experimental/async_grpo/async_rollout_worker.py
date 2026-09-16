@@ -46,7 +46,7 @@ from ...chat_template_utils import (
     parse_response,
 )
 from ...import_utils import is_vllm_available
-from ...trainer.utils import get_callable_name, print_prompt_completions_sample
+from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
 
 
 logger = get_logger(__name__)
@@ -1006,9 +1006,7 @@ class _AsyncRolloutLoop:
         )
         all_rewards = await asyncio.gather(
             *[
-                reward_func(**kwargs)
-                if inspect.iscoroutinefunction(reward_func)
-                else asyncio.to_thread(reward_func, **kwargs)
+                reward_func(**kwargs) if is_async_callable(reward_func) else asyncio.to_thread(reward_func, **kwargs)
                 for reward_func in self.reward_funcs
             ]
         )
