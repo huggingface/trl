@@ -576,10 +576,18 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise). Most
+        # architectures carry the switch in their config; the VLM MoE wrappers take it as a forward kwarg and keep only
+        # the coefficient in their text config, so either attribute marks a model that can return the aux loss.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
+        has_aux_loss = hasattr(text_config, "output_router_logits") or hasattr(text_config, "router_aux_loss_coef")
+        self.aux_loss_enabled = has_aux_loss and args.router_aux_loss_coef != 0.0
+        if not has_aux_loss and args.router_aux_loss_coef != 0.0 and hasattr(text_config, "num_experts_per_tok"):
+            logger.warning(
+                f"`router_aux_loss_coef` is set to {args.router_aux_loss_coef}, but the {text_config.model_type} "
+                f"architecture doesn't implement the load-balancing auxiliary loss, so it has no effect. Set "
+                f"`router_aux_loss_coef` to `0.0` to silence this warning."
+            )
         self.router_aux_loss_coef = args.router_aux_loss_coef
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0

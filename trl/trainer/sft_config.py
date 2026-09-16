@@ -43,9 +43,9 @@ class SFTConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+            Coefficient of the load-balancing auxiliary loss. Only has an effect on Mixture-of-Experts (MoE) models
+            that implement this loss; it does nothing for other models, and a warning is issued for MoE models that
+            don't. The auxiliary loss is added to the training loss with this weight. Set to `0.0` to disable it.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -162,9 +162,10 @@ class SFTConfig(_BaseConfig):
     router_aux_loss_coef: float = field(
         default=0.001,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect on Mixture-of-Experts "
+            "(MoE) models that implement this loss; it does nothing for other models, and a warning is issued for "
+            "MoE models that don't. The auxiliary loss is added to the training loss with this weight. Set to `0.0` "
+            "to disable it."
         },
     )
     chat_template_path: str | None = field(

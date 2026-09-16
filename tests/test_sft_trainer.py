@@ -800,6 +800,27 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id, expect_aux_loss, expect_warning",
+        [
+            # MoE that implements the load-balancing auxiliary loss: the coefficient is applied
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", True, False),
+            # MoE that balances its experts with a router bias instead, so there is no auxiliary loss to weight
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", False, True),
+            # Dense model: the coefficient is a documented no-op, nothing to warn about
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", False, False),
+        ],
+    )
+    def test_router_aux_loss_coef_warns_when_unsupported(self, model_id, expect_aux_loss, expect_warning, caplog):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.001, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert trainer.aux_loss_enabled == expect_aux_loss
+        assert ("doesn't implement the load-balancing auxiliary loss" in caplog.text) == expect_warning
+
     @require_peft
     def test_train_peft_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
