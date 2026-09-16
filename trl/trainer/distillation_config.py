@@ -52,10 +52,10 @@ class DistillationConfig(_BaseConfig):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         teacher_model_init_kwargs_by_teacher (`str` or `dict[str, dict[str, Any]]`, *optional*):
-            Per-teacher loading overrides for multi-teacher distillation, keyed by the routing ID used in the
-            trainer's `teacher_model` mapping. Each entry is merged over `teacher_model_init_kwargs`, so it can give
-            one teacher its own `revision` or `dtype` while the rest share the common kwargs. Only valid together
-            with a mapping of teachers.
+            Per-teacher loading overrides for multi-teacher distillation, keyed by the routing ID used in the trainer's
+            `teacher_model` mapping. Each entry is merged over `teacher_model_init_kwargs`, so it can give one teacher
+            its own `revision` or `dtype` while the rest share the common kwargs. Only valid together with a mapping of
+            teachers.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 

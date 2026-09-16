@@ -13,32 +13,29 @@
 # limitations under the License.
 
 """
-Two-rank CPU worker for `test_distillation_trainer_multi_teacher.py`, covering the multi-teacher
-`DistillationTrainer` (a mapping of teachers as the `teacher_model` constructor argument) with three `--mode`
-values.
+Two-rank CPU worker for `test_distillation_trainer_multi_teacher.py`, covering the multi-teacher `DistillationTrainer`
+(a mapping of teachers as the `teacher_model` constructor argument) with three `--mode` values.
 
 Launched with `python -m torch.distributed.run` rather than `accelerate launch`: this environment has no
 `mpirun`/`mpiexec`/`mpi4py`, and `accelerate launch`'s non-MPI multi-process spawn is only wired up for
-`MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process
-launcher.
+`MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process launcher.
 
-`--mode multi` / `--mode reference`: two gloo processes on CPU, compared against a single-process reference trained
-on the same global batch and the same tokens. Completions are replaced by a deterministic function of the prompt
-tokens (`FixedCompletionTrainer`), so both runs train on exactly the same (prompt, completion) pairs and the
-comparison isolates the cross-rank reduction from sampling. The two teacher checkpoints are built by every process,
+`--mode multi` / `--mode reference`: two gloo processes on CPU, compared against a single-process reference trained on
+the same global batch and the same tokens. Completions are replaced by a deterministic function of the prompt tokens
+(`FixedCompletionTrainer`), so both runs train on exactly the same (prompt, completion) pairs and the comparison
+isolates the cross-rank reduction from sampling. The two teacher checkpoints are built by every process,
 deterministically (a fixed seed and a fixed per-parameter rescale, no sampling involved), so every rank ends up with
-bit-identical teachers without needing a shared filesystem hand-off. Rank 0 writes a JSON summary and the final
-student parameters to the `--out` path (and a sibling `-params.pt` file).
+bit-identical teachers without needing a shared filesystem hand-off. Rank 0 writes a JSON summary and the final student
+parameters to the `--out` path (and a sibling `-params.pt` file).
 
 `--mode dtensor-head`: checks that the multi-teacher loss issues the same collectives on every rank when the student
-head is a sharded `DTensor` (what FSDP2 gives it), even though local routing puts a different number of teacher
-groups on each rank (`[a, b]` on rank 0, `[a, a]` on rank 1, unless `--equal-groups`). This isolates the loss path
-rather than running a full FSDP2 trainer: FSDP2 is what makes the student head a `DTensor`, and the head is the only
-student parameter the chunked loss projects through, so a head built by hand on the mesh exercises exactly the
-collectives the trainer would issue. The student head's `full_tensor()` must therefore run once per microbatch, not
-once per teacher group, or the ranks issue different numbers of collectives and `TORCH_DISTRIBUTED_DEBUG=DETAIL`
-reports a mismatch (or the run deadlocks). Forward, the cross-rank statistic reduction `compute_loss` performs, and
-backward are all driven.
+head is a sharded `DTensor` (what FSDP2 gives it), even though local routing puts a different number of teacher groups
+on each rank (`[a, b]` on rank 0, `[a, a]` on rank 1, unless `--equal-groups`). This isolates the loss path rather than
+running a full FSDP2 trainer: FSDP2 is what makes the student head a `DTensor`, and the head is the only student
+parameter the chunked loss projects through, so a head built by hand on the mesh exercises exactly the collectives the
+trainer would issue. The student head's `full_tensor()` must therefore run once per microbatch, not once per teacher
+group, or the ranks issue different numbers of collectives and `TORCH_DISTRIBUTED_DEBUG=DETAIL` reports a mismatch (or
+the run deadlocks). Forward, the cross-rank statistic reduction `compute_loss` performs, and backward are all driven.
 """
 
 import argparse

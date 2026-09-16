@@ -335,12 +335,12 @@ class DistillationTrainer(_BaseTrainer):
             (loaded like `model`, using `args.teacher_model_init_kwargs`) or an instantiated
             [`~transformers.PreTrainedModel`], which is prepared with the accelerator and stays resident on it. A
             mapping from routing ID to either of those instead opts into multi-teacher on-policy distillation: every
-            dataset row's `teacher_id` column selects the teacher that supplies its target (the column is optional
-            when a single teacher is registered), and per-teacher `teacher_jsd/<id>`, `teacher_token_frac/<id>` and
+            dataset row's `teacher_id` column selects the teacher that supplies its target (the column is optional when
+            a single teacher is registered), and per-teacher `teacher_jsd/<id>`, `teacher_token_frac/<id>` and
             `teacher_score_s/<id>` metrics are logged. The type selects the teacher lifecycle, not the numerics: the
-            teachers of a mapping are held on CPU and moved to the accelerator one at a time — even for a single
-            entry, which trains identically to passing that teacher on its own — so device memory is bounded by the
-            largest teacher rather than their sum. Several IDs may point at the same checkpoint with different
+            teachers of a mapping are held on CPU and moved to the accelerator one at a time — even for a single entry,
+            which trains identically to passing that teacher on its own — so device memory is bounded by the largest
+            teacher rather than their sum. Several IDs may point at the same checkpoint with different
             `args.teacher_model_init_kwargs_by_teacher` overrides. Every teacher must share the student's vocabulary.
             May be omitted by subclasses that supply the teacher another way (e.g. a remote server).
         args ([`DistillationConfig`], *optional*):
@@ -1056,15 +1056,15 @@ class DistillationTrainer(_BaseTrainer):
         Score every teacher present in a freshly generated batch, keeping the completion hidden states on CPU.
 
         One device upload per teacher per generation batch: the teacher's tensors are copied to the device, every
-        microbatch slice routed to it is scored in order, and the copies are freed before the next teacher — so
-        device memory holds one teacher body at a time, whatever the number registered. The slices are scored exactly
-        as the loss's own forward would see them (the same rows, the same shapes, the same precision), which is what
-        makes a single registered teacher numerically identical to passing `teacher_model=`.
+        microbatch slice routed to it is scored in order, and the copies are freed before the next teacher — so device
+        memory holds one teacher body at a time, whatever the number registered. The slices are scored exactly as the
+        loss's own forward would see them (the same rows, the same shapes, the same precision), which is what makes a
+        single registered teacher numerically identical to passing `teacher_model=`.
 
         Args:
             mode (`str`):
-                `"train"` or `"eval"`. Targets are stored per mode, so an evaluation nested in a training
-                accumulation cannot clobber the training targets.
+                `"train"` or `"eval"`. Targets are stored per mode, so an evaluation nested in a training accumulation
+                cannot clobber the training targets.
             microbatches (`list[dict[str, torch.Tensor or Any]]`):
                 Microbatches of the generation batch, in the order they will be trained on.
         """

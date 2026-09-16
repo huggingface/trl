@@ -1551,8 +1551,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
 
     Teachers are two local checkpoints saved from the same tiny fixture, each with every weight scaled by a different
     factor so that their targets — and therefore their divergences — really differ from the student's and from each
-    other's. Only public API is used: the constructor, `DistillationConfig`, `trainer.state.log_history`, the
-    student's parameters, and the `teacher_manifest.json` written next to a checkpoint.
+    other's. Only public API is used: the constructor, `DistillationConfig`, `trainer.state.log_history`, the student's
+    parameters, and the `teacher_manifest.json` written next to a checkpoint.
     """
 
     model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
@@ -1576,8 +1576,8 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
         Two local teacher checkpoints, shared by every test in this class.
 
         Both are rescaled copies of the student fixture: an unscaled copy would be the student itself, making the
-        divergence — and therefore every gradient — pure floating-point noise that Adam then amplifies into
-        full-size, arbitrarily directed parameter updates.
+        divergence — and therefore every gradient — pure floating-point noise that Adam then amplifies into full-size,
+        arbitrarily directed parameter updates.
         """
         directory = tmp_path_factory.mktemp("multi-teacher")
         return {

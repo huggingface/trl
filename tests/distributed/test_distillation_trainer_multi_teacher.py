@@ -18,13 +18,12 @@ Two-rank CPU checks of the multi-teacher `DistillationTrainer`, both launched ag
 
 * `TestDistillationTrainerMultiTeacherTwoRankCpu`: a two-process update (`--mode multi`) against a single-process
   reference (`--mode reference`) trained on the same global batch and tokens.
-* `TestDistillationTrainerDTensorHeadTwoRankCpu`: the multi-teacher loss with a sharded `DTensor` student head,
-  routing a different number of teacher groups to each rank (`--mode dtensor-head`).
+* `TestDistillationTrainerDTensorHeadTwoRankCpu`: the multi-teacher loss with a sharded `DTensor` student head, routing
+  a different number of teacher groups to each rank (`--mode dtensor-head`).
 
 Launched with `python -m torch.distributed.run` rather than `accelerate launch`: this environment has no
 `mpirun`/`mpiexec`/`mpi4py`, and `accelerate launch`'s non-MPI multi-process spawn is only wired up for
-`MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process
-launcher.
+`MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process launcher.
 """
 
 import json
