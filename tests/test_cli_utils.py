@@ -375,6 +375,33 @@ class TestGetDataset:
         expected = list(full) + list(full.select(range(n_second)))
         assert list(result["train"]) == expected
 
+    def test_dataset_fraction_zero_sum_raises_before_loading(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="dataset-a", fraction=0.0),
+                DatasetConfig(path="dataset-b", fraction=0.0),
+            ]
+        )
+
+        with patch("datasets.load_dataset") as load_dataset, pytest.raises(ValueError, match="sum to a positive value"):
+            get_dataset(mixture_config)
+
+        load_dataset.assert_not_called()
+
+    @pytest.mark.parametrize("fraction", [-0.1, float("nan"), float("inf")])
+    def test_dataset_fraction_invalid_value_raises_before_loading(self, fraction):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="dataset-a", fraction=fraction),
+                DatasetConfig(path="dataset-b", fraction=1.0),
+            ]
+        )
+
+        with patch("datasets.load_dataset") as load_dataset, pytest.raises(ValueError, match="finite and non-negative"):
+            get_dataset(mixture_config)
+
+        load_dataset.assert_not_called()
+
     def test_dataset_fraction_partial_raises_error(self):
         mixture_config = DatasetMixtureConfig(
             datasets=[

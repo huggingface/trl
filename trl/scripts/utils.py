@@ -16,6 +16,7 @@ import argparse
 import importlib
 import inspect
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -442,6 +443,17 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
     import datasets
 
     logger.info(f"Creating dataset mixture with {len(mixture_config.datasets)} datasets")
+    fractions = [dataset_config.fraction for dataset_config in mixture_config.datasets]
+    if any(fraction is not None for fraction in fractions):
+        if any(fraction is None for fraction in fractions):
+            raise ValueError("`fraction` must be set for either all datasets in the mixture or none of them.")
+        if any(not math.isfinite(fraction) or fraction < 0 for fraction in fractions):
+            raise ValueError("Dataset `fraction` values must be finite and non-negative.")
+        if sum(fractions) <= 0:
+            raise ValueError("Dataset `fraction` values must sum to a positive value.")
+        if mixture_config.streaming:
+            raise ValueError("Using a dataset `fraction` is not supported with streaming datasets.")
+
     datasets_list = []
     for dataset_config in mixture_config.datasets:
         logger.info(f"Loading dataset for mixture: {dataset_config.path} (config name: {dataset_config.name})")
@@ -460,12 +472,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
     # If `fraction` is set, treat the values as target shares of the final mixture. They are normalized to sum to one,
     # and the mixture size is capped so that no dataset is oversampled: we keep the first `round(weight * total)` rows of
     # each dataset, where `total` is the largest mixture size such that no dataset contributes more rows than it has.
-    fractions = [dataset_config.fraction for dataset_config in mixture_config.datasets]
     if any(fraction is not None for fraction in fractions):
-        if any(fraction is None for fraction in fractions):
-            raise ValueError("`fraction` must be set for either all datasets in the mixture or none of them.")
-        if mixture_config.streaming:
-            raise ValueError("Using a dataset `fraction` is not supported with streaming datasets.")
         weights = [fraction / sum(fractions) for fraction in fractions]
         total = min(
             len(dataset) / weight for dataset, weight in zip(datasets_list, weights, strict=False) if weight > 0
