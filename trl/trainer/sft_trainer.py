@@ -22,7 +22,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import accelerate
 import torch
@@ -1423,17 +1423,26 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise). Most
-        # architectures carry the switch in their config; the VLM MoE wrappers take it as a forward kwarg and keep only
-        # the coefficient in their text config, so either attribute marks a model that can return the aux loss.
+        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise). Config fields
+        # don't say whether a model can produce it: Llama 4 declares `output_router_logits` yet returns no aux loss,
+        # while the VLM MoE wrappers return one without declaring the field. The output type of the forward does say,
+        # and it is read off the class because the SFT chunked path patches the instance's forward.
         text_config = model.config.get_text_config()
-        has_aux_loss = hasattr(text_config, "output_router_logits") or hasattr(text_config, "router_aux_loss_coef")
+        base_model = model.get_base_model() if is_peft_model(model) else model
+        return_type = type(base_model).forward.__annotations__.get("return")
+        has_aux_loss = any(
+            "aux_loss" in getattr(output_type, "__dataclass_fields__", {})
+            for output_type in (get_args(return_type) or (return_type,))
+        )
         self.aux_loss_enabled = has_aux_loss and self.args.router_aux_loss_coef != 0.0
-        if not has_aux_loss and self.args.router_aux_loss_coef != 0.0 and hasattr(text_config, "num_experts_per_tok"):
+        if not has_aux_loss and self.args.router_aux_loss_coef != 0.0 and hasattr(text_config, "router_aux_loss_coef"):
+            # The architecture declares a coefficient, so it is meant to be trained with the auxiliary loss, but its
+            # forward doesn't return one. MoE families that balance their experts without it declare no coefficient
+            # and land in the silent branch instead.
             logger.warning(
-                f"`router_aux_loss_coef` is set to {self.args.router_aux_loss_coef}, but the {text_config.model_type} "
-                f"architecture doesn't implement the load-balancing auxiliary loss, so it has no effect. Set "
-                f"`router_aux_loss_coef` to `0.0` to silence this warning."
+                f"`router_aux_loss_coef` is set to {self.args.router_aux_loss_coef}, but {type(base_model).__name__} "
+                f"doesn't return a load-balancing auxiliary loss, so it has no effect. Set `router_aux_loss_coef` to "
+                f"`0.0` to silence this warning."
             )
         if has_aux_loss:
             # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
