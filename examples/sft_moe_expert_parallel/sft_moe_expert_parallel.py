@@ -30,7 +30,9 @@ across all 64, and each rank trains on its own slice of the batch. 14.1 s/step, 
     sbatch sft_moe_expert_parallel.slurm
 """
 
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 from peft import LoraConfig
 from transformers.distributed import DistributedConfig
 
@@ -39,6 +41,14 @@ from trl import SFTConfig, SFTTrainer
 
 # The checkpoint, staged on every node's local disk.
 MODEL = "REDACTED"
+
+# `ep_size` is not in a released transformers yet. Checked before the dataset is read, so 64 ranks fail in a
+# second rather than after preprocessing 500k rows.
+if Version(transformers.__version__) < Version("5.18.0.dev0"):
+    raise RuntimeError(
+        f"This example needs expert parallelism, which is not in a released transformers yet. Install "
+        f"transformers from main. Got {transformers.__version__}."
+    )
 
 # Read the dataset before loading the model: 64 GPUs holding a loaded model is the most expensive place to wait
 # on I/O.
@@ -56,6 +66,8 @@ training_args = SFTConfig(
     gradient_accumulation_steps=2,
     max_steps=500,
     max_length=2048,
+    # Without this, 500k rows are tokenized and packed single-threaded on rank 0 while 63 ranks wait.
+    dataset_num_proc=32,
     # bfd packing flattens the batch (padding-free) and passes position_ids; transformers builds the
     # block-diagonal mask from them, so sequences do not attend to each other under sdpa either.
     packing=True,
