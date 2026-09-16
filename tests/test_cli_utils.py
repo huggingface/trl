@@ -383,7 +383,10 @@ class TestGetDataset:
             ]
         )
 
-        with patch("datasets.load_dataset") as load_dataset, pytest.raises(ValueError, match="sum to a positive value"):
+        with (
+            patch("datasets.load_dataset") as load_dataset,
+            pytest.raises(ValueError, match="sum to a positive value"),
+        ):
             get_dataset(mixture_config)
 
         load_dataset.assert_not_called()
@@ -397,7 +400,10 @@ class TestGetDataset:
             ]
         )
 
-        with patch("datasets.load_dataset") as load_dataset, pytest.raises(ValueError, match="finite and non-negative"):
+        with (
+            patch("datasets.load_dataset") as load_dataset,
+            pytest.raises(ValueError, match="finite and non-negative"),
+        ):
             get_dataset(mixture_config)
 
         load_dataset.assert_not_called()
