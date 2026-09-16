@@ -812,6 +812,32 @@ class DistillationTrainer(_BaseTrainer):
                     self.teacher_models[teacher_id] = self._load_teacher(teacher_id, source, teacher_model_init_kwargs)
             self._teacher_ids = list(self.teacher_models)
             self._teacher_id_to_idx = {teacher_id: index for index, teacher_id in enumerate(self._teacher_ids)}
+            # A misrouted row is otherwise only caught once its generation batch is scored, minutes into the run and
+            # after the first checkpoint-free generation. Map-style datasets can be read up front, so the whole
+            # routing column is checked here; iterable datasets cannot be scanned without consuming them and keep the
+            # per-row check in `_generate_and_score_completions`.
+            named_datasets = {"train_dataset": train_dataset}
+            if isinstance(eval_dataset, dict):
+                named_datasets.update({f"eval_dataset[{key!r}]": value for key, value in eval_dataset.items()})
+            else:
+                named_datasets["eval_dataset"] = eval_dataset
+            for name, dataset in named_datasets.items():
+                if not isinstance(dataset, Dataset):
+                    continue
+                if "teacher_id" not in dataset.column_names:
+                    if len(self._teacher_ids) > 1:
+                        raise ValueError(
+                            f"`{name}` has no `teacher_id` column, but {len(self._teacher_ids)} teachers are "
+                            f"registered ({self._teacher_ids}). Add a `teacher_id` column naming one of them to "
+                            f"every row; it is optional only when a single teacher is registered."
+                        )
+                    continue
+                unknown = sorted(set(dataset["teacher_id"]) - set(self._teacher_ids))
+                if unknown:
+                    raise ValueError(
+                        f"Unknown teacher IDs {unknown} in the `teacher_id` column of `{name}`. Registered "
+                        f"teachers: {self._teacher_ids}."
+                    )
             # Completion hidden states scored ahead of the loss in `_prepare_inputs`, kept on CPU and keyed per mode
             # so a nested evaluation cannot clobber the training targets:
             # `{mode: {microbatch index: {teacher index: (rows, completion length, H) tensor}}}`.

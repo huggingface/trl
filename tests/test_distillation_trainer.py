@@ -1766,12 +1766,13 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
     @pytest.mark.parametrize(
         ("teacher_ids", "error"),
         [
-            (["a", "nope"] * 3, "Unknown teacher ID"),  # a routing ID nobody registered
-            (None, "no `teacher_id`"),  # no routing column at all, with more than one teacher registered
+            (["a", "nope"] * 3, r"Unknown teacher IDs \['nope'\]"),  # a routing ID nobody registered
+            (None, "no `teacher_id` column"),  # no routing column at all, with more than one teacher registered
         ],
     )
     def test_teacher_id_routing_errors(self, teachers, teacher_ids, error):
-        # Routing is resolved from the dataset, so both failures surface on `train()`, not at construction.
+        # A map-style dataset is readable up front, so both failures are caught at construction rather than minutes
+        # into the run, when the first generation batch is routed.
         dataset = self._routed_dataset(teacher_ids) if teacher_ids is not None else self._unrouted_dataset(6)
         training_args = DistillationConfig(
             output_dir=self.tmp_dir,
@@ -1780,10 +1781,51 @@ class TestDistillationTrainerMultiTeacher(TrlTestCase):
             max_steps=1,
             report_to="none",
         )
-        trainer = DistillationTrainer(
-            model=self.model_id, args=training_args, train_dataset=dataset, teacher_models=teachers
+        with pytest.raises(ValueError, match=error) as exc_info:
+            DistillationTrainer(
+                model=self.model_id, args=training_args, train_dataset=dataset, teacher_models=teachers
+            )
+        assert "train_dataset" in str(exc_info.value)
+        assert "['a', 'b']" in str(exc_info.value), "the error does not list the registered teachers"
+
+    def test_unknown_teacher_id_in_eval_dataset_is_rejected(self, teachers):
+        # Evaluation routes through the same registry, and its dataset is passed to the constructor too, so a typo
+        # there must not wait for the first evaluation. A dict of eval datasets is checked entry by entry.
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            per_device_eval_batch_size=2,
+            max_completion_length=4,
+            max_steps=1,
+            report_to="none",
         )
-        with pytest.raises(ValueError, match=error):
+        with pytest.raises(ValueError, match=r"Unknown teacher IDs \['nope'\]") as exc_info:
+            DistillationTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self._routed_dataset(["a", "b"] * 3),
+                eval_dataset={"clean": self._routed_dataset(["a"]), "typo": self._routed_dataset(["nope"])},
+                teacher_models=teachers,
+            )
+        assert "eval_dataset['typo']" in str(exc_info.value)
+
+    def test_unknown_teacher_id_in_an_iterable_dataset_is_rejected_while_training(self, teachers):
+        # An iterable dataset cannot be scanned without consuming it, so it is skipped by the construction-time
+        # check and relies on the per-row routing check that runs when a generation batch is scored.
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            max_completion_length=4,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=self.model_id,
+            args=training_args,
+            train_dataset=self._routed_dataset(["a", "nope"] * 3).to_iterable_dataset(),
+            teacher_models=teachers,
+        )
+        with pytest.raises(ValueError, match="Unknown teacher ID"):
             trainer.train()
 
     def test_teacher_id_column_is_optional_with_one_teacher(self, teachers):
