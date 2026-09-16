@@ -40,7 +40,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     entropy_from_logits,
     get_config_model_id,
-    main_processes_first,
+    global_then_local_main_first,
     pad,
     selective_log_softmax,
 )
@@ -522,7 +522,7 @@ class TPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with main_processes_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed. Unlike DPO, we must also strip the extracted prompt from the reference
             # column (see `_extract_triple_prompt`), which assumes the reference shares the same implicit prompt.
             first_example = next(iter(dataset))

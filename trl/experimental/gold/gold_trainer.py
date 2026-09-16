@@ -70,8 +70,8 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     identity,
-    main_processes_first,
     pad,
     split_tensor_dict,
 )
@@ -2049,7 +2049,7 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with main_processes_first():
+        with global_then_local_main_first():
             # Apply the formatting function if any
             if formatting_func is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`

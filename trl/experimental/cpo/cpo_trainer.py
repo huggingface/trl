@@ -54,8 +54,8 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     log_table_to_comet_experiment,
-    main_processes_first,
     selective_log_softmax,
 )
 from ..utils import (
@@ -369,7 +369,7 @@ class CPOTrainer(_BaseTrainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with main_processes_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(

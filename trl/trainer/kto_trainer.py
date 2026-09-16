@@ -66,8 +66,8 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    global_then_local_main_first,
     hash_module,
-    main_processes_first,
     maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
@@ -1026,7 +1026,7 @@ class KTOTrainer(_BaseTrainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with main_processes_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:
