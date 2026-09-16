@@ -1474,7 +1474,8 @@ class TestDPOTrainer(TrlTestCase):
         )
         trainer.model.eval()
 
-        input_ids = trainer.processing_class("Hello there", return_tensors="pt")["input_ids"].repeat(2, 1)
+        device = trainer.accelerator.device
+        input_ids = trainer.processing_class("Hello there", return_tensors="pt")["input_ids"].repeat(2, 1).to(device)
         attention_mask = torch.ones_like(input_ids)
         completion_mask = torch.zeros_like(input_ids)  # no completion tokens: simulates a fully truncated batch
         inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "completion_mask": completion_mask}
@@ -1493,7 +1494,8 @@ class TestDPOTrainer(TrlTestCase):
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        input_ids = trainer.processing_class("Hello there", return_tensors="pt")["input_ids"].repeat(2, 1)
+        device = trainer.accelerator.device
+        input_ids = trainer.processing_class("Hello there", return_tensors="pt")["input_ids"].repeat(2, 1).to(device)
         attention_mask = torch.ones_like(input_ids)
         completion_mask = torch.zeros_like(input_ids)  # no completion tokens: simulates a fully truncated batch
         inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "completion_mask": completion_mask}
