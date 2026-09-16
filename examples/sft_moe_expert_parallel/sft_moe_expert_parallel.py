@@ -25,7 +25,7 @@
 # docstyle-ignore
 """
 LoRA SFT of REDACTED on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
-across all 64, and each rank trains on its own slice of the batch. 14.1 s/step, 131k tokens/step, 40 GB per GPU.
+across all 64, and each rank trains on its own slice of the batch. 15.4 s/step, 131k tokens/step, 40.2 GB per GPU.
 
     sbatch sft_moe_expert_parallel.slurm
 """
@@ -64,7 +64,6 @@ training_args = SFTConfig(
         "distributed_config": DistributedConfig(fsdp_size=64, ep_size=8),
     },
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=2,
     max_steps=500,
     max_length=2048,
     # Without this, 500k rows are tokenized and packed single-threaded on rank 0 while 63 ranks wait.
@@ -75,7 +74,7 @@ training_args = SFTConfig(
     logging_steps=1,
     # Resuming is not supported for models sharded at load time, so the optimizer state cannot be checkpointed.
     save_only_model=True,
-    # About 25 min of work at risk. The adapter is 194 MB, so the save itself takes seconds.
+    # About 13 min of work at risk. The adapter is 194 MB, so the save itself takes seconds.
     save_steps=50,
     report_to="trackio",
 )
