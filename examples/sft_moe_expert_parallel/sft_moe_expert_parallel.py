@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl>=1.13.0",  # num_tokens counted once under tensor parallelism
 #     "transformers @ git+https://github.com/huggingface/transformers.git@ep-mesh",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
