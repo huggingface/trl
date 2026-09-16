@@ -1616,10 +1616,8 @@ def patch_chunked_lm_head(
         )
 
         if valid_mask is not None:
-            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
-            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
-            logprobs[valid_mask] = logprobs_valid
-            entropy[valid_mask] = entropy_valid
+            logprobs = logprobs_valid.new_zeros(b * s).masked_scatter(valid_mask, logprobs_valid)
+            entropy = entropy_valid.new_zeros(b * s).masked_scatter(valid_mask, entropy_valid)
         else:
             logprobs = logprobs_valid
             entropy = entropy_valid

@@ -1678,6 +1678,20 @@ class TestPatchChunkedLMHead:
 
         torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
 
+        model.lm_head.weight.grad = None
+        model.model._hidden = None
+        empty_completion_mask = torch.zeros_like(completion_mask)
+        out_empty = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            completion_mask=empty_completion_mask,
+        )
+        assert out_empty["log_probs"].count_nonzero() == 0
+        out_empty["log_probs"].sum().backward()
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
+
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):

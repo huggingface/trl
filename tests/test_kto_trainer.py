@@ -1097,12 +1097,17 @@ class TestKTOTrainer(TrlTestCase):
         torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
 
         empty_completion_mask = torch.zeros_like(completion_mask)
-        with torch.no_grad():
-            empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model, model_kwargs, input_ids, empty_completion_mask
-            )
+        trainer.model.zero_grad()
+        empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, model_kwargs, input_ids, empty_completion_mask
+        )
         assert empty_logps.shape == logps.shape
         assert empty_logps.count_nonzero() == 0
+        assert empty_logps.requires_grad
+        empty_logps.sum().backward()
+        lm_head_grad = trainer.model.get_output_embeddings().weight.grad
+        assert lm_head_grad is not None
+        assert lm_head_grad.count_nonzero() == 0
 
     @require_liger_kernel
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")

@@ -1305,10 +1305,8 @@ class KTOTrainer(_BaseTrainer):
                 logit_scale,
             )
 
-        per_token_logps = torch.zeros_like(completion_mask[:, 1:], dtype=logps.dtype)
-        per_token_entropies = torch.zeros_like(completion_mask[:, 1:], dtype=entropies.dtype)
-        per_token_logps[mask] = logps
-        per_token_entropies[mask] = entropies
+        per_token_logps = logps.new_zeros(mask.shape).masked_scatter(mask, logps)
+        per_token_entropies = entropies.new_zeros(mask.shape).masked_scatter(mask, entropies)
         return per_token_logps, per_token_entropies, outputs
 
     def compute_ref_log_probs(self, model, inputs):

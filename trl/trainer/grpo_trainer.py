@@ -1403,6 +1403,84 @@ class GRPOTrainer(_BaseTrainer):
         mm_token_type_ids=None,
         image_position_ids=None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        if self.use_liger_kernel and not compute_aux_loss:
+            model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+            if pixel_values is not None:
+                model_inputs["pixel_values"] = pixel_values
+            if image_grid_thw is not None:
+                model_inputs["image_grid_thw"] = image_grid_thw
+            if pixel_attention_mask is not None:
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask
+            if spatial_shapes is not None:
+                model_inputs["spatial_shapes"] = spatial_shapes
+            if image_sizes is not None:
+                model_inputs["image_sizes"] = image_sizes
+            if token_type_ids is not None:
+                model_inputs["token_type_ids"] = token_type_ids
+            if mm_token_type_ids is not None:
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids
+            if image_position_ids is not None:
+                model_inputs["image_position_ids"] = image_position_ids
+            if "logits_to_keep" in self.model_kwarg_keys:
+                model_inputs["logits_to_keep"] = logits_to_keep + 1
+            model_inputs["use_cache"] = False
+
+            inner_model = model.base_model.model if is_peft_model(model) else model
+            if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+                backbone = inner_model.model
+            else:
+                backbone = inner_model.base_model
+            with self.accelerator.autocast():
+                outputs = backbone(**model_inputs)
+            hidden_states = outputs.last_hidden_state[:, :-1]
+            hidden_states = hidden_states[:, -logits_to_keep:]
+            completion_ids = input_ids[:, -logits_to_keep:]
+            completion_mask = attention_mask[:, -logits_to_keep:].bool()
+
+            hidden_states = hidden_states[completion_mask]
+            labels = completion_ids[completion_mask]
+            lm_head = inner_model.get_output_embeddings()
+            text_config = inner_model.config.get_text_config()
+            final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+            # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real
+            # 0.0 is kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
+            logit_scale = getattr(text_config, "logit_scale", None)
+            if logit_scale is None:
+                logit_scale = getattr(text_config, "output_multiplier", None)
+            logit_scale = 1.0 if logit_scale is None else logit_scale
+
+            lm_head_weight = lm_head.weight
+            lm_head_bias = lm_head.bias
+            # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor.
+            # Gather the head once before splitting tokens so every projection uses compatible tensor types.
+            if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+                lm_head_weight = lm_head_weight.full_tensor()
+                if lm_head_bias is not None:
+                    lm_head_bias = lm_head_bias.full_tensor()
+
+            with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+                valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
+                    hidden_states,
+                    lm_head_weight,
+                    lm_head_bias,
+                    labels,
+                    self.temperature,
+                    _CHUNKED_LOGPROB_CHUNK_SIZE,
+                    final_logit_softcapping,
+                    logit_scale,
+                )
+
+            # `masked_scatter` keeps the output connected to the model even when no completion token is valid. This
+            # lets an all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+            logps = valid_logps.new_zeros(completion_mask.shape).masked_scatter(completion_mask, valid_logps)
+            if compute_entropy:
+                entropies = valid_entropies.new_zeros(completion_mask.shape).masked_scatter(
+                    completion_mask, valid_entropies
+                )
+            else:
+                entropies = None
+            return logps, entropies, None
+
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -1466,81 +1544,28 @@ class GRPOTrainer(_BaseTrainer):
                 model_inputs["output_router_logits"] = True
 
             completion_ids = input_ids_batch[:, -logits_to_keep:]
-            if self.use_liger_kernel and not compute_aux_loss:
-                inner_model = model.base_model.model if is_peft_model(model) else model
-                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                    backbone = inner_model.model
+            outputs = model(**model_inputs)
+            logits = outputs.logits
+            # Exclude the last value: it corresponds to the next token pred
+            logits = logits[:, :-1, :]  # (B, L-1, H)
+            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+            # Divide logits by sampling temperature.
+            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+            logits = logits / self.temperature
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+            all_logps.append(logps)
+
+            if compute_entropy:
+                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
+                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
+                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
+                if self._entropy_bonus_enabled:
+                    entropies = entropy_from_logits(logits)
                 else:
-                    backbone = inner_model.base_model
-                with self.accelerator.autocast():
-                    outputs = backbone(**model_inputs)
-                hidden_states = outputs.last_hidden_state[:, :-1]
-                hidden_states = hidden_states[:, -logits_to_keep:]
-                completion_mask = attention_mask_batch[:, -logits_to_keep:].bool()
-
-                hidden_states = hidden_states[completion_mask]
-                labels = completion_ids[completion_mask]
-                lm_head = inner_model.get_output_embeddings()
-                text_config = inner_model.config.get_text_config()
-                final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-                # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real
-                # 0.0 is kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
-                logit_scale = getattr(text_config, "logit_scale", None)
-                if logit_scale is None:
-                    logit_scale = getattr(text_config, "output_multiplier", None)
-                logit_scale = 1.0 if logit_scale is None else logit_scale
-
-                lm_head_weight = lm_head.weight
-                lm_head_bias = lm_head.bias
-                # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor.
-                # Gather the head once before splitting tokens so every projection uses compatible tensor types.
-                if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
-                    lm_head_weight = lm_head_weight.full_tensor()
-                    if lm_head_bias is not None:
-                        lm_head_bias = lm_head_bias.full_tensor()
-
-                with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-                    valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
-                        hidden_states,
-                        lm_head_weight,
-                        lm_head_bias,
-                        labels,
-                        self.temperature,
-                        _CHUNKED_LOGPROB_CHUNK_SIZE,
-                        final_logit_softcapping,
-                        logit_scale,
-                    )
-
-                logps = torch.zeros_like(completion_mask, dtype=valid_logps.dtype)
-                logps[completion_mask] = valid_logps
-                all_logps.append(logps)
-                if compute_entropy:
-                    entropies = torch.zeros_like(completion_mask, dtype=valid_entropies.dtype)
-                    entropies[completion_mask] = valid_entropies
-                    all_entropies.append(entropies)
-            else:
-                outputs = model(**model_inputs)
-                logits = outputs.logits
-                # Exclude the last value: it corresponds to the next token pred
-                logits = logits[:, :-1, :]  # (B, L-1, H)
-                # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-                logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-                # Divide logits by sampling temperature.
-                # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-                logits = logits / self.temperature
-                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-                all_logps.append(logps)
-
-                if compute_entropy:
-                    # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
-                    # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
-                    # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
-                    if self._entropy_bonus_enabled:
+                    with torch.no_grad():
                         entropies = entropy_from_logits(logits)
-                    else:
-                        with torch.no_grad():
-                            entropies = entropy_from_logits(logits)
-                    all_entropies.append(entropies)
+                all_entropies.append(entropies)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)

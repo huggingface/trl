@@ -543,6 +543,7 @@ class TestGRPOTrainer(TrlTestCase):
         trainer.model.train()
         trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        assert inputs["completion_mask"].sum() > 2048
         # Chunking over tokens as well as vocabulary adds a second axis of streamed-GEMM rounding noise, so the
         # aggregate cosine similarity is a bit looser here than the single-token-chunk case above.
         self._assert_chunked_loss_matches_full_logits(trainer, inputs, cosine_min=0.995)
@@ -573,16 +574,23 @@ class TestGRPOTrainer(TrlTestCase):
         text_config.logit_scale = None
         text_config.output_multiplier = 0.5
 
-        with torch.no_grad():
+        backbone_calls = []
+
+        def record_backbone_call(_module, _args, _output):
+            backbone_calls.append(None)
+
+        inner_model = trainer.model
+        with inner_model.base_model.register_forward_hook(record_backbone_call), torch.no_grad():
             logps, _, _ = trainer._get_per_token_logps_and_entropies(
                 trainer.model,
                 input_ids,
                 attention_mask,
                 logits_to_keep,
+                batch_size=1,
                 compute_entropy=False,
             )
+        assert len(backbone_calls) == 1
 
-        inner_model = trainer.model
         hidden_states = inner_model.base_model(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=False
         ).last_hidden_state[:, :-1]
@@ -596,16 +604,21 @@ class TestGRPOTrainer(TrlTestCase):
 
         empty_attention_mask = attention_mask.clone()
         empty_attention_mask[:, -logits_to_keep:] = 0
-        with torch.no_grad():
-            empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model,
-                input_ids,
-                empty_attention_mask,
-                logits_to_keep,
-                compute_entropy=False,
-            )
+        trainer.model.zero_grad()
+        empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model,
+            input_ids,
+            empty_attention_mask,
+            logits_to_keep,
+            compute_entropy=False,
+        )
         assert empty_logps.shape == logps.shape
         assert empty_logps.count_nonzero() == 0
+        assert empty_logps.requires_grad
+        empty_logps.sum().backward()
+        lm_head_grad = inner_model.get_output_embeddings().weight.grad
+        assert lm_head_grad is not None
+        assert lm_head_grad.count_nonzero() == 0
 
         release_memory(trainer.model, trainer)
 
