@@ -27,7 +27,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset
@@ -57,6 +56,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
     log_table_to_comet_experiment,
+    prepare_dataset_first,
     selective_log_softmax,
 )
 from ..utils import (
@@ -354,7 +354,7 @@ class ORPOTrainer(_BaseTrainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().main_process_first():
+        with prepare_dataset_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(

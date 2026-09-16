@@ -1247,6 +1247,22 @@ def get_config_model_id(config: PretrainedConfig) -> str:
 
 
 @contextmanager
+def prepare_dataset_first():
+    """
+    Context manager that lets one process per dataset cache run the block first, so the others reuse its result
+    instead of recomputing it.
+
+    `Dataset.map` writes its result to the datasets cache, so a process only reuses another's work if it can read
+    that process's cache. The global main process goes first, which is enough when the cache is shared. The local
+    main of each node then goes first, which is what makes a node-local cache cost one preparation per node
+    rather than one per process.
+    """
+    state = PartialState()
+    with state.main_process_first(), state.local_main_process_first():
+        yield
+
+
+@contextmanager
 def use_adapter(model: "PeftModel", adapter_name: str | None):
     """
     Context manager to temporarily set and reset the active adapter in a PEFT model.

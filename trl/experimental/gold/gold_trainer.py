@@ -27,7 +27,6 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.utils import (
     DistributedType,
     broadcast_object_list,
@@ -73,6 +72,7 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     pad,
+    prepare_dataset_first,
     split_tensor_dict,
 )
 from ..utils import (
@@ -2049,7 +2049,7 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with prepare_dataset_first():
             # Apply the formatting function if any
             if formatting_func is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`

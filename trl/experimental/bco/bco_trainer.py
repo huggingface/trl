@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import Accelerator, PartialState
+from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset
@@ -65,6 +65,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
     log_table_to_comet_experiment,
+    prepare_dataset_first,
     selective_log_softmax,
 )
 from ..utils import DPODataCollatorWithPadding, create_reference_model, pad_to_length, peft_module_casting_to_bf16
@@ -672,7 +673,7 @@ class BCOTrainer(_BaseTrainer):
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
 
-        with PartialState().main_process_first():
+        with prepare_dataset_first():
             # Extract the prompt if needed
             train_dataset = train_dataset.map(
                 maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
