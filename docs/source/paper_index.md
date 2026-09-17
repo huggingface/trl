@@ -954,8 +954,6 @@ training_args = DPOConfig(
 )
 ```
 
-For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
-
 ### Learn Your Reference Model for Real Good Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2404.09656
