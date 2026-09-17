@@ -52,7 +52,7 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import is_kernels_available, is_peft_available, is_rich_available, is_torchdynamo_compiling
 
 from ..trainer.model_config import ModelConfig
 
@@ -73,6 +73,9 @@ if is_rich_available():
 
 
 logger = get_logger(__name__)
+
+_TRL_LOSS_KERNEL: types.ModuleType | None = None
+_TRL_LOSS_KERNEL_LOAD_ATTEMPTED = False
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -498,6 +501,43 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
+def _load_trl_loss_kernel() -> types.ModuleType | None:
+    global _TRL_LOSS_KERNEL, _TRL_LOSS_KERNEL_LOAD_ATTEMPTED
+
+    if _TRL_LOSS_KERNEL is not None or _TRL_LOSS_KERNEL_LOAD_ATTEMPTED or is_torchdynamo_compiling():
+        return _TRL_LOSS_KERNEL
+
+    _TRL_LOSS_KERNEL_LOAD_ATTEMPTED = True
+    if not is_kernels_available():
+        return None
+
+    try:
+        from kernels import get_kernel
+
+        _TRL_LOSS_KERNEL = get_kernel("kernels-community/trl-losses", version=1)
+    except Exception:
+        pass
+    return _TRL_LOSS_KERNEL
+
+
+def _supports_trl_loss_kernel(logits: torch.Tensor, index: torch.Tensor | None = None) -> bool:
+    supported = (
+        logits.device.type in ("cuda", "xpu")
+        and logits.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and 1 <= logits.ndim <= 3
+        and logits.stride(-1) == 1
+        and logits.shape[-1] > 0
+    )
+    if index is not None:
+        supported = (
+            supported
+            and index.shape == logits.shape[:-1]
+            and index.dtype in (torch.int32, torch.int64)
+            and index.device == logits.device
+        )
+    return supported
+
+
 def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
@@ -521,6 +561,10 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
+    if _supports_trl_loss_kernel(logits, index) and (kernel := _load_trl_loss_kernel()) is not None:
+        logprobs, _ = kernel.selective_log_softmax_and_entropy(logits, index)
+        return logprobs
+
     squeeze = index.ndim == logits.ndim - 1
     if squeeze:
         index = index.unsqueeze(-1)
@@ -566,6 +610,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
+    if _supports_trl_loss_kernel(logits) and (kernel := _load_trl_loss_kernel()) is not None:
+        index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
+        _, entropy = kernel.selective_log_softmax_and_entropy(logits, index)
+        return entropy
+
     original_shape = logits.shape[:-1]  # all dims except num_classes
     num_classes = logits.shape[-1]
 
@@ -580,6 +629,35 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
     entropies = torch.cat(entropies, dim=0)
     return entropies.reshape(original_shape)
+
+
+def selective_log_softmax_and_entropy(
+    logits: torch.Tensor, index: torch.Tensor, entropy_requires_grad: bool = True
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute selected log-probabilities and entropy in one pass over the logits.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Indices of shape `(...)` selecting one log-probability per row.
+        entropy_requires_grad (`bool`, *optional*, defaults to `True`):
+            Whether gradients should flow through the entropy output.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor]`:
+            The selected log-probabilities and per-row entropies.
+    """
+    if _supports_trl_loss_kernel(logits, index) and (kernel := _load_trl_loss_kernel()) is not None:
+        logprobs, entropy = kernel.selective_log_softmax_and_entropy(logits, index)
+        return logprobs, entropy if entropy_requires_grad else entropy.detach()
+    logprobs = selective_log_softmax(logits, index)
+    if entropy_requires_grad:
+        entropy = entropy_from_logits(logits)
+    else:
+        with torch.no_grad():
+            entropy = entropy_from_logits(logits)
+    return logprobs, entropy
 
 
 def print_prompt_completions_sample(

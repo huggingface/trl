@@ -80,7 +80,6 @@ from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
@@ -93,6 +92,7 @@ from .utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -1543,19 +1543,14 @@ class GRPOTrainer(_BaseTrainer):
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
             if compute_entropy:
-                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
-                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
-                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
-                if self._entropy_bonus_enabled:
-                    entropies = entropy_from_logits(logits)
-                else:
-                    with torch.no_grad():
-                        entropies = entropy_from_logits(logits)
+                logps, entropies = selective_log_softmax_and_entropy(
+                    logits, completion_ids, entropy_requires_grad=self._entropy_bonus_enabled
+                )
                 all_entropies.append(entropies)
+            else:
+                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+            all_logps.append(logps)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)

@@ -64,13 +64,13 @@ from .utils import (
     _ChunkedLogProbFunction,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     flush_left,
     get_config_model_id,
     hash_module,
     maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     use_adapter,
 )
 
@@ -1459,7 +1459,9 @@ class KTOTrainer(_BaseTrainer):
         else:
             outputs = model(**model_kwargs)
             shift_logits = outputs.logits[:, :-1, :]
-            per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
+            per_token_logps, per_token_entropies = selective_log_softmax_and_entropy(
+                shift_logits, batch["input_ids"][:, 1:], entropy_requires_grad=False
+            )
             per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
         completion_logps = per_token_logps.sum(-1)
 
@@ -1591,7 +1593,7 @@ class KTOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             per_token_entropy = per_token_entropies.detach()
         else:
-            per_token_entropy = entropy_from_logits(shift_logits.detach())
+            per_token_entropy = per_token_entropies
         mask = batch["completion_mask"][:, 1:]
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()
