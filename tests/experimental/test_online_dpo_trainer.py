@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
@@ -92,6 +93,53 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+    def test_completion_metrics_ignore_padding(self, monkeypatch):
+        dataset = Dataset.from_dict({"prompt": ["one", "two"]})
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            beta=0.1,
+            report_to="none",
+        )
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        device = trainer.accelerator.device
+        prompt_ids = torch.ones((4, 1), dtype=torch.long, device=device)
+        prompt_mask = torch.ones_like(prompt_ids)
+        completion_ids = torch.ones((4, 3), dtype=torch.long, device=device)
+        completion_mask = torch.tensor([[1, 1, 0], [1, 0, 0], [1, 1, 1], [1, 0, 0]], dtype=torch.long, device=device)
+        logprobs = torch.tensor(
+            [[-1.0, -2.0, -100.0], [-3.0, -100.0, -100.0], [-4.0, -5.0, -6.0], [-7.0, -100.0, -100.0]],
+            device=device,
+            requires_grad=True,
+        )
+        ref_logprobs = torch.tensor(
+            [[-0.5, -1.0, -200.0], [-1.0, -200.0, -200.0], [-2.0, -2.0, -2.0], [-3.0, -200.0, -200.0]],
+            device=device,
+        )
+        rewards = torch.tensor([2.0, 1.0, 0.0, 3.0], device=device)
+        forward_calls = iter((logprobs, ref_logprobs))
+        monkeypatch.setattr(
+            trainer, "_generate", lambda *args: (prompt_ids, prompt_mask, completion_ids, completion_mask)
+        )
+        monkeypatch.setattr(trainer, "_forward", lambda *args: next(forward_calls))
+        monkeypatch.setattr(trainer, "_calculate_rewards_from_functions", lambda **kwargs: rewards)
+
+        trainer.training_step(trainer.model, {"prompt": ["one", "two"]})
+
+        assert trainer.stats["objective/kl"][-1] == pytest.approx(-4.125)
+        assert trainer.stats["objective/entropy"][-1] == pytest.approx(7.0)
+        assert trainer.stats["objective/non_score_reward"][-1] == pytest.approx(0.4125)
+        assert trainer.stats["objective/rlhf_reward"][-1] == pytest.approx(1.9125)
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):

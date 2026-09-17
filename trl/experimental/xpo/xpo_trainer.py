@@ -384,8 +384,8 @@ class XPOTrainer(OnlineDPOTrainer):
         rejected_ref_logprobs = torch.where(~chosen_mask, ref_logprobs_model_data_sum, ref_logprobs_ref_data_sum)
         rejected_log_ratios = rejected_model_logprobs - rejected_ref_logprobs
 
-        self.stats["logps/chosen"].append(gather_mean(chosen_model_logprobs.mean() + chosen_ref_logprobs.mean()))
-        self.stats["logps/rejected"].append(gather_mean(rejected_model_logprobs.mean() + rejected_ref_logprobs.mean()))
+        self.stats["logps/chosen"].append(gather_mean(chosen_model_logprobs.mean()))
+        self.stats["logps/rejected"].append(gather_mean(rejected_model_logprobs.mean()))
 
         # Log rewards
         # Compute various statistics
