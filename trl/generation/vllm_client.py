@@ -41,9 +41,17 @@ if is_requests_available():
 
 
 if is_vllm_available():
-    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip
 
+# vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
+# `trainer_send_weights` with a stateful trainer engine and moved `packed` from the per-update info to the init info.
+# The rendezvous and packed-broadcast helpers the statics were built on are still exposed, so they are called directly.
+_HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
+if _HAS_STATEFUL_TRAINER_ENGINE:
+    from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
+    from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
+elif is_vllm_available():
+    from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
 # `/start_weight_update` and `/finish_weight_update` were introduced in vLLM 0.21.0. Before that, `/update_weights`
 # ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
@@ -704,6 +712,8 @@ class VLLMClient:
             "rank_offset": 1,
             "world_size": world_size,
         }
+        if _HAS_STATEFUL_TRAINER_ENGINE:
+            init_info["packed"] = True
 
         # vLLM builds the trainer side of the group on the current device, so point it at the requested one. A device
         # without an index (e.g. `torch.device("cuda")`) means the current device, which is already the right one.
@@ -722,7 +732,10 @@ class VLLMClient:
             future = executor.submit(
                 self._post, f"{self.base_url}/init_weight_transfer_engine", json={"init_info": init_info}
             )
-            self.communicator = NCCLWeightTransferEngine.trainer_init(init_info)
+            if _HAS_STATEFUL_TRAINER_ENGINE:
+                self.communicator = open_trainer_endpoint(init_info)
+            else:
+                self.communicator = NCCLWeightTransferEngine.trainer_init(init_info)
             future.result()
 
         # When the client object is deleted, close the weight update group
@@ -789,7 +802,9 @@ class VLLMClient:
                 Iterator yielding the `(name, tensor)` pairs described by `metadata`.
         """
         names, dtype_names, shapes = (list(field) for field in zip(*metadata, strict=True))
-        update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes, "packed": True}
+        update_info = {"names": names, "dtype_names": dtype_names, "shapes": shapes}
+        if not _HAS_STATEFUL_TRAINER_ENGINE:
+            update_info["packed"] = True
 
         if not self._updating_weights:
             self._start_weight_update()
@@ -797,10 +812,15 @@ class VLLMClient:
         # trainer-side broadcast.
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(self._post, f"{self.base_url}/update_weights", json={"update_info": update_info})
-            NCCLWeightTransferEngine.trainer_send_weights(
-                iterator=named_params,
-                trainer_args=NCCLTrainerSendWeightsArgs(group=self.communicator, packed=True),
-            )
+            if _HAS_STATEFUL_TRAINER_ENGINE:
+                packed_nccl_broadcast_producer(
+                    iterator=named_params, group=self.communicator, src=0, post_iter_func=lambda item: item[1]
+                )
+            else:
+                NCCLWeightTransferEngine.trainer_send_weights(
+                    iterator=named_params,
+                    trainer_args=NCCLTrainerSendWeightsArgs(group=self.communicator, packed=True),
+                )
             future.result()
         if not self._updating_weights:
             self._finish_weight_update()

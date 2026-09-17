@@ -84,6 +84,7 @@ from .utils import (
     get_callable_name,
     get_config_model_id,
     identity,
+    is_async_callable,
     maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
@@ -339,8 +340,10 @@ class GRPOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
@@ -366,6 +369,7 @@ class GRPOTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -389,8 +393,8 @@ class GRPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
@@ -511,6 +515,7 @@ class GRPOTrainer(_BaseTrainer):
         elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
+        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
@@ -518,6 +523,7 @@ class GRPOTrainer(_BaseTrainer):
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                reward_model_revisions[i] = model_init_kwargs.get("revision")
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -555,7 +561,9 @@ class GRPOTrainer(_BaseTrainer):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(
-                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                        get_config_model_id(reward_func.config),
+                        revision=reward_model_revisions[i],
+                        trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
@@ -707,7 +715,7 @@ class GRPOTrainer(_BaseTrainer):
         self.environments = None
 
         # Check for async functions to start an event loop on a daemon thread
-        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
+        self._has_async_funcs = any(is_async_callable(func) for func in self.reward_funcs + self.tools)
 
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
@@ -954,7 +962,7 @@ class GRPOTrainer(_BaseTrainer):
             optimizers=optimizers,
             # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
             # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
-            # global accumulated batch. To control scaling ourselves, we must disable Trainer’s built-in scaling. The
+            # global accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The
             # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
             # that behavior without rewriting `training_step`.
             compute_loss_func="non-None value to disable scaling",
@@ -1668,7 +1676,7 @@ class GRPOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif is_async_callable(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function

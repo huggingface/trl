@@ -67,7 +67,7 @@ class A2POTrainer(_BaseTrainer):
             Reward function(s). Each takes `prompts` and `completions` (plus dataset columns as keyword arguments) and
             returns a list of float rewards. When multiple are provided, their weighted sum (see
             [`A2POConfig.reward_weights`]) is the scalar reward `r`, which A*-PO assumes to be binary (in `{0, 1}`).
-        args ([`A2POConfig`], *optional*):
+        args ([`experimental.a2po.A2POConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`], *optional*):
             Training dataset. Must contain a `"prompt"` column.
@@ -113,9 +113,11 @@ class A2POTrainer(_BaseTrainer):
             args = A2POConfig(f"{model if isinstance(model, str) else model.config._name_or_path}-A2PO")
 
         # Models
+        model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         model_id = model.config._name_or_path
 
@@ -129,7 +131,7 @@ class A2POTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_id, padding_side="left", trust_remote_code=args.trust_remote_code
+                model_id, revision=model_revision, padding_side="left", trust_remote_code=args.trust_remote_code
             )
 
         # Reward functions

@@ -1276,7 +1276,8 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_sync_and_async_reward_funcs(self):
-        # Test that GRPOTrainer can be instantiated with multiple reward functions one of which is async
+        # Test that GRPOTrainer can be instantiated with multiple reward functions, one of which is async, in both the
+        # function and the callable class form.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def sync_reward_func1(completions, **kwargs):
@@ -1290,6 +1291,12 @@ class TestGRPOTrainer(TrlTestCase):
             """Async Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
+        class AsyncCallableReward:
+            """Async reward function written as a callable class."""
+
+            async def __call__(self, completions, **kwargs):
+                return [float(completion.count(" ")) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1300,7 +1307,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func],
+            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func, AsyncCallableReward()],
             args=training_args,
             train_dataset=dataset,
         )
@@ -2677,7 +2684,7 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] == pytest.approx(0.0)
 
-        # Check that the params have changed
+        # Check that the params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."

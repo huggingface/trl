@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import Accelerator, PartialState
+from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model, tqdm
 from datasets import Dataset
@@ -64,6 +64,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     log_table_to_comet_experiment,
     selective_log_softmax,
 )
@@ -481,6 +482,7 @@ class BCOTrainer(_BaseTrainer):
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_revision = model_init_kwargs.get("revision") if isinstance(model, str) else None
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -597,7 +599,7 @@ class BCOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if args.max_length is None:
             logger.warning(
@@ -671,7 +673,7 @@ class BCOTrainer(_BaseTrainer):
         self.embedding_func = embedding_func
         self.embedding_tokenizer = embedding_tokenizer
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed
             train_dataset = train_dataset.map(
                 maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
