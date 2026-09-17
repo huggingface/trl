@@ -94,6 +94,82 @@ class TestXPOTrainer(TrlTestCase):
         else:
             assert trainer.eval_dataset is eval_dataset
 
+    def test_evaluate(self):
+        # `Trainer.prediction_step` never reaches `compute_loss` for this trainer: it gates on
+        # `has_labels or loss_without_labels`, and an evaluation batch carries only prompts, so evaluation used to
+        # fall through to calling the model without `input_ids`. See https://github.com/huggingface/trl/issues/2228.
+        training_args = XPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            max_steps=1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = XPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        # A stubbed `prediction_step` returning any constant passes a magnitude bound, so pin `eval_loss` to the losses
+        # `_compute_loss` produced on the evaluation batches, weighted by batch size as `Trainer` does.
+        recorded = []
+        original = trainer._compute_loss
+
+        def spy(model, inputs, log_stats=True):
+            loss = original(model, inputs, log_stats=log_stats)
+            batch_size = len(next(iter(inputs.values())))
+            recorded.append((log_stats, batch_size, loss.item()))
+            return loss
+
+        trainer._compute_loss = spy
+        metrics = trainer.evaluate()
+
+        assert len(recorded) == len(trainer.get_eval_dataloader())
+        assert all(log_stats is False for log_stats, _, _ in recorded)
+        expected_loss = sum(batch_size * loss for _, batch_size, loss in recorded) / sum(
+            batch_size for _, batch_size, _ in recorded
+        )
+        assert metrics["eval_loss"] == pytest.approx(expected_loss, abs=1e-5)
+
+    def test_evaluate_does_not_pollute_training_stats(self):
+        # `self.stats` is averaged and cleared by the training logger, so appending evaluation values to it would
+        # shift the training metrics.
+        training_args = XPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            max_steps=1,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = XPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+        # Train first: comparing an empty dict against an empty dict would pass even if `_compute_loss` had
+        # stopped recording statistics altogether, so the lengths have to be non-zero for the comparison to mean
+        # anything.
+        trainer.train()
+        lengths = {key: len(value) for key, value in trainer.stats.items()}
+        assert lengths and all(length > 0 for length in lengths.values())
+
+        trainer.evaluate()
+
+        assert {key: len(value) for key, value in trainer.stats.items()} == lengths
+
     @require_peft
     def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
