@@ -814,6 +814,9 @@ class BCOTrainer(_BaseTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
         self.running = RunningMoments(accelerator=self.accelerator)
+        self._collecting_window_rewards = False
+        self._window_rewards: list[torch.Tensor] = []
+        self._window_loss_calls = 0
 
         if self.embedding_func is None or args.resume_from_checkpoint:
             return
@@ -1223,6 +1226,40 @@ class BCOTrainer(_BaseTrainer):
 
         return weight
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        samples, num_items = super().get_batch_samples(epoch_iterator, num_batches, device)
+        self._window_loss_calls = 0
+        if not samples or self.args.gradient_accumulation_steps == 1:
+            return samples, num_items
+
+        # The unsplit objective uses the mean after all of the batch's rewards
+        # have been incorporated. Collect those rewards before any backward call.
+        models = [self.model_wrapped]
+        if self.ref_model is not None:
+            models.append(self.ref_model)
+        buffers = [(buffer, buffer.detach().clone()) for model in models for buffer in model.buffers()]
+        python_rng = random.getstate()
+        numpy_rng = np.random.get_state()
+        self._window_rewards = []
+        self._collecting_window_rewards = True
+        try:
+            with torch.random.fork_rng(), torch.no_grad(), self.compute_loss_context_manager():
+                for sample in samples:
+                    self.get_batch_loss_metrics(self.model_wrapped, self._prepare_inputs(sample), do_train=False)
+            rewards = torch.cat(self._window_rewards)
+        finally:
+            self._collecting_window_rewards = False
+            self._window_rewards = []
+            with torch.no_grad():
+                for buffer, value in buffers:
+                    buffer.copy_(value)
+            random.setstate(python_rng)
+            np.random.set_state(numpy_rng)
+
+        self.running.update(rewards)
+        self._window_loss_calls = len(samples)
+        return samples, num_items
+
     def bco_loss(
         self,
         policy_chosen_logps: torch.FloatTensor,
@@ -1262,8 +1299,14 @@ class BCOTrainer(_BaseTrainer):
         rejected_logratios = policy_rejected_logps - reference_rejected_logps
         rejected_rewards = self.beta * rejected_logratios
 
-        if do_train:
-            self.running.update(torch.cat((chosen_rewards, rejected_rewards), 0).detach())
+        rewards = torch.cat((chosen_rewards, rejected_rewards), 0).detach()
+        if self._collecting_window_rewards:
+            self._window_rewards.append(rewards)
+        elif do_train:
+            if self._window_loss_calls:
+                self._window_loss_calls -= 1
+            else:
+                self.running.update(rewards)
         delta = torch.as_tensor(self.running.mean, device=chosen_rewards.device)
 
         chosen_losses = -F.logsigmoid(chosen_rewards - delta)
