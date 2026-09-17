@@ -69,10 +69,6 @@ def is_jmespath_available() -> bool:
     return _is_package_available("jmespath")
 
 
-def is_joblib_available() -> bool:
-    return _is_package_available("joblib")
-
-
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
     _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
     return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
