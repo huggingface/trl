@@ -1434,22 +1434,24 @@ class SFTTrainer(_BaseTrainer):
             "aux_loss" in getattr(output_type, "__dataclass_fields__", {})
             for output_type in (get_args(return_type) or (return_type,))
         )
-        self.aux_loss_enabled = has_aux_loss and self.args.router_aux_loss_coef != 0.0
-        if not has_aux_loss and self.args.router_aux_loss_coef != 0.0 and hasattr(text_config, "router_aux_loss_coef"):
-            # The architecture declares a coefficient, so it is meant to be trained with the auxiliary loss, but its
-            # forward doesn't return one. MoE families that balance their experts without it declare no coefficient
-            # and land in the silent branch instead.
+        # Left unset, the coefficient comes from the architecture, which carries the value it was trained with (0.01
+        # for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Architectures that balance their experts with a
+        # router bias declare no coefficient, so they resolve to 0.0 and the term stays off, which is what they want.
+        coef = self.args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        self.aux_loss_enabled = has_aux_loss and self.router_aux_loss_coef != 0.0
+        if not has_aux_loss and self.router_aux_loss_coef != 0.0:
             logger.warning(
-                f"`router_aux_loss_coef` is set to {self.args.router_aux_loss_coef}, but {type(base_model).__name__} "
-                f"doesn't return a load-balancing auxiliary loss, so it has no effect. Set `router_aux_loss_coef` to "
-                f"`0.0` to silence this warning."
+                f"`router_aux_loss_coef` resolves to {self.router_aux_loss_coef}, but "
+                f"{type(base_model).__name__} doesn't return a load-balancing auxiliary loss, so it has no effect. "
+                f"Set `router_aux_loss_coef` to `0.0` to silence this warning."
             )
         if has_aux_loss:
             # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
             # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
             # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
             text_config.output_router_logits = self.aux_loss_enabled
-            text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
+            text_config.router_aux_loss_coef = self.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

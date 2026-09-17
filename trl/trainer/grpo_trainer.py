@@ -799,17 +799,18 @@ class GRPOTrainer(_BaseTrainer):
             "aux_loss" in getattr(output_type, "__dataclass_fields__", {})
             for output_type in (get_args(return_type) or (return_type,))
         )
-        self.aux_loss_enabled = has_aux_loss and args.router_aux_loss_coef != 0.0
-        if not has_aux_loss and args.router_aux_loss_coef != 0.0 and hasattr(text_config, "router_aux_loss_coef"):
-            # The architecture declares a coefficient, so it is meant to be trained with the auxiliary loss, but its
-            # forward doesn't return one. MoE families that balance their experts without it declare no coefficient
-            # and land in the silent branch instead.
+        # Left unset, the coefficient comes from the architecture, which carries the value it was trained with (0.01
+        # for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Architectures that balance their experts with a
+        # router bias declare no coefficient, so they resolve to 0.0 and the term stays off, which is what they want.
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        self.aux_loss_enabled = has_aux_loss and self.router_aux_loss_coef != 0.0
+        if not has_aux_loss and self.router_aux_loss_coef != 0.0:
             logger.warning(
-                f"`router_aux_loss_coef` is set to {args.router_aux_loss_coef}, but {type(base_model).__name__} "
-                f"doesn't return a load-balancing auxiliary loss, so it has no effect. Set `router_aux_loss_coef` to "
-                f"`0.0` to silence this warning."
+                f"`router_aux_loss_coef` resolves to {self.router_aux_loss_coef}, but "
+                f"{type(base_model).__name__} doesn't return a load-balancing auxiliary loss, so it has no effect. "
+                f"Set `router_aux_loss_coef` to `0.0` to silence this warning."
             )
-        self.router_aux_loss_coef = args.router_aux_loss_coef
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold

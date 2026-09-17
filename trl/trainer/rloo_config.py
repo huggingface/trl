@@ -43,10 +43,11 @@ class RLOOConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
             Also applied to reward-model and reward-tokenizer loads.
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect on Mixture-of-Experts (MoE) models
-            that implement this loss; it does nothing for other models, and a warning is issued for MoE models that
-            don't. The auxiliary loss is added to the training loss with this weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss, added to the training loss with this weight. When not
+            set, the value declared by the model architecture is used, which is `0.0` for Mixture-of-Experts (MoE)
+            models that balance their experts with a router bias instead, and for non-MoE models. Set to `0.0` to
+            disable it.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -271,13 +272,13 @@ class RLOOConfig(_BaseConfig):
             "reward-model and reward-tokenizer loads."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect on Mixture-of-Experts "
-            "(MoE) models that implement this loss; it does nothing for other models, and a warning is issued for "
-            "MoE models that don't. The auxiliary loss is added to the training loss with this weight. Set to `0.0` "
-            "to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss, added to the training loss with this weight. "
+            "When not set, the value declared by the model architecture is used, which is `0.0` for "
+            "Mixture-of-Experts (MoE) models that balance their experts with a router bias instead, and for non-MoE "
+            "models. Set to `0.0` to disable it."
         },
     )
     disable_dropout: bool = field(
