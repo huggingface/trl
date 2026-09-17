@@ -660,14 +660,9 @@ class TestEntropyFromLogits(TrlTestCase):
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     def test_entropy_from_logits_2_dims(self, dtype, chunk_size, shape):
         logits = torch.randn(*shape, dtype=dtype)
-        if dtype in (torch.float64, torch.float32):
-            p = logits.softmax(-1)
-            entropy = -torch.sum(p * p.log(), dim=-1)
-        else:
-            logps = logits.log_softmax(dim=-1)
-            entropy = -(torch.exp(logps) * logps).sum(-1)
+        reference_entropy = torch.distributions.Categorical(logits=logits).entropy()
         predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
-        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(predicted_entropy, reference_entropy, rtol=1e-5, atol=1e-5)
 
     @pytest.mark.parametrize("chunk_size", [1, 16])
     def test_entropy_from_logits_zero_probability_tokens(self, chunk_size):
@@ -680,6 +675,34 @@ class TestEntropyFromLogits(TrlTestCase):
             reference_entropy = torch.distributions.Categorical(logits=logits).entropy()
             predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
             torch.testing.assert_close(predicted_entropy, reference_entropy, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize("chunk_size", [1, 16])
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
+    def test_entropy_from_logits_matches_categorical_gradients(self, dtype, chunk_size):
+        cases = [
+            torch.randn(4, 128, dtype=dtype),
+            torch.tensor([[0.0, float("-inf")]], dtype=dtype),
+            torch.tensor([[0.0, 0.0, float("-inf")]], dtype=dtype),
+        ]
+        if dtype == torch.float16:
+            cases.append(torch.tensor([[65504.0, -65504.0]], dtype=dtype))
+
+        for logits in cases:
+            predicted_logits = logits.detach().clone().requires_grad_(True)
+            reference_logits = logits.detach().clone().requires_grad_(True)
+
+            predicted_entropy = entropy_from_logits(predicted_logits, chunk_size=chunk_size)
+            reference_entropy = torch.distributions.Categorical(logits=reference_logits).entropy()
+
+            torch.testing.assert_close(predicted_entropy, reference_entropy, rtol=1e-5, atol=1e-5)
+
+            predicted_entropy.sum().backward()
+            reference_entropy.sum().backward()
+
+            assert predicted_logits.grad is not None
+            assert reference_logits.grad is not None
+            assert not predicted_logits.grad.isnan().any()
+            torch.testing.assert_close(predicted_logits.grad, reference_logits.grad, rtol=1e-5, atol=1e-5)
 
 
 @require_rich

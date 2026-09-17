@@ -565,6 +565,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     Returns:
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
+
+    Note:
+        Uses `torch.distributions.Categorical.entropy()` per chunk so zero-probability tokens (e.g. logits
+        containing `-inf` from masking or finite float16 extremes) produce correct values and gradients.
+        This matters for differentiable entropy bonuses such as in GRPO.
     """
     original_shape = logits.shape[:-1]  # all dims except num_classes
     num_classes = logits.shape[-1]
@@ -574,10 +579,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
     entropies = []
     for chunk in flat_logits.split(chunk_size, dim=0):
-        logps = F.log_softmax(chunk, dim=-1)
-        # Zero-probability tokens have logps = -inf; 0 * -inf is undefined, but they contribute 0 to entropy.
-        chunk_entropy = -(torch.exp(logps) * logps).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).sum(-1)
-        entropies.append(chunk_entropy)
+        entropies.append(torch.distributions.Categorical(logits=chunk).entropy())
 
     entropies = torch.cat(entropies, dim=0)
     return entropies.reshape(original_shape)
