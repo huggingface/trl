@@ -3700,8 +3700,8 @@ class TestGRPOTrainer(TrlTestCase):
 
 class TestGRPOTrainerPEFTContinuation(TrlTestCase):
     """
-    Regression tests for the silent no-op when continuing GRPO from a PEFT
-    adapter loaded with ``PeftModel.from_pretrained`` (``is_trainable=False``).
+    Regression tests for the silent no-op when continuing GRPO from a PEFT adapter loaded with
+    ``PeftModel.from_pretrained`` (``is_trainable=False``).
     """
 
     def _make_sft_adapter(self, model_id):
@@ -3727,9 +3727,7 @@ class TestGRPOTrainerPEFTContinuation(TrlTestCase):
         # given a PeftModel loaded with is_trainable=False and beta != 0.
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         adapter_path = self._make_sft_adapter(model_id)
-        model = PeftModel.from_pretrained(
-            AutoModelForCausalLM.from_pretrained(model_id), adapter_path
-        )
+        model = PeftModel.from_pretrained(AutoModelForCausalLM.from_pretrained(model_id), adapter_path)
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         args = GRPOConfig(output_dir=self.tmp_dir, beta=0.01, report_to="none")
 

@@ -739,9 +739,7 @@ class KTOTrainer(_BaseTrainer):
                 if Version(peft.__version__) >= Version("0.18.0") and not model.peft_config["ref"].is_prompt_learning:
                     model.set_requires_grad("ref", requires_grad=False)
 
-        if is_peft_model(model) and peft_config is None and not any(
-            p.requires_grad for p in model.parameters()
-        ):
+        if is_peft_model(model) and peft_config is None and not any(p.requires_grad for p in model.parameters()):
             raise ValueError(
                 "KTOTrainer found no trainable parameters in the PEFT model. "
                 "If you loaded an existing adapter with `PeftModel.from_pretrained`, "
