@@ -61,7 +61,6 @@ _TELEMETRY_TRAINERS = {
     "ServerDistillationTrainer",
     "SSDTrainer",
     "TPOTrainer",
-    "XPOTrainer",
 }
 
 
