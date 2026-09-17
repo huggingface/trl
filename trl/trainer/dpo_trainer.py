@@ -21,7 +21,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import accelerate
 import torch
@@ -903,29 +903,14 @@ class DPOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise). Config fields
-        # don't say whether a model can produce it: Llama 4 declares `output_router_logits` yet returns no aux loss,
-        # while the VLM MoE wrappers return one without declaring the field. The output type of the forward does say,
-        # and it is read off the class because the SFT chunked path patches the instance's forward.
+        # MoE load-balancing auxiliary loss. Left unset, the coefficient comes from the architecture, which carries
+        # the value it was trained with (0.01 for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Architectures
+        # that balance their experts with a router bias instead, and models that aren't MoE, declare no coefficient,
+        # so they resolve to 0.0 and the term stays off.
         text_config = model.config.get_text_config()
-        base_model = model.get_base_model() if is_peft_model(model) else model
-        return_type = type(base_model).forward.__annotations__.get("return")
-        has_aux_loss = any(
-            "aux_loss" in getattr(output_type, "__dataclass_fields__", {})
-            for output_type in (get_args(return_type) or (return_type,))
-        )
-        # Left unset, the coefficient comes from the architecture, which carries the value it was trained with (0.01
-        # for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Architectures that balance their experts with a
-        # router bias declare no coefficient, so they resolve to 0.0 and the term stays off, which is what they want.
         coef = args.router_aux_loss_coef
         self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
-        self.aux_loss_enabled = has_aux_loss and self.router_aux_loss_coef != 0.0
-        if not has_aux_loss and self.router_aux_loss_coef != 0.0:
-            logger.warning(
-                f"`router_aux_loss_coef` resolves to {self.router_aux_loss_coef}, but "
-                f"{type(base_model).__name__} doesn't return a load-balancing auxiliary loss, so it has no effect. "
-                f"Set `router_aux_loss_coef` to `0.0` to silence this warning."
-            )
+        self.aux_loss_enabled = self.router_aux_loss_coef != 0.0
         if self.aux_loss_enabled and self.use_liger_kernel:
             raise ValueError(
                 "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "

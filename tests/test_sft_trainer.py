@@ -801,34 +801,23 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(
-        "model_id, expect_coef, expect_aux_loss, expect_warning",
+        "model_id, expect_coef, expect_aux_loss",
         [
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True, False),
-            # MoE that declares a coefficient but returns no auxiliary loss, so the request can't be honored
-            ("trl-internal-testing/tiny-Llama4ForCausalLM", 0.001, False, True),
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False, False),
-            # Dense model: no coefficient to inherit, nothing to warn about
-            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False, False),
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            # Dense model: no coefficient to inherit
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
         ],
     )
-    def test_router_aux_loss_coef_defaults_to_the_architecture(
-        self, model_id, expect_coef, expect_aux_loss, expect_warning, caplog
-    ):
+    def test_router_aux_loss_coef_defaults_to_the_architecture(self, model_id, expect_coef, expect_aux_loss):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
-        # Explicit tokenizer: the tiny Llama 4 repo ships no processor config, and only the text path matters here.
-        processing_class = AutoTokenizer.from_pretrained(model_id)
-
-        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
-            trainer = SFTTrainer(
-                model=model_id, args=training_args, train_dataset=dataset, processing_class=processing_class
-            )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
         assert trainer.router_aux_loss_coef == expect_coef
         assert trainer.aux_loss_enabled == expect_aux_loss
-        assert ("doesn't return a load-balancing auxiliary loss" in caplog.text) == expect_warning
 
     def test_router_aux_loss_coef_explicit_value_overrides_the_architecture(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
