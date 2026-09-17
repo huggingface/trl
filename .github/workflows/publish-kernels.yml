@@ -15,6 +15,9 @@ concurrency:
   group: publish-kernels
   cancel-in-progress: false
 
+env:
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+
 jobs:
   publish:
     name: Publish kernels
@@ -40,3 +43,11 @@ jobs:
 
             kernel-builder check-config
             kernel-builder build-and-upload
+
+      - name: Post to Slack
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Publish kernels
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
