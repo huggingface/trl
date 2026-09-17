@@ -352,8 +352,6 @@ class ORPOTrainer(_BaseTrainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
         with global_then_local_main_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)

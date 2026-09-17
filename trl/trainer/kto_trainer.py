@@ -1024,8 +1024,6 @@ class KTOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
         with global_then_local_main_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
