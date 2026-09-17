@@ -40,6 +40,9 @@ Only if you are fine with updating your code quickly when things change.
 **Will maintainers promptly fix issues in `trl.experimental`?**
 Not necessarily. The experimental module is a playground for new ideas, and maintainers may not prioritize bug fixes or feature requests there. Issues may remain unresolved until (or unless) the feature graduates to the stable API.
 
+**I contributed a paper implementation. Can it be removed?**
+Yes. Anything under `trl.experimental` can be removed, paper implementations included. If that happens, the [paper index](paper_index) entry stays and points at the last release that shipped the code.
+
 **How to silence the runtime notice?**
 
 Use: `export TRL_EXPERIMENTAL_SILENCE=1`.
