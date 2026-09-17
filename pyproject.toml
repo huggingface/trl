@@ -180,7 +180,6 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')",
     "invariant: training-invariant checks (run with '-m invariant')",
-    "kernels_ci: marks tests run by the kernel builder",
 ]
 norecursedirs = [
     "tests/experimental",
