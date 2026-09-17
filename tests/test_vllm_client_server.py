@@ -20,7 +20,7 @@ import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient, parse_logprobs
+from trl.generation.vllm_client import VLLMClient, parse_logprobs, to_openai_messages
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 
@@ -36,6 +36,41 @@ from .testing_utils import (
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+
+
+class TestToOpenAIMessages(TrlTestCase):
+    def test_content_less_tool_call_message_passes_through(self):
+        # An assistant turn that only carries `tool_calls` has no `content` key. This is the message shape from
+        # #6928, and it reaches the server through `VLLMClient.chat` and the model probe in `__init__`.
+        messages = [
+            {"role": "user", "content": "What is the weather in New York?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "tool",
+                        "function": {"name": "get_current_weather", "arguments": {"location": "New York"}},
+                    }
+                ],
+            },
+            {"role": "tool", "name": "get_current_weather", "content": [{"type": "text", "text": "22.0"}]},
+        ]
+
+        assert to_openai_messages(messages) == messages
+
+    @require_vision
+    def test_image_parts_become_data_urls(self):
+        from PIL import Image
+
+        image = Image.new("RGB", (4, 4), color="blue")
+        messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "Hi"}]}]
+
+        converted = to_openai_messages(messages)
+
+        assert converted[0]["content"][0]["type"] == "image_url"
+        assert converted[0]["content"][0]["image_url"]["url"].startswith("data:image/png;base64,")
+        assert converted[0]["content"][1] == {"type": "text", "text": "Hi"}
+        assert messages[0]["content"][0]["type"] == "image"  # the input is not mutated
 
 
 class TestParseLogprobs(TrlTestCase):
