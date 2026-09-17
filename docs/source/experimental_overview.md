@@ -12,6 +12,20 @@ This directory contains a minimal, clearly separated space for fast iteration on
 3. **Improve:** Add tests, a short doc/example, and demonstrate the usage.
 4. **Promote:** Once the API proves stable and there is clear interest or adoption from the community, move it into `trl.<feature>` (stable module).
 
+## Removal
+
+Experimental is a staging area, not long-term storage: a feature is either promoted or removed. Removal needs no deprecation cycle, as stated in the stability contract above. The code remains available in the git history, and the [paper index](paper_index) entry stays, pointing at the last release that shipped the implementation.
+
+No threshold triggers a removal. It is a judgment call, made in the removal pull request with the numbers in front of everyone. What that judgment weighs:
+
+- **Usage.** Telemetry, Hub tags, and replies on the pull request or on a discussion thread. None of them is conclusive on its own, but all of them quiet is a strong signal.
+- **External issues and pull requests that come from running the feature**, as opposed to reports produced by scanning the code.
+- **Whether a stable trainer already covers it.** If one does, that outweighs usage.
+- **Cost.** CI time, maintenance, triage load.
+- **Downstream consumers.** Libraries that import it.
+- **Owner.** Someone who wants it promoted and is willing to do the work.
+- **Age.** Whether it has been available long enough for the community to find it and try it.
+
 ## FAQ
 
 **Why not just use branches?**
