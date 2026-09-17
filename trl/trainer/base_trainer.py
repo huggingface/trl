@@ -54,7 +54,6 @@ _TELEMETRY_TRAINERS = {
     "NashMDTrainer",
     "OnlineDPOTrainer",
     "ORPOTrainer",
-    "PRMTrainer",
     "SDFTTrainer",
     "SDPOTrainer",
     "ServerDistillationTrainer",
