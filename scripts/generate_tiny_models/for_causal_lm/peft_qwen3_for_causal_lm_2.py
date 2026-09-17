@@ -17,10 +17,12 @@
 from peft import LoraConfig, get_peft_model
 from transformers import Qwen3ForCausalLM
 
-from .._common import check_transformers_version, push_to_hub, smoke_test
+from .._common import check_transformers_version, push_to_hub, set_seed, smoke_test
 
 
 check_transformers_version()
+
+set_seed()
 
 BASE = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
