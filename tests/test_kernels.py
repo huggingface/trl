@@ -17,7 +17,7 @@ import torch
 from transformers.testing_utils import torch_device
 from transformers.utils import is_kernels_available
 
-from .testing_utils import require_kernels, require_torch_accelerator
+from .testing_utils import require_kernels_trust_remote_code, require_torch_accelerator
 
 
 if is_kernels_available():
@@ -26,11 +26,7 @@ if is_kernels_available():
 
 @pytest.fixture(scope="module")
 def trl_losses():
-    return kernels.get_kernel(
-        "trl-lib/trl-losses",
-        version=0,
-        trust_remote_code=["trl-lib/trl-losses"],
-    )
+    return kernels.get_kernel("trl-lib/trl-losses", version=0, trust_remote_code=True)
 
 
 def reference(logits, index, temperature, row_mask):
@@ -44,7 +40,7 @@ def reference(logits, index, temperature, row_mask):
     return selected_logprobs, entropy
 
 
-@require_kernels
+@require_kernels_trust_remote_code
 @require_torch_accelerator
 class TestLogProbEntropy:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])

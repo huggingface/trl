@@ -51,11 +51,19 @@ from trl.import_utils import (
 if is_peft_available():
     import peft
 
+if is_kernels_available():
+    import kernels
+
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
+# `get_kernel(..., trust_remote_code=...)` was added in kernels 0.14.0; older versions don't accept the argument.
+require_kernels_trust_remote_code = pytest.mark.skipif(
+    not is_kernels_available() or Version(kernels.__version__) < Version("0.14.0"),
+    reason="test requires kernels>=0.14.0 for `trust_remote_code`",
+)
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
