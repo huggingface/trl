@@ -17,14 +17,12 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
-from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient
+from trl.generation.vllm_client import VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
-from trl.scripts.vllm_serve import chunk_list
 
 from .testing_utils import (
     TrlTestCase,
@@ -37,38 +35,43 @@ from .testing_utils import (
 
 
 if is_vllm_available():
-    import vllm
     from vllm import LLM, SamplingParams
 
-    _is_vllm_ge_014 = Version(vllm.__version__) >= Version("0.14.0")
-else:
-    _is_vllm_ge_014 = False
 
+class TestParseLogprobs(TrlTestCase):
+    def test_completion_logprobs_sorted_by_probability(self):
+        logprobs = {
+            "tokens": ["token_id:11", "token_id:5"],
+            "token_logprobs": [-0.2, -1.1],
+            "top_logprobs": [{"token_id:11": -0.2, "token_id:99": -0.1}, {"token_id:5": -1.1}],
+        }
 
-class TestChunkList(TrlTestCase):
-    def test_even_split(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 2) == [[1, 2, 3], [4, 5, 6]]
+        all_logprobs, all_token_ids = parse_logprobs([logprobs])
 
-    def test_uneven_split(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 4) == [[1, 2], [3, 4], [5], [6]]
+        assert all_token_ids == [[[99, 11], [5]]]
+        assert all_logprobs == [[[-0.1, -0.2], [-1.1]]]
 
-    def test_more_chunks_than_elements(self):
-        assert chunk_list([1, 2, 3, 4, 5, 6], 8) == [[1], [2], [3], [4], [5], [6], [], []]
+    def test_chat_logprobs(self):
+        logprobs = {
+            "content": [
+                {
+                    "token": "token_id:7",
+                    "logprob": -0.5,
+                    "top_logprobs": [
+                        {"token": "token_id:7", "logprob": -0.5},
+                        {"token": "token_id:3", "logprob": -0.4},
+                    ],
+                }
+            ]
+        }
 
-    def test_n_equals_len(self):
-        assert chunk_list([1, 2, 3], 3) == [[1], [2], [3]]
+        all_logprobs, all_token_ids = parse_logprobs([logprobs])
 
-    def test_n_is_1(self):
-        assert chunk_list([1, 2, 3], 1) == [[1, 2, 3]]
+        assert all_token_ids == [[[3, 7]]]
+        assert all_logprobs == [[[-0.4, -0.5]]]
 
-    def test_single_element_list(self):
-        assert chunk_list([42], 2) == [[42], []]
-
-    def test_any_dtype(self):
-        assert chunk_list([1, "two", 3.0, {"four": 4}, ["f", "i", "v", "e"]], 2) == [
-            [1, "two", 3.0],
-            [{"four": 4}, ["f", "i", "v", "e"]],
-        ]
+    def test_returns_none_when_logprobs_missing(self):
+        assert parse_logprobs([None]) == (None, None)
 
 
 class TestExtractLogprobs(TrlTestCase):
@@ -699,176 +702,6 @@ class TestVLLMClientServerTP(TrlTestCase):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    _is_vllm_ge_014,
-    reason="Skipping DP server test for vLLM>=0.14.0 (PR vllm#30739: DP for non-MoE/dense models no longer supported).",
-)
-@require_3_accelerators
-@require_vllm
-class TestVLLMClientServerDP(TrlTestCase):
-    model_id = "Qwen/Qwen2.5-1.5B"
-
-    @classmethod
-    def setup_class(cls):
-        # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
-        env = os.environ.copy()
-        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
-        env[VISIBLE_DEVICES] = "1,2"  # Restrict to accelerator 1 and 2
-
-        # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--data_parallel_size", "2"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
-
-        # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240, host="localhost")
-        cls.client.init_communicator()
-
-    def test_generate(self):
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
-        prompt_ids = outputs["prompt_ids"]
-        completion_ids = outputs["completion_ids"]
-
-        # Check that the outputs are lists
-        assert isinstance(prompt_ids, list)
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of sequences are equal to the number of prompts
-        assert len(prompt_ids) == len(prompts)
-        assert len(completion_ids) == len(prompts)
-
-        # Check that the sequences are lists of integers
-        for seq in prompt_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-    def test_generate_with_logprobs_none(self):
-        outputs = self.client.generate(["Hello, AI!"], logprobs=None)
-
-        assert isinstance(outputs["prompt_ids"], list)
-        assert isinstance(outputs["completion_ids"], list)
-        assert outputs["logprobs"] is None
-        assert outputs["logprob_token_ids"] is None
-
-    def test_chat(self):
-        messages = [[{"role": "user", "content": "Hello, AI!"}], [{"role": "user", "content": "Tell me a joke"}]]
-        outputs = self.client.chat(messages)
-        prompt_ids = outputs["prompt_ids"]
-        completion_ids = outputs["completion_ids"]
-
-        # Check that the outputs are lists
-        assert isinstance(prompt_ids, list)
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of sequences are equal to the number of messages
-        assert len(prompt_ids) == len(messages)
-        assert len(completion_ids) == len(messages)
-
-        # Check that the sequences are lists of integers
-        for seq in prompt_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-    def test_chat_with_logprobs_none(self):
-        outputs = self.client.chat([[{"role": "user", "content": "Hello, AI!"}]], logprobs=None)
-
-        assert isinstance(outputs["prompt_ids"], list)
-        assert isinstance(outputs["completion_ids"], list)
-        assert outputs["logprobs"] is None
-        assert outputs["logprob_token_ids"] is None
-
-    def test_chat_with_tools(self):
-        def multiply(a: int, b: int) -> int:
-            """
-            Multiplies two integers.
-
-            Args:
-                a: The first integer.
-                b: The second integer.
-
-            Returns:
-                The product of the two integers.
-            """
-            return a * b
-
-        messages = [[{"role": "user", "content": "What is 3 multiplied by 4?"}]]
-        outputs = self.client.chat(messages, tools=[multiply])
-
-        # Decode prompt and check that "Multiplies two integers." is in the prompt.
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        decoded_prompt = tokenizer.decode(outputs["prompt_ids"][0])
-        assert "Multiplies two integers." in decoded_prompt
-
-    def test_generate_with_token_ids(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        prompt_token_ids = tokenizer(prompts)["input_ids"]
-        outputs = self.client.generate(prompt_token_ids)
-        prompt_ids = outputs["prompt_ids"]
-        completion_ids = outputs["completion_ids"]
-
-        # Check that the outputs are lists
-        assert isinstance(prompt_ids, list)
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of sequences are equal to the number of prompts
-        assert len(prompt_ids) == len(prompts)
-        assert len(completion_ids) == len(prompts)
-
-        # Check that prompt_ids match the input token IDs
-        assert prompt_ids == prompt_token_ids
-
-        # Check that the sequences are lists of integers
-        for seq in prompt_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-    def test_generate_with_params(self):
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
-            "completion_ids"
-        ]
-
-        # Check that the output is a list
-        assert isinstance(completion_ids, list)
-
-        # Check that the number of generated sequences is 2 times the number of prompts
-        assert len(completion_ids) == 2 * len(prompts)
-
-        # Check that the generated sequences are lists of integers
-        for seq in completion_ids:
-            assert all(isinstance(tok, int) for tok in seq)
-
-        # Check that the length of the generated sequences is less than or equal to 32
-        for seq in completion_ids:
-            assert len(seq) <= 32
-
-    def test_update_model_params(self):
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
-        self.client.update_model_params(model)
-
-    def test_reset_prefix_cache(self):
-        # Test resetting the prefix cache
-        self.client.reset_prefix_cache()
-
-    @classmethod
-    def teardown_class(cls):
-        # Close the client
-        cls.client.close_communicator()
-
-        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
-        # kill the server process and its children explicitly.
-        kill_process(cls.server_process)
-
-
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
 class TestVLLMClientServerDeviceParameter(TrlTestCase):
@@ -957,10 +790,62 @@ class TestVLLMClientServerVLM(TrlTestCase):
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")
 
-    def test_generate_with_token_ids_and_image(self):
+    def test_generate_from_token_ids_and_images(self):
+        """Images alongside token IDs: process the images, then generate from the trainer's own tokenization."""
         from PIL import Image
 
         processor = AutoProcessor.from_pretrained(self.model_id)
+        image = Image.new("RGB", (64, 64), color="blue")
+        messages = [
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": image}, {"type": "text", "text": "What colour is it?"}],
+                }
+            ]
+        ]
+        prompt_ids = processor.apply_chat_template(
+            conversation=messages, add_generation_prompt=True, tokenize=True, return_dict=True
+        )["input_ids"][0]
+        prompt_ids = prompt_ids.tolist() if hasattr(prompt_ids, "tolist") else list(prompt_ids)
+
+        features = self.client.image_features([[image]])
+        outputs = self.client.generate(prompts=[prompt_ids], features=features, n=2, max_tokens=16)
+
+        assert len(outputs["completion_ids"]) == 2
+        assert outputs["prompt_ids"] == [prompt_ids]
+        assert all(isinstance(tok, int) for tok in outputs["completion_ids"][0])
+
+        # Continuing from a longer sequence reuses the same features, as the tool calling loop does
+        continued = [prompt_ids + outputs["completion_ids"][0] + [151644, 872, 198]]
+        outputs = self.client.generate(prompts=continued, features=features, n=2, max_tokens=16)
+
+        assert len(outputs["completion_ids"]) == 2
+
+    def test_generate_from_token_ids_without_images(self):
+        """`None` entries let a batch mix multimodal and text-only prompts."""
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained(self.model_id)
+        image = Image.new("RGB", (64, 64), color="red")
+        messages = [
+            [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "Colour?"}]}]
+        ]
+        image_prompt_ids = processor.apply_chat_template(
+            conversation=messages, add_generation_prompt=True, tokenize=True, return_dict=True
+        )["input_ids"][0]
+        image_prompt_ids = image_prompt_ids.tolist() if hasattr(image_prompt_ids, "tolist") else list(image_prompt_ids)
+        text_ids = processor.tokenizer("The capital of France is", add_special_tokens=False).input_ids
+
+        features = self.client.image_features([[image], None])
+        outputs = self.client.generate(prompts=[image_prompt_ids, text_ids], features=features, max_tokens=8)
+
+        assert features[1] is None
+        assert len(outputs["completion_ids"]) == 2
+
+    def test_chat_with_images(self):
+        from PIL import Image
+
         image1 = Image.new("RGB", (64, 64), color="red")
         image2 = Image.new("RGB", (64, 64), color="blue")
         image3 = Image.new("RGB", (64, 64), color="green")
@@ -985,10 +870,7 @@ class TestVLLMClientServerVLM(TrlTestCase):
                 }
             ],
         ]
-        prompt_token_ids = processor.apply_chat_template(
-            conversation=messages, tokenize=True, add_generation_prompt=True
-        )
-        outputs = self.client.generate(prompt_token_ids, images=[[image1, image2], [image3]], max_tokens=64)
+        outputs = self.client.chat(messages, max_tokens=64)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 
@@ -997,11 +879,10 @@ class TestVLLMClientServerVLM(TrlTestCase):
         assert all(isinstance(tok, int) for tok in prompt_ids[0])
         assert all(isinstance(tok, int) for tok in completion_ids[0])
 
-    def test_generate_with_token_ids_mixed_images(self):
+    def test_chat_with_mixed_images(self):
         """Test a batch where one prompt has an image and the other does not."""
         from PIL import Image
 
-        processor = AutoProcessor.from_pretrained(self.model_id)
         image = Image.new("RGB", (64, 64), color="red")
         messages = [
             [
@@ -1017,10 +898,7 @@ class TestVLLMClientServerVLM(TrlTestCase):
                 }
             ],
         ]
-        prompt_token_ids = processor.apply_chat_template(
-            conversation=messages, tokenize=True, add_generation_prompt=True
-        )
-        outputs = self.client.generate(prompt_token_ids, images=[[image], None], max_tokens=64)
+        outputs = self.client.chat(messages, max_tokens=64)
         prompt_ids = outputs["prompt_ids"]
         completion_ids = outputs["completion_ids"]
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -153,7 +154,12 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         # TODO(@openenv): provide an async version for performance
         #  OpenEnv's harness layer is synchronous, so run the whole session on the pool.
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
+        result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
+        # Pushed here and not in `_run_session`: the accumulators are plain dicts, and the pool runs many sessions at
+        # once, so a push off the event loop would race the score loop's.
+        if metrics is not None:
+            self._push_rollout_metrics(**metrics)
+        return result
 
     async def _run_loops(self, stop_event) -> None:
         async def _close_live_sessions_on_stop() -> None:
@@ -174,11 +180,15 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             self._session_pool.shutdown(wait=True)
 
     def _run_session(self, prompt, group_id=0):
-        """Drive one OpenEnv session to completion and return the `_generate_one` tuple + the verify reward.
+        """Drive one OpenEnv session to completion, on a pool thread.
+
+        Returns `(the _generate_one tuple, rollout metrics or None)`. The metrics are handed back rather than pushed
+        here because this runs off the event loop; `_generate_one` pushes them once it is back on it.
 
         The agent and its proxy are external, flaky processes; a single rollout that fails to launch or whose trace is
         malformed must NOT crash the worker (it would kill the whole run). Such rollouts are returned as unscorable
         (reward None, no rows) so training continues and the group baseline ignores them."""
+        t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
         # Stable per-group seed so seed-driven factories hand every generation of a group the same task. Keyed on
         # `group_id` (not the prompt) so it works with or without a dataset: when there is no dataset the prompt is
@@ -191,7 +201,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
             logger.warning("harness session create failed; scoring rollout as unscorable", exc_info=True)
-            return self._EMPTY_ROLLOUT
+            return self._EMPTY_ROLLOUT, None
         self._live_sessions.add(session)  # tracked so a stop can close it (unblocks wait_for_completion below)
         timed_out = False
         trace: list[TraceEntry] = []
@@ -235,12 +245,21 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 timed_out=timed_out,
             )
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
-            sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
+            sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
-            return completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward
+            # Same rollout-structure metrics the built-in loop reports, for `_generate_one` to push on the loop.
+            metrics = dict(
+                turns=len(turns),
+                sequences=len(sequences),
+                completion_ids=completion_ids,
+                tally=tally,
+                loop_exhausted=timed_out,
+                duration_s=time.monotonic() - t_dispatch,
+            )
+            return (completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward), metrics
         except Exception:
             logger.warning("harness rollout failed; scoring as unscorable", exc_info=True)
-            return self._EMPTY_ROLLOUT
+            return self._EMPTY_ROLLOUT, None
         finally:
             self._live_sessions.discard(session)
             try:

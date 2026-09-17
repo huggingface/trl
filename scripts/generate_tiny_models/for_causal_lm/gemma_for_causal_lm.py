@@ -32,12 +32,14 @@ MODEL_ID = "google/gemma-7b-it"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GemmaConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=256000,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    head_dim=2,
+    hidden_act="gelu",
 )
 model = GemmaForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
