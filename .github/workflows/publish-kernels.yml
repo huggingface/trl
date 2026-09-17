@@ -24,6 +24,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
       - name: Build and publish with HF Jobs
         uses: huggingface/kernel-builder-job@e76dd635bcf7c66c8322e88517cf0361af27b69e
         with:
