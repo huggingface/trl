@@ -498,6 +498,35 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
+def log_softmax_over_support(logits, index, support_ids) -> torch.Tensor:
+    """
+    Log-probability of `index` under `logits` renormalised over a per-position token subset.
+
+    This is the trainer-side counterpart of a sampler that draws from a truncated distribution (top-k / top-p /
+    min-p): the sampler's `processed_logprobs` are normalised over the kept tokens only, so comparing them with a
+    full-vocabulary log-softmax leaves a factor equal to the kept probability mass in the importance-sampling ratio.
+    Normalising over the same support removes it.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Index tensor of shape `(...)`, the token whose log-probability is returned. It must belong to the support.
+        support_ids (`torch.Tensor`):
+            Long tensor of shape `(..., K)` listing the kept token ids at each position, right-padded with `-1`.
+
+    Returns:
+        `torch.Tensor`:
+            Log-probabilities with the same shape as `index`, in float32.
+    """
+    valid = support_ids >= 0
+    kept = torch.gather(logits, dim=-1, index=support_ids.clamp(min=0)).float()
+    kept = kept.masked_fill(~valid, float("-inf"))
+    logsumexp_values = torch.logsumexp(kept, dim=-1)
+    selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1).float()
+    return selected_logits - logsumexp_values
+
+
 def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.

@@ -85,6 +85,7 @@ from .utils import (
     get_config_model_id,
     identity,
     is_async_callable,
+    log_softmax_over_support,
     maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
@@ -782,6 +783,8 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
+        self.vllm_importance_sampling_support = args.vllm_importance_sampling_support
+        self._sampling_supports = None  # kept token ids per generated token, when vLLM replays them
         self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
         self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
         self.use_liger_kernel = args.use_liger_kernel
@@ -1121,6 +1124,7 @@ class GRPOTrainer(_BaseTrainer):
                 max_completion_length=self.max_completion_length,
                 logprobs=0,  # we only need the generated token logprobs for the importance sampling correction
                 generation_kwargs=args.generation_kwargs,
+                return_sampling_mask=self.vllm_importance_sampling_support == "sampled",
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
         else:
@@ -1458,6 +1462,7 @@ class GRPOTrainer(_BaseTrainer):
         logits_to_keep,
         batch_size=None,
         compute_entropy=False,
+        sampling_support_ids=None,
         compute_aux_loss=False,
         pixel_values=None,
         image_grid_thw=None,
@@ -1543,7 +1548,12 @@ class GRPOTrainer(_BaseTrainer):
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+            if sampling_support_ids is not None:
+                # normalise over the tokens vLLM sampled among, so the ratio against its processed logprobs is 1
+                # for an unchanged policy even under top-k / top-p / min-p truncation
+                logps = log_softmax_over_support(logits, completion_ids, sampling_support_ids[start:end])
+            else:
+                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
 
             if compute_entropy:
@@ -1823,6 +1833,7 @@ class GRPOTrainer(_BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
+        self._sampling_supports = None
         if self.use_vllm:
             # Sync weights if training step changed
             if self.state.global_step != self._last_loaded_step:
@@ -1840,6 +1851,7 @@ class GRPOTrainer(_BaseTrainer):
             )
             # vLLM returns per-token top-k logprobs; keep only the top-1 (sampled token) logprob
             logprobs = [[lp[0] for lp in seq] for seq in logprobs]
+            self._sampling_supports = getattr(self.vllm_generation, "sampling_supports", None)
 
         elif self.use_transformers_continuous_batching:
             with (
@@ -2499,6 +2511,31 @@ class GRPOTrainer(_BaseTrainer):
             ).to(device=device)
         else:
             sampling_per_token_logps = None
+
+        # The kept token ids per generated token, right-padded with -1 to (B, T, K). They are only usable when they
+        # line up with the completions token for token, which tool turns and custom rollouts break; fall back to
+        # the full vocabulary in that case rather than normalising over the wrong set.
+        sampling_support_ids = None
+        if sampling_per_token_logps is not None and self._sampling_supports is not None:
+            supports = self._sampling_supports
+            aligned = len(supports) == len(completion_ids_list) and all(
+                len(seq) == len(ids) for seq, ids in zip(supports, completion_ids_list, strict=True)
+            )
+            if aligned:
+                width = max((len(ids) for seq in supports for ids in seq), default=1)
+                sampling_support_ids = torch.full(
+                    (len(supports), sampling_per_token_logps.shape[1], width), -1, dtype=torch.long
+                )
+                for i, seq in enumerate(supports):
+                    for t, ids in enumerate(seq):
+                        sampling_support_ids[i, t, : len(ids)] = torch.tensor(ids, dtype=torch.long)
+                sampling_support_ids = sampling_support_ids.to(device=device)
+            elif not getattr(self, "_warned_unaligned_support", False):
+                self._warned_unaligned_support = True
+                logger.warning(
+                    "The sampling support returned by vLLM does not line up with the completions (multi-turn or "
+                    "custom rollouts); normalising the importance-sampling log-probs over the full vocabulary instead."
+                )
         if tool_mask_list is not None:
             tool_mask = [torch.tensor(mask) for mask in tool_mask_list]
             tool_mask = pad(
@@ -2674,6 +2711,7 @@ class GRPOTrainer(_BaseTrainer):
                     batch_size,
                     num_images=num_images,
                     num_tiles=num_tiles,
+                    sampling_support_ids=sampling_support_ids,
                     **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                 )
             else:

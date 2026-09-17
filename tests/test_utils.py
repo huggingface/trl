@@ -43,6 +43,7 @@ from trl.trainer.utils import (
     get_peft_config,
     hash_module,
     is_async_callable,
+    log_softmax_over_support,
     nanstd,
     pad,
     patch_chunked_lm_head,
@@ -933,6 +934,30 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         """)
 
         assert output == expected_output
+
+
+class TestLogSoftmaxOverSupport(TrlTestCase):
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_full_support_matches_log_softmax(self, dtype):
+        """With every token in the support the result is the ordinary log-softmax."""
+        vocab_size, batch_size, seq_len = 64, 3, 5
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+        index = torch.randint(0, vocab_size, (batch_size, seq_len))
+        support = torch.arange(vocab_size).expand(batch_size, seq_len, vocab_size)
+        expected = torch.gather(logits.float().log_softmax(-1), -1, index.unsqueeze(-1)).squeeze(-1)
+        torch.testing.assert_close(log_softmax_over_support(logits, index, support), expected, atol=1e-4, rtol=1e-4)
+
+    def test_subset_support_renormalises_and_ignores_padding(self):
+        """Over a subset the log-prob is the logit minus the log-sum-exp of the kept logits; -1 entries are padding."""
+        logits = torch.tensor([[[1.0, 2.0, 3.0, 4.0]]])  # (1, 1, 4)
+        index = torch.tensor([[3]])
+        support = torch.tensor([[[3, 1, -1, -1]]])  # keep tokens 3 and 1 only, ragged padding with -1
+        expected = torch.tensor([[4.0 - torch.logsumexp(torch.tensor([4.0, 2.0]), 0)]])
+        torch.testing.assert_close(log_softmax_over_support(logits, index, support), expected)
+        # the kept mass is what separates it from the full-vocabulary value
+        full = torch.gather(logits.log_softmax(-1), -1, index.unsqueeze(-1)).squeeze(-1)
+        kept_mass = logits.softmax(-1)[0, 0, [3, 1]].sum()
+        torch.testing.assert_close(log_softmax_over_support(logits, index, support), full - kept_mass.log())
 
 
 class TestSelectiveLogSoftmax(TrlTestCase):

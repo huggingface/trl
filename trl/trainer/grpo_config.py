@@ -955,6 +955,20 @@ class GRPOConfig(_BaseConfig):
             "zero. To strictly mask ratios below C_min without upper bound, set `vllm_importance_sampling_clip_max=None`."
         },
     )
+    vllm_importance_sampling_support: str = field(
+        default="vocab",
+        metadata={
+            "help": "Support over which the trainer's log-probs are normalised before the importance-sampling ratio "
+            "against vLLM's `processed_logprobs` is formed. With `'vocab'` (default) they are normalised over the "
+            "full vocabulary. When `top_p`, `top_k` or `min_p` truncate sampling, vLLM normalises its log-probs "
+            "over the kept tokens only, so the ratio then carries a spurious factor equal to the kept probability "
+            "mass of each position. With `'sampled'`, vLLM is asked to return the kept token ids of every generated "
+            "token (`return_sampling_mask`, vLLM >= 0.28) and the trainer's log-probs are normalised over the same "
+            "set, which removes that factor. Requires `vllm_mode='colocate'` and `top_k > 0` (vLLM bounds the "
+            "replayed set with `top_k`).",
+            "choices": ["vocab", "sampled"],
+        },
+    )
     off_policy_mask_threshold: float | None = field(
         default=None,
         metadata={
@@ -1042,6 +1056,27 @@ class GRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.vllm_importance_sampling_support not in ("vocab", "sampled"):
+            raise ValueError(
+                f"`vllm_importance_sampling_support` must be 'vocab' or 'sampled', got "
+                f"{self.vllm_importance_sampling_support!r}."
+            )
+        if self.vllm_importance_sampling_support == "sampled":
+            if not self.use_vllm or self.vllm_mode != "colocate":
+                raise ValueError(
+                    "`vllm_importance_sampling_support='sampled'` needs the kept token ids that vLLM returns with "
+                    "`return_sampling_mask`, which is only available in colocate mode: set `use_vllm=True` and "
+                    "`vllm_mode='colocate'`."
+                )
+            if self.top_k is None or self.top_k <= 0:
+                raise ValueError(
+                    "`vllm_importance_sampling_support='sampled'` requires `top_k > 0`: vLLM bounds the size of the "
+                    "replayed sampling support with `top_k`. A large value (e.g. 1024) leaves `top_p` in charge of "
+                    "the truncation."
+                )
+            if self.temperature <= 0:
+                raise ValueError("`vllm_importance_sampling_support='sampled'` requires `temperature > 0`.")
 
         if self.use_transformers_paged:
             warnings.warn(

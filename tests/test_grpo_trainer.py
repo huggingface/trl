@@ -1685,6 +1685,109 @@ class TestGRPOTrainer(TrlTestCase):
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
 
+    def test_sampling_support_option_is_validated(self):
+        # 'sampled' needs vLLM's replayed support, which only colocate mode returns and which vLLM bounds with top_k
+        with pytest.raises(ValueError, match="colocate"):
+            GRPOConfig(output_dir=self.tmp_dir, vllm_importance_sampling_support="sampled", use_vllm=False)
+        with pytest.raises(ValueError, match="top_k"):
+            GRPOConfig(
+                output_dir=self.tmp_dir,
+                vllm_importance_sampling_support="sampled",
+                use_vllm=True,
+                vllm_mode="colocate",
+            )
+        with pytest.raises(ValueError, match="'vocab' or 'sampled'"):
+            GRPOConfig(output_dir=self.tmp_dir, vllm_importance_sampling_support="nucleus")
+        args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            vllm_importance_sampling_support="sampled",
+            use_vllm=True,
+            vllm_mode="colocate",
+            top_k=1024,
+        )
+        assert args.vllm_importance_sampling_support == "sampled"
+
+    @pytest.mark.parametrize("support", ["vocab", "sampled"])
+    def test_sampling_support_renormalisation_removes_truncation_term(self, support):
+        # When vLLM samples with top-k / top-p / min-p, its `processed_logprobs` are normalised over the kept tokens
+        # only, so the ratio against the trainer's full-vocabulary log-probs picks up a factor equal to the kept
+        # probability mass, which is not a policy change. With `vllm_importance_sampling_support='sampled'` the
+        # trainer receives the kept token ids and normalises over the same set. This test plays vLLM: it computes
+        # the sampling log-probs from the trainer's own model over a synthetic 3-token support, so that with the
+        # renormalisation the recorded difference is zero and without it it equals the log kept mass.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda completions, **kwargs: [float(i) for i in range(len(completions))],
+            args=training_args,
+            train_dataset=dataset,
+        )
+        # Enable the correction after construction so that no vLLM engine is required.
+        trainer.use_vllm = True
+        trainer.vllm_importance_sampling_correction = True
+        trainer.vllm_importance_sampling_mode = "token_truncate"
+
+        original_generate = trainer._generate
+        model = trainer.accelerator.unwrap_model(trainer.model)
+        log_kept_mass = []
+
+        def generate_like_a_truncating_sampler(prompts):
+            trainer.use_vllm = False
+            try:
+                outputs = list(original_generate(prompts))
+            finally:
+                trainer.use_vllm = True
+            prompt_ids, completion_ids = outputs[0], outputs[1]
+            sampling_logps, supports = [], []
+            with torch.no_grad():
+                for p_ids, c_ids in zip(prompt_ids, completion_ids, strict=True):
+                    ids = torch.tensor([list(p_ids) + list(c_ids)], device=model.device)
+                    logits = model(ids).logits[0, len(p_ids) - 1 : len(p_ids) - 1 + len(c_ids)].float()
+                    logits = logits / trainer.temperature
+                    seq_logps, seq_support = [], []
+                    for t, token in enumerate(c_ids):
+                        kept = torch.topk(logits[t], k=3).indices.tolist()
+                        if token not in kept:
+                            kept.append(token)  # the sampled token is always inside the sampler's support
+                        seq_support.append(kept)
+                        seq_logps.append((logits[t, token] - torch.logsumexp(logits[t, kept], 0)).item())
+                        log_kept_mass.append(torch.logsumexp(logits[t].log_softmax(0)[kept], 0).item())
+                    sampling_logps.append(seq_logps)
+                    supports.append(seq_support)
+            outputs[4] = sampling_logps
+            trainer._sampling_supports = supports if support == "sampled" else None
+            return tuple(outputs)
+
+        trainer._generate = generate_like_a_truncating_sampler
+
+        original_score = trainer._generate_and_score_completions
+        recorded = []
+
+        def record_metrics(inputs):
+            result = original_score(inputs)
+            recorded.extend(trainer._metrics["train"]["sampling/sampling_logp_difference/mean"])
+            return result
+
+        trainer._generate_and_score_completions = record_metrics
+        trainer.train()
+
+        assert recorded, "the sampling log-prob difference was never recorded"
+        mean_diff = sum(recorded) / len(recorded)
+        expected_truncation_term = -sum(log_kept_mass) / len(log_kept_mass)
+        if support == "sampled":
+            assert mean_diff < 1e-3, f"renormalised log-probs should match the sampler, got {mean_diff}"
+        else:
+            assert abs(mean_diff - expected_truncation_term) < 1e-2, (mean_diff, expected_truncation_term)
+            assert mean_diff > 0.05, "the truncation term should be visible for a 3-token support"
+
     @pytest.mark.parametrize(
         "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
     )

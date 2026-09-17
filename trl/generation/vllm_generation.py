@@ -108,6 +108,24 @@ if is_bitsandbytes_available():
     import bitsandbytes as bnb
 
 
+def extract_sampling_supports(all_outputs: list["RequestOutput"]) -> list[list[list[int]]] | None:
+    """
+    Extract the per-token sampling support (the token ids that survived top-k / top-p / min-p filtering) from vLLM
+    outputs generated with `return_sampling_mask=True`.
+
+    Returns:
+        `list[list[list[int]]]` of shape `(num_sequences, seq_len, num_kept)` with a ragged last dimension, or `None`
+        when the outputs carry no sampling mask.
+    """
+    supports = []
+    for outputs in all_outputs:
+        for output in outputs.outputs:
+            if output.sampling_mask is None:
+                return None
+            supports.append([list(ids) for ids in output.sampling_mask.token_ids])
+    return supports
+
+
 class VLLMGeneration:
     """Handles vLLM-based generation for trainers.
 
@@ -244,6 +262,7 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        return_sampling_mask: bool = False,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -278,6 +297,13 @@ class VLLMGeneration:
         self.min_p = min_p
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
+        # When set, every generated token comes back with the ids it was sampled among (vLLM >= 0.28); the trainer
+        # uses them to normalise its own log-probs over the same support. Exposed through `self.sampling_supports`
+        # after each `generate` call rather than through the return value, which other trainers unpack positionally.
+        self.return_sampling_mask = return_sampling_mask
+        self.sampling_supports: list[list[list[int]]] | None = None
+        if self.return_sampling_mask and self.mode != "colocate":
+            raise ValueError("`return_sampling_mask` is only available in colocate mode.")
         self.generation_kwargs = generation_kwargs or {}
 
         # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
@@ -359,6 +385,7 @@ class VLLMGeneration:
                 max_num_batched_tokens=4096,
                 # Important so temperature scaling/logit tweaking affects the TIS log probs
                 logprobs_mode="processed_logprobs",
+                return_sampling_mask=self.return_sampling_mask,
                 quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
             )
@@ -731,6 +758,7 @@ class VLLMGeneration:
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             all_logprobs, all_logprob_token_ids = extract_logprobs(all_outputs)
+            all_sampling_supports = extract_sampling_supports(all_outputs) if self.return_sampling_mask else None
 
             if self.tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
@@ -741,11 +769,14 @@ class VLLMGeneration:
                 completion_ids = all_completion_ids[tp_slice]
                 logprobs = all_logprobs[tp_slice] if all_logprobs is not None else None
                 logprob_token_ids = all_logprob_token_ids[tp_slice] if all_logprob_token_ids is not None else None
+                sampling_supports = all_sampling_supports[tp_slice] if all_sampling_supports is not None else None
             else:
                 prompt_ids = all_prompt_ids
                 completion_ids = all_completion_ids
                 logprobs = all_logprobs
                 logprob_token_ids = all_logprob_token_ids
+                sampling_supports = all_sampling_supports
+            self.sampling_supports = sampling_supports
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
