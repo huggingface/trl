@@ -151,10 +151,10 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
 - `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-- With `use_liger_kernel=True`:
-  - only a single `loss_type` is supported,
-  - `compute_metrics` is not supported,
-  - `precompute_ref_log_probs=True` is not supported.
+- With `use_liger_kernel=True`, multiple loss types, non-default f-divergences, and
+  `precompute_ref_log_probs=True` are supported. The remaining constraints are:
+  - `use_weighting=True` is not supported,
+  - `compute_metrics` is not supported because it requires the full logits.
 - `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 - `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 - `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).

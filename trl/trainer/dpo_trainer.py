@@ -48,7 +48,6 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
-from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -803,11 +802,6 @@ class DPOTrainer(_BaseTrainer):
         # Chunked log-probability path
         self.use_liger_kernel = args.use_liger_kernel
         if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
             if self.use_weighting:
                 raise ValueError(
                     "`use_liger_kernel=True` is incompatible with `use_weighting=True`. WPO weighting requires a "
@@ -1755,13 +1749,12 @@ class DPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                # Under ZeRO-3, `lm_head.weight` is sharded and the chunked projection reads it directly (bypassing
-                # the module), so run the loss inside the engine's forward via `_forward_redirection` to arm the
-                # parameter coordinator's gather/reduce hooks.
+                # The chunked projection reads `lm_head.weight` directly, but distributed wrappers still need their
+                # forward to run so their parameter materialization and gradient synchronization hooks are armed.
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
+                if is_zero3 or self.is_fsdp_enabled or model is not unwrapped_model:
                     return self._forward_redirection(
                         model, unwrapped_model, self._compute_loss, unwrapped_model, inputs, return_outputs
                     )
