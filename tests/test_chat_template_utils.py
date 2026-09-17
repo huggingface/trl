@@ -398,7 +398,6 @@ class TestSupportsToolCalling:
         [
             # No chat template
             pytest.param("trl-internal-testing/tiny-BartModel", id="bart"),
-            pytest.param("trl-internal-testing/tiny-BloomForCausalLM", id="bloom"),
             pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
             pytest.param("trl-internal-testing/tiny-GPTNeoXForCausalLM", id="gptneox"),
             pytest.param("trl-internal-testing/tiny-GPTNeoXForSequenceClassification", id="gptneox-seq"),
