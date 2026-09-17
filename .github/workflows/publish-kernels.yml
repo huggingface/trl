@@ -1,0 +1,42 @@
+name: Publish kernels
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "kernels/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-kernels
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish kernels
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and publish with HF Jobs
+        uses: huggingface/kernel-builder-job@e76dd635bcf7c66c8322e88517cf0361af27b69e
+        with:
+          token: ${{ secrets.HF_TOKEN }}
+          namespace: trl-lib
+          flavor: cpu-upgrade
+          timeout: "3600"
+          script: |
+            set +x
+            export HF_TOKEN="${{ secrets.HF_TOKEN }}"
+            export GIT_LFS_SKIP_SMUDGE=1
+
+            git clone "${{ github.server_url }}/${{ github.repository }}" trl
+            cd trl
+            git checkout "${{ github.sha }}"
+            cd kernels
+
+            kernel-builder check-config
+            kernel-builder build-and-upload
