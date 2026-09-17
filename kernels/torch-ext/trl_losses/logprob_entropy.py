@@ -36,12 +36,12 @@ def _forward_kernel(
     mask_batch_stride,
     mask_row_stride,
     n_cols: tl.constexpr,
-    rows_per_batch: tl.constexpr,
+    rows_per_batch,
     TEMPERATURE: tl.constexpr,
     HAS_MASK: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    row = tl.program_id(0)
+    row = tl.program_id(0).to(tl.int64)
     batch = row // rows_per_batch
     row_in_batch = row - batch * rows_per_batch
     if HAS_MASK:
@@ -98,14 +98,14 @@ def _backward_kernel(
     grad_logits_batch_stride,
     grad_logits_row_stride,
     n_cols: tl.constexpr,
-    rows_per_batch: tl.constexpr,
+    rows_per_batch,
     TEMPERATURE: tl.constexpr,
     HAS_MASK: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     HAS_LOGPROB_GRAD: tl.constexpr,
     HAS_ENTROPY_GRAD: tl.constexpr,
 ):
-    row = tl.program_id(0)
+    row = tl.program_id(0).to(tl.int64)
     block = tl.program_id(1)
     batch = row // rows_per_batch
     row_in_batch = row - batch * rows_per_batch
