@@ -651,9 +651,8 @@ class TPOTrainer(_BaseTrainer):
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
         per_token_logps, per_token_entropy = selective_log_softmax_and_entropy(
-            shift_logits, shift_labels, entropy_requires_grad=False
+            shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
         )
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
 
         # Length-normalized for IPO and TPO-L (matches the SimPO-style implicit reward used by the TPO paper);
         # summed otherwise.

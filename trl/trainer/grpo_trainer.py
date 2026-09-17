@@ -1539,17 +1539,22 @@ class GRPOTrainer(_BaseTrainer):
             logits = logits[:, :-1, :]  # (B, L-1, H)
             # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
+            completion_mask = attention_mask_batch[:, -logits_to_keep:]
+            # Scale inside the kernel to avoid materializing another full logits tensor.
             if compute_entropy:
                 logps, entropies = selective_log_softmax_and_entropy(
-                    logits, completion_ids, entropy_requires_grad=self._entropy_bonus_enabled
+                    logits,
+                    completion_ids,
+                    entropy_requires_grad=self._entropy_bonus_enabled,
+                    temperature=self.temperature,
+                    row_mask=completion_mask,
                 )
                 all_entropies.append(entropies)
             else:
-                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+                logps = selective_log_softmax(
+                    logits, completion_ids, temperature=self.temperature, row_mask=completion_mask
+                )
             all_logps.append(logps)
 
             if compute_aux_loss:

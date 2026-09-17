@@ -982,30 +982,57 @@ class TestSelectiveLogSoftmax(TrlTestCase):
 
     @require_torch_accelerator
     def test_hub_kernel_dispatch(self):
-        def fused_logprobs_and_entropy(logits, index):
-            logprobs = logits.float().log_softmax(-1)
+        def fused_logprobs_and_entropy(logits, index, temperature=1.0, row_mask=None):
+            logprobs = (logits.float() / temperature).log_softmax(-1)
             selected_logprobs = logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
             entropy = -(logprobs.exp() * logprobs).sum(-1)
+            if row_mask is not None:
+                selected_logprobs = selected_logprobs.masked_fill(row_mask == 0, 0.0)
+                entropy = entropy.masked_fill(row_mask == 0, 0.0)
             return selected_logprobs, entropy
 
         kernel = types.SimpleNamespace(selective_log_softmax_and_entropy=Mock(side_effect=fused_logprobs_and_entropy))
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
         index = torch.randint(257, (2, 3), device=torch_device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=torch_device, dtype=torch.bool)
 
         with patch("trl.trainer.utils._load_trl_loss_kernel", return_value=kernel):
-            logprobs = selective_log_softmax(logits, index)
+            logprobs = selective_log_softmax(logits, index, temperature=0.7, row_mask=row_mask)
             entropy = entropy_from_logits(logits)
             combined_logprobs, combined_entropy = selective_log_softmax_and_entropy(
-                logits, index, entropy_requires_grad=False
+                logits, index, entropy_requires_grad=False, temperature=0.7, row_mask=row_mask
             )
 
         torch.testing.assert_close(logprobs, combined_logprobs)
-        torch.testing.assert_close(entropy, combined_entropy)
+        expected_entropy = fused_logprobs_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)[1]
+        torch.testing.assert_close(combined_entropy, expected_entropy)
+        assert torch.all(entropy > 0)
         assert combined_logprobs.requires_grad
         assert not combined_entropy.requires_grad
         combined_logprobs.sum().backward()
         assert logits.grad is not None
         assert kernel.selective_log_softmax_and_entropy.call_count == 3
+
+    def test_temperature_and_row_mask_fallback(self):
+        logits = torch.randn(2, 3, 257, requires_grad=True)
+        index = torch.randint(257, (2, 3))
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], dtype=torch.bool)
+
+        logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
+        (logprobs + 0.1 * entropy).sum().backward()
+
+        reference_logits = logits.detach().clone().requires_grad_()
+        reference_logprobs = (reference_logits / 0.7).log_softmax(-1)
+        reference_entropy = -(reference_logprobs.exp() * reference_logprobs).sum(-1)
+        reference_logprobs = reference_logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
+        reference_logprobs = reference_logprobs.masked_fill(~row_mask, 0.0)
+        reference_entropy = reference_entropy.masked_fill(~row_mask, 0.0)
+        (reference_logprobs + 0.1 * reference_entropy).sum().backward()
+
+        torch.testing.assert_close(logprobs, reference_logprobs)
+        torch.testing.assert_close(entropy, reference_entropy)
+        torch.testing.assert_close(logits.grad, reference_logits.grad)
+        assert torch.count_nonzero(logits.grad[~row_mask]) == 0
 
     @require_torch_accelerator
     def test_torch_compile_does_not_load_hub_kernel(self):

@@ -1236,8 +1236,7 @@ class DPOTrainer(_BaseTrainer):
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
         ref_shift_logits = ref_outputs.logits[..., :-1, :]
-        ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-        ref_per_token_logps[shift_completion_mask == 0] = 0.0
+        ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels, row_mask=shift_completion_mask)
 
         if self.ld_alpha is None:
             ref_logps = ref_per_token_logps.sum(dim=1)
@@ -1383,9 +1382,8 @@ class DPOTrainer(_BaseTrainer):
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
         per_token_logps, per_token_entropy = selective_log_softmax_and_entropy(
-            shift_logits, shift_labels, entropy_requires_grad=False
+            shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
         )
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         if self.ld_alpha is None:
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
         else:
@@ -1422,8 +1420,7 @@ class DPOTrainer(_BaseTrainer):
                     ref_outputs = self.ref_model(**ref_model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-            ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels, row_mask=shift_completion_mask)
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
             else:

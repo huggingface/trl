@@ -520,7 +520,9 @@ def _load_trl_loss_kernel() -> types.ModuleType | None:
     return _TRL_LOSS_KERNEL
 
 
-def _supports_trl_loss_kernel(logits: torch.Tensor, index: torch.Tensor | None = None) -> bool:
+def _supports_trl_loss_kernel(
+    logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
+) -> bool:
     supported = (
         logits.device.type in ("cuda", "xpu")
         and logits.dtype in (torch.float16, torch.bfloat16, torch.float32)
@@ -535,10 +537,23 @@ def _supports_trl_loss_kernel(logits: torch.Tensor, index: torch.Tensor | None =
             and index.dtype in (torch.int32, torch.int64)
             and index.device == logits.device
         )
+    if row_mask is not None:
+        supported = (
+            supported
+            and index is not None
+            and row_mask.shape == index.shape
+            and row_mask.dtype in (torch.bool, torch.int32, torch.int64)
+            and row_mask.device == logits.device
+        )
     return supported
 
 
-def selective_log_softmax(logits, index) -> torch.Tensor:
+def selective_log_softmax(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -556,15 +571,25 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         index (`torch.Tensor`):
             Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the log-softmax
             output. When the last case is used, `K` log-probabilities are gathered per position (e.g. for top-K)
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero log-probability.
 
     Returns:
         `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
-    if _supports_trl_loss_kernel(logits, index) and (kernel := _load_trl_loss_kernel()) is not None:
-        logprobs, _ = kernel.selective_log_softmax_and_entropy(logits, index)
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if _supports_trl_loss_kernel(logits, index, row_mask) and (kernel := _load_trl_loss_kernel()) is not None:
+        logprobs, _ = kernel.selective_log_softmax_and_entropy(
+            logits, index, temperature=temperature, row_mask=row_mask
+        )
         return logprobs
 
+    if temperature != 1.0:
+        logits = logits / temperature
     squeeze = index.ndim == logits.ndim - 1
     if squeeze:
         index = index.unsqueeze(-1)
@@ -585,6 +610,8 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
     if squeeze:
         per_token_logps = per_token_logps.squeeze(-1)
+    if row_mask is not None:
+        per_token_logps = per_token_logps.masked_fill(row_mask == 0, 0.0)
 
     return per_token_logps
 
@@ -632,7 +659,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
 
 def selective_log_softmax_and_entropy(
-    logits: torch.Tensor, index: torch.Tensor, entropy_requires_grad: bool = True
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    entropy_requires_grad: bool = True,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute selected log-probabilities and entropy in one pass over the logits.
 
@@ -643,20 +674,32 @@ def selective_log_softmax_and_entropy(
             Indices of shape `(...)` selecting one log-probability per row.
         entropy_requires_grad (`bool`, *optional*, defaults to `True`):
             Whether gradients should flow through the entropy output.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero outputs.
 
     Returns:
         `tuple[torch.Tensor, torch.Tensor]`:
             The selected log-probabilities and per-row entropies.
     """
-    if _supports_trl_loss_kernel(logits, index) and (kernel := _load_trl_loss_kernel()) is not None:
-        logprobs, entropy = kernel.selective_log_softmax_and_entropy(logits, index)
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if _supports_trl_loss_kernel(logits, index, row_mask) and (kernel := _load_trl_loss_kernel()) is not None:
+        logprobs, entropy = kernel.selective_log_softmax_and_entropy(
+            logits, index, temperature=temperature, row_mask=row_mask
+        )
         return logprobs, entropy if entropy_requires_grad else entropy.detach()
-    logprobs = selective_log_softmax(logits, index)
+    if temperature != 1.0:
+        logits = logits / temperature
+    logprobs = selective_log_softmax(logits, index, row_mask=row_mask)
     if entropy_requires_grad:
         entropy = entropy_from_logits(logits)
     else:
         with torch.no_grad():
             entropy = entropy_from_logits(logits)
+    if row_mask is not None:
+        entropy = entropy.masked_fill(row_mask == 0, 0.0)
     return logprobs, entropy
 
 
