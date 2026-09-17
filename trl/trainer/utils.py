@@ -575,6 +575,9 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     entropies = []
     for chunk in flat_logits.split(chunk_size, dim=0):
         logps = F.log_softmax(chunk, dim=-1)
+        # Zero-probability tokens have logps=-inf; exp(-inf) * (-inf) = NaN.
+        # Replace -inf with 0 so those terms contribute zero to Shannon entropy.
+        logps = torch.where(logps == float("-inf"), torch.zeros_like(logps), logps)
         chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
         entropies.append(chunk_entropy)
 
