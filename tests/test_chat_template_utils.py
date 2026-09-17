@@ -38,8 +38,8 @@ from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 class TestCloneChatTemplate(TrlTestCase):
     def test_clone(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         _, modified_tokenizer, _ = clone_chat_template(model, tokenizer, source)
@@ -49,8 +49,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_resize(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         modified_model, modified_tokenizer, _ = clone_chat_template(
@@ -64,8 +64,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         # This will add <extra_id_0>, <extra_id_1>, ... to the tokenizer
@@ -84,8 +84,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_apply_new_chat_template(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         _, modified_tokenizer, _ = clone_chat_template(model, tokenizer, source)
