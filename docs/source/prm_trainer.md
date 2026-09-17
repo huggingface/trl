@@ -46,7 +46,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_prm.py
+torchrun --nproc_per_node 8 train_prm.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 1 hour.

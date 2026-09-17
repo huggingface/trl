@@ -11,9 +11,7 @@ The example in this guide trains on exactly one such sequence per step, on a sin
 You need one node with 8 H100s (or better), and transformers from main: the example uses gradient checkpointing's `offload`, which is not in a release yet.
 
 ```sh
-accelerate launch \
-    --config_file examples/sft_qwen3_8b_1m_context/context_parallel_8gpu.yaml \
-    examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
+torchrun --nproc_per_node 8 examples/sft_qwen3_8b_1m_context/sft_qwen3_8b_1m_context.py
 ```
 
 The script fine-tunes Qwen3-8B on books from [PG-19](https://huggingface.co/datasets/emozilla/pg19), joined end to end until each one is about a million tokens long. After ten minutes or so of loading and tokenizing, the first step lands:
@@ -184,16 +182,18 @@ There are two ways to run that exchange, context parallelism (CP) and Ulysses se
 
 **On FSDP2, use CP.** Each GPU keeps its own slice, and the other slices come to it in turn, so every token eventually sees every earlier token.
 
-```yaml
-parallelism_config:
-  parallelism_config_cp_size: 4
+```python
+from accelerate import ParallelismConfig
+
+training_args = SFTConfig(..., fsdp=True, parallelism_config=ParallelismConfig(cp_size=4))
 ```
 
 **On DeepSpeed, use SP.** Instead of moving slices around, it reshuffles the batch just before attention so each GPU holds every token but only a quarter of the attention heads, then shuffles back afterwards.
 
-```yaml
-parallelism_config:
-  parallelism_config_sp_size: 4
+```python
+training_args = SFTConfig(
+    ..., deepspeed="examples/deepspeed_configs/zero3.json", parallelism_config=ParallelismConfig(sp_size=4, sp_backend="deepspeed")
+)
 ```
 
 The two knobs do not cross over today: `cp_size` requires FSDP2 and `sp_size` only runs under DeepSpeed. Pick the backend and the method follows. The rest of this section follows the FSDP2 path, which is what the example at the top of this guide uses: its GPUs are not independent workers on separate batches, they are one group sharing a single sequence.

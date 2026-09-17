@@ -45,7 +45,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_rloo.py
+torchrun --nproc_per_node 8 train_rloo.py
 ```
 
 ## Looking deeper into the RLOO method
@@ -227,7 +227,7 @@ For more information, see [Speeding up training with vLLM](speeding_up_training#
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
 - **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such models. For more details, see [DeepSpeed Integration](deepspeed_integration).
-- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **torchrun**: PyTorch's launcher starts one process per GPU on every node and connects them through a common rendezvous. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
 Below is an example SLURM script to train a 70B model with RLOO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
@@ -245,13 +245,12 @@ TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
 VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
 
 # Run training on the first 4 nodes (Group 1)
-srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
-     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-     --num_processes 32 \
-     --num_machines 4 \
-     --main_process_ip ${NODELIST[0]} \
-     --machine_rank $SLURM_PROCID \
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" torchrun \
+     --nnodes 4 \
+     --nproc_per_node 8 \
+     --node_rank $SLURM_PROCID \
      --rdzv_backend c10d \
+     --rdzv_endpoint ${NODELIST[0]}:29500 \
      train_rloo.py \
      --server_ip $VLLM_NODE &
 
@@ -286,6 +285,7 @@ def main():
         output_dir="Qwen2.5-72B-RLOO",
         per_device_train_batch_size=4,
         bf16=True,
+        deepspeed="examples/deepspeed_configs/zero3.json",
         use_vllm=True,
         vllm_mode="server",
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
@@ -566,9 +566,8 @@ Tested with:
 Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/rloo_visual_math/rloo_visual_math.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
-accelerate launch \
-  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/rloo_visual_math/rloo_visual_math.py \
+torchrun --nproc_per_node 8 examples/rloo_visual_math/rloo_visual_math.py \
+  --deepspeed examples/deepspeed_configs/zero3.json \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir rloo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
