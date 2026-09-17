@@ -40,7 +40,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model
+from ...trainer.utils import disable_dropout_in_model, global_then_local_main_first
 from ..utils import prepare_peft_model
 from .prm_config import PRMConfig
 
@@ -205,7 +205,7 @@ class PRMTrainer(_BaseTrainer):
             data_collator = DataCollatorForTokenClassification(processing_class)
 
         if "input_ids" not in train_dataset.column_names:
-            with PartialState().main_process_first():
+            with global_then_local_main_first():
                 fn_kwargs = {
                     "tokenizer": processing_class,
                     "step_separator": args.step_separator,
