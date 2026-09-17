@@ -514,7 +514,7 @@ def _load_trl_loss_kernel() -> types.ModuleType | None:
     try:
         from kernels import get_kernel
 
-        _TRL_LOSS_KERNEL = get_kernel("kernels-community/trl-losses", version=1)
+        _TRL_LOSS_KERNEL = get_kernel("trl-lib/trl-losses", version=0, trust_remote_code=["trl-lib/trl-losses"])
     except Exception:
         pass
     return _TRL_LOSS_KERNEL
