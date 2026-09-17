@@ -1635,16 +1635,7 @@ To use Online DPO, you can use the [`experimental.online_dpo.OnlineDPOTrainer`].
 
 **📜 Paper**: https://huggingface.co/papers/2405.21046
 
-XPO augments the DPO objective with a novel and principled exploration bonus, empowering the algorithm to explore outside the support of the initial model and human feedback data. It is a one-line change to online DPO that is provably sample-efficient and converges to a near-optimal language model policy. The paper defines α > 0 (optimism coefficient) and β > 0 (KL regularization) in Algorithm 1 but does not specify numerical values. The following configuration uses TRL defaults:
-
-```python
-from trl.experimental.xpo import XPOConfig
-
-training_args = XPOConfig(
-    alpha=1e-5,  # α exploration bonus weight, α ≥ 0 where α=0 reduces to online DPO (TRL default)
-    beta=0.1,  # β KL regularization coefficient (TRL default)
-)
-```
+XPO augments the DPO objective with a novel and principled exploration bonus, empowering the algorithm to explore outside the support of the initial model and human feedback data. It is a one-line change to online DPO that is provably sample-efficient and converges to a near-optimal language model policy. TRL shipped an implementation as `XPOTrainer` up to v1.13; it is no longer part of the library and remains available in the git history.
 
 ## Distillation
 
