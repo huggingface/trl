@@ -32,10 +32,9 @@ MODEL_ID = "facebook/opt-1.3b"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = OPTConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=50272,
     hidden_size=8,
     num_attention_heads=4,
-    num_key_value_heads=2,
     num_hidden_layers=2,
     ffn_dim=32,
 )
