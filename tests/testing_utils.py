@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import importlib.metadata
 import signal
 import warnings
 from abc import abstractmethod
@@ -51,9 +52,6 @@ from trl.import_utils import (
 if is_peft_available():
     import peft
 
-if is_kernels_available():
-    import kernels
-
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
@@ -63,8 +61,9 @@ require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test re
 # transformers==4.56.2 (tested by the "minimum versions" CI job) caps `hub-kernels`/`kernels` extras at
 # kernels<=0.9 (huggingface-hub<1.0), and no kernels release since 0.13.0 supports huggingface-hub<1.0, so this
 # can't be resolved by bumping the pyproject.toml floor without dropping support for transformers<5.1.0.
+# kernels<0.14 doesn't even expose `__version__` (only `_versions`), so read the version from package metadata.
 require_kernels_trust_remote_code = pytest.mark.skipif(
-    not is_kernels_available() or Version(kernels.__version__) < Version("0.14.0"),
+    not is_kernels_available() or Version(importlib.metadata.version("kernels")) < Version("0.14.0"),
     reason="test requires kernels>=0.14.0 for `trust_remote_code`",
 )
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
