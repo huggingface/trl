@@ -20,7 +20,7 @@ from functools import wraps
 
 import pytest
 import torch
-from transformers.utils import is_liger_kernel_available, is_torch_xpu_available
+from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
 
 
 # ============================================================================
@@ -128,6 +128,15 @@ def apply_model_revisions(monkeypatch):
         # Re-wrap as classmethod
         return classmethod(wrapper)
 
+    def create_method_wrapper(original_method):
+        @wraps(original_method)
+        def wrapper(self, model_id, *args, **kwargs):
+            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+                kwargs["revision"] = MODEL_REVISIONS[model_id]
+            return original_method(self, model_id, *args, **kwargs)
+
+        return wrapper
+
     # Patch the transformers Auto* classes and the base classes they dispatch to
     for cls in [
         AutoConfig,
@@ -139,6 +148,31 @@ def apply_model_revisions(monkeypatch):
         ProcessorMixin,
     ]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
+
+    def create_peft_classmethod_wrapper(original_classmethod):
+        original_func = original_classmethod.__func__
+
+        @wraps(original_func)
+        def wrapper(cls, model, model_id, *args, **kwargs):
+            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+                kwargs["revision"] = MODEL_REVISIONS[model_id]
+            return original_func(cls, model, model_id, *args, **kwargs)
+
+        return classmethod(wrapper)
+
+    # PEFT adapters never reach the loaders above.
+    if is_peft_available():
+        from peft import AutoPeftModelForCausalLM, PeftModel
+
+        monkeypatch.setattr(
+            AutoPeftModelForCausalLM,
+            "from_pretrained",
+            create_classmethod_wrapper(AutoPeftModelForCausalLM.from_pretrained),
+        )
+        # `PeftModel.from_pretrained` takes the base model first and the adapter id second.
+        monkeypatch.setattr(PeftModel, "from_pretrained", create_peft_classmethod_wrapper(PeftModel.from_pretrained))
+        # `load_adapter` is an instance method, not a classmethod.
+        monkeypatch.setattr(PeftModel, "load_adapter", create_method_wrapper(PeftModel.load_adapter))
 
 
 @pytest.fixture(autouse=True)
