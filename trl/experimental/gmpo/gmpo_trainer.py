@@ -14,6 +14,7 @@
 
 import torch
 
+from ...extras.profiling import profiling_decorator
 from ...trainer.grpo_trainer import GRPOTrainer
 from ...trainer.utils import get_config_model_id, nanmax, nanmin
 from .gmpo_config import GMPOConfig
@@ -27,8 +28,8 @@ class GMPOTrainer(GRPOTrainer):
     token-level importance ratios instead of the arithmetic mean. Because the geometric mean is far less sensitive to
     outlier ratios, the policy update is more stable and a much wider clipping range can be used.
 
-    The only change w.r.t. [`GRPOTrainer`] is `_compute_loss`. Everything else (generation, reward computation, weight
-    syncing, metric logging) is inherited unchanged
+    GMPO provides its own loss calculation and dispatch. Generation, reward computation, and weight syncing are
+    inherited from [`GRPOTrainer`].
     """
 
     _tag_names = ["trl", "gmpo"]
@@ -39,6 +40,13 @@ class GMPOTrainer(GRPOTrainer):
             args = GMPOConfig(f"{model_name.split('/')[-1]}-GMPO")
 
         super().__init__(model, reward_funcs, args=args, **kwargs)
+
+    @profiling_decorator
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The GMPOTrainer does not support returning outputs")
+        # The fused GRPO loss does not implement GMPO's geometric-mean objective.
+        return self._compute_loss(model, inputs)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model

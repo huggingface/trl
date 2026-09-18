@@ -4,6 +4,10 @@ In the paper [Geometric-Mean Policy Optimization](https://huggingface.co/papers/
 
 To use GMPO, you can use the [`experimental.gmpo.GMPOTrainer`] class in `trl.experimental.gmpo`.
 
+GMPO always evaluates its own geometric-mean objective. Setting `use_liger_kernel=True` does not enable a fused GMPO
+loss: the trainer uses the ordinary GMPO loss instead of the fused GRPO loss. This preserves the objective but does
+not provide the fused loss's memory savings.
+
 ## Usage
 
 ```python
