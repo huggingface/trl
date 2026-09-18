@@ -11,8 +11,8 @@ on:
       - ".github/actions/**"
       - "Makefile"
       - "examples/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
@@ -24,8 +24,8 @@ on:
       - ".github/actions/**"
       - "Makefile"
       - "examples/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
