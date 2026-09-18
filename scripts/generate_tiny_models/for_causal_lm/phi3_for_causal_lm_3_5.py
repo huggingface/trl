@@ -35,12 +35,18 @@ MODEL_ID = "microsoft/Phi-3.5-mini-instruct"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = Phi3Config(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=32064,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    max_position_embeddings=131072,
+    sliding_window=262144,
+    # `short_factor` and `long_factor` hold one value per frequency band, so their length is
+    # `head_dim // 2`, which the size reduction takes from 48 down to 1. The values are the
+    # reference's first band, keeping `long_factor > short_factor` as the real model has it.
+    rope_scaling={"type": "longrope", "short_factor": [1.0], "long_factor": [1.0800000429153442]},
 )
 model = Phi3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
