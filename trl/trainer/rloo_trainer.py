@@ -581,6 +581,11 @@ class RLOOTrainer(_BaseTrainer):
         text_config = model.config.get_text_config()
         coef = args.router_aux_loss_coef
         self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0

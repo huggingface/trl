@@ -43,10 +43,9 @@ class SFTConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         router_aux_loss_coef (`float`, *optional*):
-            Coefficient of the load-balancing auxiliary loss, added to the training loss with this weight. When not
-            set, the value declared by the model architecture is used, which is `0.0` for Mixture-of-Experts (MoE)
-            models that balance their experts with a router bias instead, and for non-MoE models. Set to `0.0` to
-            disable it.
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -163,10 +162,9 @@ class SFTConfig(_BaseConfig):
     router_aux_loss_coef: float | None = field(
         default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss, added to the training loss with this weight. "
-            "When not set, the value declared by the model architecture is used, which is `0.0` for "
-            "Mixture-of-Experts (MoE) models that balance their experts with a router bias instead, and for non-MoE "
-            "models. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     chat_template_path: str | None = field(
