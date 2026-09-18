@@ -1194,9 +1194,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             optimizers=optimizers,
             compute_loss_func="non-None value to disable scaling",
         )
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
+        # compute_loss normalizes the loss across the accumulation window. The non-None compute_loss_func above
+        # disables Trainer's extra gradient_accumulation_steps divisor.
         self.model_accepts_loss_kwargs = False
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
@@ -1421,6 +1420,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
         )
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, _ = super().get_batch_samples(epoch_iterator, num_batches, device)
+        num_items_in_batch = None
+        if batch_samples:
+            # The collator repeats the global token count on each rank. Sum across the accumulation window only.
+            num_items_in_batch = sum(batch["global_n_tokens"][0] for batch in batch_samples).to(device)
+        return batch_samples, num_items_in_batch
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
@@ -1472,19 +1479,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
         per_token_loss2 = coef_2 * advantages
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
 
-        # DDP/FSDP averages gradients across ranks (world_size).
-        # To get correct per-token normalization we scale by 1/tokens_per_rank
-        # = world_size / global_n_tokens, so after DDP averaging the effective
         loss = (per_token_loss * completion_mask).sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
-        tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
-        loss = loss / tokens_per_rank.to(torch.float32)
-        # For DAPO, we would scale like this instead:
-        # loss = loss / max(per_token_loss.size(0), 1)
-        loss = loss / self.current_gradient_accumulation_steps
+        # Use one denominator for the whole accumulation window. DDP/FSDP averages gradients across ranks, so
+        # divide the global token count by world_size. Direct calls without a window count retain the batch scale.
+        if num_items_in_batch is None:
+            num_items_in_batch = global_n_tokens * self.current_gradient_accumulation_steps
+        normalizer = num_items_in_batch.clamp(min=1.0).to(torch.float32) / world_size
+        loss = loss / normalizer
 
-        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        # The auxiliary loss remains a mean across micro-batches. Trainer's automatic loss scale is disabled.
         if self.aux_loss_enabled:
             aux_loss = outputs["aux_loss"]
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
