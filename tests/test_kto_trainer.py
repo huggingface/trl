@@ -1097,7 +1097,6 @@ class TestKTOTrainer(TrlTestCase):
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             bf16=True,
-            max_steps=1,
             per_device_train_batch_size=2,
             use_liger_kernel=True,
             report_to="none",
