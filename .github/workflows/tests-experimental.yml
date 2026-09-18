@@ -19,8 +19,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   check_code_quality:
+    permissions:
+      contents: read
     name: Check code quality
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
@@ -43,6 +47,8 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure --color=always
 
   tests:
+    permissions:
+      contents: read
     name: Tests (experimental)
     runs-on:
       group: aws-g6e-4xlarge
