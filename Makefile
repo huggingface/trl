@@ -3,7 +3,8 @@
 # Transient infrastructure errors that are worth retrying, matched against "<ExceptionType>: <message>":
 #  - OSError, Timeout, HTTPError 502/504: Hub flakiness
 #  - OutOfMemoryError, STATUS_ALLOC_FAILED: GPU memory pressure from the parallel workers
-rerun_errors := (OSError|Timeout|HTTPError.*502|HTTPError.*504|OutOfMemoryError|STATUS_ALLOC_FAILED)
+#  - CalledProcessError: the same pressure in a `trl <command>` child, whose own error class never reaches pytest
+rerun_errors := (OSError|Timeout|HTTPError.*502|HTTPError.*504|OutOfMemoryError|STATUS_ALLOC_FAILED|CalledProcessError)
 
 test:
 	pytest -n auto -m "not slow and not low_priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' tests
