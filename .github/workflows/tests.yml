@@ -7,10 +7,9 @@ on:
       - ci-*
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
-      - ".pre-commit-config.yaml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
       - "examples/**.py"
-      - "scripts/**.py"
       - "tests/**.py"
       - "trl/**.py"
       - "pyproject.toml"
@@ -20,10 +19,9 @@ on:
   pull_request:
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
-      - ".pre-commit-config.yaml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
       - "examples/**.py"
-      - "scripts/**.py"
       - "tests/**.py"
       - "trl/**.py"
       - "pyproject.toml"
