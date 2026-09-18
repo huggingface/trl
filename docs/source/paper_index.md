@@ -683,6 +683,26 @@ training_args = GRPOConfig(
 )
 ```
 
+### RAGEN-2: Reasoning Collapse in Agentic RL
+
+**📜 Paper**: https://huggingface.co/papers/2604.06268
+
+RAGEN-2 introduces SNR-Aware Filtering, which uses within-prompt reward variance as a signal proxy. Before each policy
+update, top-p filtering retains the smallest set of high-variance prompt groups covering the configured fraction of
+total variance mass. TRL also supports the paper's fixed-count top-k comparison.
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    reward_variance_filtering="top_p",
+    reward_variance_top_p=0.9,
+    reward_variance_filtering_include_zero=False,
+)
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+)
 ## Optimal Advantage Regression
 
 Papers relating to the [`experimental.a2po.A2POTrainer`].

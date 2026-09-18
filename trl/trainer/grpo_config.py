@@ -14,7 +14,7 @@
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from .base_config import _BaseConfig
 
@@ -67,6 +67,19 @@ class GRPOConfig(_BaseConfig):
         num_generations_eval (`int`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
+        reward_variance_filtering (`str`, *optional*):
+            Reward-variance filtering strategy: `"top_p"`, `"top_k"`, or `None` to disable filtering.
+        reward_variance_top_p (`float`, *optional*, defaults to `0.9`):
+            With `reward_variance_filtering="top_p"`, retain the smallest prompt-group prefix covering this fraction of
+            total sample reward variance.
+        reward_variance_top_k (`int`, *optional*, defaults to `1`):
+            With `reward_variance_filtering="top_k"`, retain up to this many highest-variance prompt groups.
+        reward_variance_filtering_include_zero (`bool`, *optional*, defaults to `False`):
+            Whether zero-variance prompt groups are eligible for selection. With `False`, top-k may retain fewer than
+            `reward_variance_top_k` groups.
+        reward_variance_filtering_selection_eps (`float`, *optional*, defaults to `0.01`):
+            Numerical slack subtracted from the target cumulative variance mass. Near-zero-signal batches whose target
+            does not exceed this value are fully masked.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -489,6 +502,26 @@ class GRPOConfig(_BaseConfig):
             "help": "Number of generations to sample during evaluation. This allows using fewer generations during "
             "evaluation to save computation. If `None`, uses the value of `num_generations`."
         },
+    )
+    reward_variance_filtering: Literal["top_p", "top_k"] | None = field(
+        default=None,
+        metadata={"help": "Reward-variance filtering strategy: 'top_p', 'top_k', or None to disable it."},
+    )
+    reward_variance_top_p: float = field(
+        default=0.9,
+        metadata={"help": "Fraction of total reward-variance mass retained by top-p filtering."},
+    )
+    reward_variance_top_k: int = field(
+        default=1,
+        metadata={"help": "Maximum number of highest-variance prompt groups retained by top-k filtering."},
+    )
+    reward_variance_filtering_include_zero: bool = field(
+        default=False,
+        metadata={"help": "Make zero-variance prompt groups eligible for selection."},
+    )
+    reward_variance_filtering_selection_eps: float = field(
+        default=0.01,
+        metadata={"help": "Slack subtracted from the variance-mass target; may fully mask near-zero-signal batches."},
     )
     max_completion_length: int | None = field(
         default=512,
@@ -1042,6 +1075,20 @@ class GRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.reward_variance_filtering not in (None, "top_p", "top_k"):
+            raise ValueError(
+                f"reward_variance_filtering must be 'top_p', 'top_k', or None, got {self.reward_variance_filtering!r}"
+            )
+        if not 0.0 < self.reward_variance_top_p <= 1.0:
+            raise ValueError(f"reward_variance_top_p must be in (0, 1], got {self.reward_variance_top_p}")
+        if self.reward_variance_top_k < 1:
+            raise ValueError(f"reward_variance_top_k must be positive, got {self.reward_variance_top_k}")
+        if self.reward_variance_filtering_selection_eps < 0.0:
+            raise ValueError(
+                "reward_variance_filtering_selection_eps must be non-negative, got "
+                f"{self.reward_variance_filtering_selection_eps}"
+            )
 
         if self.use_transformers_paged:
             warnings.warn(

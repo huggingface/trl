@@ -38,6 +38,7 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.import_utils import is_liger_kernel_available
+from trl.trainer.grpo_trainer import _get_reward_variance_filter_mask
 
 from .testing_utils import (
     TrlTestCase,
@@ -86,6 +87,72 @@ async def async_multiply_tool(a: int, b: int) -> int:
         The product of the two integers.
     """
     return a * b
+
+
+def test_reward_variance_top_p_mask_selects_smallest_variance_mass_prefix():
+    rewards = torch.tensor([-3.0, 3.0, -2.0, 2.0, -1.0, 1.0])
+
+    sample_mask, group_mask, variances = _get_reward_variance_filter_mask(
+        rewards, num_generations=2, strategy="top_p", top_p=0.8, top_k=1, selection_eps=0.0
+    )
+
+    torch.testing.assert_close(variances, torch.tensor([18.0, 8.0, 2.0]))
+    assert group_mask.tolist() == [True, True, False]
+    assert sample_mask.tolist() == [True, True, True, True, False, False]
+
+
+def test_reward_variance_top_p_mask_has_stable_tie_breaking():
+    rewards = torch.tensor([-1.0, 1.0, -1.0, 1.0])
+
+    sample_mask, _, _ = _get_reward_variance_filter_mask(
+        rewards, num_generations=2, strategy="top_p", top_p=0.5, top_k=1, selection_eps=0.0
+    )
+
+    assert sample_mask.tolist() == [True, True, False, False]
+
+
+def test_reward_variance_top_p_mask_handles_nan_and_zero_variance_groups():
+    rewards = torch.tensor([float("nan"), 1.0, 2.0, 2.0])
+
+    excluded_mask, _, variances = _get_reward_variance_filter_mask(rewards, 2, "top_p", 0.9, 1)
+    included_mask, _, _ = _get_reward_variance_filter_mask(rewards, 2, "top_p", 0.9, 1, include_zero=True)
+
+    torch.testing.assert_close(variances, torch.zeros(2))
+    assert not excluded_mask.any()
+    assert included_mask.all()
+
+
+def test_reward_variance_top_k_mask_keeps_fixed_group_count():
+    rewards = torch.tensor([-3.0, 3.0, -2.0, 2.0, -1.0, 1.0])
+
+    sample_mask, group_mask, _ = _get_reward_variance_filter_mask(
+        rewards, num_generations=2, strategy="top_k", top_p=0.9, top_k=2
+    )
+
+    assert group_mask.tolist() == [True, True, False]
+    assert sample_mask.tolist() == [True, True, True, True, False, False]
+
+
+def test_reward_variance_top_k_excludes_zero_variance_groups_unless_included():
+    rewards = torch.tensor([-1.0, 1.0, 0.0, 0.0, 1.0, 1.0])
+
+    excluded_mask, excluded_groups, _ = _get_reward_variance_filter_mask(rewards, 2, "top_k", 0.9, 2)
+    included_mask, included_groups, _ = _get_reward_variance_filter_mask(
+        rewards, 2, "top_k", 0.9, 2, include_zero=True
+    )
+
+    assert excluded_groups.tolist() == [True, False, False]
+    assert excluded_mask.tolist() == [True, True, False, False, False, False]
+    assert included_groups.tolist() == [True, True, False]
+    assert included_mask.tolist() == [True, True, True, True, False, False]
+
+
+def test_reward_variance_selection_epsilon_can_drop_near_zero_signal_batch():
+    sample_mask, _, _ = _get_reward_variance_filter_mask(
+        torch.tensor([0.0, 0.1]), num_generations=2, strategy="top_p", top_p=0.9, top_k=1, selection_eps=0.01
+    )
+
+    assert not sample_mask.any()
 
 
 class TestGetHighEntropyMask(TrlTestCase):
