@@ -1423,14 +1423,14 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss. Left unset, the coefficient comes from the architecture, which carries
-        # the value it was trained with (0.01 for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Architectures
-        # that balance their experts with a router bias instead, and models that aren't MoE, declare no coefficient,
-        # so they resolve to 0.0 and the term stays off.
+        # MoE load-balancing auxiliary loss. The config answers both questions: `output_router_logits` means the model
+        # returns its router logits, `router_aux_loss_coef` is the coefficient the architecture was trained with (0.01
+        # for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Left unset, the coefficient comes from the
+        # architecture; families that balance their experts with a router bias declare none and resolve to 0.0.
         text_config = model.config.get_text_config()
         coef = self.args.router_aux_loss_coef
         self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
-        self.aux_loss_enabled = self.router_aux_loss_coef != 0.0
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
         if hasattr(text_config, "router_aux_loss_coef"):
             # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
             # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any

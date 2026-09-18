@@ -819,6 +819,18 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.router_aux_loss_coef == expect_coef
         assert trainer.aux_loss_enabled == expect_aux_loss
 
+    def test_router_aux_loss_coef_ignored_without_router_logits(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
+
+        # Dense model: no `output_router_logits` on its config, so there is nothing to compute the term from
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.router_aux_loss_coef == 0.5
+        assert not trainer.aux_loss_enabled
+
     def test_router_aux_loss_coef_explicit_value_overrides_the_architecture(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
         training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
