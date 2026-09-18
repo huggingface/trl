@@ -19,6 +19,8 @@ pip install kernels
 
 Kernels can directly replace attention implementations, removing the need to manually compile attention backends like Flash Attention and boosting training speed just by pulling the respective attention kernel from the Hub.
 
+TRL also uses its [fused loss kernels](https://huggingface.co/kernels/trl-lib/trl-losses) automatically when `kernels` is installed. These kernels combine log-probability and entropy computation in DPO, GRPO, KTO, RLOO, and TPO. The existing PyTorch implementation is used when no compatible kernel is available.
+
 You can specify a kernel when loading a model:
 
 
