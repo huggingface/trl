@@ -9,6 +9,7 @@ on:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
       - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
       - "tests/**.py"
       - "trl/**.py"
@@ -21,6 +22,7 @@ on:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
       - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
       - "tests/**.py"
       - "trl/**.py"
