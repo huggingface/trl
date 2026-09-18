@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       # Run only when relevant files are modified
+      - ".github/workflows/tests-experimental.yml"
       - "trl/experimental/**"
       - "tests/experimental/**"
 
