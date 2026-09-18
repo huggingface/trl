@@ -923,7 +923,8 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_peft
     @require_bitsandbytes
-    def test_train_peft_and_quantization(self):
+    @pytest.mark.parametrize("use_dora", [False, True])
+    def test_train_peft_and_quantization(self, use_dora):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -946,7 +947,7 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
-            peft_config=LoraConfig(),
+            peft_config=LoraConfig(use_dora=use_dora),
         )
 
         # Check that the trainer applied the quantization config when loading the model
@@ -958,12 +959,18 @@ class TestGRPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
-        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
-        # the forward pass, so some of them change in a way that is unrelated to training.
+        # Check that the peft params have changed, and that the LoRA A/B params are cast to bfloat16, as recommended
+        # by the QLoRA paper. The DoRA magnitude vector is the exception: it must stay in float32, since its
+        # optimizer updates can be smaller than bfloat16 can represent, which would otherwise silently freeze it
+        # (see https://github.com/huggingface/trl/issues/7268). The base model params are not checked: bitsandbytes
+        # casts the biases of a Linear4bit in-place during the forward pass, so some of them change in a way that is
+        # unrelated to training.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "lora" in n:  # We expect the peft params to be different
+            if "lora_magnitude_vector" in n:
+                assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            elif "lora" in n:  # We expect the peft params to be different
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
@@ -4195,7 +4202,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
     )
     @require_peft
     @require_bitsandbytes
-    def test_train_vlm_peft_and_quantization(self, model_id):
+    @pytest.mark.parametrize("use_dora", [False, True])
+    def test_train_vlm_peft_and_quantization(self, model_id, use_dora):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
@@ -4223,7 +4231,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             quantization_config=quantization_config,
-            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], use_dora=use_dora),
         )
 
         # Check that the trainer applied the quantization config when loading the model
@@ -4235,12 +4243,18 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
-        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
-        # the forward pass, so some of them change in a way that is unrelated to training.
+        # Check that the peft params have changed, and that the LoRA A/B params are cast to bfloat16, as recommended
+        # by the QLoRA paper. The DoRA magnitude vector is the exception: it must stay in float32, since its
+        # optimizer updates can be smaller than bfloat16 can represent, which would otherwise silently freeze it
+        # (see https://github.com/huggingface/trl/issues/7268). The base model params are not checked: bitsandbytes
+        # casts the biases of a Linear4bit in-place during the forward pass, so some of them change in a way that is
+        # unrelated to training.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "lora" in n:  # We expect the peft params to be different
+            if "lora_magnitude_vector" in n:
+                assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            elif "lora" in n:  # We expect the peft params to be different
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
