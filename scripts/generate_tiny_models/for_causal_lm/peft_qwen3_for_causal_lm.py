@@ -25,6 +25,8 @@ set_seed()
 BASE = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
 model = Qwen3ForCausalLM.from_pretrained(BASE, dtype="auto")
-model = get_peft_model(model, LoraConfig())
+# init_lora_weights=False leaves lora_B random rather than zeroed, so the adapter is not the identity and a
+# test can tell it apart from the base model.
+model = get_peft_model(model, LoraConfig(init_lora_weights=False))
 smoke_test(model, None)
 push_to_hub(model, None, None, "tiny")
