@@ -577,7 +577,7 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
         # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
-        # logits; `router_aux_loss_coef` is the architecture's own coefficient, absent (so 0.0) on bias-balanced MoEs.
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
         coef = args.router_aux_loss_coef
         self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
