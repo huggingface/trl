@@ -978,9 +978,7 @@ class TestSelectiveLogSoftmax(TrlTestCase):
             # Cache failures too, otherwise an offline run retries Hub I/O every training step.
             assert trainer_utils._load_trl_loss_kernel() is expected
 
-        kernels.get_kernel.assert_called_once_with(
-            "trl-lib/trl-losses", version=0, trust_remote_code=["trl-lib/trl-losses"]
-        )
+        kernels.get_kernel.assert_called_once_with("trl-lib/trl-losses", version=0, trust_remote_code=True)
 
     @require_torch_accelerator
     def test_hub_kernel_dispatch(self):
