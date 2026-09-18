@@ -161,6 +161,12 @@ class TestRepetitionPenaltyReward:
         with pytest.raises(ValueError):
             get_repetition_penalty_reward(ngram_size=2, max_penalty=0.5)
 
+    def test_non_positive_ngram_size_raises(self):
+        with pytest.raises(ValueError):
+            get_repetition_penalty_reward(ngram_size=0)
+        with pytest.raises(ValueError):
+            get_repetition_penalty_reward(ngram_size=-1)
+
     def test_extra_kwargs_are_ignored(self):
         """Trainers pass prompts/completions/etc. as kwargs; the reward must accept and ignore them."""
         reward_fn = get_repetition_penalty_reward(ngram_size=2, max_penalty=-1.0)
