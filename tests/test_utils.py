@@ -673,6 +673,28 @@ class TestEntropyFromLogits(TrlTestCase):
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
+    def test_print_tool_only_assistant_with_null_content(self, mock_stdout):
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the data.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
+                        }
+                    ],
+                }
+            ]
+        ]
+        print_prompt_completions_sample(["Find the table"], completions, {"reward": [0.0]}, None, 0)
+        assert "Inspect the data." in mock_stdout.getvalue()
+        assert "None" not in mock_stdout.getvalue()
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
