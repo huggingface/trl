@@ -963,9 +963,10 @@ class GRPOConfig(_BaseConfig):
             "full vocabulary. When `top_p`, `top_k` or `min_p` truncate sampling, vLLM normalises its log-probs "
             "over the kept tokens only, so the ratio then carries a spurious factor equal to the kept probability "
             "mass of each position. With `'sampled'`, vLLM is asked to return the kept token ids of every generated "
-            "token (`return_sampling_mask`, vLLM >= 0.28) and the trainer's log-probs are normalised over the same "
-            "set, which removes that factor. Requires `vllm_mode='colocate'` and `top_k > 0` (vLLM bounds the "
-            "replayed set with `top_k`).",
+            "token (`return_sampling_mask`, vLLM >= 0.28) and vLLM's log-probs are lifted by the log of the kept mass "
+            "so that they are comparable with the trainer's full-vocabulary log-probs, which removes that factor "
+            "without touching the log-probs the policy-gradient ratio is built on. Requires `vllm_mode='colocate'` "
+            "and `top_k > 0` (vLLM bounds the replayed set with `top_k`).",
             "choices": ["vocab", "sampled"],
         },
     )

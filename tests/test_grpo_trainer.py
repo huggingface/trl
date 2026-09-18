@@ -1712,9 +1712,12 @@ class TestGRPOTrainer(TrlTestCase):
         # When vLLM samples with top-k / top-p / min-p, its `processed_logprobs` are normalised over the kept tokens
         # only, so the ratio against the trainer's full-vocabulary log-probs picks up a factor equal to the kept
         # probability mass, which is not a policy change. With `vllm_importance_sampling_support='sampled'` the
-        # trainer receives the kept token ids and normalises over the same set. This test plays vLLM: it computes
-        # the sampling log-probs from the trainer's own model over a synthetic 3-token support, so that with the
-        # renormalisation the recorded difference is zero and without it it equals the log kept mass.
+        # trainer receives the kept token ids and lifts vLLM's log-probs by the log of that mass, so that they are
+        # comparable with its own full-vocabulary log-probs; those stay untouched, because they are also the
+        # policy-gradient baseline. This test plays vLLM: it computes the sampling log-probs from the trainer's own
+        # model over a synthetic 3-token support, so that with the correction the recorded difference is zero and
+        # without it it equals the log kept mass; in both cases the on-policy clip fraction must stay at zero,
+        # which is what fails if the trainer's own log-probs were renormalised instead.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1776,6 +1779,16 @@ class TestGRPOTrainer(TrlTestCase):
             recorded.extend(trainer._metrics["train"]["sampling/sampling_logp_difference/mean"])
             return result
 
+        original_compute_loss = trainer.compute_loss
+        clip_fractions = []
+
+        def record_clip(*args, **kwargs):
+            result = original_compute_loss(*args, **kwargs)
+            clip_fractions.extend(trainer._metrics["train"].get("clip_ratio/region_mean", []))
+            return result
+
+        trainer.compute_loss = record_clip
+
         trainer._generate_and_score_completions = record_metrics
         trainer.train()
 
@@ -1783,10 +1796,12 @@ class TestGRPOTrainer(TrlTestCase):
         mean_diff = sum(recorded) / len(recorded)
         expected_truncation_term = -sum(log_kept_mass) / len(log_kept_mass)
         if support == "sampled":
-            assert mean_diff < 1e-3, f"renormalised log-probs should match the sampler, got {mean_diff}"
+            assert mean_diff < 1e-3, f"lifted sampler log-probs should match the trainer, got {mean_diff}"
         else:
             assert abs(mean_diff - expected_truncation_term) < 1e-2, (mean_diff, expected_truncation_term)
             assert mean_diff > 0.05, "the truncation term should be visible for a 3-token support"
+        # one optimisation step per generation: the policy-gradient ratio is exactly 1, nothing may be clipped
+        assert clip_fractions and max(clip_fractions) == 0.0, clip_fractions
 
     @pytest.mark.parametrize(
         "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]

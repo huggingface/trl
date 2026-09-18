@@ -43,7 +43,7 @@ from trl.trainer.utils import (
     get_peft_config,
     hash_module,
     is_async_callable,
-    log_softmax_over_support,
+    log_kept_mass,
     nanstd,
     pad,
     patch_chunked_lm_head,
@@ -936,28 +936,25 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         assert output == expected_output
 
 
-class TestLogSoftmaxOverSupport(TrlTestCase):
+class TestLogKeptMass(TrlTestCase):
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_full_support_matches_log_softmax(self, dtype):
-        """With every token in the support the result is the ordinary log-softmax."""
+    def test_full_support_has_zero_log_mass(self, dtype):
+        """With every token kept the mass is 1, so the correction is exactly zero."""
         vocab_size, batch_size, seq_len = 64, 3, 5
         logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
-        index = torch.randint(0, vocab_size, (batch_size, seq_len))
         support = torch.arange(vocab_size).expand(batch_size, seq_len, vocab_size)
-        expected = torch.gather(logits.float().log_softmax(-1), -1, index.unsqueeze(-1)).squeeze(-1)
-        torch.testing.assert_close(log_softmax_over_support(logits, index, support), expected, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(log_kept_mass(logits, support), torch.zeros(batch_size, seq_len), atol=1e-4, rtol=0)
 
-    def test_subset_support_renormalises_and_ignores_padding(self):
-        """Over a subset the log-prob is the logit minus the log-sum-exp of the kept logits; -1 entries are padding."""
-        logits = torch.tensor([[[1.0, 2.0, 3.0, 4.0]]])  # (1, 1, 4)
-        index = torch.tensor([[3]])
-        support = torch.tensor([[[3, 1, -1, -1]]])  # keep tokens 3 and 1 only, ragged padding with -1
-        expected = torch.tensor([[4.0 - torch.logsumexp(torch.tensor([4.0, 2.0]), 0)]])
-        torch.testing.assert_close(log_softmax_over_support(logits, index, support), expected)
-        # the kept mass is what separates it from the full-vocabulary value
-        full = torch.gather(logits.log_softmax(-1), -1, index.unsqueeze(-1)).squeeze(-1)
-        kept_mass = logits.softmax(-1)[0, 0, [3, 1]].sum()
-        torch.testing.assert_close(log_softmax_over_support(logits, index, support), full - kept_mass.log())
+    def test_subset_support_gives_log_mass_and_padding_is_ignored(self):
+        """Over a subset the value is the log of the kept probability mass; -1 entries are padding; an empty
+        support means no correction."""
+        logits = torch.tensor([[[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]]])  # (1, 2, 4)
+        support = torch.tensor([[[3, 1, -1, -1], [-1, -1, -1, -1]]])  # keep tokens 3 and 1; then nothing
+        got = log_kept_mass(logits, support)
+        expected_mass = logits.softmax(-1)[0, 0, [3, 1]].sum().log()
+        torch.testing.assert_close(got[0, 0], expected_mass)
+        assert got[0, 1].item() == 0.0
+        assert (got <= 0).all()
 
 
 class TestSelectiveLogSoftmax(TrlTestCase):

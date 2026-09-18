@@ -85,7 +85,7 @@ from .utils import (
     get_config_model_id,
     identity,
     is_async_callable,
-    log_softmax_over_support,
+    log_kept_mass,
     maybe_gather_lm_head_ctx,
     nanmax,
     nanmin,
@@ -1478,6 +1478,7 @@ class GRPOTrainer(_BaseTrainer):
         """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
+        all_log_kept_mass = []
         all_entropies = []
         all_aux_losses = []
         for start in range(0, input_ids.size(0), batch_size):
@@ -1548,12 +1549,11 @@ class GRPOTrainer(_BaseTrainer):
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             if sampling_support_ids is not None:
-                # normalise over the tokens vLLM sampled among, so the ratio against its processed logprobs is 1
-                # for an unchanged policy even under top-k / top-p / min-p truncation
-                logps = log_softmax_over_support(logits, completion_ids, sampling_support_ids[start:end])
-            else:
-                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+                # log of the probability mass vLLM sampled from at each position; the trainer's log-probs stay
+                # full-vocabulary (they are also the policy-gradient baseline), the sampler's are lifted instead
+                all_log_kept_mass.append(log_kept_mass(logits, sampling_support_ids[start:end]))
             all_logps.append(logps)
 
             if compute_entropy:
@@ -1573,6 +1573,8 @@ class GRPOTrainer(_BaseTrainer):
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         aux_loss = torch.stack(all_aux_losses).mean() if compute_aux_loss else None
+        if sampling_support_ids is not None:
+            return logps, entropies, aux_loss, torch.cat(all_log_kept_mass, dim=0)
         return logps, entropies, aux_loss
 
     def training_step(self, model, inputs, num_items_in_batch):
@@ -2703,7 +2705,7 @@ class GRPOTrainer(_BaseTrainer):
             if self.args.gradient_accumulation_steps % generate_every != 0 or (
                 self.use_vllm and self.vllm_importance_sampling_correction
             ):
-                old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
+                old_outputs = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
                     attention_mask,
@@ -2714,6 +2716,13 @@ class GRPOTrainer(_BaseTrainer):
                     sampling_support_ids=sampling_support_ids,
                     **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                 )
+                old_per_token_logps = old_outputs[0]
+                if sampling_support_ids is not None and sampling_per_token_logps is not None:
+                    # vLLM's processed log-probs are normalised over the tokens it sampled from; adding the log of
+                    # that mass makes them comparable with full-vocabulary log-probs, so the importance-sampling
+                    # ratio, the sampling metrics and the off-policy mask all see the same support as the trainer,
+                    # while `old_per_token_logps` itself stays the untouched policy-gradient baseline
+                    sampling_per_token_logps = sampling_per_token_logps + old_outputs[3]
             else:
                 old_per_token_logps = None
 

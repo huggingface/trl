@@ -498,33 +498,31 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def log_softmax_over_support(logits, index, support_ids) -> torch.Tensor:
+def log_kept_mass(logits, support_ids) -> torch.Tensor:
     """
-    Log-probability of `index` under `logits` renormalised over a per-position token subset.
+    Log of the probability mass that a per-position token subset carries under `logits`.
 
-    This is the trainer-side counterpart of a sampler that draws from a truncated distribution (top-k / top-p /
-    min-p): the sampler's `processed_logprobs` are normalised over the kept tokens only, so comparing them with a
-    full-vocabulary log-softmax leaves a factor equal to the kept probability mass in the importance-sampling ratio.
-    Normalising over the same support removes it.
+    A sampler that draws from a truncated distribution (top-k / top-p / min-p) reports `processed_logprobs`
+    normalised over the kept tokens only, i.e. `log p(y) - log m` where `m` is the kept mass. Adding this value
+    back turns such a log-prob into one that is comparable with a full-vocabulary log-softmax, so the trainer's
+    own log-probs never have to be renormalised and can keep serving as the policy-gradient baseline unchanged.
 
     Args:
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`.
-        index (`torch.Tensor`):
-            Index tensor of shape `(...)`, the token whose log-probability is returned. It must belong to the support.
         support_ids (`torch.Tensor`):
-            Long tensor of shape `(..., K)` listing the kept token ids at each position, right-padded with `-1`.
+            Long tensor of shape `(..., K)` listing the kept token ids at each position, right-padded with `-1`. A
+            position with no kept token (all `-1`, e.g. padding) gets `0.0`, i.e. no correction.
 
     Returns:
         `torch.Tensor`:
-            Log-probabilities with the same shape as `index`, in float32.
+            `log m` with shape `(...)`, in float32, always `<= 0`.
     """
     valid = support_ids >= 0
     kept = torch.gather(logits, dim=-1, index=support_ids.clamp(min=0)).float()
     kept = kept.masked_fill(~valid, float("-inf"))
-    logsumexp_values = torch.logsumexp(kept, dim=-1)
-    selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1).float()
-    return selected_logits - logsumexp_values
+    log_mass = torch.logsumexp(kept, dim=-1) - torch.logsumexp(logits.float(), dim=-1)
+    return torch.where(valid.any(dim=-1), log_mass, torch.zeros_like(log_mass))
 
 
 def selective_log_softmax(logits, index) -> torch.Tensor:
