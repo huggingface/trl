@@ -7,7 +7,8 @@ on:
       - ci-*
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
       - "examples/**.py"
       - "tests/**.py"
       - "trl/**.py"
@@ -18,7 +19,8 @@ on:
   pull_request:
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
       - "examples/**.py"
       - "tests/**.py"
       - "trl/**.py"
