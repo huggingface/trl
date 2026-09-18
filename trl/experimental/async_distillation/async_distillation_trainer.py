@@ -598,6 +598,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         check_health_fn,
         stale_after_s,
         metrics,
+        dropped_prompts: set[int],
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
@@ -610,6 +611,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # `dispatch_batches=True`), which is also the only process where the queue wait is real, so its metrics need no
         # communication at all — they are appended straight into the sink the trainer reduces in `log()`.
         self.metrics = metrics
+        self.dropped_prompts = dropped_prompts
         # Blocking-get time, accumulated here and flushed by `_log_step_metrics` at the optimizer-step boundary — the
         # only place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
@@ -662,6 +664,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
                 self.metrics["sample/dropped_stale_total"].append(1.0)
+                self.dropped_prompts.add(sample.prompt_id)
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
@@ -1336,6 +1339,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
         # row yields exactly one training sample, not a group of them.
         self._trained_prompts: set[int] = set()
+        self._dropped_prompts: set[int] = set()
         # Tracks restart to match `num_train_epochs`
         self._prompts_before_resume = 0
         self._epoch_stop_prompts: int | None = None
@@ -1530,6 +1534,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 metrics=self._metrics["train"],
+                dropped_prompts=self._dropped_prompts,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -2038,12 +2043,17 @@ class AsyncDistillationTrainer(_BaseTrainer):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            trained = self._trained_prompts
-            first_untrained = next(p for p in itertools.count() if p not in trained)
+            resolved = self._trained_prompts | self._dropped_prompts
+            first_untrained = next(p for p in itertools.count() if p not in resolved)
             prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            trained_prompt_count = self._prompts_before_resume + len(self._trained_prompts)
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
-            rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
+            rollout_state = {
+                "trained_prompt_count": trained_prompt_count,
+                "prompt_index": prompt_index,
+                "model_version": self.model_version,
+            }
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
@@ -2055,6 +2065,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # cleared whatever the worker, since the collator fills them regardless and the worker's `prompt_id` restarts
         # at 0, so leftovers from an earlier run would collide with this one's.
         self._trained_prompts.clear()
+        self._dropped_prompts.clear()
         if isinstance(self.rollout_worker, AsyncRolloutWorker):
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
             self._prompts_before_resume = 0
@@ -2073,7 +2084,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     with open(rollout_state_file) as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
-                    self._prompts_before_resume = rollout_state["prompt_index"]
+                    self._prompts_before_resume = rollout_state.get(
+                        "trained_prompt_count", rollout_state["prompt_index"]
+                    )
                     # Older checkpoints predate this field; resuming from one restarts numbering at v1, which is
                     # only safe against a freshly started server.
                     self.model_version = rollout_state.get("model_version", 0)
