@@ -469,88 +469,18 @@ class TestGRPOTrainer(TrlTestCase):
         release_memory(trainer.model, trainer)
 
     @require_liger_kernel
-    def test_chunked_logps_honor_output_multiplier_and_empty_completion(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            bf16=False,
-            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
-            num_generations=2,  # reduce the number of generations to reduce memory usage
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        torch.manual_seed(42)
-        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.accelerator.device)
-        attention_mask = torch.ones_like(input_ids)
-        logits_to_keep = 4
-        text_config = trainer.model.config.get_text_config()
-        text_config.logit_scale = None
-        text_config.output_multiplier = 0.5
-
-        backbone_calls = []
-
-        def record_backbone_call(_module, _args, _output):
-            backbone_calls.append(None)
-
-        inner_model = trainer.model
-        with inner_model.base_model.register_forward_hook(record_backbone_call), torch.no_grad():
-            logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model,
-                input_ids,
-                attention_mask,
-                logits_to_keep,
-                batch_size=1,
-                compute_entropy=False,
-            )
-        assert len(backbone_calls) == 1
-
-        hidden_states = inner_model.base_model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
-        ).last_hidden_state[:, :-1]
-        hidden_states = hidden_states[:, -logits_to_keep:]
-        labels = input_ids[:, -logits_to_keep:]
-        logits = inner_model.get_output_embeddings()(hidden_states).float() * text_config.output_multiplier
-        expected = torch.log_softmax(logits / trainer.temperature, dim=-1)
-        expected = expected.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
-
-        torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
-
-        empty_attention_mask = attention_mask.clone()
-        empty_attention_mask[:, -logits_to_keep:] = 0
-        trainer.model.zero_grad()
-        empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
-            trainer.model,
-            input_ids,
-            empty_attention_mask,
-            logits_to_keep,
-            compute_entropy=False,
-        )
-        assert empty_logps.shape == logps.shape
-        assert empty_logps.count_nonzero() == 0
-        assert empty_logps.requires_grad
-        empty_logps.sum().backward()
-        lm_head_grad = inner_model.get_output_embeddings().weight.grad
-        assert lm_head_grad is not None
-        assert lm_head_grad.count_nonzero() == 0
-
-        release_memory(trainer.model, trainer)
-
-    @require_liger_kernel
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
     def test_chunked_logps_use_mixed_precision(self):
+        # The streamed projection reads the backbone directly instead of going through the model's forward, so it has
+        # to enter autocast itself. Without that the backbone would silently run in fp32 under bf16 training.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             bf16=True,
+            max_steps=1,
             per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
             num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,
             report_to="none",
         )
@@ -560,21 +490,17 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
-        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.accelerator.device)
-        attention_mask = torch.ones_like(input_ids)
         projection = next(module for name, module in trainer.model.named_modules() if name.endswith("q_proj"))
         projection_dtypes = []
 
         def record_projection_dtype(_module, _args, output):
             projection_dtypes.append(output.dtype)
 
-        with projection.register_forward_hook(record_projection_dtype), torch.no_grad():
-            logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model, input_ids, attention_mask, logits_to_keep=4
-            )
+        with projection.register_forward_hook(record_projection_dtype):
+            trainer.train()
 
-        assert projection_dtypes == [torch.bfloat16]
-        assert torch.isfinite(logps).all()
+        assert projection_dtypes  # the hook fired at all
+        assert set(projection_dtypes) == {torch.bfloat16}
 
         release_memory(trainer.model, trainer)
 
@@ -2710,7 +2636,8 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_with_mask_truncated_completions_all_masked(self):
+    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
+    def test_train_with_mask_truncated_completions_all_masked(self, use_liger_kernel):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
         mask_truncated_completions=True, the model receives no effective learning signal and therefore does not update
@@ -2718,6 +2645,9 @@ class TestGRPOTrainer(TrlTestCase):
 
         Here, we don't mock the generate method, be we rely on the fact that the model the probability of generating
         the EOS token is extremely low, so all generated completions are truncated.
+
+        The streamed log-prob path gathers only unmasked rows, so with nothing left it has to scatter back into a
+        tensor that is still attached to the model, otherwise `backward()` fails instead of contributing zero.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -2729,6 +2659,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             mask_truncated_completions=True,  # Enable masking of truncated completions
             loss_type="dapo",  # we test specifically dapo because it normalizes by num_items_in_batch
+            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(

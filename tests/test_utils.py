@@ -1268,11 +1268,16 @@ class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
 
-    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature, bias=None):
+    def _reference_logprobs_and_entropy(
+        self, hidden, weight, labels, temperature, bias=None, logit_scale=1.0, final_logit_softcapping=None
+    ):
         logits = hidden @ weight.t()
         if bias is not None:
             logits = logits + bias
-        logits = logits.to(torch.float32) / temperature  # [N, V]
+        logits = logits.to(torch.float32) * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / temperature  # [N, V]
         log_p = F.log_softmax(logits, dim=-1)
         logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
         p = torch.softmax(logits, dim=-1)
@@ -1305,6 +1310,30 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
         assert max(chunk_rows) <= 17
         assert chunk_rows[-1] == 13
+
+    @pytest.mark.parametrize(
+        ("logit_scale", "final_logit_softcapping"),
+        [
+            (0.5, None),  # models that scale but don't softcap, e.g. MPT
+            (1.0, 30.0),  # models that softcap but don't scale, e.g. Gemma 2
+            (0.5, 30.0),  # both, applied in that order
+        ],
+    )
+    def test_logit_scale_and_softcapping(self, logit_scale, final_logit_softcapping):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H)
+        weight = torch.randn(self.V, self.H)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, entropy = _ChunkedLogProbFunction.apply(
+            hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
+        )
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
+            hidden, weight, labels, 0.7, logit_scale=logit_scale, final_logit_softcapping=final_logit_softcapping
+        )
+
+        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, temperature):
