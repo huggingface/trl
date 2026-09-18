@@ -1365,25 +1365,116 @@ class GRPOTrainer(_BaseTrainer):
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
-    def _get_per_token_logps_and_entropies(self, model, *args, **kwargs):
+    def _get_per_token_logps_and_entropies(self, model, *args, compute_aux_loss=False, **kwargs):
         """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
-        if self.use_liger_kernel:
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            if model is not unwrapped_model or self.is_fsdp_enabled:
-                # Scoring runs outside `compute_loss`, so enter through distributed wrappers before reading the
-                # backbone and LM head directly.
-                return self._forward_redirection(
-                    model,
-                    unwrapped_model,
-                    self._get_per_token_logps_and_entropies_impl,
-                    unwrapped_model,
-                    *args,
-                    **kwargs,
-                )
-            model = unwrapped_model
-        return self._get_per_token_logps_and_entropies_impl(model, *args, **kwargs)
+        if not self.use_liger_kernel or compute_aux_loss:
+            return self._full_logits_logps(model, *args, compute_aux_loss=compute_aux_loss, **kwargs)
+        # The chunked path reads the backbone and the LM head directly rather than calling the model, so it has to
+        # enter through any distributed wrapper first. Scoring runs outside `compute_loss`, which would otherwise
+        # have done that.
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        if model is not unwrapped_model or self.is_fsdp_enabled:
+            return self._forward_redirection(
+                model, unwrapped_model, self._chunked_logps, unwrapped_model, *args, **kwargs
+            )
+        return self._chunked_logps(unwrapped_model, *args, **kwargs)
 
-    def _get_per_token_logps_and_entropies_impl(
+    def _chunked_logps(
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        compute_entropy=False,
+        pixel_values=None,
+        image_grid_thw=None,
+        num_images=None,
+        pixel_attention_mask=None,
+        spatial_shapes=None,
+        num_tiles=None,
+        image_sizes=None,
+        token_type_ids=None,
+        mm_token_type_ids=None,
+        image_position_ids=None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if pixel_values is not None:
+            model_inputs["pixel_values"] = pixel_values
+        if image_grid_thw is not None:
+            model_inputs["image_grid_thw"] = image_grid_thw
+        if pixel_attention_mask is not None:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        if spatial_shapes is not None:
+            model_inputs["spatial_shapes"] = spatial_shapes
+        if image_sizes is not None:
+            model_inputs["image_sizes"] = image_sizes
+        if token_type_ids is not None:
+            model_inputs["token_type_ids"] = token_type_ids
+        if mm_token_type_ids is not None:
+            model_inputs["mm_token_type_ids"] = mm_token_type_ids
+        if image_position_ids is not None:
+            model_inputs["image_position_ids"] = image_position_ids
+        if "logits_to_keep" in self.model_kwarg_keys:
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
+        model_inputs["use_cache"] = False
+
+        inner_model = model.base_model.model if is_peft_model(model) else model
+        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
+            backbone = inner_model.model
+        else:
+            backbone = inner_model.base_model
+        with self.accelerator.autocast():
+            outputs = backbone(**model_inputs)
+        hidden_states = outputs.last_hidden_state[:, :-1]
+        hidden_states = hidden_states[:, -logits_to_keep:]
+        completion_ids = input_ids[:, -logits_to_keep:]
+        completion_mask = attention_mask[:, -logits_to_keep:].bool()
+
+        hidden_states = hidden_states[completion_mask]
+        labels = completion_ids[completion_mask]
+        lm_head = inner_model.get_output_embeddings()
+        text_config = inner_model.config.get_text_config()
+        final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real
+        # 0.0 is kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
+        logit_scale = getattr(text_config, "logit_scale", None)
+        if logit_scale is None:
+            logit_scale = getattr(text_config, "output_multiplier", None)
+        logit_scale = 1.0 if logit_scale is None else logit_scale
+
+        lm_head_weight = lm_head.weight
+        lm_head_bias = lm_head.bias
+        # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor.
+        # Gather the head once before splitting tokens so every projection uses compatible tensor types.
+        if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
+            lm_head_weight = lm_head_weight.full_tensor()
+            if lm_head_bias is not None:
+                lm_head_bias = lm_head_bias.full_tensor()
+
+        with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
+            valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
+                hidden_states,
+                lm_head_weight,
+                lm_head_bias,
+                labels,
+                self.temperature,
+                _CHUNKED_LOGPROB_CHUNK_SIZE,
+                final_logit_softcapping,
+                logit_scale,
+            )
+
+        # `masked_scatter` keeps the output connected to the model even when no completion token is valid. This
+        # lets an all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+        logps = valid_logps.new_zeros(completion_mask.shape).masked_scatter(completion_mask, valid_logps)
+        if compute_entropy:
+            entropies = valid_entropies.new_zeros(completion_mask.shape).masked_scatter(
+                completion_mask, valid_entropies
+            )
+        else:
+            entropies = None
+        return logps, entropies, None
+
+    def _full_logits_logps(
         self,
         model,
         input_ids,
@@ -1403,84 +1494,6 @@ class GRPOTrainer(_BaseTrainer):
         mm_token_type_ids=None,
         image_position_ids=None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-        if self.use_liger_kernel and not compute_aux_loss:
-            model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-            if pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values
-            if image_grid_thw is not None:
-                model_inputs["image_grid_thw"] = image_grid_thw
-            if pixel_attention_mask is not None:
-                model_inputs["pixel_attention_mask"] = pixel_attention_mask
-            if spatial_shapes is not None:
-                model_inputs["spatial_shapes"] = spatial_shapes
-            if image_sizes is not None:
-                model_inputs["image_sizes"] = image_sizes
-            if token_type_ids is not None:
-                model_inputs["token_type_ids"] = token_type_ids
-            if mm_token_type_ids is not None:
-                model_inputs["mm_token_type_ids"] = mm_token_type_ids
-            if image_position_ids is not None:
-                model_inputs["image_position_ids"] = image_position_ids
-            if "logits_to_keep" in self.model_kwarg_keys:
-                model_inputs["logits_to_keep"] = logits_to_keep + 1
-            model_inputs["use_cache"] = False
-
-            inner_model = model.base_model.model if is_peft_model(model) else model
-            if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                backbone = inner_model.model
-            else:
-                backbone = inner_model.base_model
-            with self.accelerator.autocast():
-                outputs = backbone(**model_inputs)
-            hidden_states = outputs.last_hidden_state[:, :-1]
-            hidden_states = hidden_states[:, -logits_to_keep:]
-            completion_ids = input_ids[:, -logits_to_keep:]
-            completion_mask = attention_mask[:, -logits_to_keep:].bool()
-
-            hidden_states = hidden_states[completion_mask]
-            labels = completion_ids[completion_mask]
-            lm_head = inner_model.get_output_embeddings()
-            text_config = inner_model.config.get_text_config()
-            final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-            # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real
-            # 0.0 is kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
-            logit_scale = getattr(text_config, "logit_scale", None)
-            if logit_scale is None:
-                logit_scale = getattr(text_config, "output_multiplier", None)
-            logit_scale = 1.0 if logit_scale is None else logit_scale
-
-            lm_head_weight = lm_head.weight
-            lm_head_bias = lm_head.bias
-            # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor.
-            # Gather the head once before splitting tokens so every projection uses compatible tensor types.
-            if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
-                lm_head_weight = lm_head_weight.full_tensor()
-                if lm_head_bias is not None:
-                    lm_head_bias = lm_head_bias.full_tensor()
-
-            with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-                valid_logps, valid_entropies = _ChunkedLogProbFunction.apply(
-                    hidden_states,
-                    lm_head_weight,
-                    lm_head_bias,
-                    labels,
-                    self.temperature,
-                    _CHUNKED_LOGPROB_CHUNK_SIZE,
-                    final_logit_softcapping,
-                    logit_scale,
-                )
-
-            # `masked_scatter` keeps the output connected to the model even when no completion token is valid. This
-            # lets an all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-            logps = valid_logps.new_zeros(completion_mask.shape).masked_scatter(completion_mask, valid_logps)
-            if compute_entropy:
-                entropies = valid_entropies.new_zeros(completion_mask.shape).masked_scatter(
-                    completion_mask, valid_entropies
-                )
-            else:
-                entropies = None
-            return logps, entropies, None
-
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -2681,7 +2694,7 @@ class GRPOTrainer(_BaseTrainer):
                     prompt_completion_ids,
                     attention_mask,
                     logits_to_keep,
-                    batch_size,
+                    batch_size=batch_size,
                     num_images=num_images,
                     num_tiles=num_tiles,
                     **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
