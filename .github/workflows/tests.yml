@@ -41,8 +41,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   check_code_quality:
+    permissions:
+      contents: read
     name: Check code quality
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
@@ -65,6 +69,9 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure --color=always
 
   tests:
+    permissions:
+      actions: read
+      contents: read
     name: Tests with latest dependencies
     runs-on:
       group: aws-g6e-4xlarge
@@ -115,6 +122,9 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
+    permissions:
+      actions: read
+      contents: read
     name: Tests with dev dependencies
     runs-on:
       group: aws-g6e-4xlarge
@@ -170,6 +180,9 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
+    permissions:
+      actions: read
+      contents: read
     name: Tests without optional dependencies
     runs-on:
       group: aws-g6e-4xlarge
@@ -220,6 +233,9 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
+    permissions:
+      actions: read
+      contents: read
     name: Tests with minimum versions
     runs-on:
       group: aws-g6e-4xlarge
@@ -274,6 +290,9 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
+    permissions:
+      actions: read
+      contents: read
     name: Distributed smoke tests
     runs-on:
       group: aws-g5-12xlarge-cache
