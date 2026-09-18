@@ -826,11 +826,6 @@ class GRPOTrainer(_BaseTrainer):
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.importance_sampling_level not in ("token", "sequence"):
-            raise ValueError(
-                f"Unknown importance sampling level: {self.importance_sampling_level}. "
-                "Possible values are 'token' and 'sequence'."
-            )
         self.entropy_coef = args.entropy_coef
         self.use_adaptive_entropy = args.use_adaptive_entropy
         # Whether the entropy bonus is active. Constant for the run: entropy_coef only mutates in adaptive
