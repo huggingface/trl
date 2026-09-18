@@ -826,7 +826,7 @@ class GRPOTrainer(_BaseTrainer):
                 )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
+        if self.importance_sampling_level not in ("token", "sequence"):
             raise ValueError(
                 f"Unknown importance sampling level: {self.importance_sampling_level}. "
                 "Possible values are 'token' and 'sequence'."
@@ -1418,8 +1418,6 @@ class GRPOTrainer(_BaseTrainer):
             model_inputs["mm_token_type_ids"] = mm_token_type_ids
         if image_position_ids is not None:
             model_inputs["image_position_ids"] = image_position_ids
-        if "logits_to_keep" in self.model_kwarg_keys:
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
         model_inputs["use_cache"] = False
 
         inner_model = model.base_model.model if is_peft_model(model) else model
