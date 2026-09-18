@@ -1080,10 +1080,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss. The config answers both questions: `output_router_logits` means the model
-        # returns its router logits, `router_aux_loss_coef` is the coefficient the architecture was trained with (0.01
-        # for OLMoE, 0.0001 for GLM4V-MoE, 0.001 for most others). Left unset, the coefficient comes from the
-        # architecture; families that balance their experts with a router bias declare none and resolve to 0.0.
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, absent (so 0.0) on bias-balanced MoEs.
         text_config = model.config.get_text_config()
         coef = args.router_aux_loss_coef
         self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
