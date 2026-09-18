@@ -24,7 +24,6 @@ import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
@@ -40,6 +39,7 @@ from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     pad,
     selective_log_softmax_and_entropy,
 )
@@ -521,7 +521,7 @@ class TPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed. Unlike DPO, we must also strip the extracted prompt from the reference
             # column (see `_extract_triple_prompt`), which assumes the reference shares the same implicit prompt.
             first_example = next(iter(dataset))
