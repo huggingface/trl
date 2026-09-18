@@ -521,7 +521,12 @@ def log_kept_mass(logits, support_ids) -> torch.Tensor:
     valid = support_ids >= 0
     kept = torch.gather(logits, dim=-1, index=support_ids.clamp(min=0)).float()
     kept = kept.masked_fill(~valid, float("-inf"))
-    log_mass = torch.logsumexp(kept, dim=-1) - torch.logsumexp(logits.float(), dim=-1)
+    if logits.dtype in (torch.float32, torch.float64):
+        full = torch.logsumexp(logits, dim=-1).float()
+    else:
+        # row by row, as selective_log_softmax does, so the fp32 copy of the logits is one row wide at a time
+        full = torch.stack([torch.logsumexp(row.float(), dim=-1) for row in logits])
+    log_mass = torch.logsumexp(kept, dim=-1) - full
     return torch.where(valid.any(dim=-1), log_mass, torch.zeros_like(log_mass))
 
 
