@@ -75,14 +75,16 @@ def check_transformers_version(expected_version=None):
         )
 
 
-def set_seed():
+def set_seed(seed=SEED):
     """Seed the RNGs that model construction draws from.
 
     Without this every run produces different weights, so re-pushing a tiny model always creates a new
     `model.safetensors` even when nothing else changed. Call it before building the model: most scripts never call
     `init_weights_tiny_model`, and the randomness has already happened by then.
+
+    Pass a different `seed` when a script must produce weights that differ from another script's.
     """
-    _set_seed(SEED)
+    _set_seed(seed)
 
 
 def smoke_test(model, tokenizer_or_processor=None):

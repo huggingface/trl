@@ -17,12 +17,13 @@
 from peft import LoraConfig, get_peft_model
 from transformers import Qwen3ForCausalLM
 
-from .._common import check_transformers_version, push_to_hub, set_seed, smoke_test
+from .._common import SEED, check_transformers_version, push_to_hub, set_seed, smoke_test
 
 
 check_transformers_version()
 
-set_seed()
+# A different seed from peft_qwen3_for_causal_lm.py, so this adapter's weights differ from that one's.
+set_seed(SEED + 1)
 
 BASE = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
