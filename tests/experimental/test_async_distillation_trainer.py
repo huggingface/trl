@@ -1128,8 +1128,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         ("trained_prompts", "dataset_start_index", "expected"),
         [
             ({0, 1, 2, 3, 4}, 10, 15),  # dataset_start_index(10) + first_untrained(5)
-            # Prompt 2 was never trained (its rollout was dropped as stale), so the cursor stops there: it gets
-            # re-generated on resume instead of being silently skipped.
+            # Prompt 2 is still in flight, so the cursor must not skip it on resume.
             ({0, 1, 3, 4, 5}, 0, 2),
         ],
     )

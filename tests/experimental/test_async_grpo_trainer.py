@@ -639,9 +639,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         assert written_before_super == [True]
 
-    def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
-        # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
-        # prompts get re-generated on resume instead of being silently skipped.
+    def test_save_checkpoint_stops_at_inflight_group(self):
+        # Group 2 is still in flight, so the cursor must not skip it on resume.
         trainer = self._trainer_at_step_5({0, 1, 3, 4, 5}, dataset_start_index=0)
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
