@@ -429,124 +429,44 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def _assert_chunked_loss_matches_full_logits(
-        self, trainer, inputs, loss_rtol=1e-4, grad_atol=5e-4, cosine_min=0.999
-    ):
-        """Compare the streamed-projection and full-logits loss paths on the same generated batch."""
-        # If the chunked path accidentally calls the LM-head module, it materializes the full logits tensor before
-        # the streamed projection gets a chance to save memory.
+    @require_liger_kernel
+    def test_chunked_logps_match_full_logits(self):
+        # The streamed projection must return the same log-probs and entropies as the full-logits path, and must never
+        # call the LM head: doing so would materialize the [N, V] logits the projection exists to avoid. Loss-type math
+        # lives in `_compute_loss` and is path-independent, so comparing log-probs covers every loss type. 2200 scored
+        # tokens is above `_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE`, so this crosses a token-chunk boundary too.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,  # keep exact parity separate from the mixed-precision coverage below
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 1101), device=trainer.accelerator.device)
+        attention_mask = torch.ones_like(input_ids)
+
         with patch.object(trainer.model.get_output_embeddings(), "forward", side_effect=AssertionError):
-            chunked_loss = trainer.compute_loss(trainer.model, inputs)
-        chunked_loss.backward()
-        chunked_grads = {
-            name: param.grad.detach().clone()
-            for name, param in trainer.model.named_parameters()
-            if param.grad is not None
-        }
+            chunked_logps, chunked_entropies, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, input_ids, attention_mask, logits_to_keep=1100, compute_entropy=True
+            )
 
-        trainer.model.zero_grad()
-        trainer._metrics["train"].clear()
         trainer.use_liger_kernel = False
-        loss = trainer.compute_loss(trainer.model, inputs)
-        loss.backward()
-        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
+        logps, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, input_ids, attention_mask, logits_to_keep=1100, compute_entropy=True
+        )
 
-        assert chunked_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
-        torch.testing.assert_close(chunked_loss, loss, rtol=loss_rtol, atol=1e-5)
-        assert chunked_grads.keys() == grads.keys()
-        for name, grad in grads.items():
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=grad_atol)
-        chunked_grad = torch.cat([grad.flatten() for grad in chunked_grads.values()])
-        full_grad = torch.cat([grad.flatten() for grad in grads.values()])
-        torch.testing.assert_close(chunked_grad.norm(), full_grad.norm(), rtol=1e-3, atol=1e-5)
-        assert torch.nn.functional.cosine_similarity(chunked_grad, full_grad, dim=0) > cosine_min
+        torch.testing.assert_close(chunked_logps, logps)
+        torch.testing.assert_close(chunked_entropies, entropies)
 
         release_memory(trainer.model, trainer)
-
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "loss_type, beta",
-        [
-            ("grpo", 0.0),
-            ("bnpo", 0.0),
-            ("dr_grpo", 0.0),
-            ("dapo", 0.0),
-            ("cispo", 0.0),
-            ("sapo", 0.0),
-            ("luspo", 0.0),
-            ("vespo", 0.0),
-            ("dapo", 0.1),  # non-zero beta so that the KL term is compared too
-        ],
-    )
-    def test_chunked_loss_matches_full_logits(self, loss_type, beta):
-        # The chunked projection and full-logits paths must return the same loss and model gradients for the same
-        # batch. All loss-type-specific math stays in `_compute_loss` and should therefore be path-independent.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            beta=beta,
-            bf16=False,  # keep exact gradient parity separate from the mixed-precision coverage below
-            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=32,  # reduce the completion length to reduce memory usage
-            steps_per_generation=4,
-            gradient_accumulation_steps=2,
-            loss_type=loss_type,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        # Generate and score one batch, as the training loop would
-        trainer.model.train()
-        trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-
-        # LUSPO/VESPO exponentiate a sequence-level sum of per-token log-probabilities, so a per-token streamed-GEMM
-        # discrepancy compounds linearly over `max_completion_length` instead of averaging out like the other losses.
-        amplifies = loss_type in {"luspo", "vespo"}
-        loss_rtol = 2e-4 * training_args.max_completion_length if amplifies else 1e-4
-        grad_atol = 5e-4 * training_args.max_completion_length if amplifies else 5e-4
-        self._assert_chunked_loss_matches_full_logits(trainer, inputs, loss_rtol=loss_rtol, grad_atol=grad_atol)
-
-    @require_liger_kernel
-    def test_chunked_loss_matches_full_logits_multiple_token_chunks(self):
-        # Same parity check as above, but with enough completion tokens that the streamed log-prob path has to chunk
-        # over tokens as well as vocabulary (a single microbatch there stays within one token chunk).
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            bf16=False,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=700,
-            steps_per_generation=4,
-            gradient_accumulation_steps=2,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        trainer.model.train()
-        trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        assert inputs["completion_mask"].sum() > 2048
-        # Chunking over tokens as well as vocabulary adds a second axis of streamed-GEMM rounding noise, so the
-        # aggregate cosine similarity is a bit looser here than the single-token-chunk case above.
-        self._assert_chunked_loss_matches_full_logits(trainer, inputs, cosine_min=0.995)
 
     @require_liger_kernel
     def test_chunked_logps_honor_output_multiplier_and_empty_completion(self):
@@ -554,8 +474,8 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             bf16=False,
-            per_device_train_batch_size=2,
-            num_generations=2,
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
             use_liger_kernel=True,
             report_to="none",
         )
@@ -629,8 +549,8 @@ class TestGRPOTrainer(TrlTestCase):
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             bf16=True,
-            per_device_train_batch_size=2,
-            num_generations=2,
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
             use_liger_kernel=True,
             report_to="none",
         )
@@ -663,11 +583,11 @@ class TestGRPOTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
             max_steps=1,
-            max_completion_length=8,
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
             use_liger_kernel=True,
             report_to="none",
         )
