@@ -24,7 +24,6 @@ import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
@@ -41,6 +40,7 @@ from ...trainer.utils import (
     disable_dropout_in_model,
     entropy_from_logits,
     get_config_model_id,
+    global_then_local_main_first,
     pad,
     selective_log_softmax,
 )
@@ -349,8 +349,8 @@ class TPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
@@ -522,7 +522,7 @@ class TPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed. Unlike DPO, we must also strip the extracted prompt from the reference
             # column (see `_extract_triple_prompt`), which assumes the reference shares the same implicit prompt.
             first_example = next(iter(dataset))

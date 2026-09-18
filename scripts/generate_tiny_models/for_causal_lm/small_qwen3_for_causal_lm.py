@@ -33,6 +33,7 @@ config = Qwen3Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    tie_word_embeddings=True,
     max_position_embeddings=40960,
     rope_theta=1000000,
     max_window_layers=36,

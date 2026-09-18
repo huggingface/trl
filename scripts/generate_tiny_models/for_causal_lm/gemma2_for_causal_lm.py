@@ -38,6 +38,8 @@ config = Gemma2Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    head_dim=2,
+    query_pre_attn_scalar=2,
 )
 model = Gemma2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
