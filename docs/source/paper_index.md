@@ -1534,31 +1534,11 @@ training_args = TPOConfig(
 
 ## Nash Learning from Human Feedback
 
-Papers relating to the [`experimental.nash_md.NashMDTrainer`]
-
 ### Nash Learning from Human Feedback
 
 **📜 Paper**: https://huggingface.co/papers/2312.00886
 
-Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
-
-```python
-from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained(model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
-
-trainer = NashMDTrainer(
-    model=model,
-    reward_funcs=reward_model,
-    args=NashMDConfig(),
-    processing_class=tokenizer,
-    train_dataset=...,
-)
-trainer.train()
-```
+Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. TRL shipped an implementation as `NashMDTrainer` up to v1.13; it is no longer part of the library and remains available in the git history.
 
 ## Reward Modeling
 
