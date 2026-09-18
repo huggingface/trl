@@ -72,10 +72,13 @@ class TestUseAdapter(TrlTestCase):
         all give the base model's logits, and the assertions below would then hold whatever `use_adapter` did.
         `init_lora_weights=False` gives `lora_B` random values instead.
         """
+        # `target_modules` is explicit because peft only added Qwen3 to its default mapping in 0.16.0, and TRL
+        # supports peft>=0.13.0. These are the modules that mapping picks for Qwen3.
+        lora_kwargs = {"init_lora_weights": False, "target_modules": ["q_proj", "v_proj"]}
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-        model = get_peft_model(model, LoraConfig(init_lora_weights=False), adapter_name=adapter_names[0])
+        model = get_peft_model(model, LoraConfig(**lora_kwargs), adapter_name=adapter_names[0])
         for adapter_name in adapter_names[1:]:
-            model.add_adapter(adapter_name, LoraConfig(init_lora_weights=False))
+            model.add_adapter(adapter_name, LoraConfig(**lora_kwargs))
         return model
 
     def test_disables_on_none(self):
