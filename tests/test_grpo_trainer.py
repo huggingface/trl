@@ -505,6 +505,33 @@ class TestGRPOTrainer(TrlTestCase):
         release_memory(trainer.model, trainer)
 
     @require_liger_kernel
+    def test_train_with_liger_and_reference_scoring(self):
+        # `beta != 0` scores the reference model in `_prepare_inputs`, which passes `batch_size`. That call only
+        # happens off the default path, so it is easy to break without any other test noticing.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # non-zero beta scores the reference model
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=1,
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_liger_kernel
     def test_train_with_liger_and_moe_aux_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(

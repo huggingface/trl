@@ -1365,10 +1365,14 @@ class GRPOTrainer(_BaseTrainer):
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
-    def _get_per_token_logps_and_entropies(self, model, *args, compute_aux_loss=False, **kwargs):
+    def _get_per_token_logps_and_entropies(self, model, *args, batch_size=None, compute_aux_loss=False, **kwargs):
         """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
         if not self.use_liger_kernel or compute_aux_loss:
-            return self._full_logits_logps(model, *args, compute_aux_loss=compute_aux_loss, **kwargs)
+            return self._full_logits_logps(
+                model, *args, batch_size=batch_size, compute_aux_loss=compute_aux_loss, **kwargs
+            )
+        # `batch_size` caps the rows the full-logits path sends through the model at once. The chunked path bounds
+        # both the backbone and the projection on its own, so callers may pass it and it is dropped here.
         # The chunked path reads the backbone and the LM head directly rather than calling the model, so it has to
         # enter through any distributed wrapper first. Scoring runs outside `compute_loss`, which would otherwise
         # have done that.
