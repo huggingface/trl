@@ -73,7 +73,7 @@ class TestUseAdapter(TrlTestCase):
         enabled = model(input_ids).logits
         with model.disable_adapter():
             expected = model(input_ids).logits
-        # Without this the adapter could be the identity, and every assertion below would hold whatever use_adapter did
+        # Otherwise the assertions below prove nothing
         assert not torch.equal(enabled, expected)
 
         with use_adapter(model, None):
@@ -108,7 +108,7 @@ class TestUseAdapter(TrlTestCase):
         expected_1 = model(input_ids).logits
         model.set_adapter("my_adapter_2")
         expected_2 = model(input_ids).logits
-        # Without this the two adapters could be identical, and every assertion below would hold either way
+        # Otherwise the assertions below prove nothing
         assert not torch.equal(expected_1, expected_2)
 
         with use_adapter(model, "my_adapter_1"):
