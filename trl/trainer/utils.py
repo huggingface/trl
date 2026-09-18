@@ -17,6 +17,7 @@ import copy
 import functools
 import hashlib
 import importlib.resources as pkg_resources
+import inspect
 import os
 import random
 import socket
@@ -232,6 +233,20 @@ def get_callable_name(func: Callable) -> str:
     while isinstance(func, functools.partial):
         func = func.func
     return getattr(func, "__name__", type(func).__name__)
+
+
+def is_async_callable(func: Callable) -> bool:
+    """
+    Return whether calling `func` returns a coroutine, for the same forms as [`get_callable_name`]: module-level
+    functions, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to
+    the wrapped callable), and callable class instances (which carry the `async` on their `__call__`).
+
+    `inspect.iscoroutinefunction` alone covers only the first two: it inspects the instance itself, not its `__call__`,
+    so an async callable class reads as synchronous and its coroutine is never awaited.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(func.__call__)
 
 
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
@@ -1229,6 +1244,21 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@contextmanager
+def global_then_local_main_first():
+    """
+    Context manager that lets the global main process run the block first, then the local main of each node, then
+    everyone else. Both scopes of `PartialState.main_process_first`, one after the other.
+
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes first,
+    which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk costs one
+    pass per node rather than one per process.
+    """
+    state = PartialState()
+    with state.main_process_first(), state.local_main_process_first():
+        yield
 
 
 @contextmanager

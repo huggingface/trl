@@ -61,17 +61,12 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 - [`XPOTrainer`](xpo_trainer)
 
-#### Reward modeling
-
-- [`PRMTrainer`](prm_trainer)
-
 </div>
 <div style="flex: 1; min-width: 0;">
 
 #### Offline methods
 
 - [BEMA for Reference Model](bema_for_reference_model)
-- [`BCOTrainer`](bco_trainer)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
 - [`TPOTrainer`](tpo_trainer)
