@@ -541,8 +541,8 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.args.dataloader_num_workers == 4  # override is scoped, not persisted
 
     @pytest.mark.skipif(
-        not hasattr(DistillationConfig, "dataloader_multiprocessing_context"),
-        reason="requires transformers with dataloader_multiprocessing_context",
+        Version(transformers.__version__) < Version("5.15.0"),
+        reason="dataloader_multiprocessing_context was added in transformers 5.15.0",
     )
     def test_iterable_dataset_clears_multiprocessing_context(self):
         # A start method is only valid with workers, so forcing `dataloader_num_workers=0` for an iterable train set
@@ -569,8 +569,8 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.get_train_dataloader().num_workers == 0  # builds without raising
 
     @pytest.mark.skipif(
-        not hasattr(DistillationConfig, "dataloader_multiprocessing_context"),
-        reason="requires transformers with dataloader_multiprocessing_context",
+        Version(transformers.__version__) < Version("5.15.0"),
+        reason="dataloader_multiprocessing_context was added in transformers 5.15.0",
     )
     def test_iterable_eval_restores_multiprocessing_context(self):
         # The context is cleared only while building the iterable eval loader and restored afterwards, so the

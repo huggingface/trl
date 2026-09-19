@@ -895,9 +895,9 @@ class GRPOTrainer(_BaseTrainer):
                 f"provided value ({args.dataloader_num_workers})."
             )
             # A multiprocessing start method is only valid with workers, so clear it along with the worker count.
-            # transformers sets it to "fork" on MPS when `dataloader_num_workers > 1`; older versions lack the field.
+            # transformers sets it to "fork" on MPS when `dataloader_num_workers > 1`; the field was added in 5.15.0.
             args.dataloader_num_workers = 0
-            if getattr(args, "dataloader_multiprocessing_context", None) is not None:
+            if Version(transformers.__version__) >= Version("5.15.0"):
                 args.dataloader_multiprocessing_context = None
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
@@ -1313,8 +1313,8 @@ class GRPOTrainer(_BaseTrainer):
             # method is only valid with workers, so it is cleared and restored the same way.
             num_workers = self.args.dataloader_num_workers
             self.args.dataloader_num_workers = 0
-            mp_context = getattr(self.args, "dataloader_multiprocessing_context", None)
-            if mp_context is not None:
+            if Version(transformers.__version__) >= Version("5.15.0"):
+                mp_context = self.args.dataloader_multiprocessing_context
                 self.args.dataloader_multiprocessing_context = None
 
         try:
@@ -1328,7 +1328,7 @@ class GRPOTrainer(_BaseTrainer):
         finally:
             if isinstance(eval_dataset, IterableDataset):
                 self.args.dataloader_num_workers = num_workers
-                if mp_context is not None:
+                if Version(transformers.__version__) >= Version("5.15.0"):
                     self.args.dataloader_multiprocessing_context = mp_context
 
     def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
