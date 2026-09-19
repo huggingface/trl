@@ -123,8 +123,6 @@
     title: MergeModelCallback
   - local: minillm_trainer
     title: MiniLLM
-  - local: nash_md_trainer
-    title: Nash-MD
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
@@ -137,7 +135,5 @@
     title: SSD
   - local: tpo_trainer
     title: TPO
-  - local: xpo_trainer
-    title: XPO
   title: Experimental
   isExpanded: false

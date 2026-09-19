@@ -21,18 +21,21 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
 
+set_seed()
+
 MODEL_ID = "google/gemma-2-2b-it"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = Gemma2Config(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=256000,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -40,6 +43,7 @@ config = Gemma2Config(
     intermediate_size=32,
     head_dim=2,
     query_pre_attn_scalar=2,
+    eos_token_id=[1, 107],
 )
 model = Gemma2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

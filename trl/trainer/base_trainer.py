@@ -51,7 +51,6 @@ _TELEMETRY_TRAINERS = {
     "GOLDTrainer",
     "IWOPDTrainer",
     "MiniLLMTrainer",
-    "NashMDTrainer",
     "OnlineDPOTrainer",
     "ORPOTrainer",
     "SDFTTrainer",
@@ -59,7 +58,6 @@ _TELEMETRY_TRAINERS = {
     "ServerDistillationTrainer",
     "SSDTrainer",
     "TPOTrainer",
-    "XPOTrainer",
 }
 
 
