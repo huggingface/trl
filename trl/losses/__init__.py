@@ -19,13 +19,11 @@ from .._lazy_module import _LazyModule
 
 
 _import_structure = {
-    "grpo_loss": ["FusedLinearGRPOLoss"],
     "jsd_loss": ["FusedLinearJSDLoss"],
 }
 
 
 if TYPE_CHECKING:
-    from .grpo_loss import FusedLinearGRPOLoss
     from .jsd_loss import FusedLinearJSDLoss
 
 

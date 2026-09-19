@@ -1247,6 +1247,21 @@ def get_config_model_id(config: PretrainedConfig) -> str:
 
 
 @contextmanager
+def global_then_local_main_first():
+    """
+    Context manager that lets the global main process run the block first, then the local main of each node, then
+    everyone else. Both scopes of `PartialState.main_process_first`, one after the other.
+
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes first,
+    which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk costs one
+    pass per node rather than one per process.
+    """
+    state = PartialState()
+    with state.main_process_first(), state.local_main_process_first():
+        yield
+
+
+@contextmanager
 def use_adapter(model: "PeftModel", adapter_name: str | None):
     """
     Context manager to temporarily set and reset the active adapter in a PEFT model.
@@ -1616,10 +1631,8 @@ def patch_chunked_lm_head(
         )
 
         if valid_mask is not None:
-            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
-            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
-            logprobs[valid_mask] = logprobs_valid
-            entropy[valid_mask] = entropy_valid
+            logprobs = logprobs_valid.new_zeros(b * s).masked_scatter(valid_mask, logprobs_valid)
+            entropy = entropy_valid.new_zeros(b * s).masked_scatter(valid_mask, entropy_valid)
         else:
             logprobs = logprobs_valid
             entropy = entropy_valid
