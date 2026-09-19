@@ -942,8 +942,10 @@ class TestDPOTrainer(TrlTestCase):
         torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
         assert chunked_grads.keys() == grads.keys()
         for name, grad in grads.items():
-            # Vocabulary streaming changes the GEMM reduction shape; PyTorch 2.8 differs by up to 3.1e-4 in fp32.
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
+            # hidden_size=8 makes lm_head's weight-grad GEMM unusually narrow; cuBLAS picks a less precise
+            # algorithm for it on Ampere+ (up to 3.4e-2 on an L40S). Exact match on ROCm.
+            atol = 5e-2 if name == "lm_head.weight" else 5e-4
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=atol)
 
     @require_liger_kernel
     @pytest.mark.parametrize(
