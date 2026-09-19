@@ -800,6 +800,46 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "model_id, expect_coef, expect_aux_loss",
+        [
+            # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
+            # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            # Dense model: no coefficient to inherit
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
+        ],
+    )
+    def test_router_aux_loss_coef_defaults_to_the_architecture(self, model_id, expect_coef, expect_aux_loss):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert trainer.router_aux_loss_coef == expect_coef
+        assert trainer.aux_loss_enabled == expect_aux_loss
+
+    def test_router_aux_loss_coef_fails_without_router_logits(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
+
+        # Dense model: no `output_router_logits` on its config, so there is nothing to compute the term from
+        with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+    def test_router_aux_loss_coef_explicit_value_overrides_the_architecture(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
+
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.router_aux_loss_coef == 0.5
+        assert trainer.aux_loss_enabled
+
     @require_peft
     def test_train_peft_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
