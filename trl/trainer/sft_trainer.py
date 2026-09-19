@@ -1162,8 +1162,8 @@ class SFTTrainer(_BaseTrainer):
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
