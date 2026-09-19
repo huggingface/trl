@@ -19,7 +19,7 @@ import pytest
 from transformers import AutoModelForCausalLM
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import _unwrap_model_for_generation, disable_gradient_checkpointing, prepare_deepspeed
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -73,3 +73,35 @@ class TestDisableGradientCheckpointing:
         with disable_gradient_checkpointing(model):
             assert model.is_gradient_checkpointing is False
         assert model.is_gradient_checkpointing is True
+
+
+class TestUnwrapModelForGeneration:
+    def test_restores_gradient_checkpointing_on_error(self):
+        class DummyModel:
+            def __init__(self):
+                self.is_gradient_checkpointing = True
+                self.enable_calls = 0
+
+            def gradient_checkpointing_disable(self):
+                self.is_gradient_checkpointing = False
+
+            def gradient_checkpointing_enable(self):
+                self.is_gradient_checkpointing = True
+                self.enable_calls += 1
+
+        class FakeDistributedBackend:
+            def __init__(self, accelerator):
+                self.is_zero3 = False
+
+        unwrapped = DummyModel()
+        accelerator = types.SimpleNamespace(unwrap_model=lambda model: unwrapped)
+
+        with (
+            patch("trl.distributed.DistributedBackend", FakeDistributedBackend),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            with _unwrap_model_for_generation(unwrapped, accelerator):
+                raise RuntimeError("boom")
+
+        assert unwrapped.enable_calls == 1
+        assert unwrapped.is_gradient_checkpointing is True
