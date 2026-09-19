@@ -29,7 +29,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
@@ -75,6 +74,7 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    global_then_local_main_first,
     maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
@@ -1274,7 +1274,10 @@ class SFTTrainer(_BaseTrainer):
         ):
             logger.warning(
                 "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
-                "the model may not learn to stop."
+                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
+                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
+                "or edit the chat template so the end-of-turn token falls inside "
+                "`{% generation %}...{% endgeneration %}`."
             )
 
         # Dataset
@@ -1477,7 +1480,7 @@ class SFTTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
                 logger.warning(
