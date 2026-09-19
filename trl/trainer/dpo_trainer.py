@@ -1749,12 +1749,12 @@ class DPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                # The chunked projection reads `lm_head.weight` directly, but distributed wrappers still need their
-                # forward to run so their parameter materialization and gradient synchronization hooks are armed.
-                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                # The chunked projection reads `lm_head.weight` directly, bypassing the module, so the loss has to
+                # run inside the wrapper's forward via `_forward_redirection`: that is what gathers sharded
+                # parameters under ZeRO-3 and FSDP, and what arms DDP's gradient reducer. FSDP2 shards in place, so
+                # unwrapping preserves object identity and needs its own check.
                 unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled or model is not unwrapped_model:
+                if self.is_fsdp_enabled or model is not unwrapped_model:
                     return self._forward_redirection(
                         model, unwrapped_model, self._compute_loss, unwrapped_model, inputs, return_outputs
                     )
