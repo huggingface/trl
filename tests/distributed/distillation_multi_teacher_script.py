@@ -1,0 +1,257 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Two-rank CPU worker for `test_distillation_trainer_multi_teacher.py`, covering the multi-teacher `DistillationTrainer`
+(a mapping of teachers as the `teacher_model` constructor argument) with three `--mode` values.
+
+Launched with `python -m torch.distributed.run` rather than `accelerate launch`: this environment has no
+`mpirun`/`mpiexec`/`mpi4py`, and `accelerate launch`'s non-MPI multi-process spawn is only wired up for
+`MULTI_GPU`/`FSDP`/`DEEPSPEED`/`MEGATRON_LM`/`XLA`, so a `MULTI_CPU` config falls through to a single-process launcher.
+
+`--mode multi` / `--mode reference`: two gloo processes on CPU, compared against a single-process reference trained on
+the same global batch and the same tokens. Completions are replaced by a deterministic function of the prompt tokens
+(`FixedCompletionTrainer`), so both runs train on exactly the same (prompt, completion) pairs and the comparison
+isolates the cross-rank reduction from sampling. The two teacher checkpoints are built by every process,
+deterministically (a fixed seed and a fixed per-parameter rescale, no sampling involved), so every rank ends up with
+bit-identical teachers without needing a shared filesystem hand-off. Rank 0 writes a JSON summary and the final student
+parameters to the `--out` path (and a sibling `-params.pt` file).
+
+`--mode dtensor-head`: checks that the multi-teacher loss issues the same collectives on every rank when the student
+head is a sharded `DTensor` (what FSDP2 gives it), even though local routing puts a different number of teacher groups
+on each rank (`[a, b]` on rank 0, `[a, a]` on rank 1, unless `--equal-groups`). This isolates the loss path rather than
+running a full FSDP2 trainer: FSDP2 is what makes the student head a `DTensor`, and the head is the only student
+parameter the chunked loss projects through, so a head built by hand on the mesh exercises exactly the collectives the
+trainer would issue. The student head's `full_tensor()` must therefore run once per microbatch, not once per teacher
+group, or the ranks issue different numbers of collectives and `TORCH_DISTRIBUTED_DEBUG=DETAIL` reports a mismatch (or
+the run deadlocks). Forward, the cross-rank statistic reduction `compute_loss` performs, and backward are all driven.
+"""
+
+import argparse
+import json
+import os
+import tempfile
+from datetime import timedelta
+from types import SimpleNamespace
+
+import torch
+import torch.distributed as dist
+from datasets import Dataset
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.tensor import Shard, distribute_tensor
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from trl import DistillationConfig, DistillationTrainer
+
+
+MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+# 4 rows per optimizer step, 2 steps: split 2 ranks x 1 row x 2 accumulation steps under the multi-process config,
+# and 1 process x 2 rows x 2 accumulation steps in the single-process reference. See `_run_training()`.
+TRAIN_TEACHER_IDS = ["a", "a", "b", "b", "a", "a", "b", "b"]
+PROMPTS = [
+    "The capital of France is",
+    "Water boils at",
+    "The largest planet is",
+    "Photosynthesis happens in",
+    "The speed of light is",
+    "Mount Everest is in",
+    "The Pacific Ocean is",
+    "An atom contains",
+]
+
+
+def _build_teacher(directory: str, scale: float) -> str:
+    """Deterministically build one tiny teacher checkpoint, rescaled so its targets differ from the student's."""
+    torch.manual_seed(0)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float32)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.mul_(scale)
+    model.save_pretrained(directory)
+    AutoTokenizer.from_pretrained(MODEL_ID).save_pretrained(directory)
+    return directory
+
+
+def build_dataset(teacher_ids: list[str]) -> Dataset:
+    return Dataset.from_dict(
+        {"prompt": [PROMPTS[index % len(PROMPTS)] for index in range(len(teacher_ids))], "teacher_id": teacher_ids}
+    )
+
+
+class FixedCompletionTrainer(DistillationTrainer):
+    """Replaces sampled completions with a deterministic function of the prompt, so both modes see equal tokens."""
+
+    def _generate(self, prompts):
+        prompt_ids, completion_ids, tool_mask, images, tool_images = super()._generate(prompts)
+        fixed = []
+        for ids in prompt_ids:
+            offset = sum(int(token) for token in ids) % 997
+            fixed.append([(offset + position * 7) % 100 + 1 for position in range(self.max_completion_length)])
+        return prompt_ids, fixed, tool_mask, images, tool_images
+
+
+def _run_training(args):
+    with tempfile.TemporaryDirectory() as teacher_root:
+        teacher_a = _build_teacher(os.path.join(teacher_root, "teacher-a"), scale=1.05)
+        teacher_b = _build_teacher(os.path.join(teacher_root, "teacher-b"), scale=0.95)
+
+        # Same *global* batch in both modes: 4 rows per optimizer step, split 2 ranks x 1 row x 2 accumulation
+        # steps under the multi-process CPU config, and 1 process x 2 rows x 2 accumulation steps in the reference.
+        per_device_train_batch_size = 1 if args.mode == "multi" else 2
+        training_args = DistillationConfig(
+            output_dir=args.output_dir,
+            learning_rate=0.1,
+            # Plain SGD, so the update is proportional to the gradient: AdamW normalizes by a near-zero second
+            # moment here (the tiny student and teachers start almost identical), which would amplify the last-bit
+            # gradient difference between two ranks and one process into a large parameter difference and tell us
+            # nothing about the reduction itself.
+            optim="sgd",
+            per_device_train_batch_size=per_device_train_batch_size,
+            gradient_accumulation_steps=2,
+            max_completion_length=4,
+            max_steps=2,
+            logging_steps=1,
+            eval_strategy="no",
+            shuffle_dataset=False,
+            seed=11,
+            report_to="none",
+            use_cpu=True,
+        )
+        trainer = FixedCompletionTrainer(
+            model=MODEL_ID,
+            args=training_args,
+            train_dataset=build_dataset(TRAIN_TEACHER_IDS),
+            teacher_model={"a": teacher_a, "b": teacher_b},
+        )
+        accelerator = trainer.accelerator
+        world_size = accelerator.num_processes
+        if args.mode == "multi":
+            # The whole point of this worker: a real two-rank run. Never let a single-process fallback be recorded
+            # as distributed evidence.
+            assert world_size == 2, f"expected world_size == 2 under accelerate launch, got {world_size}"
+            assert torch.distributed.is_initialized(), "torch.distributed was not initialized"
+            assert torch.distributed.get_backend() == "gloo", f"expected gloo, got {torch.distributed.get_backend()}"
+        else:
+            assert world_size == 1, f"the reference must be single-process, got {world_size}"
+
+        trainer.train()
+
+        step_logs = [entry for entry in trainer.state.log_history if "loss" in entry]
+        # Only the cross-rank reduced families: `teacher_score_s/<id>` measures this rank's own scoring wall clock,
+        # so a rank that routes to no teacher "b" never logs a key for it and the set would be rank-dependent.
+        teacher_metric_keys = sorted(
+            {key for entry in step_logs for key in entry if key.startswith(("teacher_jsd/", "teacher_token_frac/"))}
+        )
+        summary = {
+            "mode": args.mode,
+            "world_size": world_size,
+            "optimizer_steps": trainer.state.global_step,
+            "per_device_train_batch_size": per_device_train_batch_size,
+            "teacher_ids": list(trainer.teacher_models),
+            "train_losses": [entry["loss"] for entry in step_logs],
+            "num_tokens": [entry["num_tokens"] for entry in step_logs],
+            "teacher_metric_keys": teacher_metric_keys,
+        }
+
+        # Every rank writes to the shared JSON/params paths only from the main process, and every rank must reach
+        # this point for the run to be a real distributed collective, not a rank that silently failed earlier.
+        if accelerator.is_main_process:
+            with open(args.out, "w") as handle:
+                json.dump(summary, handle, indent=2, sort_keys=True)
+            parameters = {name: param.detach().cpu() for name, param in trainer.model.named_parameters()}
+            torch.save(parameters, os.path.splitext(args.out)[0] + "-params.pt")
+        accelerator.wait_for_everyone()
+
+
+def _run_dtensor_head(args):
+    dist.init_process_group("gloo", timeout=timedelta(seconds=120))
+    rank = dist.get_rank()
+    # Asserted here so a single-process fallback can never be read as a two-rank result.
+    assert dist.get_world_size() == 2, dist.get_world_size()
+    torch.manual_seed(42)
+
+    vocab_size, hidden_size, rows, tokens = 8, 4, 2, 2
+    mesh = init_device_mesh("cpu", (2,))
+    # What FSDP2 hands the loss: the student `lm_head` weight sharded over the mesh's single dimension.
+    weight = distribute_tensor(torch.randn(vocab_size, hidden_size), mesh, [Shard(0)]).requires_grad_()
+    student_head = SimpleNamespace(weight=weight, bias=None)
+    config = SimpleNamespace(get_text_config=lambda: SimpleNamespace())
+    student = SimpleNamespace(config=config, get_output_embeddings=lambda: student_head)
+    teachers = {
+        teacher_id: SimpleNamespace(
+            config=config, get_output_embeddings=lambda: torch.nn.Linear(hidden_size, vocab_size, bias=False)
+        )
+        for teacher_id in ["a", "b"]
+    }
+
+    # Unequal routing: rank 0 holds two teacher groups, rank 1 holds one. The head gather must not depend on this.
+    teacher_index = torch.tensor([0, 1] if args.equal_groups or rank == 0 else [0, 0])
+    targets = {
+        int(index): torch.randn(int((teacher_index == index).sum()), tokens, hidden_size)
+        for index in teacher_index.unique()
+    }
+    hidden_states = torch.randn(rows, tokens, hidden_size, requires_grad=True)
+    trainer = SimpleNamespace(
+        model=SimpleNamespace(training=True),
+        teacher_models=teachers,
+        _teacher_ids=["a", "b"],
+        _teacher_head=None,
+        _teacher_targets={"train": {0: targets}},
+        _teacher_targets_index=0,
+        beta=0.5,
+        temperature=1.0,
+        _get_last_hidden_state=lambda *args, **kwargs: hidden_states,
+    )
+    inputs = {
+        "prompt_ids": torch.ones(rows, tokens, dtype=torch.long),
+        "completion_ids": torch.ones(rows, tokens, dtype=torch.long),
+        "prompt_mask": torch.ones(rows, tokens),
+        "completion_mask": torch.ones(rows, tokens),
+        "teacher_index": teacher_index,
+    }
+
+    try:
+        loss, entropy_sum, n_valid, teacher_stats = DistillationTrainer._compute_loss(trainer, student, inputs, None)
+        # The reduction `compute_loss` runs on the `[2, num_teachers]` statistics, right after the loss returns: the
+        # collective the mismatched head gathers used to collide with.
+        dist.all_reduce(teacher_stats)
+        loss.backward()
+        assert weight.grad is not None
+        assert torch.isfinite(loss)
+        assert n_valid.item() == rows * tokens
+    finally:
+        dist.destroy_process_group()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["multi", "reference", "dtensor-head"], required=True)
+    parser.add_argument("--out")
+    parser.add_argument("--output-dir")
+    parser.add_argument(
+        "--equal-groups", action="store_true", help="dtensor-head only: route both ranks to [a, b] instead of [a, a]."
+    )
+    args = parser.parse_args()
+
+    if args.mode == "dtensor-head":
+        _run_dtensor_head(args)
+    else:
+        # `AutoTokenizer` is loaded here so the worker fails fast if the tiny model is not cached, rather than
+        # inside the trainer where the traceback is harder to read from a `torch.distributed.run` log.
+        AutoTokenizer.from_pretrained(MODEL_ID)
+        _run_training(args)
+
+
+if __name__ == "__main__":
+    main()
