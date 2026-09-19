@@ -24,12 +24,16 @@ from pathlib import Path
 
 import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
+from huggingface_hub.errors import NotASafetensorsRepoError
 from packaging.version import Version
 from torch import nn
 from transformers import AutoConfig, ProcessorMixin
+from transformers import set_seed as _set_seed
 
 
 ORGANIZATION = "trl-internal-testing"
+
+SEED = 42
 
 MODEL_CARD = """
 ---
@@ -69,6 +73,18 @@ def check_transformers_version(expected_version=None):
         raise RuntimeError(
             f"This script requires transformers=={expected_version}, but {transformers.__version__} is installed."
         )
+
+
+def set_seed(seed=SEED):
+    """Seed the RNGs that model construction draws from.
+
+    Without this every run produces different weights, so re-pushing a tiny model always creates a new
+    `model.safetensors` even when nothing else changed. Call it before building the model: most scripts never call
+    `init_weights_tiny_model`, and the randomness has already happened by then.
+
+    Pass a different `seed` when a script must produce weights that differ from another script's.
+    """
+    _set_seed(seed)
 
 
 def smoke_test(model, tokenizer_or_processor=None):
@@ -153,7 +169,11 @@ def check_dtype_pattern(reference_id, model):
     Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
     like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
     """
-    metadata = api.get_safetensors_metadata(reference_id)
+    try:
+        metadata = api.get_safetensors_metadata(reference_id)
+    except NotASafetensorsRepoError:
+        print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
+        return
     ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
     mismatches = []
