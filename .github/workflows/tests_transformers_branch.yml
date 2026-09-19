@@ -15,8 +15,12 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
+permissions: {}
+
 jobs:
   tests_transformers_branch:
+    permissions:
+      contents: read
     name: Tests with Transformers ${{ inputs.transformers_ref }}
     runs-on:
       group: aws-g6e-4xlarge
@@ -70,6 +74,8 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
+    permissions:
+      contents: read
     name: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
     runs-on:
       group: aws-g5-12xlarge-cache
