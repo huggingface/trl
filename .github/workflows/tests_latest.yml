@@ -12,8 +12,12 @@ env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
+permissions: {}
+
 jobs:
   tests:
+    permissions:
+      contents: read
     name: Tests latest TRL release with dev dependencies
     runs-on:
       group: aws-g6e-4xlarge

@@ -13,8 +13,12 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
+permissions: {}
+
 jobs:
   tests:
+    permissions:
+      contents: read
     name: Tests with Python ${{ matrix.python-version }}
     strategy:
       matrix:
