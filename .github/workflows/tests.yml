@@ -9,9 +9,10 @@ on:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
       - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
@@ -21,9 +22,10 @@ on:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
       - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
