@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .xpo_config import XPOConfig
-from .xpo_trainer import XPOTrainer
+from .logprob_entropy import selective_log_softmax_and_entropy
 
 
-__all__ = ["XPOConfig", "XPOTrainer"]
+__all__ = ["selective_log_softmax_and_entropy"]

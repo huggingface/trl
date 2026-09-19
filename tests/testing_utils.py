@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import importlib.metadata
 import signal
 import warnings
 from abc import abstractmethod
@@ -55,6 +56,15 @@ require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reaso
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
+# `get_kernel(..., trust_remote_code=...)` was added in kernels 0.14.0; older versions don't accept the argument.
+# transformers==4.56.2 (tested by the "minimum versions" CI job) caps `hub-kernels`/`kernels` extras at
+# kernels<=0.9 (huggingface-hub<1.0), and no kernels release since 0.13.0 supports huggingface-hub<1.0, so this
+# can't be resolved by bumping the pyproject.toml floor without dropping support for transformers<5.1.0.
+# kernels<0.14 doesn't even expose `__version__` (only `_versions`), so read the version from package metadata.
+require_kernels_trust_remote_code = pytest.mark.skipif(
+    not is_kernels_available() or Version(importlib.metadata.version("kernels")) < Version("0.14.0"),
+    reason="test requires kernels>=0.14.0 for `trust_remote_code`",
+)
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
