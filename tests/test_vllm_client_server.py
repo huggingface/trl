@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
+import requests
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
+from urllib3.util.retry import Retry
 
 from trl.generation.vllm_client import VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
@@ -36,6 +41,95 @@ from .testing_utils import (
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+
+
+@pytest.fixture
+def metadata_server(monkeypatch):
+    state = SimpleNamespace(stall_path=None, release=threading.Event(), paths=[])
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            state.paths.append(self.path)
+            if self.path == state.stall_path:
+                state.release.wait(5)
+            body = json.dumps({"data": [{"id": "test-model"}], "world_size": 2}).encode()
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except ConnectionError:
+                pass  # The client has already timed out.
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    state.url = f"http://127.0.0.1:{server.server_port}"
+    with requests.Session() as session:
+        monkeypatch.setattr("trl.generation.vllm_client.is_vllm_available", lambda: True)
+        monkeypatch.setattr("trl.generation.vllm_client.requests.Session", lambda: session)
+        # Exercise the existing retry count without waiting for exponential backoff.
+        monkeypatch.setattr(Retry, "sleep", lambda self, response=None: None)
+        try:
+            yield state
+        finally:
+            state.release.set()
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+
+class TestMetadataTimeout:
+    @pytest.mark.parametrize("timeout", [None, 0.05])
+    def test_healthy_metadata(self, metadata_server, timeout):
+        kwargs = {} if timeout is None else {"metadata_timeout": timeout}
+        client = VLLMClient(base_url=metadata_server.url, **kwargs)
+        assert client.model == "test-model"
+        assert client.get_world_size() == 2
+
+    @pytest.mark.parametrize("path", ["/v1/models", "/get_world_size"])
+    def test_stalled_metadata_exhausts_read_retries(self, metadata_server, path):
+        metadata_server.stall_path = path
+        done = threading.Event()
+        errors = []
+
+        def request_metadata():
+            try:
+                client = VLLMClient(base_url=metadata_server.url, metadata_timeout=0.05)
+                client.get_world_size()
+            except Exception as error:
+                errors.append(error)
+            finally:
+                done.set()
+
+        worker = threading.Thread(target=request_metadata)
+        worker.start()
+        try:
+            finished = done.wait(2)
+        finally:
+            metadata_server.release.set()
+            worker.join(3)
+        assert not worker.is_alive()
+        assert finished, "metadata request did not time out before the server was released"
+        assert len(errors) == 1
+        assert isinstance(errors[0], requests.exceptions.ConnectionError)
+        assert "Read timed out" in str(errors[0])
+        assert metadata_server.paths.count(path) == 6  # Initial request plus five retries.
+
+    def test_post_does_not_inherit_metadata_timeout(self, metadata_server, monkeypatch):
+        client = VLLMClient(base_url=metadata_server.url, metadata_timeout=0.05)
+        kwargs_seen = []
+
+        def post(url, **kwargs):
+            kwargs_seen.append(kwargs)
+            return SimpleNamespace(status_code=200, json=lambda: {})
+
+        monkeypatch.setattr(client.session, "post", post)
+        client._post(f"{client.base_url}/update_weights", json={"names": []})
+        assert kwargs_seen == [{"json": {"names": []}}]
 
 
 class TestParseLogprobs(TrlTestCase):

@@ -156,6 +156,10 @@ class VLLMClient:
         connection_timeout (`float`, *optional*, defaults to `0.0`):
             Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
+        metadata_timeout (`float`, *optional*):
+            Timeout in seconds for model discovery and world-size requests. Applies separately to connection
+            establishment and read inactivity on each attempt; existing retries and backoff can extend the total
+            duration. Defaults to no timeout. Does not apply to health checks, generation, or weight updates.
 
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
@@ -208,6 +212,7 @@ class VLLMClient:
         server_port: int = 8000,
         group_port: int = 51216,
         connection_timeout: float = 0.0,
+        metadata_timeout: float | None = None,
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
@@ -245,10 +250,11 @@ class VLLMClient:
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
+        self.metadata_timeout = metadata_timeout
         self.communicator = None
         self._updating_weights = False  # set while inside `weight_update`
         self.check_server(connection_timeout)  # check server and fail after timeout
-        self.model = self._get(f"{self.base_url}/v1/models")["data"][0]["id"]
+        self.model = self._get(f"{self.base_url}/v1/models", timeout=self.metadata_timeout)["data"][0]["id"]
 
     def _get(self, url: str, **kwargs) -> dict:
         response = self.session.get(url, **kwargs)
@@ -302,7 +308,7 @@ class VLLMClient:
         """
         Returns the number of workers of the vLLM server, i.e. `tensor_parallel_size * data_parallel_size`.
         """
-        return self._get(f"{self.base_url}/get_world_size")["world_size"]
+        return self._get(f"{self.base_url}/get_world_size", timeout=self.metadata_timeout)["world_size"]
 
     def image_features(self, images: list[list | None], max_concurrent_requests: int = 64) -> list[dict | None]:
         """
