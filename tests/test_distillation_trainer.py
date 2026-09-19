@@ -540,6 +540,65 @@ class TestDistillationTrainer(TrlTestCase):
         assert trainer.get_eval_dataloader().num_workers == 0  # iterable eval loader uses a single worker
         assert trainer.args.dataloader_num_workers == 4  # override is scoped, not persisted
 
+    @pytest.mark.skipif(
+        not hasattr(DistillationConfig, "dataloader_multiprocessing_context"),
+        reason="requires transformers with dataloader_multiprocessing_context",
+    )
+    def test_iterable_dataset_clears_multiprocessing_context(self):
+        # A start method is only valid with workers, so forcing `dataloader_num_workers=0` for an iterable train set
+        # must also clear `dataloader_multiprocessing_context`, otherwise the DataLoader raises (transformers sets it
+        # to "fork" on MPS when `dataloader_num_workers > 1`).
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            dataloader_num_workers=4,
+            dataloader_multiprocessing_context="fork",
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.args.dataloader_num_workers == 0
+        assert trainer.args.dataloader_multiprocessing_context is None
+        assert trainer.get_train_dataloader().num_workers == 0  # builds without raising
+
+    @pytest.mark.skipif(
+        not hasattr(DistillationConfig, "dataloader_multiprocessing_context"),
+        reason="requires transformers with dataloader_multiprocessing_context",
+    )
+    def test_iterable_eval_restores_multiprocessing_context(self):
+        # The context is cleared only while building the iterable eval loader and restored afterwards, so the
+        # map-style train loader keeps both its workers and its start method.
+        train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test", streaming=True)
+
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            per_device_eval_batch_size=3,
+            dataloader_num_workers=4,
+            dataloader_multiprocessing_context="fork",
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+
+        assert trainer.get_train_dataloader().num_workers == 4
+        assert trainer.get_eval_dataloader().num_workers == 0
+        assert trainer.args.dataloader_num_workers == 4
+        assert trainer.args.dataloader_multiprocessing_context == "fork"  # restored after the eval loader
+
     @pytest.mark.parametrize("train_dataset_type", ["dataset", "iterable_dataset"])
     def test_init_with_train_dataset(self, train_dataset_type):
         streaming = "iterable" in train_dataset_type

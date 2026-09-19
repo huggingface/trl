@@ -894,7 +894,11 @@ class GRPOTrainer(_BaseTrainer):
                 f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
                 f"provided value ({args.dataloader_num_workers})."
             )
+            # A multiprocessing start method is only valid with workers, so clear it along with the worker count.
+            # transformers sets it to "fork" on MPS when `dataloader_num_workers > 1`; older versions lack the field.
             args.dataloader_num_workers = 0
+            if getattr(args, "dataloader_multiprocessing_context", None) is not None:
+                args.dataloader_multiprocessing_context = None
 
         if args.loss_type == "luspo" and args.importance_sampling_level != "sequence":
             logger.warning(
@@ -1305,9 +1309,13 @@ class GRPOTrainer(_BaseTrainer):
             self.accelerator.dataloader_config.dispatch_batches = False
             eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
             eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
-            # Force a single worker for this loader only, without persisting the change
+            # Force a single worker for this loader only, without persisting the change. A multiprocessing start
+            # method is only valid with workers, so it is cleared and restored the same way.
             num_workers = self.args.dataloader_num_workers
             self.args.dataloader_num_workers = 0
+            mp_context = getattr(self.args, "dataloader_multiprocessing_context", None)
+            if mp_context is not None:
+                self.args.dataloader_multiprocessing_context = None
 
         try:
             return self._get_dataloader(
@@ -1320,6 +1328,8 @@ class GRPOTrainer(_BaseTrainer):
         finally:
             if isinstance(eval_dataset, IterableDataset):
                 self.args.dataloader_num_workers = num_workers
+                if mp_context is not None:
+                    self.args.dataloader_multiprocessing_context = mp_context
 
     def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
         """
