@@ -1366,6 +1366,10 @@ class RLOOTrainer(_BaseTrainer):
 
         return prompt_ids, completion_ids, completions
 
+    def _transform_advantages(self, advantages: torch.Tensor) -> torch.Tensor:
+        """Transform gathered advantages before logging and process-local slicing."""
+        return advantages
+
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
     ) -> dict[str, torch.Tensor | Any]:
@@ -1612,6 +1616,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # Unscorable completions carry no learning signal: zero their advantage to keep them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
+        advantages = self._transform_advantages(advantages)
 
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))  # for logging
 
