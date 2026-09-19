@@ -498,6 +498,38 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
+def log_kept_mass(logits, support_ids) -> torch.Tensor:
+    """
+    Log of the probability mass that a per-position token subset carries under `logits`.
+
+    A sampler that draws from a truncated distribution (top-k / top-p / min-p) reports `processed_logprobs`
+    normalised over the kept tokens only, i.e. `log p(y) - log m` where `m` is the kept mass. Adding this value
+    back turns such a log-prob into one that is comparable with a full-vocabulary log-softmax, so the trainer's
+    own log-probs never have to be renormalised and can keep serving as the policy-gradient baseline unchanged.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        support_ids (`torch.Tensor`):
+            Long tensor of shape `(..., K)` listing the kept token ids at each position, right-padded with `-1`. A
+            position with no kept token (all `-1`, e.g. padding) gets `0.0`, i.e. no correction.
+
+    Returns:
+        `torch.Tensor`:
+            `log m` with shape `(...)`, in float32, always `<= 0`.
+    """
+    valid = support_ids >= 0
+    kept = torch.gather(logits, dim=-1, index=support_ids.clamp(min=0)).float()
+    kept = kept.masked_fill(~valid, float("-inf"))
+    if logits.dtype in (torch.float32, torch.float64):
+        full = torch.logsumexp(logits, dim=-1).float()
+    else:
+        # row by row, as selective_log_softmax does, so the fp32 copy of the logits is one row wide at a time
+        full = torch.stack([torch.logsumexp(row.float(), dim=-1) for row in logits])
+    log_mass = torch.logsumexp(kept, dim=-1) - full
+    return torch.where(valid.any(dim=-1), log_mass, torch.zeros_like(log_mass))
+
+
 def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
