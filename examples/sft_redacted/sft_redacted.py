@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl>=1.13.0",  # num_tokens counted once under tensor parallelism
-#     "transformers @ git+https://github.com/huggingface/transformers.git@ep-mesh",
+#     "transformers @ git+https://github.com/huggingface/transformers.git@ep-umbrella",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
 #     "trackio",
@@ -25,7 +25,7 @@
 # docstyle-ignore
 """
 LoRA SFT of REDACTED on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
-across all 64, and each rank trains on its own slice of the batch. 15.4 s/step, 131k tokens/step, 40.2 GB per GPU.
+across all 64, and each rank trains on its own slice of the batch. 14.2 s/step, 131k tokens/step, 40.2 GB per GPU.
 
     sbatch sft_redacted.slurm
 """
@@ -48,7 +48,7 @@ MODEL = "REDACTED"
 if Version(transformers.__version__) < Version("5.18.0.dev0"):
     raise RuntimeError(
         f"This example needs expert parallelism, which is not in a released transformers yet. Install "
-        f"transformers from main. Got {transformers.__version__}."
+        f"transformers from the ep-umbrella branch. Got {transformers.__version__}."
     )
 
 # Read the dataset before loading the model: 64 GPUs holding a loaded model is the most expensive place to wait
