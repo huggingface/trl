@@ -27,6 +27,7 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
+    is_bf16_supported,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
@@ -906,27 +907,195 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
-    def test_liger_loss_forwards_config(self):
+    def _assert_liger_loss_matches(self, **config_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=2,
             use_liger_kernel=True,
-            loss_type="robust",
+            report_to="none",
+            **config_kwargs,
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        trainer.model.train()
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+
+        chunked_loss = trainer.compute_loss(trainer.model, inputs)
+        chunked_loss.backward()
+        chunked_grads = {
+            name: param.grad.detach().clone()
+            for name, param in trainer.model.named_parameters()
+            if param.grad is not None
+        }
+
+        trainer.model.zero_grad()
+        trainer._metrics["train"].clear()
+        trainer.use_liger_kernel = False
+        loss = trainer.compute_loss(trainer.model, inputs)
+        loss.backward()
+        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
+
+        assert chunked_loss.abs() > 0
+        torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
+        assert chunked_grads.keys() == grads.keys()
+        for name, grad in grads.items():
+            # hidden_size=8 makes lm_head's weight-grad GEMM unusually narrow; cuBLAS picks a less precise
+            # algorithm for it on Ampere+ (up to 3.4e-2 on an L40S). Exact match on ROCm.
+            atol = 5e-2 if name == "lm_head.weight" else 5e-4
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=atol)
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "loss_types",
+        [
+            ["sigmoid", "hinge", "ipo", "exo_pair", "robust"],
+            ["nca_pair", "bco_pair", "sppo_hard", "aot", "aot_unpaired"],
+            ["apo_zero", "apo_down", "discopop", "sft", "sigmoid_norm"],
+        ],
+    )
+    def test_liger_loss_types_match_non_liger_loss(self, loss_types):
+        self._assert_liger_loss_matches(
+            loss_type=loss_types,
+            loss_weights=[1.0 / len(loss_types)] * len(loss_types),
             label_smoothing=0.1,
-            discopop_tau=0.2,
+        )
+
+    @require_liger_kernel
+    @pytest.mark.parametrize("f_divergence_type", ["forward_kl", "js_divergence", "alpha_divergence"])
+    def test_liger_f_divergence_matches_non_liger_loss(self, f_divergence_type):
+        self._assert_liger_loss_matches(f_divergence_type=f_divergence_type)
+
+    @require_liger_kernel
+    def test_chunked_logps_honor_output_multiplier_without_calling_lm_head(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
+        model_kwargs = {
+            "input_ids": input_ids,
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        text_config = trainer.model.config.get_text_config()
+        text_config.logit_scale = None
+        text_config.output_multiplier = 0.5
+
+        hidden_states = trainer.model.base_model(**model_kwargs).last_hidden_state[:, :-1]
+        labels = input_ids[:, 1:]
+        mask = completion_mask[:, 1:].bool()
+        logits = trainer.model.get_output_embeddings()(hidden_states[mask]).float() * text_config.output_multiplier
+        expected_valid = torch.log_softmax(logits, dim=-1).gather(-1, labels[mask].unsqueeze(-1)).squeeze(-1)
+        expected = torch.zeros_like(completion_mask[:, 1:], dtype=expected_valid.dtype)
+        expected[mask] = expected_valid
+
+        def fail_forward(*args, **kwargs):
+            raise AssertionError("the chunked path must not call lm_head.forward")
+
+        monkeypatch.setattr(trainer.model.get_output_embeddings(), "forward", fail_forward)
+        with torch.no_grad():
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, input_ids, completion_mask
+            )
+
+        torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
+
+    @require_liger_kernel
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_chunked_logps_use_mixed_precision(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=True,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        model_kwargs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        projection = next(module for name, module in trainer.model.named_modules() if name.endswith("q_proj"))
+        projection_dtypes = []
+
+        def record_projection_dtype(_module, _args, output):
+            projection_dtypes.append(output.dtype)
+
+        with projection.register_forward_hook(record_projection_dtype), torch.no_grad():
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, inputs["input_ids"], inputs["completion_mask"]
+            )
+
+        assert projection_dtypes == [torch.bfloat16]
+        assert torch.isfinite(logps).all()
+
+    @require_liger_kernel
+    def test_train_with_liger_and_precomputed_ref_logps(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            use_liger_kernel=True,
+            precompute_ref_log_probs=True,
             report_to="none",
         )
         trainer = DPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
-        assert trainer.liger_loss.label_smoothing == 0.1
-        assert trainer.liger_loss.discopop_tau == 0.2
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_liger_kernel
+    def test_compute_ref_log_probs_redirects_wrapped_liger_model(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        wrapped_model = object()
+        redirected = False
+
+        monkeypatch.setattr(trainer.accelerator, "unwrap_model", lambda model: trainer.model)
+
+        def forward_redirection(wrapper, unwrapped, method, *args):
+            nonlocal redirected
+            redirected = True
+            assert wrapper is wrapped_model
+            assert unwrapped is trainer.model
+            return method(*args)
+
+        monkeypatch.setattr(trainer, "_forward_redirection", forward_redirection)
+        trainer.compute_ref_log_probs(wrapped_model, inputs)
+
+        # A distributed wrapper owns the hooks that gather its sharded backbone parameters, so the chunked reference
+        # forward must enter through that wrapper even though the loss itself operates on the unwrapped model.
+        assert redirected
 
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
-        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
-        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
+        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so the chunked projection
+        # reads the real weight. Verify the full path actually trains (peft params change, base params stay frozen).
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -956,7 +1125,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_liger_kernel
     @require_peft
     def test_liger_kernel_with_peft_lm_head_raises(self):
-        # The Liger fused DPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
@@ -980,7 +1149,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_liger_kernel
     @require_peft
     def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger DPO loss bypasses.
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the chunked path bypasses.
         # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
@@ -996,7 +1165,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_init_fails_with_moe_aux_loss_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        # The MoE auxiliary loss is on by default; the chunked path bypasses the wrapper that computes it.
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=True,
@@ -1011,18 +1180,17 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_liger_kernel
-    def test_init_fails_with_f_divergence_and_liger(self):
+    def test_init_fails_with_weighting_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # The Liger fused loss always uses the reverse-KL parameterization; it can't honor another f-divergence.
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=True,
-            f_divergence_type="js_divergence",
+            use_weighting=True,
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="incompatible with a non-default `f_divergence_type`"):
+        with pytest.raises(ValueError, match="incompatible with `use_weighting=True`"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
