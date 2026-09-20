@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import tempfile
 from dataclasses import dataclass
 from unittest.mock import mock_open, patch
@@ -438,11 +439,13 @@ class TestGetDataset:
         """
 
         # Write YAML to a temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as tmpfile:
             tmpfile.write(yaml_content)
-            tmpfile.flush()
+        try:
             parser = TrlParser((DatasetMixtureConfig,))
             args = parser.parse_args_and_config(args=["--config", tmpfile.name])[0]
+        finally:
+            os.remove(tmpfile.name)
 
         # Assert that we got DatasetMixtureConfig instance
         assert isinstance(args, DatasetMixtureConfig)
@@ -474,11 +477,13 @@ class TestGetDataset:
         """
 
         # Write YAML to a temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as tmpfile:
             tmpfile.write(yaml_content)
-            tmpfile.flush()
+        try:
             parser = TrlParser((DatasetMixtureConfig,))
             args = parser.parse_args_and_config(args=["--config", tmpfile.name])[0]
+        finally:
+            os.remove(tmpfile.name)
 
         # Load the dataset using get_dataset
         result = get_dataset(args)
