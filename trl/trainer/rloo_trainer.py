@@ -1074,6 +1074,35 @@ class RLOOTrainer(_BaseTrainer):
         """
         self._pending_metrics[name].append(value)
 
+    def _flush_user_logs(self, prompts_text: list[str], mode: str, device: torch.device):
+        """
+        Flush user-logged extra columns and scalar metrics, gathering and synchronizing across processes.
+        """
+        # Flush user-logged extra columns (from log_extra), gathering across processes.
+        # Synchronize keys across all processes so that ranks that did not log a given column provide None-padding
+        # to preserve row alignment with completions, and prevent deadlocks / cross-column misattribution.
+        all_columns = sorted(set(gather_object(list(self._pending_extra_logs.keys()))))
+        for column in all_columns:
+            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            self._logs["extra"][column].extend(gather_object(values))
+        self._pending_extra_logs.clear()
+
+        # Flush user-logged metrics (from log_metric), averaging across processes.
+        # Synchronize keys across all processes and compute weighted sum across samples so ranks that did not log
+        # a given metric provide zero weight, preventing deadlocks, misattribution, and sample-weighting distortion.
+        all_metrics = sorted(set(gather_object(list(self._pending_metrics.keys()))))
+        for name in all_metrics:
+            values = self._pending_metrics.get(name, [])
+            local_sum = float(sum(values))
+            local_count = float(len(values))
+            stats = torch.tensor([[local_sum, local_count]], device=device)
+            gathered = self.accelerator.gather(stats)
+            tot_sum = gathered[:, 0].sum().item()
+            tot_cnt = gathered[:, 1].sum().item()
+            global_mean = tot_sum / tot_cnt if tot_cnt > 0 else 0.0
+            self._metrics[mode][name].append(global_mean)
+        self._pending_metrics.clear()
+
     @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
@@ -1648,23 +1677,8 @@ class RLOOTrainer(_BaseTrainer):
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
-
-        # Flush user-logged extra columns (from log_extra), gathering across processes.
-        # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
-        # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
-        self._pending_extra_logs.clear()
-
-        # Flush user-logged metrics (from log_metric), averaging across processes.
-        # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
-        # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
-        self._pending_metrics.clear()
+        # Flush user-logged extra columns and metrics (from log_extra and log_metric), synchronizing across processes
+        self._flush_user_logs(prompts_text, mode, device)
 
         if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))

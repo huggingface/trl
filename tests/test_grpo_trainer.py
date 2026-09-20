@@ -2974,6 +2974,133 @@ class TestGRPOTrainer(TrlTestCase):
         logged_keys = {k for entry in trainer.state.log_history for k in entry}
         assert "custom_accuracy" in logged_keys
 
+    def test_flush_user_logs_asymmetric_metrics_multi_process(self):
+        # Regression test: prevents distributed deadlock and silent cross-metric corruption
+        # when reward functions call log_metric conditionally across DDP ranks.
+        from collections import defaultdict, deque
+        from unittest.mock import Mock
+
+        ranks_pending = [
+            {"accuracy": [1.0], "syntax_score": [1.0]},  # Rank 0 logged 2 metrics
+            {"accuracy": [0.5]},  # Rank 1 logged 1 metric
+            {"format_valid": [0.8]},  # Rank 2 logged a different metric
+        ]
+        all_metric_keys = sorted(set().union(*[list(p.keys()) for p in ranks_pending]))
+
+        trainers = []
+        for pending in ranks_pending:
+            trainer = Mock(spec=GRPOTrainer)
+            trainer._pending_extra_logs = defaultdict(list)
+            trainer._pending_metrics = defaultdict(list, {k: list(v) for k, v in pending.items()})
+            trainer._logs = {"extra": defaultdict(lambda: deque(maxlen=100))}
+            trainer._metrics = {"train": defaultdict(list)}
+            trainer.accelerator = Mock()
+            trainer.accelerator.device = torch.device("cpu")
+            trainer._flush_user_logs = GRPOTrainer._flush_user_logs.__get__(trainer)
+            trainers.append(trainer)
+
+        # Simulate execution on each rank
+        for trainer in trainers:
+            state = {"call_idx": 0}
+
+            def mock_gather_obj(obj):
+                # Flattens keys across all 3 ranks
+                return [k for p in ranks_pending for k in p.keys()]
+
+            def mock_gather_tensor(stats, s=state):
+                metric_name = all_metric_keys[s["call_idx"]]
+                s["call_idx"] += 1
+                # Multi-process gather concatenates tensors from all 3 ranks along dim 0
+                rank_stats = [
+                    torch.tensor([[float(sum(p.get(metric_name, []))), float(len(p.get(metric_name, [])))]])
+                    for p in ranks_pending
+                ]
+                return torch.cat(rank_stats, dim=0)
+
+            trainer.accelerator.gather.side_effect = mock_gather_tensor
+            with patch("trl.trainer.grpo_trainer.gather_object", side_effect=mock_gather_obj):
+                trainer._flush_user_logs(prompts_text=["prompt"], mode="train", device=torch.device("cpu"))
+
+        # Every rank should arrive at the exact same synchronized metrics without deadlocks
+        for trainer in trainers:
+            assert len(trainer._pending_metrics) == 0
+            assert trainer._metrics["train"]["accuracy"] == [0.75]
+            assert trainer._metrics["train"]["syntax_score"] == [1.0]
+            assert trainer._metrics["train"]["format_valid"] == [pytest.approx(0.8)]
+
+    def test_flush_user_logs_weighted_averaging_unequal_sample_counts(self):
+        # Regression test: prevents distorted unweighted averaging when ranks evaluate
+        # different numbers of metric values.
+        from collections import defaultdict, deque
+        from unittest.mock import Mock
+
+        trainer = Mock(spec=GRPOTrainer)
+        trainer._pending_extra_logs = defaultdict(list)
+        trainer._pending_metrics = defaultdict(list, {"loss": [10.0]})  # Rank 0: 1 sample with value 10.0
+        trainer._logs = {"extra": defaultdict(lambda: deque(maxlen=100))}
+        trainer._metrics = {"train": defaultdict(list)}
+        trainer.accelerator = Mock()
+        trainer._flush_user_logs = GRPOTrainer._flush_user_logs.__get__(trainer)
+
+        # Rank 0: sum=10.0, cnt=1; Rank 1: sum=0.0, cnt=3 (3 samples with value 0.0)
+        # Weighted mean must be (10.0 + 0.0) / (1 + 3) = 2.5 (NOT unweighted average (10.0 + 0.0) / 2 = 5.0)
+        gathered_stats = torch.tensor([[10.0, 1.0], [0.0, 3.0]])
+        trainer.accelerator.gather.return_value = gathered_stats
+
+        with patch("trl.trainer.grpo_trainer.gather_object", side_effect=lambda obj: obj):
+            trainer._flush_user_logs(prompts_text=["prompt"], mode="train", device=torch.device("cpu"))
+
+        assert trainer._metrics["train"]["loss"] == [2.5]
+        assert len(trainer._pending_metrics) == 0
+
+    def test_flush_user_logs_asymmetric_extra_columns_multi_process(self):
+        # Regression test: verifies that ranks not logging an extra column supply None padding
+        # matching local prompt/completion batch length, preserving row alignment for completions table.
+        from collections import defaultdict, deque
+        from unittest.mock import Mock
+
+        trainer = Mock(spec=GRPOTrainer)
+        trainer._pending_extra_logs = defaultdict(list, {"rationale": ["step 1", "step 2"]})  # 2 samples
+        trainer._pending_metrics = defaultdict(list)
+        trainer._logs = {"extra": defaultdict(lambda: deque(maxlen=100))}
+        trainer._metrics = {"train": defaultdict(list)}
+        trainer.accelerator = Mock()
+        trainer._flush_user_logs = GRPOTrainer._flush_user_logs.__get__(trainer)
+
+        def mock_gather_obj(obj):
+            if obj == ["rationale"]:
+                return ["rationale", "rationale"]  # Both ranks receive synchronized column key
+            elif obj == ["step 1", "step 2"]:
+                # Rank 0 sent 2 items, Rank 1 supplied 2 None paddings
+                return ["step 1", "step 2", None, None]
+            return obj
+
+        with patch("trl.trainer.grpo_trainer.gather_object", side_effect=mock_gather_obj):
+            trainer._flush_user_logs(prompts_text=["p1", "p2"], mode="train", device=torch.device("cpu"))
+
+        assert list(trainer._logs["extra"]["rationale"]) == ["step 1", "step 2", None, None]
+        assert len(trainer._pending_extra_logs) == 0
+
+    def test_flush_user_logs_empty(self):
+        # Verifies that empty user logs are cleanly no-ops without unnecessary collective gathers.
+        from collections import defaultdict, deque
+        from unittest.mock import Mock
+
+        trainer = Mock(spec=GRPOTrainer)
+        trainer._pending_extra_logs = defaultdict(list)
+        trainer._pending_metrics = defaultdict(list)
+        trainer._logs = {"extra": defaultdict(lambda: deque(maxlen=100))}
+        trainer._metrics = {"train": defaultdict(list)}
+        trainer.accelerator = Mock()
+        trainer._flush_user_logs = GRPOTrainer._flush_user_logs.__get__(trainer)
+
+        with patch("trl.trainer.grpo_trainer.gather_object", return_value=[]):
+            trainer._flush_user_logs(prompts_text=["p1"], mode="train", device=torch.device("cpu"))
+
+        assert len(trainer._logs["extra"]) == 0
+        assert len(trainer._metrics["train"]) == 0
+        trainer.accelerator.gather.assert_not_called()
+
     def test_prepare_input_called_with_correct_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
