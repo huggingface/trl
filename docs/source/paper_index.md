@@ -1737,23 +1737,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
-
-```python
-from datasets import load_dataset
-from trl.experimental.minillm import MiniLLMTrainer
-
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-trainer = MiniLLMTrainer(
-    model="Qwen/Qwen3-0.6B",
-    teacher_model="Qwen/Qwen3-1.7B",
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
+TRL shipped an implementation as `MiniLLMTrainer` up to v1.13; it is no longer part of the library and remains available in the git history.
 
 ### Reinforcement Learning via Self-Distillation
 
