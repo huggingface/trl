@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import os
 import subprocess
 from types import SimpleNamespace
@@ -22,7 +21,7 @@ import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient, parse_logprobs
+from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 
@@ -51,17 +50,11 @@ class TestConnectionPoolSize(TrlTestCase):
             client = VLLMClient(host="127.0.0.1")
 
         with client.session:
-            # The mounted pool must retain enough connections for each method's default concurrency.
-            methods = (VLLMClient.image_features, VLLMClient._generate_from_features, VLLMClient.chat)
-            required_concurrency = max(
-                inspect.signature(method).parameters["max_concurrent_requests"].default for method in methods
-            )
             url = f"{scheme}://127.0.0.1:8000"
             adapter = client.session.get_adapter(url)
             pool = adapter.poolmanager.connection_from_url(url)
-            assert pool.pool.maxsize >= required_concurrency, (
-                f"{scheme} pool capacity {pool.pool.maxsize} is below the default concurrency {required_concurrency}"
-            )
+            # Retain enough connections for the default generation concurrency.
+            assert pool.pool.maxsize >= _DEFAULT_GENERATION_CONCURRENCY
 
 
 class TestParseLogprobs(TrlTestCase):
