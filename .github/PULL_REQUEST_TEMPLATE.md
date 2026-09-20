@@ -14,6 +14,12 @@ Once you're done, someone will review your PR shortly. They may suggest changes 
 
 Fixes # (issue)
 
+<!--
+First-time contributors: the issue above must be assigned to you before you open this PR.
+Open an issue describing the change, ask to be assigned, then reference it here. PRs without
+one are closed automatically.
+-->
+
 ## Before submitting
 
 - [ ] This PR fixes a typo or improves the docs (you can dismiss the other checks if that's the case).

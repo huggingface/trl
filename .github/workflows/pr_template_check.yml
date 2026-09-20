@@ -5,6 +5,7 @@
 #   1. Contains a non-empty description (not just the template placeholder)
 #   2. Includes the "## Before submitting" checklist
 #   3. Has at least one checkbox checked
+#   4. Links an issue that is assigned to the PR author
 # If any check fails, the workflow posts a comment and closes the PR.
 
 name: PR Template Check
@@ -59,8 +60,47 @@ jobs:
               errors.push("- No checkboxes are checked in the 'Before submitting' section. Please review and check the relevant items.");
             }
 
+            // 4. Must link an issue assigned to the PR author
+            const author = context.payload.pull_request.user.login;
+            const referenced = new Set();
+            for (const m of body.matchAll(/#(\d+)\b/g)) {
+              referenced.add(Number(m[1]));
+            }
+            for (const m of body.matchAll(/https:\/\/github\.com\/huggingface\/trl\/issues\/(\d+)/g)) {
+              referenced.add(Number(m[1]));
+            }
+
+            let assignedIssue = null;
+            for (const number of referenced) {
+              let issue;
+              try {
+                issue = (await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                })).data;
+              } catch (error) {
+                continue;  // the reference points at nothing in this repo
+              }
+              if (issue.pull_request) continue;  // the reference points at a PR, not an issue
+              if (issue.assignees.some((a) => a.login === author)) {
+                assignedIssue = number;
+                break;
+              }
+            }
+
+            if (assignedIssue === null) {
+              errors.push("- No linked issue assigned to you: open an issue describing the change, ask to be assigned, and reference it in the PR description.");
+            }
+
             if (errors.length > 0) {
-              const comment = "Your PR has been closed because it does not follow the required [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md). Please open a new PR following the template. See [CONTRIBUTING.md](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#submitting-a-pull-request-pr) for guidance.";
+              const comment = [
+                "Your PR has been closed because it does not meet the requirements for first-time contributors:",
+                "",
+                errors.join("\n"),
+                "",
+                "See [CONTRIBUTING.md](https://github.com/huggingface/trl/blob/main/CONTRIBUTING.md#submitting-a-pull-request-pr) for guidance. Once the issue is assigned to you, open a new PR following the [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md).",
+              ].join("\n");
 
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -76,7 +116,7 @@ jobs:
                 state: "closed",
               });
 
-              core.setFailed("PR does not follow the required template.");
+              core.setFailed("PR does not meet the requirements for first-time contributors.");
             } else {
               console.log("PR template check passed.");
             }

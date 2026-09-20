@@ -104,7 +104,7 @@ We're always looking for improvements to the documentation that make it more cle
 ## Submitting a pull request (PR)
 
 > [!IMPORTANT]
-> **First-time contributors: you MUST fill out the [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md) when opening a pull request.** PRs that do not follow the template (missing description, unchecked checklist, no linked issue) will be closed without review.
+> **First-time contributors: you MUST open an issue and get it assigned to you before opening a pull request, and you MUST fill out the [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md).** Describe the change in an issue first, ask to be assigned, then reference that issue in the PR description. PRs that do not follow the template (missing description, unchecked checklist) or that link no issue assigned to their author will be closed without review.
 
 Before writing code, we strongly advise you to search through the existing PRs or issues to make sure that nobody is already working on the same thing. If you are unsure, it is always a good idea to open an issue to get some feedback.
 
