@@ -323,7 +323,9 @@ class TrlParser(HfArgumentParser):
             config_index = args.index("--config")
             args.pop(config_index)  # remove the --config flag
             config_path = args.pop(config_index)  # get the path to the config file
-            with open(config_path) as yaml_file:
+            # Config files are YAML (UTF-8); pin the encoding so this read does not depend on the
+            # locale's preferred encoding (e.g. cp936 on Windows), which crashes on non-ASCII content.
+            with open(config_path, encoding="utf-8") as yaml_file:
                 config = yaml.safe_load(yaml_file)
             if not isinstance(config, dict):
                 raise ValueError(f"Config file {config_path} must contain a YAML mapping.")
