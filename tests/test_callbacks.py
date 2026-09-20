@@ -14,8 +14,11 @@
 
 import json
 import os
-from unittest.mock import call, patch
+import types
+from contextlib import nullcontext
+from unittest.mock import Mock, call, patch
 
+import pytest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
@@ -115,6 +118,34 @@ class TestLogCompletionsCallback(TrlTestCase):
         assert tables is not None
         assert len(tables) == tables_logged
         assert all(table["fileName"] == "completions.csv" for table in tables)
+
+
+class TestLogCompletionsCallbackPaddingSide(TrlTestCase):
+    def test_padding_side_restored_after_generation(self):
+        # The callback temporarily switches the shared tokenizer to left padding for generation,
+        # but must restore the original value afterwards, even if generation raises (#6663).
+        tokenizer = Mock(padding_side="right")
+        trainer = types.SimpleNamespace(
+            eval_dataset={"prompt": ["prompt"]},
+            accelerator=types.SimpleNamespace(
+                is_main_process=False,
+                split_between_processes=lambda prompts: nullcontext(prompts),
+            ),
+            model_wrapped=Mock(),
+        )
+        callback = LogCompletionsCallback(trainer, freq=1)
+        args = types.SimpleNamespace(per_device_eval_batch_size=1, report_to=[])
+        state = types.SimpleNamespace(global_step=1, eval_steps=1)
+
+        with patch("trl.trainer.callbacks._generate_completions", return_value=["completion"]):
+            callback.on_step_end(args, state, None, processing_class=tokenizer)
+        assert tokenizer.padding_side == "right"
+
+        with patch("trl.trainer.callbacks._generate_completions", side_effect=RuntimeError("boom")):
+            state.global_step = 2  # log again: on_step_end skips already-logged steps
+            with pytest.raises(RuntimeError):
+                callback.on_step_end(args, state, None, processing_class=tokenizer)
+        assert tokenizer.padding_side == "right"
 
 
 class TestBEMACallback(TrlTestCase):

@@ -316,21 +316,25 @@ class LogCompletionsCallback(TrainerCallback):
             return
 
         tokenizer = kwargs["processing_class"]
+        original_padding_side = tokenizer.padding_side
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
-        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
-            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
-            completions = _generate_completions(
-                prompts,
-                model=model,
-                tokenizer=tokenizer,
-                accelerator=accelerator,
-                generation_config=self.generation_config,
-                batch_size=args.per_device_eval_batch_size,
-            )
-            completions = gather_object(completions)
-            prompts = gather_object(prompts)
+        try:
+            with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+                prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
+                completions = _generate_completions(
+                    prompts,
+                    model=model,
+                    tokenizer=tokenizer,
+                    accelerator=accelerator,
+                    generation_config=self.generation_config,
+                    batch_size=args.per_device_eval_batch_size,
+                )
+                completions = gather_object(completions)
+                prompts = gather_object(prompts)
+        finally:
+            tokenizer.padding_side = original_padding_side
 
         # Build the data to log
         if self.trainer.accelerator.is_main_process:
@@ -498,24 +502,28 @@ class WeaveCallback(TrainerCallback):
             return
 
         tokenizer = kwargs["processing_class"]
+        original_padding_side = tokenizer.padding_side
         tokenizer.padding_side = "left"
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
 
-        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
-            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
+        try:
+            with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+                prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
 
-            completions = _generate_completions(
-                prompts=prompts,
-                model=model,
-                tokenizer=tokenizer,
-                accelerator=accelerator,
-                generation_config=self.generation_config,
-                batch_size=args.per_device_eval_batch_size,
-            )
+                completions = _generate_completions(
+                    prompts=prompts,
+                    model=model,
+                    tokenizer=tokenizer,
+                    accelerator=accelerator,
+                    generation_config=self.generation_config,
+                    batch_size=args.per_device_eval_batch_size,
+                )
 
-            all_prompts = gather_object(prompts)
-            all_completions = gather_object(completions)
+                all_prompts = gather_object(prompts)
+                all_completions = gather_object(completions)
+        finally:
+            tokenizer.padding_side = original_padding_side
 
         if self.trainer.accelerator.is_main_process:
             eval_attributes = {
