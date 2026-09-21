@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -105,3 +108,7 @@ class _BaseConfig(TrainingArguments):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
+
+        # transformers < 5 publishes the mixed precision process-wide, where `bf16=False` cannot clear an earlier value
+        if Version(transformers.__version__) < Version("5.0.0") and not self.bf16 and not self.fp16:
+            os.environ["ACCELERATE_MIXED_PRECISION"] = "no"
