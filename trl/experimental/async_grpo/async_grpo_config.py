@@ -373,27 +373,31 @@ class AsyncGRPOConfig(_BaseConfig):
         },
     )
     vllm_importance_sampling_mode: str = field(
-        default="sequence_mask",
+        default="token_truncate",
         metadata={
             "help": "How to constrain the combined importance-sampling ratio. `'token_truncate'` caps each token's "
             "effective gradient weight at the clip bounds; `'token_mask'` zeroes tokens whose ratio falls outside "
-            "them; `'sequence_truncate'` and `'sequence_mask'` do the same with one ratio per packed sequence "
-            "(the product of its token ratios).",
-            "choices": ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"],
+            "them; `'sequence_mask'` zeroes every token of a packed sequence whose product of token ratios leaves "
+            "the bounds. Because the combined ratio's product grows with completion length under ordinary staleness "
+            "drift, `'sequence_mask'` needs far looser bounds than the synchronous trainer's defaults. There is no "
+            "`'sequence_truncate'`: a sequence-level product cannot be divided back out of a per-token loss.",
+            "choices": ["token_truncate", "token_mask", "sequence_mask"],
         },
     )
     vllm_importance_sampling_clip_max: float | None = field(
         default=3.0,
         metadata={
-            "help": "Upper bound for the importance-sampling ratio. Above it, `*_truncate` modes cap the effective "
-            "weight and `*_mask` modes zero the token or sequence. `None` means no upper bound."
+            "help": "Upper bound for the importance-sampling ratio; must be positive. Above it, `token_truncate` "
+            "caps the effective weight and the mask modes zero the token or sequence. `None` means no upper bound."
         },
     )
     vllm_importance_sampling_clip_min: float | None = field(
-        default=None,
+        default=0.5,
         metadata={
-            "help": "Lower bound for the importance-sampling ratio. Below it, `*_truncate` modes raise the effective "
-            "weight to the bound and `*_mask` modes zero the token or sequence. `None` means no lower bound."
+            "help": "Lower bound for the importance-sampling ratio; must be positive. Below it, `token_truncate` "
+            "raises the effective weight to the bound (this is what neutralizes the top-p support bias, where an "
+            "unchanged policy reads a ratio equal to the surviving probability mass instead of 1.0) and the mask "
+            "modes zero the token or sequence. `None` means no lower bound."
         },
     )
     queue_maxsize: int = field(
@@ -428,12 +432,16 @@ class AsyncGRPOConfig(_BaseConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        valid_is_modes = ("token_truncate", "token_mask", "sequence_truncate", "sequence_mask")
+        valid_is_modes = ("token_truncate", "token_mask", "sequence_mask")
         if self.vllm_importance_sampling_mode not in valid_is_modes:
             raise ValueError(
                 f"vllm_importance_sampling_mode ({self.vllm_importance_sampling_mode!r}) must be one of "
                 f"{valid_is_modes}."
             )
+        for bound_name in ("vllm_importance_sampling_clip_min", "vllm_importance_sampling_clip_max"):
+            bound = getattr(self, bound_name)
+            if bound is not None and bound <= 0.0:
+                raise ValueError(f"{bound_name} ({bound}) must be positive: the ratio is a quotient of probabilities.")
         if (
             self.vllm_importance_sampling_clip_min is not None
             and self.vllm_importance_sampling_clip_max is not None
@@ -445,13 +453,13 @@ class AsyncGRPOConfig(_BaseConfig):
             )
         if (
             self.vllm_importance_sampling_correction
-            and self.vllm_importance_sampling_mode in ("token_truncate", "sequence_truncate")
             and self.vllm_importance_sampling_clip_min is None
             and self.vllm_importance_sampling_clip_max is None
         ):
             raise ValueError(
-                "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
-                "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
+                "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` must be "
+                "set when `vllm_importance_sampling_correction` is enabled; with both `None` every mode is a no-op. "
+                "Set `vllm_importance_sampling_correction=False` to disable the correction explicitly."
             )
 
         if self.parallelism_config is not None and (

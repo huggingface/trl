@@ -1964,7 +1964,7 @@ def _any_adapter_merged(model) -> bool:
 
 
 class TestImportanceSamplingGate(TrlTestCase):
-    """Unit tests for the combined-ratio importance-sampling gate (issue #6945)."""
+    """Unit and integration tests for the combined-ratio importance-sampling gate (issue #6945)."""
 
     def _gate(self, log_ratio, completion_mask, position_ids, mode, clip_min=None, clip_max=None):
         from trl.experimental.async_grpo.async_grpo_trainer import _importance_sampling_gate
@@ -1978,16 +1978,31 @@ class TestImportanceSamplingGate(TrlTestCase):
             clip_max,
         )
 
-    def test_unchanged_policy_under_top_p_is_neutralized(self):
-        # The motivating case: for an unchanged policy sampled with top_p, vLLM's processed
-        # logprobs renormalize over the surviving mass S, so every token reads ratio S instead
-        # of 1.0. With S = 0.7 the raw ratio sits below 1 - epsilon_low and would clip on every
-        # negative-advantage token. The truncate gate lifts the effective weight to clip_min.
+    def test_top_p_support_bias_is_lifted_with_a_tight_lower_bound(self):
+        # The mechanism from the issue: for an unchanged policy sampled with top_p, vLLM's
+        # processed logprobs renormalize over the surviving mass S, so every token reads ratio S
+        # instead of 1.0. A user who sets clip_min near S gets the effective weight lifted to the
+        # bound; the shipped default (clip_min=0.5) deliberately does not fight ratios in the
+        # ordinary top-p range, and the default-behavior test below pins that.
         log_s = math.log(0.7)
         gate = self._gate([log_s] * 4, [1.0] * 4, [0, 1, 2, 3], "token_truncate", clip_min=0.8, clip_max=1.25)
-        # gate = clamp(0.7, 0.8, 1.25) / 0.7 = 0.8 / 0.7, so the effective weight is exactly 0.8
         expected = 0.8 / 0.7
         torch.testing.assert_close(gate, torch.full_like(gate, expected))
+
+    def test_default_bounds_cap_explosion_and_pass_ordinary_ratios(self):
+        # Defaults are token_truncate with [0.5, 3.0]: a mild top-p ratio (0.9) and mild drift
+        # (1.1) pass untouched, while the unbounded negative-advantage branch is capped at 3.0
+        # and pathological collapse is lifted to 0.5.
+        gate = self._gate(
+            [math.log(0.9), math.log(1.1), math.log(10.0), math.log(0.01)],
+            [1.0] * 4,
+            [0, 1, 2, 3],
+            "token_truncate",
+            clip_min=0.5,
+            clip_max=3.0,
+        )
+        effective = torch.tensor([[0.9, 1.1, 10.0, 0.01]]) * gate
+        torch.testing.assert_close(effective, torch.tensor([[0.9, 1.1, 3.0, 0.5]]), rtol=1e-4, atol=1e-6)
 
     def test_truncate_bounds_the_negative_advantage_branch(self):
         # -min(r*A, clip(r)*A) with A < 0 grows linearly in r; the gate must cap the effective
@@ -1996,6 +2011,14 @@ class TestImportanceSamplingGate(TrlTestCase):
             gate = self._gate([math.log(raw_ratio)], [1.0], [0], "token_truncate", clip_max=3.0)
             effective = raw_ratio * gate.item()
             assert effective == pytest.approx(min(raw_ratio, 3.0), rel=1e-5)
+
+    def test_long_sequence_gate_stays_finite(self):
+        # Regression for the reviewed sequence_truncate design: no mode may produce non-finite
+        # weights, however long the completion and however small the per-token ratio.
+        n = 300
+        for mode in ("token_truncate", "token_mask", "sequence_mask"):
+            gate = self._gate([math.log(0.7)] * n, [1.0] * n, list(range(n)), mode, clip_min=0.8, clip_max=3.0)
+            assert torch.isfinite(gate).all(), mode
 
     def test_mask_zeroes_out_of_range_tokens_only(self):
         gate = self._gate(
@@ -2009,11 +2032,11 @@ class TestImportanceSamplingGate(TrlTestCase):
         torch.testing.assert_close(gate, torch.tensor([[0.0, 1.0, 0.0]]))
 
     def test_in_range_ratio_passes_untouched(self):
-        for mode in ("token_truncate", "token_mask", "sequence_truncate", "sequence_mask"):
+        for mode in ("token_truncate", "token_mask", "sequence_mask"):
             gate = self._gate([0.0, 0.0], [1.0, 1.0], [0, 1], mode, clip_min=0.5, clip_max=2.0)
             torch.testing.assert_close(gate, torch.ones_like(gate))
 
-    def test_sequence_mode_uses_one_ratio_per_packed_sequence(self):
+    def test_sequence_mask_uses_one_ratio_per_packed_sequence(self):
         # Two sequences packed into one row: position_ids reset at the second sequence's start.
         # Sequence 1 (three tokens, log-ratios 0.1 each) has product ratio exp(0.3), in range.
         # Sequence 2 (two tokens, log-ratios 1.0 each) has product ratio exp(2.0) > clip_max = 3,
@@ -2039,7 +2062,7 @@ class TestImportanceSamplingGate(TrlTestCase):
         )
         torch.testing.assert_close(gate, torch.ones_like(gate))
 
-    def test_nan_sampler_logprob_means_no_correction(self):
+    def test_nan_sampler_logprob_means_no_correction_in_token_modes(self):
         gate = self._gate(
             [float("nan"), math.log(10.0)],
             [1.0, 1.0],
@@ -2050,7 +2073,23 @@ class TestImportanceSamplingGate(TrlTestCase):
         assert gate[0, 0].item() == pytest.approx(1.0)
         assert 10.0 * gate[0, 1].item() == pytest.approx(3.0, rel=1e-5)
 
-    def test_config_rejects_inverted_bounds_and_unbounded_truncate(self):
+    def test_nan_token_shares_its_sequence_fate_under_sequence_mask(self):
+        # A NaN token contributes nothing to its sequence's product, but if the remaining tokens
+        # push the sequence out of range, the NaN token is masked with the rest of the sequence:
+        # the exemption is contribution, not immunity.
+        gate = self._gate(
+            [float("nan"), 2.0, 2.0],
+            [1.0, 1.0, 1.0],
+            [0, 1, 2],
+            "sequence_mask",
+            clip_max=3.0,
+        )
+        torch.testing.assert_close(gate, torch.zeros_like(gate))
+        # And a NaN alone must not mask an otherwise in-range sequence.
+        gate = self._gate([float("nan"), 0.0], [1.0, 1.0], [0, 1], "sequence_mask", clip_max=3.0)
+        torch.testing.assert_close(gate, torch.ones_like(gate))
+
+    def test_config_validation(self):
         from trl.experimental.async_grpo import AsyncGRPOConfig
 
         with pytest.raises(ValueError, match="must be less than"):
@@ -2059,9 +2098,100 @@ class TestImportanceSamplingGate(TrlTestCase):
                 vllm_importance_sampling_clip_min=3.0,
                 vllm_importance_sampling_clip_max=1.0,
             )
-        with pytest.raises(ValueError, match="at least one of|At least one of"):
+        with pytest.raises(ValueError, match="must be positive"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, vllm_importance_sampling_clip_min=0.0)
+        with pytest.raises(ValueError, match="no-op"):
             AsyncGRPOConfig(
                 output_dir=self.tmp_dir,
-                vllm_importance_sampling_mode="token_truncate",
+                vllm_importance_sampling_clip_min=None,
                 vllm_importance_sampling_clip_max=None,
             )
+        with pytest.raises(ValueError, match="must be one of"):
+            AsyncGRPOConfig(output_dir=self.tmp_dir, vllm_importance_sampling_mode="sequence_truncate")
+        # The gate itself refuses the removed mode too, so a stray string can never fall through to
+        # a different mode's behavior.
+        with pytest.raises(ValueError, match="Unknown importance-sampling mode"):
+            self._gate([0.0], [1.0], [0], "sequence_truncate", clip_max=3.0)
+        # Disabling the correction lifts the no-op restriction.
+        AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            vllm_importance_sampling_correction=False,
+            vllm_importance_sampling_clip_min=None,
+            vllm_importance_sampling_clip_max=None,
+        )
+
+    def _stub_trainer_for_loss(self):
+        # __new__ skips __init__, which hard-codes a flash-attn3 kernel and needs a GPU; compute_loss
+        # itself only needs the attributes below. The model stands in for the patched LM head and
+        # returns per-token log-probs that are exactly zero, so the combined ratio is exp(-old_log_probs).
+        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer.accelerator = MagicMock()
+        trainer.accelerator.num_processes = 1
+        trainer.accelerator.reduce = lambda t, reduction="sum": t
+        trainer.accelerator.gather = lambda t: t
+        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        trainer.epsilon_low = 0.2
+        trainer.epsilon_high = 0.2
+        trainer.current_gradient_accumulation_steps = 1
+        trainer.aux_loss_enabled = False
+        trainer._step_forward_tokens = 0.0
+        trainer._step_trained_tokens = 0.0
+        trainer._step_seq_len_weighted = 0.0
+        trainer._step_samples = 0
+        trainer._step_forward_s = 0.0
+        trainer._step_microbatches = 0
+        trainer.vllm_importance_sampling_correction = True
+        trainer.vllm_importance_sampling_mode = "token_truncate"
+        trainer.vllm_importance_sampling_clip_min = 0.5
+        trainer.vllm_importance_sampling_clip_max = 3.0
+
+        class _ZeroLogProbModel(torch.nn.Module):
+            def forward(self, input_ids, **kwargs):
+                t = input_ids.shape[1] - 1
+                return {"log_probs": torch.zeros(1, t), "entropy": torch.zeros(1, t), "aux_loss": None}
+
+        return trainer, _ZeroLogProbModel()
+
+    @staticmethod
+    def _packed_inputs(old_log_probs):
+        t = len(old_log_probs)
+        return {
+            "input_ids": torch.arange(1, t + 1).unsqueeze(0),
+            "attention_mask": torch.ones(1, t, dtype=torch.long),
+            "completion_mask": torch.tensor([[0.0, 0.0] + [1.0] * (t - 2)]),
+            "old_log_probs": torch.tensor([old_log_probs]),
+            "position_ids": torch.arange(t).unsqueeze(0),
+            "advantages": torch.full((1, t), -1.0),  # negative: the branch the gate exists for
+            "global_n_tokens": torch.tensor([float(t - 2)]),
+            "global_n_forward_tokens": torch.tensor([float(t)]),
+            "mean_seq_len": torch.tensor([float(t)]),
+        }
+
+    def test_compute_loss_applies_the_gate_and_logs_the_metric(self):
+        # The reviewer's integration oracle: run the real compute_loss on a packed batch and observe
+        # the loss and the logged metric through the trainer's own wiring (including the
+        # position_ids[:, 1:] shift), not the gate function in isolation. Sampler log-prob -log(10)
+        # against a current log-prob of 0 gives a combined ratio of 10 on every completion token,
+        # far past clip_max, and the negative advantage makes that ratio's contribution unbounded.
+        trainer, model = self._stub_trainer_for_loss()
+        old = [-math.log(10.0)] * 8
+
+        trainer.vllm_importance_sampling_correction = False
+        ungated = trainer.compute_loss(model, self._packed_inputs(old))
+        assert "sampling/importance_sampling_gated_frac" not in trainer._metrics["train"]
+
+        trainer.vllm_importance_sampling_correction = True
+        gated = trainer.compute_loss(model, self._packed_inputs(old))
+
+        # Ungated: -min(10*A, clip(10)*A) with A=-1 is 10 per token. Gated: capped at clip_max = 3.
+        assert ungated.item() == pytest.approx(10.0, rel=1e-4)
+        assert gated.item() == pytest.approx(3.0, rel=1e-4)
+        assert trainer._metrics["train"]["sampling/importance_sampling_gated_frac"][-1] == pytest.approx(1.0)
+
+    def test_compute_loss_gate_leaves_in_range_batches_alone(self):
+        trainer, model = self._stub_trainer_for_loss()
+        old = [0.0] * 8  # ratio exactly 1 everywhere
+
+        gated = trainer.compute_loss(model, self._packed_inputs(old))
+        assert gated.item() == pytest.approx(1.0, rel=1e-5)
+        assert trainer._metrics["train"]["sampling/importance_sampling_gated_frac"][-1] == pytest.approx(0.0)
