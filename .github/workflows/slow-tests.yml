@@ -17,6 +17,7 @@ permissions: {}
 jobs:
   run_all_tests_single_gpu:
     permissions:
+      actions: read
       contents: read
     runs-on:
       group: aws-g6e-4xlarge
@@ -76,6 +77,7 @@ jobs:
 
   run_all_tests_multi_gpu:
     permissions:
+      actions: read
       contents: read
     runs-on:
       group: aws-g5-12xlarge-cache
