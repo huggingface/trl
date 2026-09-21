@@ -12,8 +12,12 @@ env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
+permissions: {}
+
 jobs:
   run_all_tests_single_gpu:
+    permissions:
+      contents: read
     runs-on:
       group: aws-g6e-4xlarge
     env:
@@ -71,6 +75,8 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   run_all_tests_multi_gpu:
+    permissions:
+      contents: read
     runs-on:
       group: aws-g5-12xlarge-cache
     env:

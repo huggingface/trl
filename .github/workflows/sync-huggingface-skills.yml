@@ -23,11 +23,15 @@ jobs:
 
       - name: Determine PR title
         id: pr_title
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
-            echo "title=Sync TRL Skill (${{ github.ref_name }})" >> $GITHUB_OUTPUT
+          if [[ "$EVENT_NAME" == "push" && "$REF_TYPE" == "tag" ]]; then
+            echo "title=Sync TRL Skill ($REF_NAME)" >> "$GITHUB_OUTPUT"
           else
-            echo "title=Sync TRL Skill (manual trigger)" >> $GITHUB_OUTPUT
+            echo "title=Sync TRL Skill (manual trigger)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create GitHub App token
