@@ -461,6 +461,28 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_list_beta_uses_integer_epoch(self):
+        # `TrainerState.epoch` is None before training and a float during it.
+        # Indexing the per-epoch beta schedule with that value raises TypeError.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_funcs=self.reward_model,
+            args=OnlineDPOConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                beta=[0.1, 0.05],
+            ),
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert trainer._beta == [0.1, 0.05]
+
+        for epoch, expected_beta in [(None, 0.1), (0.25, 0.1), (1.0, 0.05), (2.7, 0.05)]:
+            trainer.state.epoch = epoch
+            assert trainer.beta == expected_beta
+
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
