@@ -12,22 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-from typing import TYPE_CHECKING
-
-from .._lazy_module import _LazyModule
+from .logprob_entropy import selective_log_softmax_and_entropy
 
 
-_import_structure = {
-    "dpo_loss": ["FusedLinearDPOLoss"],
-    "jsd_loss": ["FusedLinearJSDLoss"],
-}
-
-
-if TYPE_CHECKING:
-    from .dpo_loss import FusedLinearDPOLoss
-    from .jsd_loss import FusedLinearJSDLoss
-
-
-else:
-    sys.modules[__name__] = _LazyModule(__name__, __file__, _import_structure, module_spec=__spec__)
+__all__ = ["selective_log_softmax_and_entropy"]

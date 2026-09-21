@@ -1303,10 +1303,8 @@ class KTOTrainer(_BaseTrainer):
                 logit_scale,
             )
 
-        per_token_logps = torch.zeros_like(completion_mask[:, 1:], dtype=logps.dtype)
-        per_token_entropies = torch.zeros_like(completion_mask[:, 1:], dtype=entropies.dtype)
-        per_token_logps[mask] = logps
-        per_token_entropies[mask] = entropies
+        per_token_logps = logps.new_zeros(mask.shape).masked_scatter(mask, logps)
+        per_token_entropies = entropies.new_zeros(mask.shape).masked_scatter(mask, entropies)
         return per_token_logps, per_token_entropies, outputs
 
     def compute_ref_log_probs(self, model, inputs):
@@ -1729,13 +1727,12 @@ class KTOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
             if self.use_liger_kernel:
-                # Under ZeRO-3, `lm_head.weight` is sharded and the chunked projection reads it directly (bypassing the
-                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
-                # coordinator's gather/reduce hooks.
-                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+                # The chunked projection reads `lm_head.weight` directly, bypassing the module, so the loss has to
+                # run inside the wrapper's forward via `_forward_redirection`: that is what gathers sharded
+                # parameters under ZeRO-3 and FSDP, and what arms DDP's gradient reducer. FSDP2 shards in place, so
+                # unwrapping preserves object identity and needs its own check.
                 unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
+                if self.is_fsdp_enabled or model is not unwrapped_model:
                     return self._forward_redirection(
                         model, unwrapped_model, self._compute_loss, unwrapped_model, inputs, return_outputs
                     )
