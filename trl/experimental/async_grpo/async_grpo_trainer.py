@@ -86,29 +86,39 @@ def _importance_sampling_gate(
 ) -> torch.Tensor:
     """Build the multiplicative importance-sampling gate for the packed policy loss.
 
-    AsyncGRPO trains on rollouts whose generating weights are up to ``max_staleness`` versions old,
-    so ``log_ratio`` (current policy minus vLLM sampler, per token) folds policy drift and
-    training-inference mismatch into one combined ratio. Left alone, that ratio is unbounded on the
-    negative-advantage branch of the PPO objective: ``-min(r*A, clip(r)*A)`` with ``A < 0`` grows
-    linearly in ``r``. The gate bounds it.
+    AsyncGRPO trains on rollouts whose generating weights are up to ``max_staleness`` versions old, so ``log_ratio``
+    (current policy minus vLLM sampler, per token) folds policy drift and training-inference mismatch into one combined
+    ratio. Left alone, that ratio is unbounded on the negative-advantage branch of the PPO objective: ``-min(r*A,
+    clip(r)*A)`` with ``A < 0`` grows linearly in ``r``. The gate bounds it.
 
-    All inputs are ``(1, T)`` slices of the packed row, already label-shifted. ``mode`` selects two
-    orthogonal choices: granularity (``token_*`` uses each token's ratio; ``sequence_*`` uses one
-    ratio per packed sequence, the product of its completion-token ratios, located via
-    ``position_ids`` resets) and constraint (``*_truncate`` caps the effective gradient weight at
-    the clip bounds by multiplying with ``clamp(rho)/rho``; ``*_mask`` zeroes tokens or sequences
-    whose ratio leaves the bounds). Tokens whose sampler logprob was unavailable (NaN ratio) are
-    left uncorrected, matching the synchronous trainer's convention.
+    All inputs are ``(1, T)`` slices of the packed row, already label-shifted. Modes:
+
+    - ``"token_truncate"`` multiplies each token's loss by ``clamp(rho, C_min, C_max) / rho``, capping the effective
+      gradient weight at the clip bounds and leaving in-range tokens untouched. The identity is only valid at token
+      granularity, where the loss carries the same ``rho`` the gate divides by. There is deliberately no
+      ``sequence_truncate``: a sequence-level product cannot be divided back out of a per-token loss without producing
+      unbounded weights.
+    - ``"token_mask"`` zeroes tokens whose ratio leaves the bounds.
+    - ``"sequence_mask"`` zeroes every completion token of a packed sequence whose product of token ratios (segments
+      located via ``position_ids`` resets) leaves the bounds. The combined ratio's product grows with completion length
+      under ordinary staleness drift, so bounds must be far looser than the synchronous trainer's mismatch-only
+      defaults.
+
+    A token whose sampler logprob was unavailable (NaN ratio) is left uncorrected in the token modes. In
+    ``sequence_mask`` it contributes nothing to its sequence's product but shares the sequence's fate: the exemption is
+    contribution, not immunity, because the mask is a sequence-level decision.
 
     Returns a detached ``(1, T)`` tensor to multiply into the per-token loss.
     """
     log_ratio = log_ratio.detach()
+    log_clip_min = math.log(clip_min) if clip_min is not None else -torch.inf
+    log_clip_max = math.log(clip_max) if clip_max is not None else torch.inf
 
-    if mode in ("sequence_truncate", "sequence_mask"):
+    if mode == "sequence_mask":
         # The collator packs sequences into one row with position_ids resetting to 0 at each
         # sequence start, so cumsum over resets labels each token with its segment. The sequence
-        # log-ratio is the sum over its completion tokens (a product of ratios), scattered back
-        # to every token of the segment.
+        # log-ratio is the sum over its non-NaN completion tokens (a product of ratios), scattered
+        # back to every token of the segment.
         segment_ids = (position_ids == 0).cumsum(dim=-1)[0]
         num_segments = int(segment_ids.max().item()) + 1 if segment_ids.numel() else 1
         masked_log_ratio = torch.nan_to_num(log_ratio, nan=0.0) * completion_mask
@@ -116,22 +126,21 @@ def _importance_sampling_gate(
             0, segment_ids, masked_log_ratio[0]
         )
         effective_log_rho = segment_sums.gather(0, segment_ids).unsqueeze(0)
-        nan_positions = torch.zeros_like(log_ratio, dtype=torch.bool)
-    else:
-        nan_positions = torch.isnan(log_ratio)
-        effective_log_rho = torch.nan_to_num(log_ratio, nan=0.0)
+        in_range = (effective_log_rho >= log_clip_min) & (effective_log_rho <= log_clip_max)
+        return in_range.to(log_ratio.dtype)
 
-    log_clip_min = math.log(clip_min) if clip_min is not None else -torch.inf
-    log_clip_max = math.log(clip_max) if clip_max is not None else torch.inf
+    if mode not in ("token_truncate", "token_mask"):
+        raise ValueError(f"Unknown importance-sampling mode {mode!r}.")
 
-    if mode in ("token_truncate", "sequence_truncate"):
+    nan_positions = torch.isnan(log_ratio)
+    effective_log_rho = torch.nan_to_num(log_ratio, nan=0.0)
+    if mode == "token_truncate":
         # exp(clamp(log rho) - log rho) == clamp(rho, C_min, C_max) / rho, computed in log space so
         # that extreme ratios cannot overflow before the division.
         gate = torch.exp(effective_log_rho.clamp(min=log_clip_min, max=log_clip_max) - effective_log_rho)
-    else:  # token_mask, sequence_mask
+    else:  # token_mask
         in_range = (effective_log_rho >= log_clip_min) & (effective_log_rho <= log_clip_max)
         gate = in_range.to(log_ratio.dtype)
-
     # No sampler logprob means no correction for that token, never a masked-out token.
     return torch.where(nan_positions, torch.ones_like(gate), gate)
 
@@ -1634,10 +1643,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
             if importance_sampling_gate is not None:
-                # Fraction of completion tokens whose loss the gate reduced (masked out, or damped by
-                # truncation). A rising value is the first sign that the queue is running further
-                # off-policy than the clip bounds tolerate.
-                gated = (importance_sampling_gate < 1.0) & valid_mask
+                # Fraction of completion tokens whose loss the gate changed: masked out, damped by an
+                # upper truncation, or lifted by a lower one. A rising value is the first sign that
+                # the queue is running further off-policy than the clip bounds tolerate.
+                gated = (importance_sampling_gate != 1.0) & valid_mask
                 gate_stats = torch.stack([gated.float().sum(), local_count])
                 gate_stats = self.accelerator.reduce(gate_stats, reduction="sum")
                 global_gated_sum, global_gate_count = gate_stats.unbind(0)
