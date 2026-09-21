@@ -193,7 +193,7 @@ Let's also define some terms to make token metrics unambiguous:
 
 ### How the batch numbers compose
 
-A **row** is what **one** DP rank forwards in one micro-batch: several samples concatenated into a single sequence, with `position_ids` restarting at each sample boundary. The planner decides which samples land in which row (balancing Σ Lᵢ² so no rank straggles), and a data collator does the concatenating.
+A **row** is what **one** DP rank forwards in one micro-batch: several samples concatenated into a single sequence, with `position_ids` restarting at each sample boundary. The planner decides which samples land in which row (balancing attention cost so no rank straggles), and a data collator does the concatenating. Under `packing="tree"` the row is a prefix forest rather than a concatenation — see [Tree packing](#tree-packing).
 
 In all our metrics **a "step" always means one FULL optimizer step**, never a micro-batch. `gradient_accumulation_steps` micro-batches make one step, and every metric named `_per_step` is per optimizer step, matching `global_step`, `logging_steps` and the rest of the [`Trainer`] vocabulary. Where a metric is per micro-batch it says so (`batch/microbatches_per_step`) or it is a per-row quantity (`batch/row_*`, `batch/samples_per_row`).
 
@@ -216,6 +216,45 @@ sample                                     sample/forwarded_tokens_mean
 So `batch/samples_per_step ≈ row-slots x batch/samples_per_row`, and likewise for tokens. The two sides agree only up to the variation between micro-batches inside the step — the per-step metrics are sums, the per-row ones are means — so expect a fraction of a percent, not an exact match.
 
 `batch/row_fill_frac` is the one to watch when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the packer often gets two and the row runs ~77% full), while 1k-token samples tile it almost perfectly. That is quantization, not a bug, and `token_budget` is the lever — bearing in mind that attention is O(L²) per sequence, so a fuller row of long sequences does not cost linearly more memory.
+
+### Tree packing
+
+`packing="tree"` builds each row as a prefix forest instead of a concatenation, so a token several samples share is forwarded **once**. Multi-turn agentic rollouts are full of such tokens: every turn re-sends the whole conversation, so the rows of one rollout are nested prefixes of each other, and the `num_generations` rollouts of a prompt all repeat it. Attention still shows each sample exactly what it saw in its own row — the mask is the forest's ancestry, evaluated by FlexAttention.
+
+The saving is the decoder's per-token work, which falls by the **packing ratio** (raw tokens ÷ forwarded tokens). Against it stands a fixed overhead: the surviving tokens attend through FlexAttention rather than FlashAttention 3, and each of them now attends over a longer ancestry.
+
+```
+speed-up ≈ packing ratio ÷ overhead        overhead ≈ 1.6 on Qwen3-4B, ≈ 1.3 on Qwen3-8B
+```
+
+The overhead shrinks as the model grows, because attention is a smaller share of a larger model's step. Take ~1.5 as a conservative break-even: below that packing ratio, tree packing is a *loss*, and `batch/packing_ratio` is the metric that says where a workload sits.
+
+**The ratio is the product of two things: how much prefix the samples in a row actually share, and how many of them fit.** Neither alone is enough — perfectly nested rows share nothing useful if only one lands per rank, and a rank full of unrelated samples shares nothing however many there are. Measured on recorded agentic groups, where rows of a group are nested prefixes of each other:
+
+| rows of a group packed together | 2 | 4 | 8 | 16 | 24 |
+| ------------------------------- | ----- | ----- | ----- | ------ | ------ |
+| 512-token prompt                | 1.44x | 1.93x | 2.23x | 2.48x  | 2.55x  |
+| 4k prompt                       | 1.86x | 3.31x | 5.20x | 7.55x  | 8.72x  |
+| 8k prompt                       | 1.92x | 3.57x | 6.21x | 10.03x | 12.50x |
+
+Down a column is the sharing (a longer shared prompt is worth more); across a row is the count. Two rows never clear break-even whatever the prompt; four or more do. So `batch/samples_per_row` is the leading indicator: if it sits near 1, no amount of shared prefix can help, and the lever is `token_budget` relative to row length.
+
+The mask runs on inductor's Triton template. FlashAttention 4 would bring the divisor to 1.47, about 7% on the step, but its CuteDSL kernels and the flashinfer vLLM builds on both register types in tvm-ffi, and whichever loads second aborts — so a server and a trainer sharing one environment could not both start.
+
+Three things to expect when reading the dashboard:
+
+- **Judge it on throughput, not on step time or MFU.** A tree-packed micro-batch holds several times more samples, so `perf/fwd_bwd_s` *rises* while the work inside it rises faster, and `perf/mfu_*` *falls* because it divides by forwarded tokens — exactly the ones packing removed. Both look like regressions and neither is. Divide instead: `batch/trained_tokens_per_step / perf/fwd_bwd_s`. On a Qwen3-8B SWE-Gym run the step went 4.5s -> 5.6s and MFU dropped, while throughput went 376 -> 1297 trained tokens/s.
+- **`token_budget` now bounds unique tokens** (and, separately, the row's loss terms, which packing does not shrink), so the same budget fits more samples per row. That is the capacity win, and it has a scheduling consequence: a micro-batch draws proportionally more rollouts from the queue, so a run that was already generation-bound becomes more so. Watch `perf/rollout_wait_s` and `sample/rollout_queue_size`. The planner keeps a prompt-group in one row, since a sample is only cheap where its group already is; it splits a group across rows only when the alternative is a rank forwarding nothing.
+- **The first step pays for compilation.** FlexAttention compiles once per shape family; on 12k-token rows that measured ~137s, after which steps settle. It is not a hang, and it is amortized in any real run.
+
+Packing is a layout change, not a semantic one: every trained token keeps its own target, advantage and old log-probability, so the loss and the reward curve should track the `"sequence"` run.
+
+<Tip warning={true}>
+
+Anything that makes rows longer or fewer removes the sharing, including settings that have nothing to do with packing. `fork_threshold_tokens` is the one to check first: a turn becomes its own training row only when its re-tokenization drifts by at least that many tokens, and on agentic rollouts the drift is ~40 against a default of `1024`. Almost nothing forks, a 50-turn conversation collapses into one very long row, and one row per rank leaves little to share. On a SWE-Gym run that cost most of the win: `batch/packing_ratio` 1.45 and 1.5x throughput at the default, against 4.2x and 3.5x throughput once rows forked. `rollout/fork_frac` says which regime you are in.
+
+</Tip>
+
 
 ### The rollout queue
 
@@ -300,7 +339,8 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 | `batch/masked_token_frac`                                                | forwarded tokens with `completion_mask == 0` — the share of the forward that earns no gradient                                       |
 | `batch/samples_per_row`, `batch/row_tokens_mean`, `batch/row_tokens_max` | how densely the planner packed each rank's row                                                                                       |
 | `batch/row_fill_frac`                                                    | row tokens against `token_budget`. Low means the budget is not being used                                                            |
-| `batch/row_imbalance`                                                    | `max Σ Lᵢ² / mean Σ Lᵢ²` across rows. Attention is O(L²), so this predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
+| `batch/row_imbalance`                                                    | `max cost / mean cost` across rows, where the cost is the row's attention work. This predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
+| `batch/packing_ratio`                                                    | raw tokens per forwarded token. 1.0 under `packing="sequence"`; under `"tree"` the factor by which the decoder's work shrinks       |
 | `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                    |
 | `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                         |
 

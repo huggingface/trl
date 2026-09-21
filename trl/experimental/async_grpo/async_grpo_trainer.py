@@ -55,6 +55,8 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
+from .packing import PackingProtocol, SequencePacking, TrainingRow, TreePacking
+from .tree import register_tree_attention
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -401,20 +403,28 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             }
 
 
-def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
-    """Greedily partition `examples` into `num_groups` rows (one per DP rank), balancing each row's Σ Lᵢ².
+def _balance_by_attention_cost(
+    atoms: list[list[dict[str, Any]]], num_groups: int, packing: PackingProtocol
+) -> list[list[dict[str, Any]]]:
+    """Greedily partition `atoms` into `num_groups` rows (one per DP rank), balancing each row's attention cost.
 
-    Attention is O(L²) while the FFN is O(L), so equal token counts wouldn't equalize wall-time; balancing Σ Lᵢ² keeps
-    the per-micro-batch all-reduce free of stragglers. Samples are placed longest-first into the row with the smallest
-    running Σ Lᵢ² (LPT scheduling). With at least `num_groups` samples every row ends up non-empty.
+    Attention is superlinear in length while the FFN is linear, so equal token counts wouldn't equalize wall-time;
+    balancing the attention cost keeps the per-micro-batch all-reduce free of stragglers. Atoms are placed
+    costliest-first into the row with the smallest running cost (LPT scheduling). With at least `num_groups` atoms
+    every row ends up non-empty.
+
+    The atom is whatever the packing can move independently — a sample under sequence packing, a whole `group_id` under
+    tree packing, whose samples have to stay together to share a prefix — and the cost is Σ Lᵢ² or Σ score pairs
+    accordingly. Both are additive over a row, which is what keeps this a greedy bin-pack.
     """
+    priced = [(packing.cost(atom)[1], atom) for atom in atoms]
+    priced.sort(key=lambda item: item[0], reverse=True)
     groups = [[] for _ in range(num_groups)]
-    squared_loads = [0] * num_groups
-    for example in sorted(examples, key=lambda e: len(e["input_ids"]), reverse=True):
-        n = len(example["input_ids"])
-        i = min(range(num_groups), key=lambda j: squared_loads[j])
-        groups[i].append(example)
-        squared_loads[i] += n * n
+    loads = [0] * num_groups
+    for cost, atom in priced:
+        i = min(range(num_groups), key=lambda j: loads[j])
+        groups[i].extend(atom)
+        loads[i] += cost
     return groups
 
 
@@ -422,9 +432,9 @@ class FixedCountBatcher(torch.utils.data.IterableDataset):
     """Fixed-count batcher (the planner) wrapping [`RolloutQueueDataset`].
 
     Buffers `microbatch_size` (= `per_device_train_batch_size × num_processes`) samples, then partitions them across
-    the `num_processes` rows (one per DP rank) balanced by Σ Lᵢ² (attention cost) so no rank straggles at the
-    per-micro-batch all-reduce. The sample count is fixed, so this does not bound peak memory — use
-    [`TokenBudgetBatcher`] for that. With `microbatch_size >= num_processes` every row is non-empty.
+    the `num_processes` rows (one per DP rank) balanced by attention cost so no rank straggles at the per-micro-batch
+    all-reduce. The sample count is fixed, so this does not bound peak memory — use [`TokenBudgetBatcher`] for that.
+    With `microbatch_size >= num_processes` every row is non-empty.
 
     Args:
         dataset ([`RolloutQueueDataset`]):
@@ -433,19 +443,28 @@ class FixedCountBatcher(torch.utils.data.IterableDataset):
             Number of DP ranks; the number of rows (one per rank) in each micro-batch.
         microbatch_size (`int`):
             Number of samples buffered into each micro-batch before it is partitioned and emitted.
+        packing ([`~packing.PackingProtocol`], *optional*):
+            Packing strategy, which decides the scheduling atom and its cost. Defaults to sequence packing.
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
+    def __init__(
+        self,
+        dataset: "RolloutQueueDataset",
+        num_processes: int,
+        microbatch_size: int,
+        packing: PackingProtocol | None = None,
+    ):
         self.dataset = dataset
         self.num_processes = num_processes
         self.microbatch_size = microbatch_size
+        self.packing = packing or SequencePacking()
 
     def __iter__(self):
         batch = []
         for sample in self.dataset:
             batch.append(sample)
             if len(batch) == self.microbatch_size:
-                yield _balance_by_squared_length(batch, self.num_processes)
+                yield _balance_by_attention_cost(self.packing.atoms(batch), self.num_processes, self.packing)
                 batch = []
 
 
@@ -453,16 +472,21 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
     """Token-budgeted dynamic batcher (the planner) wrapping [`RolloutQueueDataset`].
 
     Keeps `num_processes` open rows (one per DP rank) and pulls single samples from the source one at a time, dropping
-    each into the row with the smallest running Σ Lᵢ² (attention cost) that still fits within `token_budget` tokens.
+    each into the row with the smallest running attention cost that still fits within `token_budget` forwarded tokens.
     When the next sample fits in no row, the current micro-batch is emitted — a list of `num_processes` groups, already
     partitioned per rank — and a fresh one is started with that sample. The number of samples per row is therefore
     dynamic: short samples pack many per row, long ones pack few, while every row stays within `token_budget` tokens.
-    This bounds peak memory independently of `per_device_train_batch_size` and keeps the rows Σ Lᵢ²-balanced so no rank
+    This bounds peak memory independently of `per_device_train_batch_size` and keeps the rows cost-balanced so no rank
     straggles at the per-micro-batch all-reduce.
+
+    Under tree packing the budget counts *unique* tokens, so the same budget fits strictly more samples: a sample costs
+    only what it does not already share with its row. It also bounds the row's loss terms, which packing does not
+    shrink — otherwise rows that share everything would add no tokens and the row would never close. A sample's
+    standalone length upper-bounds both, so the drop rule below stays correct.
 
     Every emitted micro-batch has all `num_processes` rows non-empty (a rank forwarding zero tokens would desync
     FSDP/EP collectives): a micro-batch is only closed once every row holds at least one sample. A sample longer than
-    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` ≥ the vLLM server's
+    `token_budget` fits in no row, so it is dropped with a warning; set `token_budget` >= the vLLM server's
     `max_model_len` (the cap on prompt + completion) to avoid dropping samples.
 
     Args:
@@ -471,44 +495,50 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         num_processes (`int`):
             Number of DP ranks; the number of rows (one per rank) in each micro-batch.
         token_budget (`int`):
-            Maximum real tokens packed into a single row (one rank's forward).
+            Maximum tokens forwarded in a single row (one rank's forward).
         metrics (`dict`):
             The trainer's metric sink, appended to when a sample is dropped for exceeding the budget.
+        packing ([`~packing.PackingProtocol`], *optional*):
+            Packing strategy, which prices a sample against a row. Defaults to sequence packing.
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
+    def __init__(
+        self,
+        dataset: "RolloutQueueDataset",
+        num_processes: int,
+        token_budget: int,
+        metrics: dict,
+        packing: PackingProtocol | None = None,
+    ):
         self.dataset = dataset
         self.num_processes = num_processes
         self.token_budget = token_budget
         self.metrics = metrics  # the trainer's sink, for the drop counter below
+        self.packing = packing or SequencePacking()
 
     def __iter__(self):
-        rows = [[] for _ in range(self.num_processes)]
-        squared_loads = [0] * self.num_processes  # Σ Lᵢ² per row, drives the balancing
-        token_counts = [0] * self.num_processes  # tokens per row, drives the budget
+        rows = [self.packing.open_row() for _ in range(self.num_processes)]
         for sample in self.dataset:
             n = len(sample["input_ids"])
             if n > self.token_budget:
                 # Longer than the whole budget: fits in no row, so drop it (placing it would overshoot the budget
-                # or force an empty row that desyncs FSDP/EP collectives).
                 logger.warning(
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
                 )
                 self.metrics["batch/dropped_oversize_total"].append(1.0)
                 continue
-            fits = [i for i in range(self.num_processes) if token_counts[i] + n <= self.token_budget]
-            if not fits:
-                # No row has room (all are non-empty, since this sample fits an empty one): close and reset.
-                yield rows
-                rows = [[] for _ in range(self.num_processes)]
-                squared_loads = [0] * self.num_processes
-                token_counts = [0] * self.num_processes
-                fits = list(range(self.num_processes))
-            i = min(fits, key=lambda j: squared_loads[j])
-            rows[i].append(sample)
-            squared_loads[i] += n * n
-            token_counts[i] += n
+            while True:
+                home = next((row for row in rows if row.holds(sample)), None)
+                candidates = rows if home is None else [home]
+                fits = [row for row in candidates if row.fits(sample, self.token_budget)]
+                if not fits and any(not row.samples for row in rows):
+                    fits = [row for row in rows if row.fits(sample, self.token_budget)]
+                if fits:
+                    min(fits, key=lambda row: row.load).add(sample)
+                    break
+                yield [row.samples for row in rows]
+                rows = [self.packing.open_row() for _ in range(self.num_processes)]
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
@@ -522,14 +552,18 @@ class _EmptyIterableDataset(torch.utils.data.IterableDataset):
 class DataCollatorForRollout(DataCollatorMixin):
     """
     Padding-free collator (the packer) for rollout samples. Packs a micro-batch into `num_processes` rows (one per DP
-    rank): each row concatenates its samples into a single sequence, with `position_ids` resetting per sequence and
-    advantages expanded per-token. Rows are padded only to the longest row, so the batch stays rectangular for
-    `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is stripped per-rank in
-    `compute_loss`.
+    rank) and, for each row, the flat list of loss terms taken over it: which packed position predicts which target,
+    with what old log-probability, advantage and originating completion. Rows are padded only to the longest row, so
+    the batch stays rectangular for `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is
+    stripped per-rank in `compute_loss`.
+
+    How a row is built is the `packing` strategy's business: sequence packing concatenates the samples with
+    `position_ids` resetting per sequence, tree packing folds them into a prefix forest. Both fill the same fields, so
+    nothing downstream branches on the choice.
 
     The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
-    ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's Σ Lᵢ² (attention cost) to avoid
-    stragglers at the gradient all-reduce — so the collator only tensorizes the given rows.
+    ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at
+    the gradient all-reduce — so the collator only packs and tensorizes the given rows.
 
     Args:
         pad_token_id (`int`):
@@ -540,6 +574,8 @@ class DataCollatorForRollout(DataCollatorMixin):
             The trainer's metric sink, appended to with this micro-batch's sample and packing metrics.
         token_budget (`int`, *optional*, defaults to `0`):
             Per-row token cap of the planner, or `0` when batching by fixed sample count.
+        packing ([`~packing.PackingProtocol`], *optional*):
+            Packing strategy. Defaults to sequence packing.
     """
 
     pad_token_id: int
@@ -551,68 +587,61 @@ class DataCollatorForRollout(DataCollatorMixin):
     metrics: dict[str, list] = field(default_factory=lambda: defaultdict(list))
     # Per-row token cap of the planner,
     token_budget: int = 0
+    packing: PackingProtocol = field(default_factory=SequencePacking)
 
     def torch_call(self, examples: list[Any]) -> dict[str, Any]:
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
         # rows, so `examples` is a length-1 list holding that single micro-batch (one group per rank).
         (groups,) = examples
 
-        input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
-        for group in groups:
-            seq_lengths = [len(example["input_ids"]) for example in group]
-            ids = [token for example in group for token in example["input_ids"]]
-            input_ids.append(torch.tensor(ids, dtype=torch.long))
-            attention_mask.append(torch.ones(len(ids), dtype=torch.long))
-            completion_mask.append(
-                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
-            )
-            old_log_probs.append(
-                torch.tensor([lp for example in group for lp in example["old_log_probs"]], dtype=torch.float32)
-            )
-            position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
-            advantages.append(
-                torch.cat(
-                    [torch.full((n,), example["advantage"]) for example, n in zip(group, seq_lengths, strict=False)]
-                )
-            )
-
-        input_ids = pad(input_ids, padding_value=self.pad_token_id)
-        attention_mask = pad(attention_mask, padding_value=0)
-        completion_mask = pad(completion_mask, padding_value=0)
-        old_log_probs = pad(old_log_probs, padding_value=0.0)
-        position_ids = pad(position_ids, padding_value=0)
-        advantages = pad(advantages, padding_value=0.0)
+        rows = [self.packing.pack(group) for group in groups]
+        input_ids = pad([row.input_ids for row in rows], padding_value=self.pad_token_id)
+        attention_mask = pad([torch.ones_like(row.input_ids) for row in rows], padding_value=0)
+        position_ids = pad([row.position_ids for row in rows], padding_value=0)
+        pred_index = pad([row.pred_index for row in rows], padding_value=-1)
+        target_id = pad([row.target_id for row in rows], padding_value=0)
+        old_log_probs = pad([row.old_log_probs for row in rows], padding_value=0.0)
+        advantages = pad([row.advantages for row in rows], padding_value=0.0)
+        segment_id = pad([row.segment_id for row in rows], padding_value=0)
 
         all_examples = [example for group in groups for example in group]
         self.groups_trained.update(example["group_id"] for example in all_examples)
 
-        # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        n_trained_tokens = sum(row.pred_index.numel() for row in rows)
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
-        sample_tokens = [len(example["input_ids"]) for example in all_examples]
-        n_forward_tokens = sum(sample_tokens)
+        n_forward_tokens = sum(row.input_ids.numel() for row in rows)
         mean_seq_len = n_forward_tokens / len(all_examples)
         global_n_forward_tokens = torch.full((self.num_processes,), float(n_forward_tokens), dtype=torch.float32)
         mean_seq_len_t = torch.full((self.num_processes,), float(mean_seq_len), dtype=torch.float32)
 
-        self._log_metrics(groups=groups, all_examples=all_examples, padded=attention_mask)
+        self._log_metrics(groups=groups, all_examples=all_examples, rows=rows, padded=attention_mask)
 
-        return {
+        batch = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "completion_mask": completion_mask,
-            "old_log_probs": old_log_probs,
             "position_ids": position_ids,
+            "pred_index": pred_index,
+            "target_id": target_id,
+            "old_log_probs": old_log_probs,
             "advantages": advantages,
+            "segment_id": segment_id,
             "global_n_tokens": global_n_tokens,
             "global_n_forward_tokens": global_n_forward_tokens,
             "mean_seq_len": mean_seq_len_t,
         }
+        if rows[0].tree_enter is not None:
+            batch["tree_enter"] = pad([row.tree_enter for row in rows], padding_value=0)
+            batch["tree_leave"] = pad([row.tree_leave for row in rows], padding_value=0)
+        return batch
 
     def _log_metrics(
-        self, groups: list[list[dict[str, Any]]], all_examples: list[dict[str, Any]], padded: torch.Tensor
+        self,
+        groups: list[list[dict[str, Any]]],
+        all_examples: list[dict[str, Any]],
+        rows: list[TrainingRow],
+        padded: torch.Tensor,
     ) -> None:
         """Append this micro-batch's sample and packing metrics straight into the trainer's sink.
 
@@ -640,14 +669,13 @@ class DataCollatorForRollout(DataCollatorMixin):
             valid = [v for v in values if not math.isnan(v)]
             self.metrics[key].append(sum(valid) / len(valid) if valid else float("nan"))
 
-        # Packing quality. `row_imbalance` is what the Σ Lᵢ²-balancing planner exists to keep near 1.0: attention is
-        # O(L²), so it is Σ Lᵢ² and not the token count that predicts which rank stalls the gradient all-reduce.
-        row_tokens = [sum(len(example["input_ids"]) for example in group) for group in groups]
-        squared_loads = [sum(len(example["input_ids"]) ** 2 for example in group) for group in groups]
+        row_tokens = [row.input_ids.numel() for row in rows]
+        loads = [self.packing.cost(group)[1] for group in groups]
         self.metrics["batch/samples_per_row"].append(len(all_examples) / len(groups))
         self.metrics["batch/row_tokens_mean"].append(sum(row_tokens) / len(row_tokens))
         self.metrics["batch/row_tokens_max"].append(float(max(row_tokens)))
-        self.metrics["batch/row_imbalance"].append(max(squared_loads) / (sum(squared_loads) / len(squared_loads)))
+        self.metrics["batch/row_imbalance"].append(max(loads) / (sum(loads) / len(loads)))
+        self.metrics["batch/packing_ratio"].append((sum(forwarded), sum(row_tokens)))
         if self.token_budget:
             self.metrics["batch/row_fill_frac"].append((sum(row_tokens), self.token_budget * len(row_tokens)))
         # Inter-rank padding, added so the batch is rectangular for the dispatcher. It costs broadcast bytes only:
@@ -1063,17 +1091,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
+        if args.packing == "tree":
+            self.packing = TreePacking()
+            register_tree_attention()
+        else:
+            self.packing = SequencePacking()
+
         # Model
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
         model_revision = model_init_kwargs.get("revision")
-        # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
-        # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
         model = create_model_from_path(
             model,
             device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
+            attn_implementation=self.packing.attn_implementation,
             **model_init_kwargs,
         )
 
@@ -1386,14 +1418,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.vllm_client.wait_for_server_ready()
                 self.args.token_budget = self.vllm_client.get_max_model_len()
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
-            # The planner partitions the rollout stream into Σ Lᵢ²-balanced micro-batches of `num_processes` rows.
             # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
             # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
             if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
+                dataset = TokenBudgetBatcher(
+                    dataset, num_processes, self.args.token_budget, self._metrics["train"], self.packing
+                )
             else:
                 dataset = FixedCountBatcher(
-                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
+                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes, self.packing
                 )
         else:
             dataset = _EmptyIterableDataset()
@@ -1413,6 +1446,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
                     # construct the collator (and never use it) while `token_budget` is still `None`.
                     token_budget=max(self.args.token_budget or 0, 0),
+                    packing=self.packing,
                 ),
                 num_workers=0,
                 # NOTE(@aminediro):
@@ -1424,47 +1458,46 @@ class AsyncGRPOTrainer(_BaseTrainer):
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). In AsyncGRPOTrainer, we need additional columns ("completion_mask", "old_log_probs",
-        # "advantages", "global_n_tokens") to compute the loss, hence the override.
         if self._signature_columns is None:
             self._signature_columns = [
                 "input_ids",
                 "attention_mask",
-                "completion_mask",
-                "old_log_probs",
                 "position_ids",
+                "pred_index",
+                "target_id",
+                "old_log_probs",
                 "advantages",
+                "segment_id",
                 "global_n_tokens",
                 "global_n_forward_tokens",
                 "mean_seq_len",
+                "tree_enter",
+                "tree_leave",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
-        # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
-        # rank's length so DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding
-        # here.
         mask_bool = inputs["attention_mask"].bool()
+        selected = inputs["pred_index"] >= 0
         input_ids = inputs["input_ids"][mask_bool].unsqueeze(0)
-        completion_mask = inputs["completion_mask"][mask_bool].unsqueeze(0)
-        old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
-        advantages = inputs["advantages"][mask_bool].unsqueeze(0)
+        pred_index = inputs["pred_index"][selected]
+        target_id = inputs["target_id"][selected]
+        old_log_probs = inputs["old_log_probs"][selected]
+        advantages = inputs["advantages"][selected]
+        segment_id = inputs["segment_id"][selected]
 
         forward_start = time.time()
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
-            labels=input_ids,
-            completion_mask=completion_mask,
+            pred_index=pred_index,
+            target_id=target_id,
             use_cache=False,
+            **self.packing.forward_kwargs(inputs, mask_bool),
         )
         log_probs, entropy = outputs["log_probs"], outputs["entropy"]
         self._last_forward_time_s = time.time() - forward_start
 
-        completion_mask = completion_mask[:, 1:]
-        old_log_probs = old_log_probs[:, 1:]
-        advantages = advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
@@ -1475,7 +1508,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
         # = world_size / global_n_tokens, so after DDP averaging the effective
-        loss = (per_token_loss * completion_mask).sum()
+        loss = per_token_loss.sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
@@ -1490,22 +1523,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():
-            valid_mask = completion_mask > 0
-            local_count = valid_mask.sum().float()
-
-            # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
-            local_ratio_sum = coef_1[valid_mask].sum()
+            local_ratio_sum = coef_1.sum()
+            local_count = torch.full_like(local_ratio_sum, float(log_probs.numel()))
             # Approx KL: http://joschu.net/blog/kl-approx.html
-            local_kl_sum = ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
-            local_entropy_sum = entropy[valid_mask].sum()
+            local_kl_sum = ((coef_1 - 1) - log_ratio).sum()
+            local_entropy_sum = entropy.sum()
 
             # Compute the clipped probability ratios
             is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
             is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
             is_region_clipped = is_low_clipped | is_high_clipped
-            local_low_clip_sum = is_low_clipped[valid_mask].float().sum()
-            local_high_clip_sum = is_high_clipped[valid_mask].float().sum()
-            local_region_clip_sum = is_region_clipped[valid_mask].float().sum()
+            local_low_clip_sum = is_low_clipped.float().sum()
+            local_high_clip_sum = is_high_clipped.float().sum()
+            local_region_clip_sum = is_region_clipped.float().sum()
 
             # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
             stats = torch.stack(
@@ -1536,17 +1566,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
 
-            seq_ids = (position_ids[0] == 0).cumsum(0)[1:] - 1  # (T-1,) completion index per (shifted) token
-            n_completions = (position_ids == 0).sum()  # number of packed completions in this rank's row
-            num_seq = int(n_completions)
-            comp_mask = completion_mask[0].float()  # (T-1,) valid completion-token mask
+            num_seq = int(segment_id.max()) + 1  # completions in this rank's row
 
-            def seg_sum(vals):  # per-completion segment sum over the packed row
-                return torch.zeros(num_seq, device=comp_mask.device).index_add_(0, seq_ids, vals)
+            def seg_sum(vals):  # per-completion segment sum over the flat selection
+                return torch.zeros(num_seq, device=vals.device).index_add_(0, segment_id, vals)
 
-            seq_tokens = seg_sum(comp_mask)
-            seq_low = seg_sum(is_low_clipped[0].float() * comp_mask)
-            seq_high = seg_sum(is_high_clipped[0].float() * comp_mask)
+            seq_tokens = seg_sum(torch.ones_like(coef_1, dtype=torch.float32))
+            seq_low = seg_sum(is_low_clipped.float())
+            seq_high = seg_sum(is_high_clipped.float())
             per_seq_low = seq_low / seq_tokens  # NaN for a completion with no valid tokens; ignored by nan-aware min
             per_seq_high = seq_high / seq_tokens
             gathered_low_min = self.accelerator.gather(nanmin(per_seq_low))

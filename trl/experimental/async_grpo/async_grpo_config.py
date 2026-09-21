@@ -105,15 +105,24 @@ class AsyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        packing (`str`, *optional*, defaults to `"sequence"`):
+            How a micro-batch is packed into one row per DP rank. `"sequence"` concatenates the samples end to end and
+            attends block-diagonally. `"tree"` packs them into a prefix forest, so a token shared by several rows — a
+            prompt, or a conversation up to a fork — is forwarded once instead of once per row, and attends through a
+            FlexAttention mask that still shows each row exactly what it saw. Tree packing speeds up the step roughly
+            by `packing_ratio / 1.57` (measured on Qwen3-4B / H100), so it is a loss below a packing ratio of ~1.6;
+            watch `batch/packing_ratio` to see where a workload sits. It also lets `token_budget` bound unique tokens
+            rather than raw ones, fitting more rows per row.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
-            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
-            within this budget, bounding peak memory independently of the sample count (the number of samples per row
-            becomes dynamic). If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train
-            start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample
-            longer than `token_budget` fits in no row and is dropped with a warning. Set `<= 0` to disable token
-            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch, Σ
-            Lᵢ²-balanced across the rows.
+            Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic token-budgeted
+            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows
+            each stay within this budget, bounding peak memory independently of the sample count (the number of samples
+            per row becomes dynamic). Under `packing="tree"` the budget bounds unique tokens rather than raw ones, so
+            the same budget fits more rows, and it bounds the row's loss terms too. If `None` (default), it is set to
+            the vLLM server's `max_model_len` (queried at train start) — the cap on prompt + completion length — so no
+            rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is
+            dropped with a warning. Set `<= 0` to disable token budgeting and instead pack a fixed
+            `per_device_train_batch_size × num_processes` samples per micro-batch, balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -331,10 +340,22 @@ class AsyncGRPOConfig(_BaseConfig):
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
     )
+    packing: str = field(
+        default="sequence",
+        metadata={
+            "help": "How a micro-batch is packed into one row per DP rank. `'sequence'` concatenates the samples "
+            "end to end and attends block-diagonally. `'tree'` packs them into a prefix forest, so a token shared "
+            "by several rows — a prompt, or a conversation up to a fork — is forwarded once instead of once per "
+            "row, and attends through a FlexAttention mask that still shows each row exactly what it saw. Tree "
+            "packing speeds up the step roughly by `packing_ratio / 1.57` (measured on Qwen3-4B / H100), so it is "
+            "a loss below a packing ratio of ~1.4; watch `batch/packing_ratio` to see where a workload sits. It "
+            "also lets `token_budget` bound unique tokens rather than raw ones, fitting more rows per row."
+        },
+    )
     token_budget: int | None = field(
         default=None,
         metadata={
-            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
+            "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic "
             "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
             "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
             "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
