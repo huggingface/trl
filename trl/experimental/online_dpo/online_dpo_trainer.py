@@ -577,10 +577,10 @@ class OnlineDPOTrainer(_BaseTrainer):
     @property
     def beta(self):
         if isinstance(self._beta, list):
-            epoch = self.state.epoch
-            return self._beta[epoch] if epoch < len(self._beta) else self._beta[-1]
-        else:
-            return self._beta
+            # TrainerState.epoch is a float during training and None before it starts.
+            epoch = int(self.state.epoch) if self.state.epoch is not None else 0
+            return self._beta[min(epoch, len(self._beta) - 1)]
+        return self._beta
 
     @staticmethod
     def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase) -> dict[str, Any]:
