@@ -20,11 +20,11 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import accelerate
+import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
 from packaging.version import Version
-from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedModel
 
@@ -34,6 +34,11 @@ from ..import_utils import suppress_experimental_warning
 with suppress_experimental_warning():
     from ..experimental.utils import create_reference_model as _create_reference_model
 
+
+if Version(torch.__version__) >= Version("2.6.0"):
+    from torch.distributed.fsdp import FSDPModule
+else:  # the FSDP2 API was public only from torch 2.6
+    from torch.distributed._composable.fsdp import FSDPModule
 
 if Version(accelerate.__version__) >= Version("1.6.0"):
     from accelerate.utils.fsdp_utils import fsdp2_prepare_model
@@ -300,7 +305,10 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             if Version(accelerate.__version__) >= Version("1.6.0"):
                 model = fsdp2_prepare_model(accelerator, model)
             else:
-                from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+                if Version(torch.__version__) >= Version("2.6.0"):
+                    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+                else:
+                    from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
 
                 mesh = getattr(accelerator, "torch_device_mesh", None)
                 warnings.warn(

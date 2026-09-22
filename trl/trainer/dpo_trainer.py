@@ -27,7 +27,6 @@ import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
@@ -61,6 +60,7 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     get_config_model_id,
+    global_then_local_main_first,
     hash_module,
     maybe_gather_lm_head_ctx,
     pad,
@@ -1028,7 +1028,7 @@ class DPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:

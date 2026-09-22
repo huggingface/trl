@@ -76,6 +76,31 @@ def test_prepare_fsdp2_uses_accelerate_auto_wrap():
     assert result.training is False
 
 
+@pytest.mark.parametrize("torch_version", ["2.5.0", "2.6.0", "2.7.0"])
+def test_prepare_fsdp2_legacy_accelerate_uses_compatible_torch_api(torch_version):
+    model = nn.Linear(2, 2)
+    plugin = types.SimpleNamespace(
+        fsdp_version=2, reshard_after_forward=True, cpu_offload=None, mixed_precision_policy=None
+    )
+    accelerator = types.SimpleNamespace(state=types.SimpleNamespace(fsdp_plugin=plugin))
+    module = (
+        "torch.distributed._composable.fsdp" if Version(torch_version) < Version("2.6.0") else "torch.distributed.fsdp"
+    )
+    with (
+        patch("trl.models.utils.accelerate.__version__", "1.5.0"),
+        patch("trl.models.utils.torch.__version__", torch_version),
+        patch(f"{module}.fully_shard") as fully_shard,
+        pytest.warns(UserWarning, match="Only the root module will be sharded"),
+    ):
+        result = prepare_fsdp(model, accelerator)
+
+    fully_shard.assert_called_once()
+    assert fully_shard.call_args.args == (model,)
+    assert "ignored_params" not in fully_shard.call_args.kwargs
+    assert result is model
+    assert result.training is False
+
+
 @pytest.mark.parametrize("trainer_cls", [DPOTrainer, KTOTrainer])
 @pytest.mark.parametrize("optimizer_prepared_during_precompute", [False, True])
 def test_precomputed_fsdp_model_is_reused_for_training(trainer_cls, optimizer_prepared_during_precompute):
