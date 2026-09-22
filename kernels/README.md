@@ -20,10 +20,13 @@ from kernels import get_kernel
 trl_losses = get_kernel(
     "trl-lib/trl-losses",
     version=0,
-    trust_remote_code=["trl-lib/trl-losses"],
+    trust_remote_code=True,
 )
 logprobs, entropy = trl_losses.selective_log_softmax_and_entropy(logits, token_ids)
 ```
+
+The kernel source lives in this repository's `kernels/` directory. The GitHub Actions workflow publishes a
+compatible build to the Hub for `kernels` to load at runtime.
 
 The operation accepts fp32, fp16, or bf16 logits shaped `[tokens, vocab]` or `[batch, tokens, vocab]`. Outputs are
 accumulated in fp32. CUDA, ROCm, and XPU use the same backend-neutral Triton source.
