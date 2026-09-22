@@ -32,7 +32,8 @@ def dfs_intervals(layout: TreeLayout) -> tuple[list[int], list[int]]:
 
     A subtree occupies a contiguous interval of pre-order indices, so these two integers per token turn the `O(depth)`
     ancestor walk into the `O(1)` test `enter[k] <= enter[q] < leave[k]`, which is what a FlexAttention `mask_mod`
-    needs.
+    needs. [`~PrefixForest.linearize`] already lays the forest out in pre-order, so the entry clock is the packed
+    position itself, and all that is left is where each segment's subtree ends.
 
     Args:
         layout ([`TreeLayout`]):
@@ -41,29 +42,14 @@ def dfs_intervals(layout: TreeLayout) -> tuple[list[int], list[int]]:
     Returns:
         `tuple[list[int], list[int]]`: entry and exit clocks, one pair per packed token.
     """
-    children = [[] for _ in range(layout.num_tokens)]
-    roots = []
-    for s, parent in enumerate(layout.parents):
-        start, end = layout.offsets[s], layout.offsets[s + 1]
-        if parent == -1:
-            roots.append(start)
-        else:
-            children[layout.offsets[parent + 1] - 1].append(start)
-        for token in range(start + 1, end):
-            children[token - 1].append(token)
-
-    enter, leave = [0] * layout.num_tokens, [0] * layout.num_tokens
-    clock = 0
-    stack = [(token, False) for token in reversed(roots)]
-    while stack:
-        token, leaving = stack.pop()
-        if leaving:
-            leave[token] = clock
-        else:
-            enter[token] = clock
-            clock += 1
-            stack.append((token, True))
-            stack.extend((child, False) for child in reversed(children[token]))
+    offsets = layout.offsets
+    subtree_end = list(offsets[1:])
+    for segment in reversed(range(len(layout.parents))):
+        parent = layout.parents[segment]
+        if parent != -1:
+            subtree_end[parent] = max(subtree_end[parent], subtree_end[segment])
+    enter = list(range(layout.num_tokens))
+    leave = [end for s, end in enumerate(subtree_end) for _ in range(offsets[s + 1] - offsets[s])]
     return enter, leave
 
 
