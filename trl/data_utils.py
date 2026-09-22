@@ -50,10 +50,10 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
         assistant turns contains `"tool_calls"`, then the `"content"` might be empty.
 
     Notes:
-        - When the input `messages` isn't already in the structured format, (i.e., all `"content"` values are strings),
-          the function transforms them into the structured format by wrapping text in `{"type": "text", "text": ...}`
-          and inserting `{"type": "image"}` placeholders for the images *before* the first user message.
-          If the number of placeholders does not match the number of provided images, an error is raised.
+        - Raw string contents are wrapped in `{"type": "text", "text": ...}`. If no unfilled image placeholders already
+          exist outside tool messages, `{"type": "image"}` placeholders are inserted before the text of the first user
+          message with string content. Existing placeholders keep their positions, including in conversations mixing
+          string and structured contents. If their number does not match the number of provided images, an error is raised.
         - Existing image blocks that already include an `"image"` payload are preserved as-is. Only unfilled image
           placeholders are counted and populated from `images`.
 
@@ -77,7 +77,12 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
     # First, convert all messages to the structured format if needed, and insert image placeholders if needed.
     # Build new message dicts only when transforming string content to avoid modifying the originals.
     new_messages = []
-    images_included = False
+    images_included = any(
+        part["type"] == "image" and "image" not in part
+        for message in messages
+        if message["role"] != "tool" and isinstance(message.get("content"), list)
+        for part in message["content"]
+    )
     for message in messages:
         if message["role"] == "user":
             if isinstance(message["content"], str) and not images_included:

@@ -29,6 +29,7 @@ from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
@@ -39,6 +40,7 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import (
     DataCollatorForLanguageModeling,
+    DataCollatorForVisionLanguageModeling,
     _chunked_cross_entropy_loss,
     _patch_chunked_ce_lm_head,
     dft_loss,
@@ -94,6 +96,34 @@ class TestDFTLoss(TrlTestCase):
         # If we have just two tokens in our vocab and all logits are the same,
         # dft scales the ce_loss per token by 0.5. So the dft_loss should be ce_loss/2
         torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
+
+
+@require_vision
+class TestDataCollatorForVisionLanguageModeling(TrlTestCase):
+    @pytest.mark.parametrize("image_turn", [0, 2])
+    def test_mixed_message_content(self, image_turn):
+        from PIL import Image
+
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration")
+        collator = DataCollatorForVisionLanguageModeling(processor)
+        image = Image.new("RGB", (56, 56), color="blue")
+        messages = [
+            {"role": "user", "content": "Describe the image."},
+            {"role": "assistant", "content": "It is blue."},
+            {"role": "user", "content": "What else can you see?"},
+        ]
+        messages[image_turn]["content"] = [{"type": "image"}, {"type": "text", "text": "Look at this image."}]
+        structured = copy.deepcopy(messages)
+        for message in structured:
+            if isinstance(message["content"], str):
+                message["content"] = [{"type": "text", "text": message["content"]}]
+
+        expected = collator([{"messages": structured, "images": [image]}])
+        result = collator([{"messages": messages, "images": [image]}])
+
+        assert result.keys() == expected.keys()
+        for key in expected:
+            torch.testing.assert_close(result[key], expected[key])
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
