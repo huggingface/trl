@@ -114,6 +114,10 @@ GOLD requires a [conversational](dataset_formats#conversational) [language model
 `GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct
 boundaries.
 
+When `train_dataset` is an `IterableDataset` (e.g. a streaming dataset), `max_steps` must be set in the training
+arguments, since its length cannot be inferred and the total number of training steps is required to bound the
+training loop and configure the learning rate scheduler.
+
 ## How Token Merging Works
 
 When student and teacher use different tokenizers, the same text may be split differently:
