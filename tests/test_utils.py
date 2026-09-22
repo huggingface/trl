@@ -42,6 +42,7 @@ from trl.trainer.utils import (
     get_callable_name,
     get_peft_config,
     hash_module,
+    is_async_callable,
     nanstd,
     pad,
     patch_chunked_lm_head,
@@ -69,8 +70,11 @@ class TestUseAdapter(TrlTestCase):
             "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
         )
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        enabled = model(input_ids).logits
         with model.disable_adapter():
             expected = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(enabled, expected)
 
         with use_adapter(model, None):
             output = model(input_ids).logits
@@ -104,6 +108,8 @@ class TestUseAdapter(TrlTestCase):
         expected_1 = model(input_ids).logits
         model.set_adapter("my_adapter_2")
         expected_2 = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(expected_1, expected_2)
 
         with use_adapter(model, "my_adapter_1"):
             output_1 = model(input_ids).logits
@@ -313,6 +319,47 @@ class TestGetCallableName(TrlTestCase):
         assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
 
 
+class TestIsAsyncCallable(TrlTestCase):
+    def test_function(self):
+        def reward(completions):
+            return [0.0] * len(completions)
+
+        assert not is_async_callable(reward)
+
+    def test_async_function(self):
+        async def reward(completions):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(reward)
+
+    def test_partial(self):
+        async def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(reward, threshold=0.5))
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert not is_async_callable(LengthReward())
+
+    def test_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(LengthReward())
+
+    def test_partial_of_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions, threshold):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(LengthReward(), threshold=0.5))
+
+
 class TestNanStd(TrlTestCase):
     def test_nanstd_ignores_nans(self):
         x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
@@ -350,7 +397,7 @@ class TestGenerateModelCard(TrlTestCase):
         card_text = str(model_card)
         assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
         assert "](https://huggingface.co/spaces/username/space_id)" in card_text
@@ -376,7 +423,7 @@ class TestGenerateModelCard(TrlTestCase):
         )
         card_text = str(model_card)
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "My Trainer" in card_text
 
 
@@ -1226,11 +1273,16 @@ class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
 
-    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature, bias=None):
+    def _reference_logprobs_and_entropy(
+        self, hidden, weight, labels, temperature, bias=None, logit_scale=1.0, final_logit_softcapping=None
+    ):
         logits = hidden @ weight.t()
         if bias is not None:
             logits = logits + bias
-        logits = logits.to(torch.float32) / temperature  # [N, V]
+        logits = logits.to(torch.float32) * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / temperature  # [N, V]
         log_p = F.log_softmax(logits, dim=-1)
         logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
         p = torch.softmax(logits, dim=-1)
@@ -1243,14 +1295,50 @@ class TestChunkedLogProbFunction:
         hidden = torch.randn(self.N, self.H)
         weight = torch.randn(self.V, self.H)
         labels = torch.randint(0, self.V, (self.N,))
+        chunk_rows = []
+        torch_mm = torch.mm
 
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
+        def record_chunk(input, mat2, *, out=None):
+            chunk_rows.append(input.size(0))
+            return torch_mm(input, mat2, out=out)
+
+        with (
+            patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17),
+            patch("trl.trainer.utils.torch.mm", side_effect=record_chunk),
+        ):
+            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
+            )
         logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
 
         torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
+        assert max(chunk_rows) <= 17
+        assert chunk_rows[-1] == 13
+
+    @pytest.mark.parametrize(
+        ("logit_scale", "final_logit_softcapping"),
+        [
+            (0.5, None),  # models that scale but don't softcap, e.g. MPT
+            (1.0, 30.0),  # models that softcap but don't scale, e.g. Gemma 2
+            (0.5, 30.0),  # both, applied in that order
+        ],
+    )
+    def test_logit_scale_and_softcapping(self, logit_scale, final_logit_softcapping):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H)
+        weight = torch.randn(self.V, self.H)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, entropy = _ChunkedLogProbFunction.apply(
+            hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
+        )
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
+            hidden, weight, labels, 0.7, logit_scale=logit_scale, final_logit_softcapping=final_logit_softcapping
+        )
+
+        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, temperature):
@@ -1298,6 +1386,50 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
 
+    def test_backward_bfloat16_hidden_float32_weight(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
+        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+        logprobs.sum().backward()
+        grad_hidden = hidden.grad.clone()
+        grad_weight = weight.grad.clone()
+
+        hidden.grad = None
+        weight.grad = None
+        reference, _ = self._reference_logprobs_and_entropy(hidden, weight.to(hidden.dtype), labels, 1.0)
+        reference.sum().backward()
+
+        torch.testing.assert_close(logprobs, reference, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-2, rtol=1e-2)
+
+    def test_backward_uses_autocast_hidden_for_weight_gradient(self):
+        torch.manual_seed(42)
+        hidden = torch.linspace(1.0, 2.0, self.N * self.H).reshape(self.N, self.H).to(torch.bfloat16).float()
+        perturbed_hidden = hidden + 1e-4
+        assert torch.equal(hidden.to(torch.bfloat16), perturbed_hidden.to(torch.bfloat16))
+        hidden.requires_grad_()
+        perturbed_hidden.requires_grad_()
+        weight = torch.randn(self.V, self.H, requires_grad=True)
+        perturbed_weight = weight.detach().clone().requires_grad_()
+        labels = torch.randint(0, self.V, (self.N,))
+
+        # Autocast gives both inputs identical projected values. Their weight gradients must therefore also match;
+        # using the original fp32 hidden states in backward would make the gradients depend on the discarded bits.
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+            perturbed_logprobs, _ = _ChunkedLogProbFunction.apply(
+                perturbed_hidden, perturbed_weight, None, labels, 1.0, self.CHUNK_SIZE
+            )
+        logprobs.sum().backward()
+        perturbed_logprobs.sum().backward()
+
+        torch.testing.assert_close(logprobs, perturbed_logprobs, rtol=0, atol=0)
+        torch.testing.assert_close(weight.grad, perturbed_weight.grad, rtol=0, atol=0)
+
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward_entropy(self, temperature):
         """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
@@ -1332,10 +1464,11 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,))
 
         # Chunked backward
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
-        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
+        with patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17):
+            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
+            )
+            (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
 
@@ -1372,6 +1505,46 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=atol, rtol=rtol)
         for actual, expected in zip(chunked_grads, (hidden.grad, weight.grad, bias.grad), strict=True):
             torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
+
+    def test_backward_skips_frozen_parameter_gradients(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True)
+        weight = torch.randn(self.V, self.H)
+        bias = torch.randn(self.V)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
+        with patch.object(torch, "zeros", wraps=torch.zeros) as mock_zeros:
+            logprobs.sum().backward()
+
+        # A frozen LM head should not allocate full-vocabulary gradient buffers. These shapes are distinct from the
+        # per-token accumulators and the hidden-state gradient allocated by the same backward pass.
+        allocated_shapes = [call.args[0] for call in mock_zeros.call_args_list]
+        assert weight.shape not in allocated_shapes
+        assert bias.shape not in allocated_shapes
+        assert hidden.grad is not None
+
+    @pytest.mark.parametrize("requires_grad", [(True, False, False), (False, True, False), (False, False, True)])
+    def test_backward_with_partially_frozen_inputs(self, requires_grad):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=requires_grad[0])
+        weight = torch.randn(self.V, self.H, requires_grad=requires_grad[1])
+        bias = torch.randn(self.V, requires_grad=requires_grad[2])
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
+        logprobs.sum().backward()
+        chunked_grads = hidden.grad, weight.grad, bias.grad
+
+        hidden_ref = hidden.detach().clone().requires_grad_(requires_grad[0])
+        weight_ref = weight.detach().clone().requires_grad_(requires_grad[1])
+        bias_ref = bias.detach().clone().requires_grad_(requires_grad[2])
+        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden_ref, weight_ref, labels, 1.0, bias_ref)
+        logprobs_ref.sum().backward()
+
+        for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
+            if expected is not None:
+                torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 class _FakeTransformerModel(nn.Module):
@@ -1538,6 +1711,20 @@ class TestPatchChunkedLMHead:
         grad_weight_masked = model.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
+
+        model.lm_head.weight.grad = None
+        model.model._hidden = None
+        empty_completion_mask = torch.zeros_like(completion_mask)
+        out_empty = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            completion_mask=empty_completion_mask,
+        )
+        assert out_empty["log_probs"].count_nonzero() == 0
+        out_empty["log_probs"].sum().backward()
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
 
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])

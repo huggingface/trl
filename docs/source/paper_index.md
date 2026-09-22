@@ -51,7 +51,7 @@ Distillation: Empowering Small Models
 A key contribution of the paper is demonstrating that reasoning patterns can be distilled from a large model (DeepSeek-R1) into smaller dense models (e.g., Qwen and Llama series). Distillation was found to be more effective for small models than training them with pure RL from scratch.
 
 
-You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline. 
+You can use the GRPOTrainer to replicate the reasoning-heavy stages of this pipeline.
 ```python
 from trl import GRPOConfig, GRPOTrainer
 
@@ -88,7 +88,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
+    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306
     epsilon=3e-4,  # GSPO paper (v2), section 5.1
     epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
     gradient_accumulation_steps=1,
@@ -98,7 +98,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
+TRL also provides an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -592,7 +592,7 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...,
-    off_policy_mask_threshold=0.5, 
+    off_policy_mask_threshold=0.5,
 )
 ```
 
@@ -954,8 +954,6 @@ training_args = DPOConfig(
 )
 ```
 
-For the unpaired version, the user should utilize [`experimental.bco.BCOConfig`] and [`experimental.bco.BCOTrainer`].
-
 ### Learn Your Reference Model for Real Good Alignment
 
 **📜 Paper**: https://huggingface.co/papers/2404.09656
@@ -1153,7 +1151,7 @@ $$
 l_p=\min(|y_w|,|y_l|).
 $$
 
-Setting  \\( \alpha=1 \\) recovers standard  \\( \alpha \\) reduces verbosity while preserving preference quality.
+Setting  \\( \alpha=1 \\) recovers standard DPO; smaller  \\( \alpha \\) reduces verbosity while preserving preference quality.
 The optimal  \\( \alpha \\) depends on the model family and whether you’re training a base vs. instruct model, but the paper suggests  \\( \alpha=0.5 \\) as a strong default starting point.
 
 ```python
@@ -1229,6 +1227,16 @@ trainer.train()
 ## Supervised Fine-Tuning
 
 Papers relating to the [`SFTTrainer`]
+
+### TailSFT: Filtered Fine-Tuning Improves Post-Training Performance
+
+**📜 Paper**: https://huggingface.co/papers/2608.25756
+
+TailSFT preserves response coverage for subsequent reinforcement learning by filtering the sequences whose length-normalized loss has improved the most relative to the initial policy. The [`tail_sft_gsm8k`](https://github.com/huggingface/trl/tree/main/examples/tail_sft_gsm8k) example implements the paper's distributed selection-batch filtering by subclassing [`SFTTrainer`]. It records each sequence's initial-policy loss before training and filters examples independently in every selection batch.
+
+```sh
+python examples/tail_sft_gsm8k/tail_sft.py
+```
 
 ### EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
@@ -1526,52 +1534,15 @@ training_args = TPOConfig(
 
 ## Nash Learning from Human Feedback
 
-Papers relating to the [`experimental.nash_md.NashMDTrainer`]
-
 ### Nash Learning from Human Feedback
 
 **📜 Paper**: https://huggingface.co/papers/2312.00886
 
-Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. Used in TRL via [`experimental.nash_md.NashMDTrainer`].
-
-```python
-from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained(model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id, num_labels=1)
-
-trainer = NashMDTrainer(
-    model=model,
-    reward_funcs=reward_model,
-    args=NashMDConfig(),
-    processing_class=tokenizer,
-    train_dataset=...,
-)
-trainer.train()
-```
+Introduces Nash-MD, an alternative to standard RLHF that learns a preference model conditioned on two inputs and finds a policy at the Nash equilibrium. Instead of optimizing against a reward model, Nash-MD produces policies that consistently generate responses preferred over those of any competing policy. The algorithm is based on mirror descent principles. TRL shipped an implementation as `NashMDTrainer` up to v1.13; it is no longer part of the library and remains available in the git history.
 
 ## Reward Modeling
 
-Papers relating to the [`RewardTrainer`] and [`experimental.prm.PRMTrainer`]
-
-### Solving math word problems with process- and outcome-based feedback
-
-**📜 Paper**: https://huggingface.co/papers/2211.14275
-
-Compares process-based supervision (per-step reasoning feedback) and outcome-based supervision (final-answer only) for math reasoning on GSM8K. Outcome-based training yields similar final-answer error with less labeling, but process-based supervision or learned process reward models (PRMs) are needed to reduce reasoning-step errors. The paper improves prior best from 16.8% to 12.7% final-answer error and 14.0% to 3.4% reasoning error among correct-answer solutions. Used in TRL via [`experimental.prm.PRMTrainer`]. To train a PRM using TRL, use this configuration:
-
-```python
-from trl.experimental.prm import PRMConfig
-
-training_args = PRMConfig(
-    step_separator="\n",  # separator between reasoning steps (TRL implementation detail)
-    train_on_last_step_only=False,  # supervise all steps, not just the last one (TRL implementation detail)
-)
-```
-
-The paper does not specify training hyperparameters; it focuses on comparing process-based vs outcome-based supervision strategies.
+Papers relating to the [`RewardTrainer`]
 
 ### Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking
 
@@ -1621,7 +1592,7 @@ dataset = dataset.map(add_margin)
 
 ## Online Direct Preference Optimization
 
-Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
+Papers relating to the [`experimental.online_dpo.OnlineDPOTrainer`]
 
 ### Direct Language Model Alignment from Online AI Feedback
 
@@ -1629,22 +1600,13 @@ Papers relating to the [`experimental.odpo.OnlineDPOTrainer`]
 
 Online DPO improves direct alignment from preferences methods by providing real-time feedback from a model, outperforming both DPO and PPO methods.
 
-To use Online DPO, you can use the [`experimental.odpo.OnlineDPOTrainer`].
+To use Online DPO, you can use the [`experimental.online_dpo.OnlineDPOTrainer`].
 
 ### Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF
 
 **📜 Paper**: https://huggingface.co/papers/2405.21046
 
-XPO augments the DPO objective with a novel and principled exploration bonus, empowering the algorithm to explore outside the support of the initial model and human feedback data. It is a one-line change to online DPO that is provably sample-efficient and converges to a near-optimal language model policy. The paper defines α > 0 (optimism coefficient) and β > 0 (KL regularization) in Algorithm 1 but does not specify numerical values. The following configuration uses TRL defaults:
-
-```python
-from trl.experimental.xpo import XPOConfig
-
-training_args = XPOConfig(
-    alpha=1e-5,  # α exploration bonus weight, α ≥ 0 where α=0 reduces to online DPO (TRL default)
-    beta=0.1,  # β KL regularization coefficient (TRL default)
-)
-```
+XPO augments the DPO objective with a novel and principled exploration bonus, empowering the algorithm to explore outside the support of the initial model and human feedback data. It is a one-line change to online DPO that is provably sample-efficient and converges to a near-optimal language model policy. TRL shipped an implementation as `XPOTrainer` up to v1.13; it is no longer part of the library and remains available in the git history.
 
 ## Distillation
 
@@ -1749,16 +1711,21 @@ training_args = GKDConfig(
 )
 ```
 
-You can also use the [`GOLDTrainer`] and [`GOLDConfig`] to perform on-policy distillation with a similar configuration:
+You can also use [`experimental.gold.GOLDTrainer`] for on-policy distillation; see [Unlocking On-Policy Distillation for Any Model Family](#unlocking-on-policy-distillation-for-any-model-family).
+
+### Unlocking On-Policy Distillation for Any Model Family
+
+**🌐 Project**: https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation
+
+Introduces General Online Logit Distillation (GOLD), which extends on-policy distillation to student/teacher pairs with different tokenizers and model families. GOLD aligns textual spans across tokenizers and can apply Universal Logit Distillation (ULD) so completion tokens are not dropped. Used in TRL via [`experimental.gold.GOLDTrainer`].
 
 ```python
 from trl.experimental.gold import GOLDConfig
 
-config = GOLDConfig(
-    lmbda=1.0, # student produces rollouts for all batches
-    beta=1.0, # to ensure reverse-kl as the loss function
-    teacher_model_name_or_path="teacher-model", # specify the teacher model
-
+training_args = GOLDConfig(
+    lmbda=1.0,  # student produces rollouts for all batches
+    beta=1.0,  # to ensure reverse-kl as the loss function
+    use_uld_loss=True,  # Universal Logit Distillation for cross-tokenizer pairs
 )
 ```
 

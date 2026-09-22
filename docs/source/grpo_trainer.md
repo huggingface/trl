@@ -157,7 +157,7 @@ $$
 The temperature  \\( \tau_{i,t} \\) is chosen based on the sign of the advantage  \\( \hat{A}_{i,t} \\):
 
 $$
-\tau_{i,t} = \begin{cases} 
+\tau_{i,t} = \begin{cases}
 \tau_{\text{pos}}, & \text{if } \hat{A}_{i,t} > 0 \\
 \tau_{\text{neg}}, & \text{otherwise}
 \end{cases}
@@ -204,7 +204,6 @@ While training and evaluating, we record the following metrics:
 - `clip_ratio/high_max`: The largest per-completion fraction of tokens (or the sequence itself, if `importance_sampling_level="sequence"`) clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 - `cispo_clip_ratio`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) importance sampling weights that were clipped at `epsilon_high` while having a positive advantage:  \\(r_{i,t}(\theta) > \epsilon_\mathrm{high}\\). Logged only when `loss_type="cispo"`.
 - `vespo/phi_seq_mean`: The average value of the VESPO Gamma weighting  \\(\varphi(w)\\)  applied to the sequence-level importance weights. Values below `1.0` mean sequences are being down-weighted. Logged only when `loss_type="vespo"`.
-- `clip_ratio`: The ratio of clipped tokens reported by the fused Liger GRPO loss. Logged only when `use_liger_kernel=True`, in which case it replaces the `clip_ratio/*` metrics above.
 
 ## Customization
 
@@ -986,7 +985,7 @@ All environments plug into the same `environment_factory` slot, so they are inte
 | [OpenReward](openreward) | An integration with ORS-speaking environments (the [openreward.ai](https://openreward.ai) catalog or your own ORS server); tasks **and** rewards are served over HTTP. | You want to train against an ORS environment: the catalog (e.g. `Eigent/SETA`), one you self-host on your own infra, or a local server you're developing. |
 | [Harbor](harbor) | An integration with Harbor task suites: each task is an instruction, a real sandbox image (`docker`, `e2b`, ...), and an in-sandbox verifier. | You want to train against a Harbor task suite: a tree of tasks, each a self-contained sandbox plus verifier (e.g. a data-analysis agent that explores files in a sandbox and writes an answer a grader checks). |
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
@@ -999,7 +998,7 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 

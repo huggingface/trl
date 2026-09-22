@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import importlib.metadata
 import signal
 import warnings
 from abc import abstractmethod
@@ -22,7 +23,8 @@ import psutil
 import pytest
 import torch
 import torch.nn as nn
-from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
+from packaging.version import Version
+from transformers import is_bitsandbytes_available, is_comet_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
     is_kernels_available,
@@ -38,7 +40,6 @@ from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.import_utils import (
     is_harbor_available,
     is_jmespath_available,
-    is_joblib_available,
     is_liger_kernel_available,
     is_math_verify_available,
     is_mergekit_available,
@@ -47,15 +48,33 @@ from trl.import_utils import (
 )
 
 
+if is_peft_available():
+    import peft
+
+
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
+# `get_kernel(..., trust_remote_code=...)` was added in kernels 0.14.0; older versions don't accept the argument.
+# transformers==4.56.2 (tested by the "minimum versions" CI job) caps `hub-kernels`/`kernels` extras at
+# kernels<=0.9 (huggingface-hub<1.0), and no kernels release since 0.13.0 supports huggingface-hub<1.0, so this
+# can't be resolved by bumping the pyproject.toml floor without dropping support for transformers<5.1.0.
+# kernels<0.14 doesn't even expose `__version__` (only `_versions`), so read the version from package metadata.
+require_kernels_trust_remote_code = pytest.mark.skipif(
+    not is_kernels_available() or Version(importlib.metadata.version("kernels")) < Version("0.14.0"),
+    reason="test requires kernels>=0.14.0 for `trust_remote_code`",
+)
 require_liger_kernel = pytest.mark.skipif(not is_liger_kernel_available(), reason="test requires liger-kernel")
 require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
 require_openreward = pytest.mark.skipif(not is_openreward_available(), reason="test requires openreward")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
+# `LoraConfig.target_parameters` was added in peft 0.17.0; on older versions the field doesn't exist at all.
+require_peft_target_parameters = pytest.mark.skipif(
+    not is_peft_available() or Version(peft.__version__) < Version("0.17.0"),
+    reason="test requires peft>=0.17.0 for `LoraConfig.target_parameters`",
+)
 # Response parsing needs jmespath only on transformers < 5.13, which ships the legacy `response_schema` parser; the
 # new-style `response_template` parser doesn't use it. See `_SUPPORTS_RESPONSE_TEMPLATE`.
 require_response_parsing = pytest.mark.skipif(
@@ -63,9 +82,6 @@ require_response_parsing = pytest.mark.skipif(
     reason="test requires jmespath for response parsing on transformers below 5.13.0",
 )
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
-require_sklearn = pytest.mark.skipif(
-    not (is_sklearn_available() and is_joblib_available()), reason="test requires sklearn"
-)
 require_torch_accelerator = pytest.mark.skipif(
     torch_device is None or torch_device == "cpu", reason="test requires accelerator"
 )
