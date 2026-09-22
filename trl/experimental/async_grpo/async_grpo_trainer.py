@@ -55,7 +55,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import PackingProtocol, SequencePacking, TrainingRow, TreePacking
+from .packing import PackingProtocol, SequencePacking, SequenceRow, TrainingRow, TreePacking, TreeRow
 from .tree import register_tree_attention
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
@@ -522,6 +522,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
             n = len(sample["input_ids"])
             if n > self.token_budget:
                 # Longer than the whole budget: fits in no row, so drop it (placing it would overshoot the budget
+                # or force an empty row that desyncs FSDP/EP collectives).
                 logger.warning(
                     f"Dropping a rollout sample of {n} tokens that exceeds token_budget={self.token_budget}. "
                     "Raise token_budget to avoid dropping samples."
@@ -529,16 +530,36 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                 self.metrics["batch/dropped_oversize_total"].append(1.0)
                 continue
             while True:
-                home = next((row for row in rows if row.holds(sample)), None)
-                candidates = rows if home is None else [home]
-                fits = [row for row in candidates if row.fits(sample, self.token_budget)]
-                if not fits and any(not row.samples for row in rows):
-                    fits = [row for row in rows if row.fits(sample, self.token_budget)]
-                if fits:
-                    min(fits, key=lambda row: row.load).add(sample)
+                placed_row = self._place(rows, sample)
+                if placed_row is not None:
+                    placed_row.add(sample)
                     break
+                # No more place in rows
                 yield [row.samples for row in rows]
                 rows = [self.packing.open_row() for _ in range(self.num_processes)]
+
+    def _place(self, rows: list[SequenceRow | TreeRow], sample: dict[str, Any]) -> SequenceRow | TreeRow | None:
+        """Pick the row `sample` belongs in, or `None` when the micro-batch has to close first.
+
+        A sample is only ever cheap in a row that already holds its `group_id`, so those rows get first refusal — all
+        of them, since an earlier split can leave one group on several rows. When none of them has room the sample can
+        still be split off, but only to keep a rank from forwarding nothing; otherwise closing the micro-batch is
+        cheaper, since the sample then keeps its prefix in a fresh row.
+        """
+        home = [row for row in rows if row.holds(sample)]
+        placed = self._least_loaded(home, sample)
+        if placed is not None:
+            return placed
+        if home and all(row.samples for row in rows):
+            return None
+        # Mostly happends for SequenceRow, as holds returns always False
+        # Or all the TreeRow are full
+        return self._least_loaded(rows, sample)
+
+    def _least_loaded(self, rows: list[SequenceRow | TreeRow], sample: dict[str, Any]) -> SequenceRow | TreeRow | None:
+        """The least loaded of `rows` that `sample` still fits in, or `None` if it fits in none of them."""
+        fits = [row for row in rows if row.fits(sample, self.token_budget)]
+        return min(fits, key=lambda row: row.load) if fits else None
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):

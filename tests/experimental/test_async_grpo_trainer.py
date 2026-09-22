@@ -1091,6 +1091,16 @@ class TestTreePacking(TrlTestCase):
         assert all(len(group) > 0 for group in micro_batch)
         assert all(sum(sum(s["completion_mask"]) for s in group) <= 20 for group in micro_batch)
 
+    def test_a_split_group_can_be_rejoined_on_either_row(self):
+        prompt = list(range(1, 4))
+        stream = [
+            _tree_sample(prompt + list(range(10, 10 + n)), len(prompt) + n - t, group_id=0)
+            for n, t in ((3, 3), (6, 6), (4, 4), (5, 5), (7, 4))
+        ]
+        batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list), TreePacking())
+
+        assert next(iter(batcher), None) is None  # the whole stream fits without closing a micro-batch
+
     def test_a_group_is_split_rather_than_let_a_rank_starve(self):
         source = (_tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=0) for i in range(100))
         batcher = TokenBudgetBatcher(source, 2, 10, defaultdict(list), TreePacking())
