@@ -88,7 +88,7 @@ def pytest_runtest_makereport(item, call):
 # ============================================================================
 
 MODEL_REVISIONS = {
-    # Add model_id: revision mappings here to test PRs
+    "trl-internal-testing/tiny-GemmaForCausalLM": "refs/pr/3",
 }
 
 
