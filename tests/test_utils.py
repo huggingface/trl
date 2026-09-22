@@ -70,8 +70,11 @@ class TestUseAdapter(TrlTestCase):
             "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
         )
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        enabled = model(input_ids).logits
         with model.disable_adapter():
             expected = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(enabled, expected)
 
         with use_adapter(model, None):
             output = model(input_ids).logits
@@ -105,6 +108,8 @@ class TestUseAdapter(TrlTestCase):
         expected_1 = model(input_ids).logits
         model.set_adapter("my_adapter_2")
         expected_2 = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(expected_1, expected_2)
 
         with use_adapter(model, "my_adapter_1"):
             output_1 = model(input_ids).logits
@@ -1280,11 +1285,16 @@ class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
 
-    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature, bias=None):
+    def _reference_logprobs_and_entropy(
+        self, hidden, weight, labels, temperature, bias=None, logit_scale=1.0, final_logit_softcapping=None
+    ):
         logits = hidden @ weight.t()
         if bias is not None:
             logits = logits + bias
-        logits = logits.to(torch.float32) / temperature  # [N, V]
+        logits = logits.to(torch.float32) * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / temperature  # [N, V]
         log_p = F.log_softmax(logits, dim=-1)
         logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
         p = torch.softmax(logits, dim=-1)
@@ -1317,6 +1327,30 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
         assert max(chunk_rows) <= 17
         assert chunk_rows[-1] == 13
+
+    @pytest.mark.parametrize(
+        ("logit_scale", "final_logit_softcapping"),
+        [
+            (0.5, None),  # models that scale but don't softcap, e.g. MPT
+            (1.0, 30.0),  # models that softcap but don't scale, e.g. Gemma 2
+            (0.5, 30.0),  # both, applied in that order
+        ],
+    )
+    def test_logit_scale_and_softcapping(self, logit_scale, final_logit_softcapping):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H)
+        weight = torch.randn(self.V, self.H)
+        labels = torch.randint(0, self.V, (self.N,))
+
+        logprobs, entropy = _ChunkedLogProbFunction.apply(
+            hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
+        )
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
+            hidden, weight, labels, 0.7, logit_scale=logit_scale, final_logit_softcapping=final_logit_softcapping
+        )
+
+        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, temperature):
@@ -1686,6 +1720,17 @@ class TestPatchChunkedLMHead:
         grad_weight_masked = model.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
+
+        model.lm_head.weight.grad = None
+        model.model._hidden = None
+        empty_index, empty_target = _next_token_selection(torch.zeros_like(completion_mask), input_ids)
+        out_empty = model(
+            input_ids=input_ids, attention_mask=attention_mask, pred_index=empty_index, target_id=empty_target
+        )
+        assert out_empty["log_probs"].numel() == 0
+        out_empty["log_probs"].sum().backward()
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
 
     def test_dummy_model_one_position_feeds_several_targets(self):
         """A packed forest reuses a position for several targets, which is why selection is a gather, not a mask."""
