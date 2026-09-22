@@ -43,9 +43,7 @@ config = Phi3Config(
     intermediate_size=32,
     max_position_embeddings=131072,
     sliding_window=262144,
-    # `short_factor` and `long_factor` hold one value per frequency band, so their length is
-    # `head_dim // 2`, which the size reduction takes from 48 down to 1. The values are the
-    # reference's first band, keeping `long_factor > short_factor` as the real model has it.
+    # One value per frequency band: length is `head_dim // 2`, values are the reference's first band.
     rope_scaling={"type": "longrope", "short_factor": [1.0], "long_factor": [1.0800000429153442]},
 )
 model = Phi3ForCausalLM(config).to(dtype=torch.bfloat16)
