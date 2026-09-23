@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import requests
 
+from trl.experimental.async_distillation.vllm_client import VLLMClient as DistillationVLLMClient
 from trl.experimental.async_grpo.vllm_client import VLLMClient as AsyncVLLMClient
 from trl.generation.vllm_client import VLLMClient
 
@@ -51,9 +52,10 @@ def server():
         thread.join()
 
 
-def test_async_weight_update_pause_drains_requests_and_clears_old_cache(server):
+@pytest.mark.parametrize("client_cls", [AsyncVLLMClient, DistillationVLLMClient])
+def test_async_weight_update_pause_drains_requests_and_clears_old_cache(server, client_cls):
     url, state = server
-    client = AsyncVLLMClient(url)
+    client = client_cls(url)
     client.pause()
     request = state["requests"][-1]
     assert request.path == "/pause"
