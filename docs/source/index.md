@@ -56,15 +56,8 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`A2POTrainer`](a2po_trainer)
 - [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GMPOTrainer`](gmpo)
-- [`GRPOWithReplayBufferTrainer`](grpo_with_replay_buffer)
 - [GSPO-token](gspo_token)
-- [`NashMDTrainer`](nash_md_trainer)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
-- [`XPOTrainer`](xpo_trainer)
-
-#### Reward modeling
-
-- [`PRMTrainer`](prm_trainer)
 
 </div>
 <div style="flex: 1; min-width: 0;">
@@ -72,7 +65,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 #### Offline methods
 
 - [BEMA for Reference Model](bema_for_reference_model)
-- [`BCOTrainer`](bco_trainer)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
 - [`TPOTrainer`](tpo_trainer)

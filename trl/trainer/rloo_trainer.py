@@ -63,10 +63,10 @@ from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
+    is_async_callable,
     nanmax,
     nanmin,
     nanstd,
@@ -74,6 +74,7 @@ from .utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -322,8 +323,8 @@ class RLOOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        # Mirror the pad token onto the model configs: `Trainer` runs the same alignment at train time, so the end
-        # state is unchanged, but the model stays consistent with the tokenizer from the moment it is built.
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
         model.config.pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
@@ -446,7 +447,7 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
-        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        self._has_async_funcs = any(is_async_callable(func) for func in self.reward_funcs)
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
                 name="RLOOTrainer-AsyncRewardLoop"
@@ -985,17 +986,23 @@ class RLOOTrainer(_BaseTrainer):
             logits = logits[:, :-1, :]  # (B, L-1, H)
             # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            completion_mask = attention_mask_batch[:, -logits_to_keep:]
+            # Scale inside the kernel to avoid materializing another full logits tensor.
             if compute_entropy:
-                with torch.no_grad():
-                    entropies = entropy_from_logits(logits)
+                logps, entropies = selective_log_softmax_and_entropy(
+                    logits,
+                    completion_ids,
+                    entropy_requires_grad=False,
+                    temperature=self.temperature,
+                    row_mask=completion_mask,
+                )
                 all_entropies.append(entropies)
+            else:
+                logps = selective_log_softmax(
+                    logits, completion_ids, temperature=self.temperature, row_mask=completion_mask
+                )
+            all_logps.append(logps)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
@@ -1112,7 +1119,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif is_async_callable(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function

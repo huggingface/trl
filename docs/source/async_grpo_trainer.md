@@ -28,11 +28,13 @@ In the standard [`GRPOTrainer`], generation and training are sequential: generat
 The rollout worker runs in a separate process spawned from the trainer, so reward computation never contends with the training loop for the GIL. This has two consequences for what you can pass as `reward_funcs`, `tools`, and `environment_factory` (for the latter, see the [OpenEnv guide](openenv), which covers the contract and the available integrations):
 
 > [!WARNING]
-> Because we run the rollout worker in a separate process, everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must therefore be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Lambdas and closures will raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
+> Because we run the rollout worker in a separate process, everything passed to it is **pickled**. Each reward function, tool, and `environment_factory` (and anything they close over) must therefore be picklable: use a module-level function, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial), or a **callable class instance**. Tools are the exception: the model calls a tool by its name, so each tool is registered under its `__name__` and must be a module-level function. Lambdas and closures will raise a `TypeError` at `trainer.train()`. This is a difference from [`GRPOTrainer`], where reward functions are called in-process and closures work.
 >
 > The rollout process also runs with `CUDA_VISIBLE_DEVICES=""`, so it cannot use the GPU. A **GPU-backed reward model** (e.g. an `AutoModelForSequenceClassification` scorer) still loads without error but silently falls back to **CPU** (note that in [`GRPOTrainer`], such a reward model shares the trainer's GPUs). Keep reward functions CPU-side and lightweight (verifiers like `accuracy_reward`, format/length checks).
 >
 > If you do need a GPU reward model, the recommended approach is to **serve it behind its own inference engine** (vLLM, TGI, …) on separate GPUs and have a lightweight, picklable reward function call it over HTTP. This keeps the reward model on its own device while the rollout process stays CPU-only, and it scales independently of the trainer.
+
+Tools and environment methods can be synchronous or asynchronous. Synchronous tools run on a thread pool sized to `max_inflight_tasks`, so a slow tool never blocks the other in-flight vLLM requests. Within one assistant turn, tool calls run in the order the model emitted them. Up to `max_inflight_tasks` synchronous tools therefore run at once, so a tool that reads or writes shared state must be thread-safe.
 
 After every `weight_sync_steps` training steps, the updated weights are transferred to the vLLM server via NCCL so that subsequent generations reflect the latest policy.
 
@@ -96,6 +98,45 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 
 > [!WARNING]
 > **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
+
+## LoRA
+
+Pass a `peft_config` to train a LoRA adapter instead of the full model:
+
+```python
+from peft import LoraConfig
+
+trainer = AsyncGRPOTrainer(
+    model="Qwen/Qwen3-4B",
+    reward_funcs=reward_len,
+    train_dataset=dataset,
+    peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
+)
+```
+
+Every weight sync has to get the updated policy to the server. By default the trainer merges the adapter into the base model and sends the full merged weights, which is around 15 GB for a 7B model on every sync. Start the vLLM server with `--enable-lora` and it sends only the adapter instead, about 160 MB at `r=32`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3-4B \
+    --max-model-len 4096 \
+    --logprobs-mode processed_logprobs \
+    --weight-transfer-config '{"backend":"nccl"}' \
+    --enable-lora \
+    --max-lora-rank 32 \
+    --max-loras 6
+```
+
+`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Add `VLLM_WORKER_MULTIPROC_METHOD=spawn` if you serve tensor-parallel, and keep `--weight-transfer-config` either way: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
+
+`--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
+
+vLLM loads adapters from disk rather than over the network, so the trainer writes each version under `<output_dir>/.vllm_lora/` and gives the server the path. If the server runs on a different machine, that directory has to be on a filesystem both of them can see.
+
+> [!WARNING]
+> `<output_dir>/.vllm_lora/` is a serving cache, not where your trained adapter is kept. It only holds the most recent versions, and each one is deleted shortly after it falls out of the staleness window. Checkpoints are what preserve the adapter you trained, so do not turn them off: with `save_strategy="no"` a multi-hour run finishes and leaves nothing behind. `output_dir` also has to be readable by the server and has to outlive the job, so node-local scratch will not work, even though it would keep syncs off a slow shared filesystem.
+
+> [!TIP]
+> Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
 ## Design philosophy
 
