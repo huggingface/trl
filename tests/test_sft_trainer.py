@@ -1997,6 +1997,49 @@ class TestSFTTrainer(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    @require_vision
+    @pytest.mark.parametrize("text_field", ["text", "caption"])
+    @pytest.mark.parametrize("image_column", ["image", "images"])
+    def test_train_vlm_standard_text_column(self, text_field, image_column):
+        from PIL import Image
+
+        image = Image.new("RGB", (32, 32), "red")
+        text = "<|vision_start|><|image_pad|><|vision_end|>A red square."
+        dataset = Dataset.from_dict(
+            {
+                text_field: [text],
+                image_column: [image] if image_column == "image" else [[image]],
+                "unused_metadata": ["not a model input"],
+            }
+        )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            dataset_text_field=text_field,
+            max_length=None,
+            max_steps=1,
+            per_device_train_batch_size=1,
+            save_strategy="no",
+            report_to="none",
+        )
+        assert training_args.remove_unused_columns
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+            eval_dataset=dataset,
+        )
+
+        # Exercise the trainer's column filtering, not just the collator in isolation.
+        train_batch = next(iter(trainer.get_train_dataloader()))
+        eval_batch = next(iter(trainer.get_eval_dataloader()))
+        assert "pixel_values" in train_batch
+        assert "A red square." in trainer.processing_class.tokenizer.decode(train_batch["input_ids"][0])
+        torch.testing.assert_close(train_batch["input_ids"], eval_batch["input_ids"])
+
+        result = trainer.train()
+        assert trainer.state.global_step == 1
+        assert 0 < result.training_loss < float("inf")
+
     @pytest.mark.parametrize(
         "model_id",
         [

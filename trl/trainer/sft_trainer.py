@@ -1709,6 +1709,7 @@ class SFTTrainer(_BaseTrainer):
         if self._signature_columns is None:
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
+                self._signature_columns.append(self.args.dataset_text_field)
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths"]
 

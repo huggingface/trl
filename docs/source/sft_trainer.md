@@ -319,6 +319,9 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 [`SFTTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, provide a dataset with either an `image` column (single image per sample) or an `images` column (list of images per sample). For more information on the expected dataset structure, see the [Dataset Format — Vision Dataset](dataset_formats#vision-dataset) section.
 An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/datasets/trl-lib/llava-instruct-mix).
 
+For standard (non-conversational) image-text datasets, provide the formatted text in the `text` column, or set
+`dataset_text_field` to your text column's name. The text must include the image placeholders expected by the model.
+
 ```python
 from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
