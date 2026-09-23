@@ -664,7 +664,7 @@ class KTOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
