@@ -41,10 +41,8 @@ class _BaseConfig(TrainingArguments):
             Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts. See
             the documentation of each scheduler for possible values.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
-            Patch the model's `RMSNorm`, `RoPE` and `SwiGLU` with [Liger
-            Kernel](https://github.com/linkedin/Liger-Kernel) Triton kernels. In SFT it also swaps the loss for Liger's
-            fused linear cross-entropy; in DPO, GRPO and KTO it also computes the per-token log-probabilities with
-            TRL's chunked implementation, which comes with restrictions listed in the [Liger Kernel
+            Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations. In DPO, GRPO and KTO it also
+            selects TRL's chunked log-probability path, which has restrictions; see the [Liger Kernel
             Integration](liger_kernel_integration) guide.
         torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
@@ -92,7 +90,7 @@ class _BaseConfig(TrainingArguments):
     use_liger_kernel: bool = field(
         default=False,
         metadata={
-            "help": "Patch the model with Liger Kernel Triton kernels. Also selects the fused loss in SFT and the chunked log-probability path in DPO, GRPO and KTO."
+            "help": "Enable Liger Kernel optimizations. In DPO, GRPO and KTO, also selects the chunked log-probability path."
         },
     )
     # - Introduced in v4.54.1; fixed in v5.3.0
