@@ -734,7 +734,7 @@ class DPOTrainer(_BaseTrainer):
                 "forward pass of the reference model over the entire dataset is not supported for large "
                 "multimodal models. Set `precompute_ref_log_probs=False`."
             )
-        if data_collator is None and not self._is_vision_dataset:
+        if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
@@ -749,18 +749,19 @@ class DPOTrainer(_BaseTrainer):
             # configs.
             model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
             model.generation_config.pad_token_id = self._tokenizer.pad_token_id
-            data_collator = DataCollatorForPreference(
-                pad_token_id=self._tokenizer.pad_token_id,
-                max_length=args.max_length,
-                truncation_mode=args.truncation_mode,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
-        elif data_collator is None and self._is_vision_dataset:
-            data_collator = DataCollatorForVisionPreference(
-                processor=processing_class,
-                max_length=args.max_length,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
+            if self._is_vision_dataset:
+                data_collator = DataCollatorForVisionPreference(
+                    processor=processing_class,
+                    max_length=args.max_length,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
+            else:
+                data_collator = DataCollatorForPreference(
+                    pad_token_id=self._tokenizer.pad_token_id,
+                    max_length=args.max_length,
+                    truncation_mode=args.truncation_mode,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
 
         # Training arguments
         self.beta = args.beta

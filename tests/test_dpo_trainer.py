@@ -1721,6 +1721,29 @@ class TestDPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
+    def test_pad_token_synced_with_model_config_vision(self):
+        # A vision dataset takes the other collator branch, which used to skip the pad token handling entirely, so
+        # the requested pad token reached neither the tokenizer nor the model configs.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+
+        with pytest.warns(FutureWarning, match="`pad_token` is deprecated"):
+            training_args = DPOConfig(
+                output_dir=self.tmp_dir,
+                max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+                pad_token="<|fim_pad|>",
+                report_to="none",
+            )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.tokenizer.convert_tokens_to_ids("<|fim_pad|>")
+        assert trainer.processing_class.tokenizer.pad_token_id == pad_token_id
+        assert trainer.model.config.get_text_config().pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
+
 
 @pytest.mark.slow
 class TestDPOTrainerSlow(TrlTestCase):
