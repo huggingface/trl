@@ -36,14 +36,34 @@ class KLPOConfig(GRPOConfig):
     Parameters:
         num_generations (`int`, *optional*, defaults to `1`):
             Number of generations to sample per prompt. KLPO needs only a single complete rollout per prompt.
+        klpo_route (`str`, *optional*, defaults to `"token"`):
+            Regression route. `"token"` (default) uses a separate detached feedback coefficient `R - klpo_beta * ell_u`
+            for each token; `"sequence"` shares one detached trajectory residual `R - klpo_beta * sum(ell_u + k_u)`
+            across all tokens of a response.
+        kl_estimator (`str`, *optional*, defaults to `"mc"`):
+            Conditional-KL estimator supplying the sampler-conditioned score correction. Supported values are:
+
+            - `"mc"` (default): Monte Carlo KL. Averages `mc_samples` independent auxiliary token draws from the
+              sampler at each visited prefix. Sequence regression requires `mc_samples >= 2` (leave-one-out residuals).
+            - `"topk"`: Top-K Aggregated KL. Keeps the sampler's `kl_top_k` highest-probability tokens per prefix and
+              aggregates all remaining tokens into one tail bucket.
+            - `"binary"`: Binary KL. Groups the sampled action against its complement; needs only sampled-action
+              log-probabilities (no extra records).
+            - `"full"`: exact KL over the entire vocabulary. Stores the sampler's full `(B, T, vocab_size)`
+              conditionals per generation batch, which is memory-intensive for real vocabularies; prefer `"topk"` with
+              a large `kl_top_k` in that case.
         klpo_beta (`float`, *optional*, defaults to `0.1`):
             KL regularization coefficient toward the sampler policy (β in the KLPO report). Each token's feedback
             coefficient is `R - klpo_beta * (log p(a) - log q(a))`, where `p` is the current policy and `q` the
             sampler.
         mc_samples (`int`, *optional*, defaults to `128`):
             Number of independent auxiliary token draws per visited prefix (M in the KLPO report) used by the Monte
-            Carlo KL (MC-KL) score correction. Token regression supports any `M >= 1`; the report's launchers default
-            to `128`.
+            Carlo KL (MC-KL) score correction. Token regression supports any `M >= 1`; sequence regression requires `M
+            >= 2`. The report's launchers default to `128`. Only used when `kl_estimator="mc"`.
+        kl_top_k (`int`, *optional*, defaults to `128`):
+            Head size K of the Top-K Aggregated KL estimator: the sampler's K highest-probability tokens are stored per
+            prefix and the rest aggregated into one tail bucket. The report uses `128`. Only used when
+            `kl_estimator="topk"`.
         mask_truncated_completions (`bool`, *optional*, defaults to `True`):
             Whether to exclude truncated completions from loss calculation. KLPO expects each row to be a complete
             trajectory carrying a terminal reward, so this defaults to `True` (unlike GRPO).
@@ -53,6 +73,22 @@ class KLPOConfig(GRPOConfig):
         default=1,
         metadata={
             "help": "Number of generations to sample per prompt. KLPO needs only a single complete rollout per prompt."
+        },
+    )
+    klpo_route: str = field(
+        default="token",
+        metadata={
+            "help": "Regression route. 'token' (default) uses a separate detached feedback coefficient per token; "
+            "'sequence' shares one detached trajectory residual across all tokens of a response."
+        },
+    )
+    kl_estimator: str = field(
+        default="mc",
+        metadata={
+            "help": "Conditional-KL estimator. Supported values are 'mc' (default, Monte Carlo KL from mc_samples "
+            "auxiliary draws per prefix), 'topk' (Top-K Aggregated KL with head size kl_top_k), 'binary' (sampled "
+            "action against its complement, no extra records), and 'full' (exact KL over the entire vocabulary, "
+            "memory-intensive for real vocabularies)."
         },
     )
     klpo_beta: float = field(
@@ -66,7 +102,15 @@ class KLPOConfig(GRPOConfig):
         default=128,
         metadata={
             "help": "Number of independent auxiliary token draws per visited prefix (M in the KLPO report) used by "
-            "the Monte Carlo KL (MC-KL) score correction. Must be >= 1."
+            "the Monte Carlo KL (MC-KL) score correction. Must be >= 1 (>= 2 with klpo_route='sequence'). Only used "
+            "when kl_estimator='mc'."
+        },
+    )
+    kl_top_k: int = field(
+        default=128,
+        metadata={
+            "help": "Head size K of the Top-K Aggregated KL estimator: the sampler's K highest-probability tokens "
+            "are stored per prefix and the rest aggregated into one tail bucket. Only used when kl_estimator='topk'."
         },
     )
     mask_truncated_completions: bool = field(
@@ -87,8 +131,23 @@ class KLPOConfig(GRPOConfig):
         if self.num_generations == 1:
             self.scale_rewards = "none"
 
+        if self.klpo_route not in ("token", "sequence"):
+            raise ValueError(f"klpo_route must be 'token' or 'sequence', got {self.klpo_route!r}.")
+
+        if self.kl_estimator not in ("mc", "topk", "binary", "full"):
+            raise ValueError(f"kl_estimator must be 'mc', 'topk', 'binary', or 'full', got {self.kl_estimator!r}.")
+
         if self.mc_samples < 1:
             raise ValueError(f"mc_samples must be >= 1, got {self.mc_samples}.")
+
+        if self.klpo_route == "sequence" and self.kl_estimator == "mc" and self.mc_samples < 2:
+            raise ValueError(
+                "sequence MC-KL needs mc_samples >= 2 for leave-one-out residuals, got "
+                f"{self.mc_samples}. Increase mc_samples or use klpo_route='token'."
+            )
+
+        if self.kl_top_k < 1:
+            raise ValueError(f"kl_top_k must be >= 1, got {self.kl_top_k}.")
 
         if self.use_liger_kernel:
             raise ValueError(

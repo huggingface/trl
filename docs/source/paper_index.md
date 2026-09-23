@@ -725,7 +725,7 @@ $$
 \mathcal{L} = -\underset{\text{responses}}{\text{mean}} \sum_{\text{tokens } u} \operatorname{sg}\!\left[R - \beta\,\ell_u\right] \left( \log p(a_u) - \frac{1}{M}\sum_{j=1}^{M} \log p(v_j) \right), \qquad v_j \sim q
 $$
 
-Tokens are summed without length normalization and responses averaged; there is no importance-ratio multiplier, reward centering, ratio clipping, or reference-model pass. TRL provides an experimental implementation, see [Experimental - KLPO](klpo_trainer):
+Tokens are summed without length normalization and responses averaged; there is no importance-ratio multiplier, reward centering, ratio clipping, or reference-model pass. The report also describes a sequence-regression route (one trajectory residual shared across tokens) and three alternative conditional-KL estimators (TopK-KL, Binary KL, Full KL); all eight route/estimator combinations are implemented. TRL provides an experimental implementation, see [Experimental - KLPO](klpo_trainer):
 
 ```python
 from trl.experimental.klpo import KLPOConfig, KLPOTrainer
@@ -733,6 +733,8 @@ from trl.experimental.klpo import KLPOConfig, KLPOTrainer
 training_args = KLPOConfig(
     num_generations=1,  # "One complete response per prompt is sufficient"
     klpo_beta=0.1,  # "beta=0.1 [is a] starting value, not [a] tuned KLPO benchmark setting"
+    klpo_route="token",  # "All recipes default to --route token"
+    kl_estimator="mc",  # "--kl-estimator mc"; also selectable: "topk", "binary", "full"
     mc_samples=128,  # "the launchers default to M=128, and token regression allows any M >= 1"
 )
 trainer = KLPOTrainer(
