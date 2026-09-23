@@ -31,7 +31,7 @@ jobs:
         uses: huggingface/kernel-builder-job@e76dd635bcf7c66c8322e88517cf0361af27b69e
         with:
           token: ${{ secrets.HF_TOKEN }}
-          namespace: trl-lib
+          namespace: qgallouedec
           flavor: cpu-upgrade
           timeout: "3600"
           script: |
