@@ -57,6 +57,8 @@ elif is_vllm_available():
 # ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
 _HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
 
+_DEFAULT_GENERATION_CONCURRENCY = 64
+
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +232,8 @@ class VLLMClient:
             allowed_methods=["POST", "GET"],  # allow POST as well, even though we're not sure it's safe here
         )
 
-        adapter = HTTPAdapter(max_retries=retry_strategy)
+        # Match the default generation concurrency so connections can be reused across batches.
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_maxsize=_DEFAULT_GENERATION_CONCURRENCY)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
@@ -304,7 +307,9 @@ class VLLMClient:
         """
         return self._get(f"{self.base_url}/get_world_size")["world_size"]
 
-    def image_features(self, images: list[list | None], max_concurrent_requests: int = 64) -> list[dict | None]:
+    def image_features(
+        self, images: list[list | None], max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY
+    ) -> list[dict | None]:
         """
         Processes images server-side into the features that pair with token IDs in
         [`~generation.vllm_client.VLLMClient.generate`].
@@ -442,7 +447,7 @@ class VLLMClient:
         prompts: list[list[int]],
         features: list[dict | None],
         sampling_params: dict,
-        max_concurrent_requests: int = 64,
+        max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY,
     ) -> dict[str, list[list[int]]]:
         """Generate from token IDs paired with multimodal features, one request per prompt."""
         # The server leaves the default output kind on non-streaming requests, under which it returns only the
@@ -489,7 +494,7 @@ class VLLMClient:
         chat_template_kwargs: dict | None = None,
         tools: list | None = None,
         chat_template: str | None = None,
-        max_concurrent_requests: int = 64,
+        max_concurrent_requests: int = _DEFAULT_GENERATION_CONCURRENCY,
     ) -> dict[str, list[list[int]]]:
         """
         Generates model completions for the provided chat messages.
