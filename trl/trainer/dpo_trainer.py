@@ -47,6 +47,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -802,6 +803,11 @@ class DPOTrainer(_BaseTrainer):
         # Chunked log-probability path
         self.use_liger_kernel = args.use_liger_kernel
         if self.use_liger_kernel:
+            if not is_liger_kernel_available():
+                raise ImportError(
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
+                    "Please install liger-kernel first: `pip install liger-kernel`"
+                )
             if self.use_weighting:
                 raise ValueError(
                     "`use_liger_kernel=True` is incompatible with `use_weighting=True`. WPO weighting requires a "
