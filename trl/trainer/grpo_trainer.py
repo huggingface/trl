@@ -69,7 +69,7 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_jmespath_available, is_liger_kernel_available
+from ..import_utils import is_jmespath_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
@@ -787,7 +787,6 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
         self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
-        self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
 
@@ -799,31 +798,12 @@ class GRPOTrainer(_BaseTrainer):
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
-        if self.use_liger_kernel and is_peft_model(model):
-            # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head is
-            # targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base weight
-            # and the trainable adapter parameters live in separate submodules that Liger never sees. The head adapter
-            # would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail loudly rather
-            # than train a silently-frozen head.
-            output_embeddings = model.get_output_embeddings()
-            if isinstance(output_embeddings, BaseTunerLayer):
-                raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The chunked "
-                    "projection reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
-                    "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
-                )
-            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-            # `PeftModel.forward()`. The chunked path bypasses `PeftModel.forward()` by calling the backbone
-            # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
-            # Fail loudly rather than train on a silently corrupted input.
-            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
-                raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                    "PrefixTuning, P-Tuning). The chunked path bypasses `PeftModel.forward()` by calling the "
-                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
-                    "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                    "`use_liger_kernel=False`."
-                )
+        # Log-probs are streamed through `lm_head.weight` without materializing the logits. That skips a PEFT adapter
+        # on `lm_head` and the virtual tokens prompt-learning injects in `PeftModel.forward()`, so both keep the logits.
+        self.use_chunked_logps = not is_peft_model(model) or not (
+            isinstance(model.get_output_embeddings(), BaseTunerLayer)
+            or any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values())
+        )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         self.entropy_coef = args.entropy_coef
@@ -1023,11 +1003,7 @@ class GRPOTrainer(_BaseTrainer):
                 _cast_lm_head_to_fp32(self.ref_model)
 
         # Chunked log-probability path
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
-                )
+        if self.use_chunked_logps:
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the chunked projection.
             self._forward_redirection = _ForwardRedirection()
@@ -1362,7 +1338,7 @@ class GRPOTrainer(_BaseTrainer):
     @profiling_decorator
     def _get_per_token_logps_and_entropies(self, model, *args, batch_size=None, compute_aux_loss=False, **kwargs):
         """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
-        if not self.use_liger_kernel or compute_aux_loss:
+        if not self.use_chunked_logps or compute_aux_loss:
             return self._full_logits_logps(
                 model, *args, batch_size=batch_size, compute_aux_loss=compute_aux_loss, **kwargs
             )
@@ -1464,6 +1440,9 @@ class GRPOTrainer(_BaseTrainer):
         # lets an all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
         logps = valid_logps.new_zeros(completion_mask.shape).masked_scatter(completion_mask, valid_logps)
         if compute_entropy:
+            # Without the entropy bonus they are only logged and used for masking, so detach them like the full path
+            if not self._entropy_bonus_enabled:
+                valid_entropies = valid_entropies.detach()
             entropies = valid_entropies.new_zeros(completion_mask.shape).masked_scatter(
                 completion_mask, valid_entropies
             )
@@ -2985,7 +2964,7 @@ class GRPOTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.use_liger_kernel:
+        if self.use_chunked_logps:
             unwrapped_model = self.accelerator.unwrap_model(model)
             if model is not unwrapped_model or self.is_fsdp_enabled:
                 return self._forward_redirection(model, unwrapped_model, self._compute_loss, unwrapped_model, inputs)
