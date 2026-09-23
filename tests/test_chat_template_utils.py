@@ -1042,8 +1042,8 @@ class TestGetTrainingChatTemplate:
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
             request.node.add_marker(
                 pytest.mark.xfail(
-                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
-                    "through the processor path. It is not a supported training template.",
+                    Version(transformers.__version__) < Version("5.18.0.dev0"),
+                    reason="Processor assistant masks require transformers#48793 (5.18.0.dev0).",
                     strict=True,
                 )
             )
@@ -1072,8 +1072,8 @@ class TestGetTrainingChatTemplate:
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
             request.node.add_marker(
                 pytest.mark.xfail(
-                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
-                    "through the processor path. It is not a supported training template.",
+                    Version(transformers.__version__) < Version("5.18.0.dev0"),
+                    reason="Processor assistant masks require transformers#48793 (5.18.0.dev0).",
                     strict=True,
                 )
             )
