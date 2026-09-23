@@ -37,6 +37,17 @@ class TestKLPOConfig:
         with pytest.raises(ValueError, match="mc_samples"):
             KLPOConfig("dummy", mc_samples=0)
 
+    def test_invalid_route_and_estimator(self):
+        with pytest.raises(ValueError, match="klpo_route"):
+            KLPOConfig("dummy", klpo_route="tokens")
+        with pytest.raises(ValueError, match="kl_estimator"):
+            KLPOConfig("dummy", kl_estimator="montecarlo")
+
+    def test_sequence_mc_needs_two_samples(self):
+        # Sequence MC-KL uses leave-one-out residuals, which require M >= 2.
+        with pytest.raises(ValueError, match="leave-one-out"):
+            KLPOConfig("dummy", klpo_route="sequence", kl_estimator="mc", mc_samples=1)
+
 
 class TestKLPOTrainer(TrlTestCase):
     def test_train(self):
@@ -130,6 +141,55 @@ class TestKLPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @pytest.mark.parametrize(
+        "route, estimator",
+        [
+            # token + mc is the default and is covered by test_train
+            ("token", "topk"),
+            ("token", "binary"),
+            ("token", "full"),
+            ("sequence", "mc"),
+            ("sequence", "topk"),
+            ("sequence", "binary"),
+            ("sequence", "full"),
+        ],
+    )
+    def test_train_routes_and_estimators(self, route, estimator):
+        # All route/estimator combinations must train and move the parameters.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = KLPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=1,
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            klpo_route=route,
+            kl_estimator=estimator,
+            mc_samples=4,  # reduce the number of MC draws to speed up the test
+            kl_top_k=2,  # small head so the tail bucket is exercised
+            mask_truncated_completions=False,  # the tiny model never emits EOS, so all completions are truncated
+            report_to="none",
+        )
+        trainer = KLPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert "kl" in trainer.state.log_history[-1]
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_num_generations_gt1(self):
         # KLPO does not need groups, but grouped generation must still work (rewards stay raw).
