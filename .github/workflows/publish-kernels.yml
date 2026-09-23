@@ -32,7 +32,7 @@ jobs:
         with:
           token: ${{ secrets.HF_TOKEN }}
           namespace: qgallouedec
-          flavor: cpu-upgrade
+          flavor: cpu-xl
           timeout: "3600"
           script: |
             set +x
@@ -44,8 +44,10 @@ jobs:
             git checkout "${{ github.sha }}"
             cd kernels
 
-            kernel-builder check-config
-            kernel-builder build-and-upload
+            # Run the kernel-builder CLI pinned in flake.lock so it matches the builder
+            KB="nix run github:huggingface/kernels/$(jq -r '.nodes["kernel-builder"].locked.rev' flake.lock)#kernel-builder --"
+            $KB check-config
+            $KB build-and-upload
 
       - name: Post to Slack
         if: ${{ !cancelled() }}
