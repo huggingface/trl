@@ -1007,7 +1007,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
+        with pytest.raises(ValueError, match="`compute_metrics` is not supported with `use_liger_kernel=True`"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
