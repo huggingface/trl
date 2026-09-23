@@ -335,3 +335,16 @@ def test_harbor_producer_defaults_and_partial_masks_round_trip():
         with pytest.raises(ValueError, match="sampling"):
             openenv_harness._turns_from_trace(trace, sampling=policy)
         trace[0]["metadata"]["sampling_params"][key] = original
+
+
+def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypatch):
+    session = Session(captured_entry())
+    loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
+    monkeypatch.setattr(
+        openenv_harness, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
+    )
+    with pytest.raises(openenv_harness.CaptureContractError, match="invalid training sequence"):
+        loop.run()
+    assert loop._failed_event.is_set()
+    assert session.closed.is_set()
+    assert loop.rollout_buffer.empty()

@@ -94,12 +94,13 @@ _children: list[subprocess.Popen] = []
 _stopping = threading.Event()
 
 
-def _spawn(cmd: list[str], log_path: pathlib.Path, env: dict[str, str] | None = None) -> subprocess.Popen:
+def _spawn(cmd: list[str], log_path: pathlib.Path | None, env: dict[str, str] | None = None) -> subprocess.Popen:
     """Start a child in a process group so cleanup also stops its workers."""
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         cmd,
-        stdout=open(log_path, "w"),
+        stdout=open(log_path, "w") if log_path is not None else None,
         stderr=subprocess.STDOUT,
         env={**os.environ, **(env or {})},
         start_new_session=True,
@@ -126,10 +127,14 @@ def _stop_process(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
 
 
-def _cleanup(*_: object) -> None:
+def _cleanup() -> None:
     _stopping.set()
-    for proc in list(_children):
+    for proc in reversed(list(_children)):
         _stop_process(proc)
+
+
+def _handle_signal(signum: int, _frame: object) -> None:
+    raise SystemExit(128 + signum)
 
 
 def _http_ok(url: str, timeout: float = 5.0) -> bool:
@@ -152,16 +157,13 @@ def _http_json_has(url: str, key: str, timeout: float = 15.0) -> bool:
 
 def wait_for_public_proxy(log: pathlib.Path, capture_port: int, deadline_s: float = 420.0) -> str:
     """Return the public URL after its health endpoint reaches the capture proxy."""
-    published = re.compile(rf"capture\s+:{capture_port}\s+->\s+(https://\S+)")
-    ansi = re.compile(r"\x1b\[[0-9;]*m")
     started = time.monotonic()
     url: str | None = None
     while time.monotonic() - started < deadline_s:
-        if url is None and log.exists():
-            found = published.search(ansi.sub("", log.read_text(errors="replace")))
-            if found:
-                url = found.group(1).rstrip(".,")
-                print(f"[launcher] server published {url}; verifying it reaches the proxy", flush=True)
+        latest = _published_url(log, capture_port)
+        if latest and latest != url:
+            url = latest
+            print(f"[launcher] server published {url}; verifying it reaches the proxy", flush=True)
         if url and _http_json_has(f"{url}/health", "status"):
             print(f"[launcher] capture proxy reachable at {url}", flush=True)
             return url
@@ -255,8 +257,7 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
     log = logs / "warm-template.log"
     print("[launcher] warming the sandbox template (one serial rollout) ...", flush=True)
     started = time.monotonic()
-    with open(log, "w") as handle:
-        rc = subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT, check=False).returncode
+    rc = _spawn(cmd, log).wait()
     took = time.monotonic() - started
     if rc != 0:
         # A verifier failure does not imply that the image build failed.
@@ -290,8 +291,8 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 
 def main() -> None:
     args, forwarded = parse_args()
-    signal.signal(signal.SIGTERM, _cleanup)
-    signal.signal(signal.SIGINT, _cleanup)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
     data_root = pathlib.Path(args.data_root)
     mounted = data_root.is_dir()
@@ -397,9 +398,7 @@ def main() -> None:
     ]  # fmt: skip
     print(f"[launcher] proxy {public_proxy}  (what the sandboxed agent calls)", flush=True)
     print(f"[launcher] train {' '.join(cmd)}", flush=True)
-    rc = subprocess.run(
-        cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": args.train_device, "PYTHONPATH": env_path}, check=False
-    ).returncode
+    rc = _spawn(cmd, None, env={"CUDA_VISIBLE_DEVICES": args.train_device, "PYTHONPATH": env_path}).wait()
     print(f"[launcher] training exited {rc}", flush=True)
     sys.exit(rc)
 

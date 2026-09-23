@@ -252,7 +252,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 timed_out=timed_out,
             )
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
-            sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
+            try:
+                sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
+            except (ValueError, TypeError, KeyError) as exc:
+                raise CaptureContractError(str(exc)) from exc
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
             metrics = dict(
                 turns=len(turns),

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import os
 import signal
 import socket
 import subprocess
@@ -128,7 +129,8 @@ def test_jobs_launcher_uses_pinned_source_and_unique_names(launcher, monkeypatch
     monkeypatch.setattr(launcher.shutil, "which", lambda tool: f"/bin/{tool}")
     run = MagicMock(return_value=SimpleNamespace(stdout="0\n1\n", returncode=0))
     monkeypatch.setattr(launcher.subprocess, "run", run)
-    monkeypatch.setattr(launcher, "_spawn", MagicMock())
+    spawn = MagicMock(return_value=SimpleNamespace(wait=lambda: 0))
+    monkeypatch.setattr(launcher, "_spawn", spawn)
     monkeypatch.setattr(launcher, "start_harbor_server", lambda *args: "https://proxy.example")
     monkeypatch.setattr(launcher, "wait_for_vllm", MagicMock())
     monkeypatch.setattr(launcher.urllib.request, "urlretrieve", MagicMock())
@@ -139,7 +141,7 @@ def test_jobs_launcher_uses_pinned_source_and_unique_names(launcher, monkeypatch
             launcher.main()
         assert stopped.value.code == 0
     thread.assert_not_called()
-    commands = [call for call in run.call_args_list if call.args[0][0] == sys.executable]
+    commands = [call for call in spawn.call_args_list if call.args[0][0] == sys.executable]
     names = [call.args[0][call.args[0].index("--run-name") + 1] for call in commands]
     assert names[0] != names[1] and all("job42" in name for name in names)
     for call, name in zip(commands, names, strict=True):
@@ -181,3 +183,64 @@ def test_training_run_names_are_unique_and_can_be_overridden(monkeypatch, job_ke
     assert config.call_args.kwargs["run_name"] == "explicit"
     assert config.call_args.kwargs["output_dir"] == "runs/custom"
     assert trainer.return_value.train.call_count == 3
+
+
+def test_proxy_waiter_follows_republished_url(launcher, monkeypatch, tmp_path):
+    log = tmp_path / "server.log"
+    log.write_text("capture :8300 -> https://old.example\n")
+    calls = []
+
+    def probe(url, key):
+        calls.append(url)
+        if url == "https://old.example/health":
+            with log.open("a") as handle:
+                handle.write("capture :8300 -> https://new.example\n")
+            return False
+        return True
+
+    monkeypatch.setattr(launcher, "_http_json_has", probe)
+    monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
+    assert launcher.wait_for_public_proxy(log, 8300, deadline_s=1) == "https://new.example"
+    assert calls == ["https://old.example/health", "https://new.example/health"]
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_signal_stops_trainer_and_exits(launcher, signum):
+    script = (
+        "import importlib.util, signal, sys\n"
+        "spec = importlib.util.spec_from_file_location('launcher', sys.argv[1])\n"
+        "launcher = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(launcher)\n"
+        "signal.signal(signal.SIGTERM, launcher._handle_signal)\n"
+        "signal.signal(signal.SIGINT, launcher._handle_signal)\n"
+        "child = launcher._spawn([sys.executable, '-c', 'import time; time.sleep(60)'], None)\n"
+        "print(child.pid, flush=True)\n"
+        "try:\n"
+        "    child.wait()\n"
+        "finally:\n"
+        "    launcher._cleanup()\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script, launcher.__file__],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    child_pid = None
+    try:
+        proc.stdout.readline()  # launcher spawn message
+        child_pid = int(proc.stdout.readline())
+        proc.send_signal(signum)
+        assert proc.wait(timeout=10) == 128 + signum
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if child_pid is not None:
+            try:
+                os.killpg(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        proc.stdout.close()
