@@ -2188,6 +2188,28 @@ class TestImportanceSamplingGate(TrlTestCase):
         assert gated.item() == pytest.approx(3.0, rel=1e-4)
         assert trainer._metrics["train"]["sampling/importance_sampling_gated_frac"][-1] == pytest.approx(1.0)
 
+    @pytest.mark.parametrize("ratio", [0.01, 1e-6])
+    def test_truncate_gate_cannot_inflate_the_clipped_low_ratio_branch(self, ratio):
+        # Regression: the truncate gate must scale the RATIO entering the PPO objective, not the already-clipped
+        # loss. On the negative-advantage low-ratio branch PPO substitutes the constant 1 - epsilon for rho, so a
+        # loss-level clamp(rho)/rho factor (here C_min/rho = 0.5/0.01 = 50) would inflate that constant without
+        # bound as the policy moves away from a stale bad sample. Applied to the ratio instead, the gated
+        # coefficient is clamp(rho) = 0.5 < 1 - epsilon and the loss stays at the ungated clipped value.
+        trainer, model = self._stub_trainer_for_loss()
+        old = [-math.log(ratio)] * 8  # combined ratio `ratio` on every token, far below clip_min = 0.5
+
+        trainer.vllm_importance_sampling_correction = False
+        ungated = trainer.compute_loss(model, self._packed_inputs(old))
+        trainer.vllm_importance_sampling_correction = True
+        gated = trainer.compute_loss(model, self._packed_inputs(old))
+
+        # Both arms of -min(rho*A, clip(rho)*A) with A = -1: ungated picks the clipped 1 - epsilon = 0.8; gated
+        # picks max(clamp(rho, 0.5, 3), 1 - epsilon) = 0.8. Bounded, never 0.8 * C_min/rho.
+        assert ungated.item() == pytest.approx(0.8, rel=1e-4)
+        assert gated.item() == pytest.approx(0.8, rel=1e-4)
+        # The gate did touch the tokens (their ratio was lifted to C_min), so the drift metric still fires.
+        assert trainer._metrics["train"]["sampling/importance_sampling_gated_frac"][-1] == pytest.approx(1.0)
+
     def test_compute_loss_gate_leaves_in_range_batches_alone(self):
         trainer, model = self._stub_trainer_for_loss()
         old = [0.0] * 8  # ratio exactly 1 everywhere
