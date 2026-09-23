@@ -956,7 +956,7 @@ class TestDPOTrainer(TrlTestCase):
             ["apo_zero", "apo_down", "discopop", "sft", "sigmoid_norm"],
         ],
     )
-    def test_liger_loss_types_match_non_liger_loss(self, loss_types):
+    def test_liger_loss_matches_non_liger_loss(self, loss_types):
         self._assert_liger_loss_matches(
             loss_type=loss_types,
             loss_weights=[1.0 / len(loss_types)] * len(loss_types),
@@ -1011,6 +1011,42 @@ class TestDPOTrainer(TrlTestCase):
             )
 
         torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
+
+    @require_liger_kernel
+    def test_chunked_logps_stay_differentiable_when_all_masked(self):
+        # A batch whose completion is fully masked yields no valid rows. The streamed projection still has to return
+        # log-probs attached to the model, so it contributes a differentiable zero instead of failing in `backward()`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        input_ids = inputs["input_ids"]
+        model_kwargs = {
+            "input_ids": input_ids,
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        empty_completion_mask = torch.zeros_like(inputs["completion_mask"])
+
+        logps, _, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, model_kwargs, input_ids, empty_completion_mask
+        )
+
+        assert logps.shape == (input_ids.shape[0], input_ids.shape[1] - 1)
+        assert logps.count_nonzero() == 0
+        assert logps.requires_grad
+        logps.sum().backward()
+        lm_head_grad = trainer.model.get_output_embeddings().weight.grad
+        assert lm_head_grad is not None
+        assert lm_head_grad.count_nonzero() == 0
 
     @require_liger_kernel
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
