@@ -226,6 +226,7 @@ def main() -> None:
         max_staleness=args.max_staleness,
         vllm_server_base_url=args.vllm_url,
         optim="adamw_torch",
+        dtype="bfloat16",
         bf16=True,
         # On: rollout sequences here are long enough that activations dominate.
         gradient_checkpointing=True,
