@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import SimpleNamespace
+
 import pytest
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
@@ -44,6 +46,15 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
+
+    @pytest.mark.parametrize(
+        ("epoch", "expected"),
+        [(None, 0.2), (0, 0.2), (0.25, 0.2), (1.0, 0.1), (2.0, 0.05), (10.0, 0.05)],
+    )
+    def test_beta_list_schedule_uses_integer_epoch(self, epoch, expected):
+        trainer = SimpleNamespace(_beta=[0.2, 0.1, 0.05], state=SimpleNamespace(epoch=epoch))
+
+        assert OnlineDPOTrainer.beta.fget(trainer) == expected
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
