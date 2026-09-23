@@ -250,7 +250,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
                 # Set pad token ID on reward model config
-                reward_func.config.pad_token_id = reward_processing_class_i.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class_i.pad_token_id
             self.reward_processing_classes.append(reward_processing_class_i)
 
         # Handle reward_weights
