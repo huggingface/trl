@@ -3472,6 +3472,77 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_tool_discovery_does_not_evaluate_environment_properties(self):
+        # Tool discovery must list the environment's methods on its class. `inspect.getmembers` calls `getattr` on
+        # every name before applying the predicate, so listing the instance evaluates its properties, and a property
+        # may be expensive or have side effects (a Harbor env scores the rollout from one). Here `reward` is inert on
+        # a fresh instance and raises once the environment has been reset: the first batch resets the pooled
+        # instances, so a second batch that listed the instance would raise before generating anything.
+        class PropertyEnvironment:
+            def __init__(self):
+                self.is_reset = False
+
+            def reset(self, **kwargs):
+                self.is_reset = True
+
+            @property
+            def reward(self) -> float:
+                if self.is_reset:
+                    raise RuntimeError("`reward` must not be evaluated while discovering tools")
+                return 0.0
+
+            def echo(self, text: str) -> str:
+                """
+                Echo the text back.
+
+                Args:
+                    text: Text to echo.
+
+                Returns:
+                    The text, unchanged.
+                """
+                return text
+
+        def reward_func(completions, **kwargs):
+            # Never reads `environments`, so nothing but tool discovery can touch the `reward` property.
+            return [1.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=2,  # the first batch resets the pooled instances, the second re-lists their tools
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=reward_func,
+            args=training_args,
+            environment_factory=PropertyEnvironment,
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            # "I won't increment<|im_end|>" — no tool call, so one generation round per step.
+            completion_ids = torch.tensor(
+                [[40, 2765, 944, 16252, 151645]] * input_ids.shape[0], device=input_ids.device
+            )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The regression is only exercised if the instances the last batch listed had really been reset before it.
+        assert all(environment.is_reset for environment in trainer.environments)
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_environment_owned_reward(self):
         # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
         # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations

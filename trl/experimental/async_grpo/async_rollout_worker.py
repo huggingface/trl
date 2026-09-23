@@ -414,14 +414,18 @@ class _AsyncRolloutLoop:
                 instance = factory()
                 has_reset = False
                 methods = []
-                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                # Look the tool methods up on the class, not the instance: `inspect.getmembers` evaluates every
+                # attribute it lists before applying the predicate, so probing the instance would run its properties
+                # (which may be expensive or have side effects, e.g. scoring a rollout). On the class a property is
+                # inert, and the functions found there are bound to the instance by name.
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         if type(instance) not in self._env_reward_types:
                             self._env_reward_types.append(type(instance))
                     elif not member_name.startswith("_"):
-                        methods.append(member)
+                        methods.append(getattr(instance, member_name))
                 if not has_reset:
                     raise ValueError(
                         "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -573,9 +577,11 @@ class _AsyncRolloutLoop:
                     # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
                     methods = []
                     if environment is not None:
+                        # Looked up on the class, not the instance, for the reason given in `__init__`: the instance
+                        # is a pooled one, and evaluating its properties here would run them before every rollout.
                         methods = [
-                            member
-                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            getattr(environment, member_name)
+                            for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                             if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                         ]
                     tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
