@@ -250,7 +250,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
                 # Set pad token ID on reward model config
-                reward_func.config.pad_token_id = reward_processing_class_i.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class_i.pad_token_id
             self.reward_processing_classes.append(reward_processing_class_i)
 
         # Handle reward_weights
@@ -389,7 +389,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             self._tokenizer.pad_token = self._tokenizer.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # Vision tokens for VLM support
@@ -451,7 +451,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     )
 
                     # Determine device type (supports cuda, xpu, etc.)
-                    accelerator_type = torch.accelerator.current_accelerator().type
+                    if Version(torch.__version__) >= Version("2.6.0"):
+                        accelerator_type = torch.accelerator.current_accelerator().type
+                    else:  # `torch.accelerator` was introduced in torch 2.6
+                        accelerator_type = "cuda"
                     current_device = getattr(torch, accelerator_type).current_device()
                     self.vllm_client.init_communicator(device=current_device)
                 else:

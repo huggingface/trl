@@ -24,6 +24,7 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 from ._remote_code.configuration_remote import RemoteConfig
@@ -31,6 +32,8 @@ from ._remote_code.modeling_remote import RemoteForCausalLM, RemoteForSequenceCl
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 

@@ -1,0 +1,56 @@
+name: Publish kernels
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "kernels/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-kernels
+  cancel-in-progress: false
+
+env:
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+
+jobs:
+  publish:
+    name: Publish kernels
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build and publish with HF Jobs
+        uses: huggingface/kernel-builder-job@e76dd635bcf7c66c8322e88517cf0361af27b69e
+        with:
+          token: ${{ secrets.HF_TOKEN }}
+          namespace: qgallouedec
+          flavor: cpu-upgrade
+          timeout: "3600"
+          script: |
+            set +x
+            export HF_TOKEN="${{ secrets.HF_TOKEN }}"
+            export GIT_LFS_SKIP_SMUDGE=1
+
+            git clone "${{ github.server_url }}/${{ github.repository }}" trl
+            cd trl
+            git checkout "${{ github.sha }}"
+            cd kernels
+
+            kernel-builder check-config
+            kernel-builder build-and-upload
+
+      - name: Post to Slack
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Publish kernels
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

@@ -953,9 +953,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
             Unlike [`GRPOTrainer`], rewards are computed in a spawned child process, so each reward function (along
             with `tools` and `environment_factory`) must be picklable: use a module-level function,
-            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. The child
-            process also runs with `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the
-            trainer's GPU.
+            `functools.partial`, or a callable class instance — lambdas and closures will fail at startup. Tools are
+            registered under their `__name__`, so they must be module-level functions. The child process also runs with
+            `CUDA_VISIBLE_DEVICES=""`, so a GPU-backed reward model runs on CPU (slow), not the trainer's GPU.
         args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
@@ -1112,7 +1112,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # PEFT. Placed after `patch_chunked_lm_head`, which patches the bare `lm_head` and would otherwise have to
