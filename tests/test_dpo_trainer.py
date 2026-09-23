@@ -1126,8 +1126,8 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
-        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so the chunked projection
-        # reads the real weight. Verify the full path actually trains (peft params change, base params stay frozen).
+        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
+        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
