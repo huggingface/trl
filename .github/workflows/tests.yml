@@ -49,7 +49,7 @@ jobs:
   diag_dpo_lm_head:
     permissions:
       contents: read
-    name: DPO lm_head parity (transformers ${{ matrix.transformers }}, accelerate ${{ matrix.accelerate }})
+    name: DPO lm_head parity, min versions (${{ matrix.mode }})
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -61,11 +61,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transformers: ["4.56.2", "5.17.0"]
-        accelerate: ["1.4.0", "1.15.0"]
+        include:
+          - mode: old-isolated
+            ref: c2196d5f571ee8bb32fbfa14464f3b6854ac13d2
+          - mode: old-gw9-sequence
+            ref: c2196d5f571ee8bb32fbfa14464f3b6854ac13d2
+          - mode: head-full-suite
+            ref: ""
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+
+      - name: Checkout helper files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: helper
 
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -89,21 +101,29 @@ jobs:
           source .venv/bin/activate
           uv pip install \
             ".[dev]" \
-            "accelerate==${{ matrix.accelerate }}" \
+            "accelerate==1.4.0" \
             "datasets==4.7.0" \
-            "transformers==${{ matrix.transformers }}"
-          uv pip freeze | grep -iE "^(torch|transformers|accelerate|datasets|liger-kernel|peft)=="
+            "transformers==4.56.2"
+          uv pip freeze | grep -iE "^(torch|transformers|accelerate|datasets|liger-kernel|peft|kernels)=="
+          git log --oneline -1
 
-      - name: Parity tests at 5e-4
+      - name: Old commit, parity tests alone
+        if: matrix.mode == 'old-isolated'
         run: |
           source .venv/bin/activate
           pytest -s -v -p no:cacheprovider \
-            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_loss_matches_non_liger_loss" \
-            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_f_divergence_matches_non_liger_loss" \
-            "tests/test_kto_trainer.py::TestKTOTrainer::test_liger_loss_matches_non_liger_loss"
+            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_loss_types_match_non_liger_loss" \
+            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_f_divergence_matches_non_liger_loss"
 
-      - name: Diagnostic
-        if: ${{ !cancelled() }}
+      - name: Old commit, gw9 sequence in one process
+        if: matrix.mode == 'old-gw9-sequence'
         run: |
           source .venv/bin/activate
-          python tests/_diag_dpo_lm_head_parity.py
+          mapfile -t TESTS < helper/tests/_gw9_sequence.txt
+          pytest -s -v -p no:cacheprovider -p no:randomly "${TESTS[@]}"
+
+      - name: Head, full suite as in CI
+        if: matrix.mode == 'head-full-suite'
+        run: |
+          source .venv/bin/activate
+          make test
