@@ -93,12 +93,15 @@ def _importance_sampling_gate(
 
     All inputs are ``(1, T)`` slices of the packed row, already label-shifted. Modes:
 
-    - ``"token_truncate"`` multiplies each token's loss by ``clamp(rho, C_min, C_max) / rho``, capping the effective
-      gradient weight at the clip bounds and leaving in-range tokens untouched. The identity is only valid at token
-      granularity, where the loss carries the same ``rho`` the gate divides by. There is deliberately no
-      ``sequence_truncate``: a sequence-level product cannot be divided back out of a per-token loss without producing
-      unbounded weights.
-    - ``"token_mask"`` zeroes tokens whose ratio leaves the bounds.
+    - ``"token_truncate"`` multiplies each token's RATIO (before PPO clipping) by ``clamp(rho, C_min, C_max) / rho``,
+      replacing the coefficient's value with its clamped ratio while keeping the gradient direction, and leaving
+      in-range tokens untouched. It must scale the ratio, not the already-clipped loss: on the negative-advantage
+      low-ratio branch PPO substitutes the constant ``1 - epsilon`` for ``rho``, and an extra ``C_min / rho`` factor
+      there would inflate the token loss without bound as ``rho -> 0``. The identity is only valid at token
+      granularity, where the coefficient carries the same ``rho`` the gate divides by. There is deliberately no
+      ``sequence_truncate``: a sequence-level product cannot be divided back out of a per-token coefficient without
+      producing unbounded weights.
+    - ``"token_mask"`` zeroes the loss of tokens whose ratio leaves the bounds.
     - ``"sequence_mask"`` zeroes every completion token of a packed sequence whose product of token ratios (segments
       located via ``position_ids`` resets) leaves the bounds. The combined ratio's product grows with completion length
       under ordinary staleness drift, so bounds must be far looser than the synchronous trainer's mismatch-only
@@ -108,7 +111,8 @@ def _importance_sampling_gate(
     ``sequence_mask`` it contributes nothing to its sequence's product but shares the sequence's fate: the exemption is
     contribution, not immunity, because the mask is a sequence-level decision.
 
-    Returns a detached ``(1, T)`` tensor to multiply into the per-token loss.
+    Returns a detached ``(1, T)`` tensor: the caller multiplies it into the per-token ratio for ``token_truncate`` and
+    into the per-token loss for the mask modes.
     """
     log_ratio = log_ratio.detach()
     log_clip_min = math.log(clip_min) if clip_min is not None else -torch.inf
@@ -1540,10 +1544,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         advantages = advantages[:, 1:]
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss1 = coef_1 * advantages
-        per_token_loss2 = coef_2 * advantages
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.vllm_importance_sampling_correction:
             # `old_log_probs` are the vLLM sampler's logprobs, not a recomputation with the
             # generation-time weights (those are gone by dequeue time), so `log_ratio` is the
@@ -1556,9 +1556,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.vllm_importance_sampling_clip_min,
                 self.vllm_importance_sampling_clip_max,
             )
-            per_token_loss = per_token_loss * importance_sampling_gate
+            if self.vllm_importance_sampling_mode == "token_truncate":
+                # The truncate gate rescales the RATIO entering the clipped objective, before PPO clipping: the
+                # gated coefficient's value is clamp(rho, C_min, C_max) and its gradient is the same clamped weight
+                # times grad(log p). Multiplying the already-clipped loss instead would break on the
+                # negative-advantage low-ratio branch, where PPO has replaced rho with the constant 1 - epsilon: the
+                # extra C_min/rho factor would inflate that constant without bound as rho -> 0.
+                coef_1 = coef_1 * importance_sampling_gate
         else:
             importance_sampling_gate = None
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if importance_sampling_gate is not None and self.vllm_importance_sampling_mode != "token_truncate":
+            # The mask gates (0/1) drop a token or sequence outright, which only works applied to the LOSS: zeroing
+            # the ratio instead would leave the clipped arm (1 - epsilon) * A alive on negative advantages.
+            per_token_loss = per_token_loss * importance_sampling_gate
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -1582,9 +1596,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_count = valid_mask.sum().float()
 
             # Empty masked selections sum to a 0 scalar on the right device, so no valid_mask.any() guard is needed.
-            local_ratio_sum = coef_1[valid_mask].sum()
+            # `ratio` and `kl` report the raw drift, so they use the ungated ratio (`coef_1` carries the truncate
+            # gate); the clip metrics below describe the loss's clipping decisions, so they use `coef_1` as clipped.
+            raw_ratio = torch.exp(log_ratio[valid_mask])
+            local_ratio_sum = raw_ratio.sum()
             # Approx KL: http://joschu.net/blog/kl-approx.html
-            local_kl_sum = ((coef_1[valid_mask] - 1) - log_ratio[valid_mask]).sum()
+            local_kl_sum = ((raw_ratio - 1) - log_ratio[valid_mask]).sum()
             local_entropy_sum = entropy[valid_mask].sum()
 
             # Compute the clipped probability ratios
