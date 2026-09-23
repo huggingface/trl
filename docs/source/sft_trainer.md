@@ -321,6 +321,7 @@ An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/
 
 For standard (non-conversational) image-text datasets, provide the formatted text in the `text` column, or set
 `dataset_text_field` to your text column's name. The text must include the image placeholders expected by the model.
+For prompt-completion datasets, the `prompt` and `completion` columns take precedence over an additional text column.
 
 ```python
 from trl import SFTConfig, SFTTrainer
