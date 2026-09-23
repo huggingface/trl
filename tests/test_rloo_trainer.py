@@ -15,6 +15,7 @@
 from unittest.mock import patch
 
 import pytest
+from collections import defaultdict
 import torch
 import transformers
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
@@ -1696,6 +1697,45 @@ class TestRLOOTrainer(TrlTestCase):
         # log_metric appends to _metrics, which gets averaged and merged into log_history
         logged_keys = {k for entry in trainer.state.log_history for k in entry}
         assert "custom_accuracy" in logged_keys
+
+    def test_flush_user_logs_synchronizes_conditional_keys(self):
+        from types import SimpleNamespace
+
+        gathered_by_call = iter(
+            [
+                ["a_shared", "b_rank1_only"],
+                [1, 2, None, None],
+                [None, None, 4, None],
+                ["a_shared", "b_rank1_only"],
+            ]
+        )
+
+        def gather_objects(values):
+            # In distributed use, gather_object receives one rank-local argument and returns combined values.
+            return next(gathered_by_call)
+
+        accelerator = SimpleNamespace(
+            device="cpu",
+            gather=lambda tensor: torch.cat([tensor, torch.zeros_like(tensor)], dim=0),
+        )
+        trainer = SimpleNamespace(
+            model=SimpleNamespace(training=True),
+            accelerator=accelerator,
+            _pending_extra_logs={"a_shared": [1, 2]},
+            _pending_metrics={"a_shared": [1.0, 3.0]},
+            _logs={"extra": defaultdict(list)},
+            _metrics={"train": defaultdict(list)},
+        )
+
+        with patch("trl.trainer.rloo_trainer.gather_object", gather_objects):
+            RLOOTrainer._flush_user_logs(trainer, batch_size=2)
+
+        assert trainer._logs["extra"]["a_shared"] == [1, 2, None, None]
+        assert trainer._logs["extra"]["b_rank1_only"] == [None, None, 4, None]
+        assert "a_shared" in trainer._metrics["train"]
+        assert "b_rank1_only" in trainer._metrics["train"]
+        assert trainer._pending_extra_logs == {}
+        assert trainer._pending_metrics == {}
 
     def test_prepare_input_called_with_correct_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

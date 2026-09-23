@@ -1653,6 +1653,36 @@ class GRPOTrainer(_BaseTrainer):
         """
         self._pending_metrics[name].append(value)
 
+    def _flush_user_logs(self, batch_size: int) -> None:
+        """Flush user-logged columns and metrics with distributed-safe collectives.
+
+        Reward functions may log conditionally, so ranks can have different keys. Synchronize the key sets first, then
+        have every rank participate in the same collectives. Missing columns are padded so completions tables stay
+        aligned, and metrics are reduced with sample counts instead of averaging local means.
+        """
+        mode = "train" if self.model.training else "eval"
+
+        extra_keys = sorted(
+            set(gather_object(list(self._pending_extra_logs.keys())))
+        )
+        for column in extra_keys:
+            local_values = self._pending_extra_logs.get(column, [None] * batch_size)
+            self._logs["extra"][column].extend(gather_object(local_values))
+
+        metric_keys = sorted(set(gather_object(list(self._pending_metrics.keys()))))
+        for name in metric_keys:
+            values = self._pending_metrics.get(name, [])
+            stats = torch.tensor(
+                [[float(sum(values)), float(len(values))]], device=self.accelerator.device
+            )
+            gathered = self.accelerator.gather(stats)
+            total_sum = gathered[:, 0].sum().item()
+            total_count = gathered[:, 1].sum().item()
+            self._metrics[mode][name].append(total_sum / total_count if total_count else 0.0)
+
+        self._pending_extra_logs.clear()
+        self._pending_metrics.clear()
+
     @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
@@ -2883,22 +2913,7 @@ class GRPOTrainer(_BaseTrainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        # Flush user-logged extra columns (from log_extra), gathering across processes.
-        # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
-        # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
-        self._pending_extra_logs.clear()
-
-        # Flush user-logged metrics (from log_metric), averaging across processes.
-        # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
-        # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
-        self._pending_metrics.clear()
+        self._flush_user_logs(len(prompts_text))
 
         if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
