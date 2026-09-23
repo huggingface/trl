@@ -17,7 +17,6 @@ import textwrap
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from functools import partial
 from itertools import takewhile
 from typing import Any, Optional
@@ -27,12 +26,10 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.utils import (
     DistributedType,
     broadcast_object_list,
     gather_object,
-    is_peft_model,
 )
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
@@ -62,15 +59,15 @@ from ...data_utils import (
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
-from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
-from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
+from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     identity,
     pad,
     split_tensor_dict,
@@ -925,29 +922,6 @@ class GOLDTrainer(SFTTrainer):
                 data_collator = identity
             else:
                 data_collator = DataCollatorForChatML(tokenizer=self._tokenizer, max_length=args.max_length)
-
-        # Liger fused GKD loss (JSD)
-        self.use_liger_gkd_loss = False
-        if args.use_liger_kernel:
-            # The fused Liger JSD loss requires student and teacher to share a vocabulary, while ULD loss exists
-            # precisely for the cross-tokenizer case — the two cannot be combined.
-            if args.use_uld_loss:
-                raise ValueError(
-                    "`use_liger_kernel=True` cannot be combined with `use_uld_loss=True`. The fused Liger JSD loss "
-                    "requires the student and teacher to share a vocabulary, whereas ULD loss handles the "
-                    "cross-tokenizer case. Either set `use_uld_loss=False` (if your student and teacher are from the "
-                    "same family and the standard JSD loss applies), or set `use_liger_kernel=False`."
-                )
-            self.liger_loss = FusedLinearJSDLoss(
-                beta=args.beta,
-                ignore_index=-100,
-                temperature=args.temperature,
-                compiled=False,
-                weight_hard_loss=0.0,
-                weight_soft_loss=1.0,
-            )
-            self.use_liger_gkd_loss = True
-            self._forward_redirection = _ForwardRedirection()
 
         if args.teacher_model_init_kwargs is None:
             teacher_model_init_kwargs = {}
@@ -2049,7 +2023,7 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Apply the formatting function if any
             if formatting_func is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -2264,19 +2238,6 @@ class GOLDTrainer(SFTTrainer):
 
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-
-            if args.use_liger_kernel:
-                required_columns = {
-                    "input_ids",
-                    "attention_mask",
-                    "position_ids",
-                    "completion_mask",
-                    "messages",
-                    "original_prompt_text",
-                    "original_completion_text",
-                    "byte_offsets",
-                }
-                dataset = dataset.select_columns(required_columns.intersection(dataset.column_names))
 
         return dataset
 
@@ -2542,99 +2503,36 @@ class GOLDTrainer(SFTTrainer):
                     **teacher_forward_kwargs,
                 )
         else:
-            if self.use_liger_gkd_loss:
-                # Forward only through the base models (avoid lm_head to save memory).
-                # Route through the DDP/FSDP wrapper via _forward_redirection so that
-                # DDP.forward() is called and prepare_for_backward() fires correctly.
-                unwrapped_student = self.accelerator.unwrap_model(model)
-                student_outputs = self._forward_redirection(
-                    model,
-                    unwrapped_student,
-                    self._liger_student_forward,
-                    unwrapped_student,
-                    inputs,
-                )
+            outputs_student = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                **student_forward_kwargs,
+            )
 
-                self.teacher_model.eval()
-                unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-                base_teacher = self._liger_backbone(unwrapped_teacher)
-                with torch.no_grad():
-                    teacher_outputs = base_teacher(
-                        input_ids=inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                        use_cache=False,
-                        **student_forward_kwargs,
-                    )
-
-                student_hidden = student_outputs.last_hidden_state[:, :-1]
-                teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-
-                del student_outputs, teacher_outputs
-
-                student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
-                teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
-
-                labels_mask = inputs["labels"] != -100
-                masked_input_ids = torch.where(
-                    labels_mask,
-                    inputs["input_ids"],
-                    torch.full_like(inputs["input_ids"], -100),
-                )
-                true_labels = masked_input_ids[:, 1:].reshape(-1)
-
-                student_head = unwrapped_student.get_output_embeddings()
-                teacher_head = unwrapped_teacher.get_output_embeddings()
-
-                loss = self.liger_loss(
-                    student_input=student_hidden,
-                    student_weight=student_head.weight,
-                    teacher_input=teacher_hidden,
-                    teacher_weight=teacher_head.weight,
-                    true_labels=true_labels,
-                    student_bias=getattr(student_head, "bias", None),
-                    teacher_bias=getattr(teacher_head, "bias", None),
-                )
-
-                # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
-                # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
-                if num_items_in_batch is not None:
-                    num_valid_local = (true_labels != -100).sum().clamp_min(1)
-                    if isinstance(num_items_in_batch, torch.Tensor):
-                        num_items_in_batch = num_items_in_batch.to(loss.device)
-                    loss = loss * num_valid_local / num_items_in_batch
-
-                del student_hidden, teacher_hidden, true_labels
-            else:
-                outputs_student = model(
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                     **student_forward_kwargs,
                 )
 
-                self.teacher_model.eval()
-                with torch.no_grad():
-                    outputs_teacher = self.teacher_model(
-                        input_ids=inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                        **student_forward_kwargs,
-                    )
-
-                # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
-                # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
-                # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
-                # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
-                # padded to the full-sequence width independently of `prompts`.
-                shifted_student_logits = outputs_student.logits[:, :-1, :]
-                shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
-                shifted_labels = inputs["labels"][:, 1:]
-                loss = self.generalized_jsd_loss(
-                    student_logits=shifted_student_logits,
-                    teacher_logits=shifted_teacher_logits,
-                    labels=shifted_labels,
-                    beta=self.beta,
-                    temperature=self.temperature,
-                    num_items_in_batch=num_items_in_batch,
-                )
+            # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+            # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+            # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+            # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
+            # padded to the full-sequence width independently of `prompts`.
+            shifted_student_logits = outputs_student.logits[:, :-1, :]
+            shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
+            shifted_labels = inputs["labels"][:, 1:]
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+                temperature=self.temperature,
+                num_items_in_batch=num_items_in_batch,
+            )
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:
             student_labels = inputs["labels"]
@@ -2756,51 +2654,6 @@ class GOLDTrainer(SFTTrainer):
             completion_texts,
         )
 
-    def _liger_backbone(self, unwrapped_model: nn.Module) -> nn.Module:
-        """Return the lm_head-free backbone used by the Liger JSD path (skips lm_head to save memory).
-
-        `base_model` gives the backbone — text decoder for LMs, multimodal wrapper for VLMs (so vision-token injection
-        runs before the text decoder). `get_decoder()` won't do: on VLMs it returns just the text stack and feeds
-        image-placeholder IDs through it. Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is
-        self` (re-runs `lm_head`); fall back to `.model` there.
-        """
-        if is_peft_model(unwrapped_model):
-            unwrapped_model = unwrapped_model.base_model.model
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            return unwrapped_model.model
-        return unwrapped_model.base_model
-
-    def _liger_student_forward(self, student, inputs):
-        """Backbone forward used by the Liger JSD path (skips lm_head to save memory)."""
-        backbone = self._liger_backbone(student)
-        return backbone(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            use_cache=False,
-            **self._get_model_forward_kwargs(inputs),
-        )
-
-    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        if not self.use_liger_gkd_loss:
-            return nullcontext()
-
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
-            return nullcontext()
-
-        import deepspeed
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-        params = [student_head.weight, teacher_head.weight]
-        if student_head.bias is not None:
-            params.append(student_head.bias)
-        if teacher_head.bias is not None:
-            params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-
     # During eval, Trainer calls prediction_step. The inherited SFT prediction_step indexes the raw inputs before
     # collation, which breaks the VLM identity-collator path (inputs is a list of raw examples). We override it to
     # collate via _prepare_inputs and force compute_loss, evaluating the off-policy distillation loss over the
@@ -2829,9 +2682,7 @@ class GOLDTrainer(SFTTrainer):
         """
         buffer_steps = self.args.gradient_accumulation_steps
 
-        # Keep lm_head gathered across forward+backward for Liger + ZeRO-3.
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
-            loss = super().training_step(model, inputs, num_items_in_batch)
+        loss = super().training_step(model, inputs, num_items_in_batch)
 
         slice_idx = (self._step - 1) % buffer_steps
 

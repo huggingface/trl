@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "google/gemma-7b-it"
 
@@ -40,6 +43,7 @@ config = GemmaConfig(
     intermediate_size=32,
     head_dim=2,
     hidden_act="gelu",
+    rope_scaling=None,
 )
 model = GemmaForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
