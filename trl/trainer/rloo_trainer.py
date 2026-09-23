@@ -421,7 +421,7 @@ class RLOOTrainer(_BaseTrainer):
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
         # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
-        # represent, silently freezing it. See: https://github.com/huggingface/trl/issues/7268
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
             for name, param in model.named_parameters():
                 if param.requires_grad and "lora_magnitude_vector" not in name:
