@@ -61,9 +61,13 @@ def test_lossless_capture_preserves_rewritten_tail_and_partial_mask():
 def test_missing_or_invalid_sample_logprobs_cannot_be_filled_with_zeros(logprobs):
     with pytest.raises(ValueError):
         openenv_harness._turns_from_trace([entry([1], [2], logprobs)])
+
+
+@pytest.mark.parametrize("mask,logprobs", [(1, None), (1, []), ([1, 0], [-0.1]), (0, [])])
+def test_builder_rejects_misaligned_arrays_before_mutation(mask, logprobs):
     builder = _SampleBuilder(fork_threshold=0)
     with pytest.raises(ValueError):
-        builder._append([2], mask=1, logprobs=logprobs)
+        builder._append([2], mask=mask, logprobs=logprobs)
     assert builder.tokens == builder.loss_mask == builder.logprobs == []
 
 
@@ -168,6 +172,20 @@ class Session:
 
     def close(self):
         self.closed.set()
+
+
+def test_factory_temperature_can_differ_from_trainer(make_loop, monkeypatch):
+    harness = pytest.importorskip("harbor_env.harness")
+    factory = harness.HarborSessionFactory("http://unused", sampling={"temperature": 1.0})
+    row = captured_entry()
+    row["metadata"]["sampling_params"] = factory.sampling
+    session = Session(row)
+    monkeypatch.setattr(factory, "create", lambda *args, **kwargs: session)
+    loop = make_loop(factory)  # Trainer temperature is 0.8.
+    with pytest.raises(openenv_harness.CaptureContractError, match="sampling"):
+        loop._run_session([])
+    assert session.closed.is_set()
+    assert loop.rollout_buffer.empty()
 
 
 @pytest.mark.parametrize("field,value", [("prompt_token_ids", []), ("per_token_logps", []), ("loss_mask", [1, 1, 1])])

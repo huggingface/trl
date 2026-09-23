@@ -134,21 +134,15 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         self._adapter = harness_adapter
         self._sampling_policy = None
         if harness_adapter is None:
-            self._sampling_policy = training_sampling(
-                {
-                    "temperature": self.temperature,
-                    **{
-                        key: value
-                        for key, value in {
-                            "top_p": self.top_p,
-                            "top_k": self.top_k,
-                            "min_p": self.min_p,
-                            "repetition_penalty": self.repetition_penalty,
-                        }.items()
-                        if value is not None
-                    },
-                }
-            )
+            sampling_kwargs = {
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+            }
+            sampling_kwargs = {key: value for key, value in sampling_kwargs.items() if value is not None}
+            self._sampling_policy = training_sampling(sampling_kwargs)
         self._limits = HarnessRunLimits(
             max_turns=self.max_tool_calling_iterations if self.max_tool_calling_iterations is not None else 8,
             sampling={"temperature": self.temperature, "max_tokens": self.max_tokens},
