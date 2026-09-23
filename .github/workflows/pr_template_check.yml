@@ -72,7 +72,7 @@ jobs:
             }
 
             let assignedIssue = null;
-            for (const number of referenced) {
+            for (const number of [...referenced].slice(0, 10)) {
               let issue;
               try {
                 issue = (await github.rest.issues.get({
@@ -81,7 +81,8 @@ jobs:
                   issue_number: number,
                 })).data;
               } catch (error) {
-                continue;  // the reference points at nothing in this repo
+                if (error.status === 404) continue;  // the reference points at nothing in this repo
+                throw error;
               }
               if (issue.pull_request) continue;  // the reference points at a PR, not an issue
               if (issue.assignees.some((a) => a.login === author)) {
