@@ -3105,7 +3105,7 @@ class GRPOTrainer(_BaseTrainer):
         # Compute the loss
         advantages = inputs["advantages"]
         # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
-        # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
+        # provide advantages with shape (B, T), we *conditionally* unsqueeze the tensor.
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,

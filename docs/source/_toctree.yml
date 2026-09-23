@@ -121,8 +121,6 @@
     title: IW-OPD
   - local: merge_model_callback
     title: MergeModelCallback
-  - local: minillm_trainer
-    title: MiniLLM
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
