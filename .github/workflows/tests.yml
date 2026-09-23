@@ -105,7 +105,6 @@ jobs:
             "datasets==4.7.0" \
             "transformers==4.56.2"
           uv pip freeze | grep -iE "^(torch|transformers|accelerate|datasets|liger-kernel|peft|kernels)=="
-          git log --oneline -1
 
       - name: Old commit, parity tests alone
         if: matrix.mode == 'old-isolated'
