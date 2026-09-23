@@ -43,7 +43,7 @@ select a component when the verifier returns a reward dictionary.
 
 Requirements:
   - A running OpenEnv Harbor server, which owns the dataset and the sandbox templates:
-        openenv harbor serve --dataset <hf-dataset> --port 8200 --capture-port 8300 --expose gradio
+        MAX_CONCURRENT_ENVS=9 openenv harbor serve --dataset <hf-dataset> --port 8200 --capture-port 8300 --expose gradio
   - A sandbox backend credential for the server's environment, e.g. `E2B_API_KEY`.
   - An OpenAI-compatible vLLM server (below) reachable at `--vllm-url`.
   - The pinned OpenEnv checkout and `PYTHONPATH` setup in this example's README.md.

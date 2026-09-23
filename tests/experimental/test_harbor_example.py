@@ -44,6 +44,16 @@ def test_zero_interval_disables_supervision(launcher, monkeypatch):
     probe.assert_not_called()
 
 
+@pytest.mark.parametrize("max_inflight", [2, 8, 16])
+def test_server_reserves_metadata_connection(launcher, monkeypatch, max_inflight):
+    spawn = MagicMock()
+    monkeypatch.setattr(launcher, "_spawn", spawn)
+    monkeypatch.setattr(launcher, "wait_for_public_proxy", lambda *args: "https://proxy.example")
+    args = SimpleNamespace(split="tasks", server_port=8200, capture_port=8300, max_inflight=max_inflight)
+    launcher.start_harbor_server(args, Path("unused"))
+    assert int(spawn.call_args.kwargs["env"]["MAX_CONCURRENT_ENVS"]) > max_inflight
+
+
 def test_restart_waits_for_server_exit(launcher, monkeypatch):
     proc = MagicMock(args=["openenv", "harbor", "serve"], pid=12345)
     proc.poll.return_value = None
@@ -134,6 +144,7 @@ def test_jobs_launcher_uses_pinned_source_and_unique_names(launcher, monkeypatch
     assert names[0] != names[1] and all("job42" in name for name in names)
     for call, name in zip(commands, names, strict=True):
         command = call.args[0]
+        assert command[command.index("--max-inflight") + 1] == "8"
         assert Path(command[command.index("--output-dir") + 1]).name == name
         assert call.kwargs["env"]["PYTHONPATH"].split(launcher.os.pathsep)[0].endswith("/envs")
     fetches = [call.args[0] for call in run.call_args_list if "fetch" in call.args[0]]

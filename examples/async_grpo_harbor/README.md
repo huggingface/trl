@@ -21,6 +21,8 @@ The source path is required because this revision's environment wheel does not p
 Run the OpenEnv server with its sandbox credentials, then start vLLM and the trainer using the commands
 in [async_grpo_harbor.py](async_grpo_harbor.py). The server additionally needs `pip install './OpenEnv[harbor]'`;
 the trainer can use an existing server. Use the same model and vLLM endpoint for rollouts and weight updates.
+Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-inflight + 1` (9 for the defaults); the factory
+keeps one connection for task metadata. The Jobs launcher sets this capacity automatically.
 
 ## Hugging Face Jobs
 
