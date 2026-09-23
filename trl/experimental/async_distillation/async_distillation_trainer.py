@@ -992,7 +992,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # Initialize the Trainer

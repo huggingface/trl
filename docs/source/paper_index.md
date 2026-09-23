@@ -98,7 +98,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provides an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
+TRL shipped an experimental GSPO-token implementation up to v1.13; it is no longer part of the library and remains available in the git history. It differed from the sequence-level objective above only when the advantage varies with  \\( t \\), which TRL does not currently produce.
 
 #### Policy ratio: GRPO vs. GSPO
 

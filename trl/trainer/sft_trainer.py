@@ -1026,7 +1026,7 @@ class SFTTrainer(_BaseTrainer):
             # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
             # configs. The generation config may hold several eos tokens, any of which halts generation, so the new
             # one is added to the existing ones instead of replacing them.
-            model.config.eos_token_id = self._tokenizer.eos_token_id
+            model.config.get_text_config().eos_token_id = self._tokenizer.eos_token_id
             eos_token_ids = model.generation_config.eos_token_id
             if eos_token_ids is None:
                 eos_token_ids = []
@@ -1228,7 +1228,7 @@ class SFTTrainer(_BaseTrainer):
             self._tokenizer.pad_token = pad_token
             # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
             # configs.
-            model.config.pad_token_id = self._tokenizer.pad_token_id
+            model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
             model.generation_config.pad_token_id = self._tokenizer.pad_token_id
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,

@@ -80,7 +80,6 @@ from .utils import (
     _ChunkedLogProbFunction,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
@@ -93,6 +92,7 @@ from .utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -398,7 +398,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
@@ -572,7 +572,7 @@ class GRPOTrainer(_BaseTrainer):
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -1560,22 +1560,22 @@ class GRPOTrainer(_BaseTrainer):
             logits = logits[:, :-1, :]  # (B, L-1, H)
             # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            completion_mask = attention_mask_batch[:, -logits_to_keep:]
+            # Scale inside the kernel to avoid materializing another full logits tensor.
             if compute_entropy:
-                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
-                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
-                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
-                if self._entropy_bonus_enabled:
-                    entropies = entropy_from_logits(logits)
-                else:
-                    with torch.no_grad():
-                        entropies = entropy_from_logits(logits)
+                logps, entropies = selective_log_softmax_and_entropy(
+                    logits,
+                    completion_ids,
+                    entropy_requires_grad=self._entropy_bonus_enabled,
+                    temperature=self.temperature,
+                    row_mask=completion_mask,
+                )
                 all_entropies.append(entropies)
+            else:
+                logps = selective_log_softmax(
+                    logits, completion_ids, temperature=self.temperature, row_mask=completion_mask
+                )
+            all_logps.append(logps)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)

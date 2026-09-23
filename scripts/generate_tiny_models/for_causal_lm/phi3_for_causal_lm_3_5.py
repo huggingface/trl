@@ -45,6 +45,7 @@ config = Phi3Config(
     sliding_window=262144,
     # One value per frequency band: length is `head_dim // 2`, values are the reference's first band.
     rope_scaling={"type": "longrope", "short_factor": [1.0], "long_factor": [1.0800000429153442]},
+    attention_bias=False,
 )
 model = Phi3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
