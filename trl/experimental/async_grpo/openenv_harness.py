@@ -118,6 +118,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         harness_session_factory: ResourceSessionFactory,
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
+        # FIXME: These hooks temporarily fill gaps in the OpenEnv contract. OpenEnv should return
+        # training objects with prefilled masks that TRL can consume directly.
         train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
         agent_turn_fn: Callable[[list[TraceEntry]], list[TraceEntry]] | None = None,
         lossless_capture: bool = True,
