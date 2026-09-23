@@ -944,7 +944,7 @@ class TestDPOTrainer(TrlTestCase):
         for name, grad in grads.items():
             # hidden_size=8 makes lm_head's weight-grad GEMM unusually narrow; cuBLAS picks a less precise
             # algorithm for it on Ampere+ (up to 3.4e-2 on an L40S). Exact match on ROCm.
-            atol = 5e-2 if name == "lm_head.weight" else 5e-4
+            atol = 5e-4
             torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=atol)
 
     @require_liger_kernel

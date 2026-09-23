@@ -46,10 +46,10 @@ concurrency:
 permissions: {}
 
 jobs:
-  tests:
+  diag_dpo_lm_head:
     permissions:
       contents: read
-    name: Tests with latest dependencies
+    name: DPO lm_head parity (transformers ${{ matrix.transformers }}, accelerate ${{ matrix.accelerate }})
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -58,168 +58,11 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
-    steps:
-      - name: Git checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.12'
-
-      - name: Install Make and Git
-        run: |
-          apt-get update && apt-get install -y make git curl
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
-
-      - name: Create Python virtual environment
-        run: |
-          uv venv
-          uv pip install --upgrade setuptools wheel
-
-      - name: Install dependencies
-        run: |
-          source .venv/bin/activate
-          uv pip install ".[dev]"
-
-      - name: Test with pytest
-        run: |
-          source .venv/bin/activate
-          make test
-
-      - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests with latest dependencies
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
-
-  tests_dev:
-    permissions:
-      contents: read
-    name: Tests with dev dependencies
-    runs-on:
-      group: aws-g6e-4xlarge
-    container:
-      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
-    defaults:
-      run:
-        shell: bash
-    if: github.event.pull_request.draft == false
-    steps:
-      - name: Git checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.12'
-
-      - name: Install Make and Git
-        run: |
-          apt-get update && apt-get install -y make git curl
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
-
-      - name: Create Python virtual environment
-        run: |
-          uv venv
-          uv pip install --upgrade setuptools wheel
-
-      - name: Install dependencies
-        run: |
-          source .venv/bin/activate
-          uv pip install -U \
-            ".[dev]" \
-            "accelerate @ git+https://github.com/huggingface/accelerate.git" \
-            "datasets @ git+https://github.com/huggingface/datasets.git" \
-            "transformers @ git+https://github.com/huggingface/transformers.git" \
-            "peft @ git+https://github.com/huggingface/peft.git"
-
-      - name: Test with pytest
-        run: |
-          source .venv/bin/activate
-          make test
-
-      - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests with dev dependencies
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
-
-  tests_wo_optional_deps:
-    permissions:
-      contents: read
-    name: Tests without optional dependencies
-    runs-on:
-      group: aws-g6e-4xlarge
-    container:
-      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
-    defaults:
-      run:
-        shell: bash
-    if: github.event.pull_request.draft == false
-    steps:
-      - name: Git checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.12'
-
-      - name: Install Make and Git
-        run: |
-          apt-get update && apt-get install -y make git curl
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
-
-      - name: Create Python virtual environment
-        run: |
-          uv venv
-          uv pip install --upgrade setuptools wheel
-
-      - name: Install dependencies
-        run: |
-          source .venv/bin/activate
-          uv pip install ".[test]"
-
-      - name: Test with pytest
-        run: |
-          source .venv/bin/activate
-          make test
-
-      - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests without optional dependencies
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
-
-  tests_min_versions:
-    permissions:
-      contents: read
-    name: Tests with minimum versions
-    runs-on:
-      group: aws-g6e-4xlarge
-    container:
-      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
-    defaults:
-      run:
-        shell: bash
-    if: github.event.pull_request.draft == false
+    strategy:
+      fail-fast: false
+      matrix:
+        transformers: ["4.56.2", "5.17.0"]
+        accelerate: ["1.4.0", "1.15.0"]
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -246,73 +89,21 @@ jobs:
           source .venv/bin/activate
           uv pip install \
             ".[dev]" \
-            "accelerate==1.4.0" \
+            "accelerate==${{ matrix.accelerate }}" \
             "datasets==4.7.0" \
-            "transformers==4.56.2"
+            "transformers==${{ matrix.transformers }}"
+          uv pip freeze | grep -iE "^(torch|transformers|accelerate|datasets|liger-kernel|peft)=="
 
-      - name: Test with pytest
+      - name: Parity tests at 5e-4
         run: |
           source .venv/bin/activate
-          make test
+          pytest -s -v -p no:cacheprovider \
+            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_loss_matches_non_liger_loss" \
+            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_f_divergence_matches_non_liger_loss" \
+            "tests/test_kto_trainer.py::TestKTOTrainer::test_liger_loss_matches_non_liger_loss"
 
-      - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests with minimum versions
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
-
-  distributed_smoke:
-    permissions:
-      contents: read
-    name: Distributed smoke tests
-    runs-on:
-      group: aws-g5-12xlarge-cache
-    container:
-      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
-    defaults:
-      run:
-        shell: bash
-    if: github.event.pull_request.draft == false
-    env:
-      CUDA_VISIBLE_DEVICES: "0,1"
-    steps:
-      - name: Git checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.12'
-
-      - name: Install Make and Git
-        run: |
-          apt-get update && apt-get install -y make git curl
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
-
-      - name: Create Python virtual environment
-        run: |
-          uv venv
-          uv pip install --upgrade setuptools wheel
-
-      - name: Install dependencies
+      - name: Diagnostic
+        if: ${{ !cancelled() }}
         run: |
           source .venv/bin/activate
-          uv pip install ".[dev]"
-
-      - name: Run distributed smoke tests
-        run: |
-          source .venv/bin/activate
-          pytest -v tests/distributed/test_distributed.py
-
-      - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Distributed smoke tests
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+          python tests/_diag_dpo_lm_head_parity.py
