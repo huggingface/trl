@@ -63,7 +63,6 @@ from .utils import (
     _ChunkedLogProbFunction,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     flush_left,
     get_config_model_id,
     global_then_local_main_first,
@@ -71,6 +70,7 @@ from .utils import (
     maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     use_adapter,
 )
 
@@ -664,7 +664,7 @@ class KTOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
@@ -1223,6 +1223,14 @@ class KTOTrainer(_BaseTrainer):
                     self.create_optimizer()
                     self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
                 else:
+                    # Match Trainer's FSDP1 PEFT setup before the early reference pass prepares the policy.
+                    if is_peft_model(self.model):
+                        if Version(transformers.__version__) >= Version("5.2.0"):
+                            from transformers.trainer import update_fsdp_plugin_peft
+
+                            update_fsdp_plugin_peft(self.model, self.accelerator)
+                        else:
+                            self._fsdp_qlora_plugin_updates()
                     self.model = self.accelerator.prepare(self.model)
                 self.model_wrapped = self.model
                 self._precompute_engine = self.model.eval()
@@ -1411,12 +1419,16 @@ class KTOTrainer(_BaseTrainer):
                     KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
 
                 shift_logits = completion_logits[:, :-1, :]
-                per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
-                per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
+                per_token_logps = selective_log_softmax(
+                    shift_logits, inputs["input_ids"][:, 1:], row_mask=inputs["completion_mask"][:, 1:]
+                )
                 if self.calculate_KL:
                     shift_KL_logits = KL_logits[:, :-1, :]
-                    KL_per_token_logps = selective_log_softmax(shift_KL_logits, inputs["KL_input_ids"][:, 1:])
-                    KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
+                    KL_per_token_logps = selective_log_softmax(
+                        shift_KL_logits,
+                        inputs["KL_input_ids"][:, 1:],
+                        row_mask=inputs["KL_completion_mask"][:, 1:],
+                    )
 
         completion_logps = per_token_logps.sum(-1)
 
@@ -1464,8 +1476,11 @@ class KTOTrainer(_BaseTrainer):
                 else:
                     KL_logits = model(**KL_model_kwargs).logits
                     shift_KL_logits = KL_logits[:, :-1, :]
-                    KL_per_token_logps = selective_log_softmax(shift_KL_logits, batch["KL_input_ids"][:, 1:])
-                    KL_per_token_logps[batch["KL_completion_mask"][:, 1:] == 0] = 0.0
+                    KL_per_token_logps = selective_log_softmax(
+                        shift_KL_logits,
+                        batch["KL_input_ids"][:, 1:],
+                        row_mask=batch["KL_completion_mask"][:, 1:],
+                    )
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
@@ -1508,8 +1523,12 @@ class KTOTrainer(_BaseTrainer):
         else:
             outputs = model(**model_kwargs)
             shift_logits = outputs.logits[:, :-1, :]
-            per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
-            per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+            per_token_logps, per_token_entropies = selective_log_softmax_and_entropy(
+                shift_logits,
+                batch["input_ids"][:, 1:],
+                entropy_requires_grad=False,
+                row_mask=batch["completion_mask"][:, 1:],
+            )
         completion_logps = per_token_logps.sum(-1)
 
         if completion_logps.shape[0] != len(batch["label"]):
@@ -1586,8 +1605,11 @@ class KTOTrainer(_BaseTrainer):
                         ref_outputs = self.ref_model(**ref_model_kwargs)
             if not self.use_liger_kernel:
                 ref_shift_logits = ref_outputs.logits[:, :-1, :]
-                ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["input_ids"][:, 1:])
-                ref_per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+                ref_per_token_logps = selective_log_softmax(
+                    ref_shift_logits,
+                    batch["input_ids"][:, 1:],
+                    row_mask=batch["completion_mask"][:, 1:],
+                )
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
@@ -1640,7 +1662,7 @@ class KTOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             per_token_entropy = per_token_entropies.detach()
         else:
-            per_token_entropy = entropy_from_logits(shift_logits.detach())
+            per_token_entropy = per_token_entropies
         mask = batch["completion_mask"][:, 1:]
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()

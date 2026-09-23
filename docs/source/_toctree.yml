@@ -115,8 +115,6 @@
     title: GMPO
   - local: gold_trainer
     title: GOLD
-  - local: gspo_token
-    title: GSPO-token
   - local: iw_opd_trainer
     title: IW-OPD
   - local: merge_model_callback
