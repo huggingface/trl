@@ -193,15 +193,6 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
-<hfoption id="GKD">
-
-```python
-from trl.experimental.gkd import GKDConfig
-
-training_args = GKDConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
 </hfoptions>
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).

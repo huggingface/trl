@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
@@ -38,10 +38,10 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_config_model_id,
+    global_then_local_main_first,
     pad,
-    selective_log_softmax,
+    selective_log_softmax_and_entropy,
 )
 from .tpo_config import TPOConfig
 
@@ -324,8 +324,10 @@ class TPOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `TPOConfig`, but your model is already instantiated. "
@@ -335,7 +337,7 @@ class TPOTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if not isinstance(processing_class, PreTrainedTokenizerBase):
             raise TypeError(
@@ -346,6 +348,10 @@ class TPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -452,6 +458,14 @@ class TPOTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction. `parallelism_config` requires accelerate 1.12.0.
+        if Version(accelerate.__version__) >= Version("1.12.0") and self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
+
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
@@ -507,7 +521,7 @@ class TPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed. Unlike DPO, we must also strip the extracted prompt from the reference
             # column (see `_extract_triple_prompt`), which assumes the reference shares the same implicit prompt.
             first_example = next(iter(dataset))
@@ -636,8 +650,9 @@ class TPOTrainer(_BaseTrainer):
         shift_logits = outputs.logits[..., :-1, :]
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+        per_token_logps, per_token_entropy = selective_log_softmax_and_entropy(
+            shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
+        )
 
         # Length-normalized for IPO and TPO-L (matches the SimPO-style implicit reward used by the TPO paper);
         # summed otherwise.
@@ -696,7 +711,6 @@ class TPOTrainer(_BaseTrainer):
 
         # Log the metrics
         # Entropy
-        per_token_entropy = entropy_from_logits(shift_logits.detach())
         entropy = per_token_entropy[shift_completion_mask.bool()].mean()
         entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
         self._metrics[mode]["entropy"].append(entropy)
@@ -704,7 +718,7 @@ class TPOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions

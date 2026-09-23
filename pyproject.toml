@@ -44,13 +44,12 @@ Homepage = "https://github.com/huggingface/trl"
 trl = "trl.cli:main"
 
 [project.optional-dependencies]
-bco = [
-    "scikit-learn",
-    "joblib"
-]
 deepspeed = [
     "deepspeed>=0.18.6",
     "transformers!=5.1.0",  # see transformers#43780
+]
+harbor = [
+    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
 ]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
@@ -58,6 +57,12 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
 ]
 liger = [
     "liger-kernel>=0.8.2"
+]
+math_verify = [
+    "math-verify>=0.5.2",
+]
+openreward = [
+    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]
 peft = [
     "peft>=0.13.0"
@@ -69,20 +74,17 @@ quality = [
 quantization = [
     "bitsandbytes"
 ]
-scikit = [
-    "scikit-learn"
-]
 test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-reportlog",  # test report consumed by scripts/log_reports.py
-    "pytest-rerunfailures==15.1",
+    "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.19.1,<=0.27.1",
+    "vllm>=0.19.1,<=0.29.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -91,19 +93,7 @@ vlm = [
     "torchvision",
     "num2words==0.5.14"
 ]
-math_verify = [
-    "math-verify>=0.5.2",
-]
-openreward = [
-    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
-]
-harbor = [
-    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
-]
 dev = [
-    # bco
-    "scikit-learn",
-    "joblib",
     # deepspeed
     "deepspeed>=0.18.6",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -120,12 +110,11 @@ dev = [
     "hf-doc-builder",
     # quantization
     "bitsandbytes",
-    # scikit: included in bco
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-reportlog",  # test report consumed by scripts/log_reports.py
-    "pytest-rerunfailures==15.1",
+    "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
     "tabulate",  # test report rendering in scripts/log_reports.py

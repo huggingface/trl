@@ -17,7 +17,6 @@ import textwrap
 import warnings
 from collections import defaultdict
 from collections.abc import Callable
-from contextlib import nullcontext
 from functools import partial
 from typing import Any, Optional
 
@@ -42,9 +41,8 @@ from transformers.utils import is_peft_available, is_rich_available
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
-from ...losses import FusedLinearJSDLoss
 from ...models import prepare_deepspeed
-from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
+from ...models.utils import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import RepeatSampler, create_model_from_path, disable_dropout_in_model, pad, split_tensor_dict
 from .iw_opd_config import IWOPDConfig
@@ -367,7 +365,6 @@ class IWOPDTrainer(_BaseTrainer):
     - On-policy / off-policy mixing via `lmbda` (buffered across gradient accumulation)
     - Local teacher model or external teacher via vLLM server
     - Student on-policy generation via vLLM or model.generate()
-    - Liger kernel for memory-efficient fused JSD loss
     """
 
     _tag_names = ["trl", "iw-opd"]
@@ -418,9 +415,11 @@ class IWOPDTrainer(_BaseTrainer):
             import json
 
             teacher_model_init_kwargs = json.loads(teacher_model_init_kwargs)
+        model_revision = None
         if isinstance(model, str):
             model_name_or_path = model
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
@@ -431,11 +430,15 @@ class IWOPDTrainer(_BaseTrainer):
         # ── Processing class (tokenizer) ──
         if processing_class is None and model_name_or_path is not None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_name_or_path, trust_remote_code=args.trust_remote_code
+                model_name_or_path, revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class is not None:
             if getattr(processing_class, "pad_token", None) is None:
                 processing_class.pad_token = processing_class.eos_token
+            # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+            # configs.
+            model.config.get_text_config().pad_token_id = processing_class.pad_token_id
+            model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # ── PEFT ──
         if peft_config is not None:
@@ -474,20 +477,6 @@ class IWOPDTrainer(_BaseTrainer):
                 max_length=args.max_length,
                 max_prompt_length=args.max_prompt_length,
             )
-
-        # ── Liger fused JSD loss ──
-        self.use_liger_loss = False
-        if args.use_liger_kernel:
-            self.liger_loss = FusedLinearJSDLoss(
-                beta=args.beta,
-                ignore_index=-100,
-                temperature=args.temperature,
-                compiled=False,
-                weight_hard_loss=0.0,
-                weight_soft_loss=1.0,
-            )
-            self.use_liger_loss = True
-            self._forward_redirection = _ForwardRedirection()
 
         # ── Teacher model setup ──
         self.teacher_client = None
@@ -1568,10 +1557,6 @@ class IWOPDTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         self._raise_if_local_teacher_tokenizer_mismatch()
 
-        if self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            return (loss, None) if return_outputs else loss
-
         # Student forward pass
         student_outputs = model(
             input_ids=inputs["input_ids"],
@@ -1672,99 +1657,6 @@ class IWOPDTrainer(_BaseTrainer):
 
         return (loss, student_outputs) if return_outputs else loss
 
-    def _liger_student_forward(self, student, inputs):
-        """Decoder-only forward used by the Liger JSD path (skips lm_head to save memory)."""
-        if hasattr(student, "get_decoder") and student.get_decoder() is not None:
-            decoder = student.get_decoder()
-        else:
-            decoder = getattr(student, getattr(student, "base_model_prefix", "model"), student)
-        return decoder(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            use_cache=False,
-        )
-
-    def _compute_liger_loss(self, model, inputs, num_items_in_batch=None):
-        """Memory-efficient JSD using Liger kernel (operates on hidden states, not full logits)."""
-        # Route through the DDP/FSDP wrapper via _forward_redirection so that
-        # DDP.forward() is called and prepare_for_backward() fires correctly.
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        student_outputs = self._forward_redirection(
-            model, unwrapped_student, self._liger_student_forward, unwrapped_student, inputs
-        )
-
-        self.teacher_model.eval()
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        if hasattr(unwrapped_teacher, "get_decoder") and unwrapped_teacher.get_decoder() is not None:
-            base_teacher = unwrapped_teacher.get_decoder()
-        else:
-            base_teacher = getattr(
-                unwrapped_teacher, getattr(unwrapped_teacher, "base_model_prefix", "model"), unwrapped_teacher
-            )
-        with torch.no_grad():
-            teacher_outputs = base_teacher(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                use_cache=False,
-            )
-
-        student_hidden = student_outputs.last_hidden_state[:, :-1]
-        teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-        del student_outputs, teacher_outputs
-
-        student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
-        teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
-
-        labels_mask = inputs["labels"] != -100
-        masked_input_ids = torch.where(labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100))
-        true_labels = masked_input_ids[:, 1:].reshape(-1)
-
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-
-        loss = self.liger_loss(
-            student_input=student_hidden,
-            student_weight=student_head.weight,
-            teacher_input=teacher_hidden,
-            teacher_weight=teacher_head.weight,
-            true_labels=true_labels,
-            student_bias=getattr(student_head, "bias", None),
-            teacher_bias=getattr(teacher_head, "bias", None),
-        )
-
-        # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we want
-        # the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
-        if num_items_in_batch is not None:
-            num_valid_local = (true_labels != -100).sum().clamp_min(1)
-            if isinstance(num_items_in_batch, torch.Tensor):
-                num_items_in_batch = num_items_in_batch.to(loss.device)
-            loss = loss * num_valid_local / num_items_in_batch
-
-        del student_hidden, teacher_hidden, true_labels
-        return loss
-
-    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        """Context manager for gathering lm_head parameters under Liger + ZeRO-3."""
-        if not self.use_liger_loss:
-            return nullcontext()
-
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
-            return nullcontext()
-
-        import deepspeed
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-        params = [student_head.weight, teacher_head.weight]
-        if student_head.bias is not None:
-            params.append(student_head.bias)
-        if teacher_head.bias is not None:
-            params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-
     # ──────────────────────────────────────────────────────────────────────
     #  Training step & Logging
     # ──────────────────────────────────────────────────────────────────────
@@ -1776,8 +1668,7 @@ class IWOPDTrainer(_BaseTrainer):
         """Training step with on/off-policy loss tracking and completion stats."""
         buffer_steps = self.args.gradient_accumulation_steps
 
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
-            loss = super().training_step(model, inputs, num_items_in_batch)
+        loss = super().training_step(model, inputs, num_items_in_batch)
 
         slice_idx = (self._buffer_step - 1) % buffer_steps
 
@@ -1830,7 +1721,7 @@ class IWOPDTrainer(_BaseTrainer):
                     self._on_policy_step_equiv,
                     self._off_policy_step_equiv,
                 ],
-                dtype=torch.float64,
+                dtype=torch.float32,
                 device=device,
             )
 

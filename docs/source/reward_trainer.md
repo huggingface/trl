@@ -134,17 +134,17 @@ $$
 
 While training and evaluating, we record the following metrics:
 
-* `global_step`: The total number of optimizer steps taken so far.
-* `epoch`: The current epoch number, based on dataset iteration.
-* `num_tokens`: The total number of tokens processed so far.
-* `loss`: The average loss over the last logging interval.
-* `accuracy`: The proportion of correct predictions (i.e., the model assigned a higher score to the chosen response than to the rejected one) averaged over the last logging interval.
-* `min_reward`: The minimum reward score assigned by the model. This value is averaged over the logging interval.
-* `mean_reward`: The average reward score assigned by the model over the last logging interval.
-* `max_reward`: The maximum reward score assigned by the model. This value is averaged over the logging interval.
-* `margin`: The average margin (difference between chosen and rejected rewards) over the last logging interval.
-* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
-* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+- `global_step`: The total number of optimizer steps taken so far.
+- `epoch`: The current epoch number, based on dataset iteration.
+- `num_tokens`: The total number of tokens processed so far.
+- `loss`: The average loss over the last logging interval.
+- `accuracy`: The proportion of correct predictions (i.e., the model assigned a higher score to the chosen response than to the rejected one) averaged over the last logging interval.
+- `min_reward`: The minimum reward score assigned by the model. This value is averaged over the logging interval.
+- `mean_reward`: The average reward score assigned by the model over the last logging interval.
+- `max_reward`: The maximum reward score assigned by the model. This value is averaged over the logging interval.
+- `margin`: The average margin (difference between chosen and rejected rewards) over the last logging interval.
+- `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+- `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
 
 ## Customization
 
@@ -217,8 +217,8 @@ trainer.train()
 
 The [`RewardTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+- The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+- The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 

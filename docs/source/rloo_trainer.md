@@ -120,9 +120,9 @@ $$
 In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1 \\) and this reduces to standard REINFORCE.
 
 > [!NOTE]
-> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\). 
+> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\).
 >
-> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy. 
+> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy.
 >
 > In contrast, [GRPO](grpo_trainer) adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\), so its gradient flows through both the ratio term and the KL penalty.
 
@@ -544,7 +544,7 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 RLOO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
@@ -557,7 +557,7 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 

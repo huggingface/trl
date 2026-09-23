@@ -63,10 +63,10 @@ from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
+    is_async_callable,
     nanmax,
     nanmin,
     nanstd,
@@ -74,6 +74,7 @@ from .utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -271,8 +272,10 @@ class RLOOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
@@ -298,6 +301,7 @@ class RLOOTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -318,6 +322,11 @@ class RLOOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -355,16 +364,17 @@ class RLOOTrainer(_BaseTrainer):
 
         elif is_peft_model(model):
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during the training. Before PEFT
+            # of the "default" adapter, so that we can use it as the reference model during RLOO training. Before PEFT
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config.
+            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
+            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
+                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
-                and Version(peft.__version__) < Version("0.20.0")
             ):
                 logger.warning(
                     "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
@@ -419,6 +429,7 @@ class RLOOTrainer(_BaseTrainer):
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
+        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
@@ -426,6 +437,7 @@ class RLOOTrainer(_BaseTrainer):
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
                 model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                reward_model_revisions[i] = model_init_kwargs.get("revision")
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -435,7 +447,7 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
-        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        self._has_async_funcs = any(is_async_callable(func) for func in self.reward_funcs)
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
                 name="RLOOTrainer-AsyncRewardLoop"
@@ -472,13 +484,15 @@ class RLOOTrainer(_BaseTrainer):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(
-                        get_config_model_id(reward_func.config), trust_remote_code=args.trust_remote_code
+                        get_config_model_id(reward_func.config),
+                        revision=reward_model_revisions[i],
+                        trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -972,17 +986,23 @@ class RLOOTrainer(_BaseTrainer):
             logits = logits[:, :-1, :]  # (B, L-1, H)
             # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
             completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            completion_mask = attention_mask_batch[:, -logits_to_keep:]
+            # Scale inside the kernel to avoid materializing another full logits tensor.
             if compute_entropy:
-                with torch.no_grad():
-                    entropies = entropy_from_logits(logits)
+                logps, entropies = selective_log_softmax_and_entropy(
+                    logits,
+                    completion_ids,
+                    entropy_requires_grad=False,
+                    temperature=self.temperature,
+                    row_mask=completion_mask,
+                )
                 all_entropies.append(entropies)
+            else:
+                logps = selective_log_softmax(
+                    logits, completion_ids, temperature=self.temperature, row_mask=completion_mask
+                )
+            all_logps.append(logps)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
@@ -1099,7 +1119,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif is_async_callable(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
@@ -1415,8 +1435,8 @@ class RLOOTrainer(_BaseTrainer):
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-            # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
@@ -1428,7 +1448,7 @@ class RLOOTrainer(_BaseTrainer):
 
         num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
-        # Get forward_kwargs for models with multimodal inputs
+        # Get forward_kwargs for models with multimodal inputs.
         if images is not None:
             prompts_text = [
                 apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]

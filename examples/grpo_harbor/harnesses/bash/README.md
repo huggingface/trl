@@ -1,6 +1,6 @@
 # `bash` harness
 
-The minimal harness: a single shell tool. This is the **built-in** [`HarborBashEnv`](../../../../../trl/experimental/harbor/_env.py) (`trl.experimental.harbor.HarborBashEnv`); this folder just documents it and re-exports it as `BashEnv`.
+The minimal harness: a single shell tool. This is the **built-in** [`HarborBashEnv`](../../../../trl/experimental/harbor/_env.py) (`trl.experimental.harbor.HarborBashEnv`); this folder just documents it and re-exports it as `BashEnv`.
 
 ## Tools
 

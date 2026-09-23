@@ -19,6 +19,8 @@ pip install kernels
 
 Kernels can directly replace attention implementations, removing the need to manually compile attention backends like Flash Attention and boosting training speed just by pulling the respective attention kernel from the Hub.
 
+The source for TRL's fused loss kernel is maintained in the repository's [`kernels/` directory](https://github.com/huggingface/trl/tree/main/kernels). When `kernels` is installed and a compatible `trl-lib/trl-losses` Hub build is available, TRL loads it automatically for DPO, GRPO, KTO, RLOO, and TPO. The existing PyTorch implementation remains the fallback when the optional build is unavailable. Builds are published by the repository's `publish-kernels` workflow after changes to `kernels/` land on `main`.
+
 You can specify a kernel when loading a model:
 
 
@@ -116,4 +118,4 @@ training_args = SFTConfig(
 )
 ```
 
-Learn more about the [Liger Kernel Integration](./liger_kernel_integration).
+Learn more about the [Liger Kernel Integration](liger_kernel_integration).

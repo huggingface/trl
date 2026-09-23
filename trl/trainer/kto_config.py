@@ -36,7 +36,8 @@ class KTOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`KTOTrainer`] is provided as a string.
+            argument of the [`KTOTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -93,8 +94,10 @@ class KTOConfig(_BaseConfig):
             reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
             π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
         ref_model_sync_steps (`int`, *optional*, defaults to `512`):
-            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
-            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
+            set `sync_ref_model=True`.
+
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
@@ -130,7 +133,8 @@ class KTOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `KTOTrainer` is provided as a string."
+            "the `KTOTrainer` is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
