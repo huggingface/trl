@@ -46,10 +46,10 @@ concurrency:
 permissions: {}
 
 jobs:
-  diag_dpo_lm_head:
+  diag_grpo_chunked:
     permissions:
       contents: read
-    name: DPO lm_head parity (${{ matrix.mode }})
+    name: GRPO chunked parity (${{ matrix.mode }})
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -62,32 +62,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - mode: old-pair-min
-            ref: c2196d5f571ee8bb32fbfa14464f3b6854ac13d2
+          - mode: main-alone-min
+            ref: 7da90a08559abbf4e84cb551157ae12f4e4e619f
             deps: min
-            parity: test_liger_loss_types_match_non_liger_loss
-          - mode: old-pair-latest
-            ref: c2196d5f571ee8bb32fbfa14464f3b6854ac13d2
+            first: ""
+          - mode: main-pair-min
+            ref: 7da90a08559abbf4e84cb551157ae12f4e4e619f
+            deps: min
+            first: "tests/test_grpo_trainer.py::TestGRPOTrainer::test_train_loss_types[vespo-True]"
+          - mode: main-pair-latest
+            ref: 7da90a08559abbf4e84cb551157ae12f4e4e619f
             deps: latest
-            parity: test_liger_loss_types_match_non_liger_loss
-          - mode: head-pair-min
-            ref: ""
+            first: "tests/test_grpo_trainer.py::TestGRPOTrainer::test_train_loss_types[vespo-True]"
+          - mode: a98-pair-min
+            ref: a98fa6a4428f9aae58dfb26d729d7437f662f27a
             deps: min
-            parity: test_liger_loss_matches_non_liger_loss
-          - mode: head-gw9-min
-            ref: ""
-            deps: min
-            parity: ""
+            first: "tests/test_grpo_trainer.py::TestGRPOTrainer::test_train_loss_types[vespo-True]"
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ matrix.ref }}
-
-      - name: Checkout helper files
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          path: helper
 
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -116,18 +111,8 @@ jobs:
           fi
           uv pip freeze | grep -iE "^(torch|transformers|accelerate|datasets|liger-kernel|peft|kernels)=="
 
-      - name: Liger train test, then parity tests, in one process
-        if: matrix.parity != ''
+      - name: Run in one process
         run: |
           source .venv/bin/activate
-          pytest -s -v -p no:cacheprovider -p no:randomly \
-            "tests/test_dpo_trainer.py::TestDPOTrainer::test_train_with_liger" \
-            "tests/test_dpo_trainer.py::TestDPOTrainer::${{ matrix.parity }}" \
-            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_f_divergence_matches_non_liger_loss"
-
-      - name: gw9 sequence in one process
-        if: matrix.parity == ''
-        run: |
-          source .venv/bin/activate
-          mapfile -t TESTS < helper/tests/_gw9_sequence_head.txt
-          pytest -s -v -p no:cacheprovider -p no:randomly "${TESTS[@]}"
+          set -f  # keep the [param] test ids from being glob-expanded
+          pytest -s -v -p no:cacheprovider -p no:randomly ${{ matrix.first }} "tests/test_grpo_trainer.py::TestGRPOTrainer::test_chunked_logps_match_full_logits"
