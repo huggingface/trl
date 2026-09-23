@@ -1022,6 +1022,16 @@ class TestWorkerMetricPush(TrlTestCase):
 
 
 class TestReconciler(TrlTestCase):
+    @pytest.mark.parametrize("mask", [None, [1, 0, 1], [0, 0, 0]])
+    def test_completion_masks_are_generic(self, mask):
+        rows = _finalize([TurnRecord([1, 2], [3, 4, 5], [-0.1, -0.2, -0.3], mask)])
+        if mask == [0, 0, 0]:
+            assert rows == []
+        else:
+            assert rows[0].completion_mask == [0, 0] + (mask if mask is not None else [1, 1, 1])
+            assert rows[0].input_ids == [1, 2, 3, 4, 5]
+            assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
+
     def test_common_prefix_len(self):
         assert _common_prefix_len([1, 2, 3], [1, 2, 3]) == 3  # identical
         assert _common_prefix_len([1, 2], [1, 2, 3, 4]) == 2  # old is a prefix of new

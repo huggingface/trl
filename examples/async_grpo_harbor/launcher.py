@@ -16,8 +16,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "openenv @ git+https://github.com/huggingface/OpenEnv.git",
-#     "openenv-harbor-env @ git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/harbor_env",
+#     "openenv[harbor] @ git+https://github.com/huggingface/OpenEnv.git@34825a772ae54760fb6bf7a8b2073a4a85714004",
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
@@ -35,19 +34,8 @@ wraps them:
     vllm serve             (GPU 0)   the policy the agent calls and the trainer syncs weights into
     async_grpo_harbor.py   (GPU 1)   the training script, downloaded and run unmodified
 
-The training script is *downloaded*, not duplicated here, so what runs on Jobs is byte-identical to what
-runs locally and the two cannot drift.
-
-Everything is in one job because AsyncGRPO syncs weights into vLLM over NCCL, which needs both on the
-same host's GPUs. That leaves only the OpenEnv server placeable, and keeping it here means the capture
-proxy reaches vLLM over `localhost`; hosting it on a Space instead adds a public hop to every model call.
-
-WHICH HOP THE TUNNEL IS FOR. The sandboxed agent is the only participant outside this container, and what
-it needs to reach is the capture proxy — not vLLM, which is what the opencode recipe tunnels. So
-`openenv harbor serve --expose gradio` publishes the proxy and the engine stays entirely private.
-Jobs can also publish a port at `https://<job_id>--<port>.hf.jobs`, but that requires an HF token, and
-the agent's `Authorization` header already carries its rollout session key — the key the proxy routes on
-— so it cannot carry a second credential.
+The trainer and vLLM share a host for NCCL weight sync. The capture proxy is tunneled to the remote
+sandbox. The training script is downloaded from `--train-script-url`; OpenEnv uses the revision below.
 
 Requirements:
   - A Hugging Face account with a positive credit balance; Jobs is pay-as-you-go.
@@ -71,7 +59,7 @@ hf jobs uv run --flavor h200x2 --image huggingface/trl \
     --secrets HF_TOKEN --secrets E2B_API_KEY --timeout 7200s \
     --volume type=bucket,source=<user>/<bucket>,mount_path=/data \
     https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/launcher.py \
-    -- --save-steps 10
+    -- --max-steps 20
 ```
 
 Anything after `--` is forwarded to the training script, so its full argument surface is available:
@@ -92,25 +80,22 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 
-# The canonical training script. Overridable with --train-script-url so a branch can be tested before it
-# is merged -- worth having: the equivalent opencode launcher still points at a pre-reorg path that now
-# 404s, and the failure surfaces as a download error minutes into a paid job.
+# Use --train-script-url to test an unmerged revision.
 TRAIN_SCRIPT_URL = (
     "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py"
 )
 DATA_ROOT = pathlib.Path(os.environ.get("DATA_ROOT", "/data"))
+OPENENV_REVISION = "34825a772ae54760fb6bf7a8b2073a4a85714004"
 
 _children: list[subprocess.Popen] = []
+_stopping = threading.Event()
 
 
 def _spawn(cmd: list[str], log_path: pathlib.Path, env: dict[str, str] | None = None) -> subprocess.Popen:
-    """Start a long-lived child in its own process group, logging to a file.
-
-    Its own group so cleanup can signal the whole tree: vLLM spawns engine workers that outlive a plain
-    kill of the parent and then keep holding the GPU.
-    """
+    """Start a child in a process group so cleanup also stops its workers."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         cmd,
@@ -124,13 +109,27 @@ def _spawn(cmd: list[str], log_path: pathlib.Path, env: dict[str, str] | None = 
     return proc
 
 
+def _stop_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
+
+
 def _cleanup(*_: object) -> None:
-    for proc in _children:
-        if proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
+    _stopping.set()
+    for proc in list(_children):
+        _stop_process(proc)
 
 
 def _http_ok(url: str, timeout: float = 5.0) -> bool:
@@ -152,14 +151,7 @@ def _http_json_has(url: str, key: str, timeout: float = 15.0) -> bool:
 
 
 def wait_for_public_proxy(log: pathlib.Path, capture_port: int, deadline_s: float = 420.0) -> str:
-    """Return the proxy's public URL, but only once a request THROUGH it reaches the proxy.
-
-    The published URL appearing in the log is not enough. When a tunnel's forwarding process dies the
-    domain keeps resolving and answers with the tunnel provider's own error page, so the sandboxed agent
-    receives HTML where an OpenAI endpoint should be, makes zero model calls, and every rollout comes
-    back unscorable — while the server's own /health still reports healthy, because it checks itself and
-    not its tunnel. A check that does not traverse the path the workload uses proves nothing.
-    """
+    """Return the public URL after its health endpoint reaches the capture proxy."""
     published = re.compile(rf"capture\s+:{capture_port}\s+->\s+(https://\S+)")
     ansi = re.compile(r"\x1b\[[0-9;]*m")
     started = time.monotonic()
@@ -195,27 +187,11 @@ def start_harbor_server(args: argparse.Namespace, log: pathlib.Path) -> str:
 
 
 def supervise_tunnel(args: argparse.Namespace, log: pathlib.Path, interval_s: float) -> None:
-    """Keep the published proxy reachable for the whole run, restarting the server when it is not.
-
-    Verifying once at startup is not enough, and this is measured rather than defensive: over 27 hours
-    on our own cluster the published tunnel stopped serving the proxy 69 times -- roughly once every 24
-    minutes -- so a run of any length will lose it mid-flight. When that happens the sandboxed agent gets
-    the tunnel provider's error page instead of an OpenAI endpoint, makes zero model calls, and every
-    rollout comes back unscorable, with nothing in the trainer's own logs to say why.
-
-    A restart changes the published URL, which is fine: the trainer talks to the server over localhost
-    and the server hands its current URL to each new sandbox, so only rollouts already in flight are
-    lost. Two consecutive failures are required before acting, so one flaky request does not bounce a
-    healthy server mid-step.
-
-    Note which check does the work. The failure signature we originally debugged -- the provider's
-    "no interface is running" placeholder -- accounted for 2 of those 69. The other 137 probe failures
-    were plain 502s. So the test is positive and generic: the URL must return OUR health document.
-    Enumerating known failure modes would have caught almost none of them.
-    """
+    """Restart after two failed public health checks. Existing sessions may be lost."""
+    if interval_s <= 0:
+        return
     consecutive = 0
-    while True:
-        time.sleep(interval_s)
+    while not _stopping.wait(interval_s):
         url = _published_url(log, args.capture_port)
         if url and _http_json_has(f"{url}/health", "status"):
             consecutive = 0
@@ -226,13 +202,11 @@ def supervise_tunnel(args: argparse.Namespace, log: pathlib.Path, interval_s: fl
             continue
         print("[launcher] the published proxy is not reachable; restarting the Harbor server", flush=True)
         for proc in list(_children):
-            if proc.poll() is None and "harbor" in " ".join(getattr(proc, "args", []) or []):
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
+            if "harbor" in proc.args:
+                _stop_process(proc)
                 _children.remove(proc)
-        time.sleep(5)
+        if _stopping.is_set():
+            return
         try:
             new_url = start_harbor_server(args, log)
             print(f"[launcher] Harbor server back up; proxy now {new_url}", flush=True)
@@ -266,14 +240,7 @@ def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_
 
 
 def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib.Path) -> None:
-    """Build the sandbox image once, serially, before any group runs concurrently.
-
-    Not an optimisation. Harbor decides whether to build from `alias_exists()`, which flips true when a
-    build STARTS rather than when it finishes, so N generations racing their first visit to a task all
-    see "exists" and then fail against a half-built image with `404: tag 'default' does not exist`. With
-    `num_generations` rollouts launched together on a cold template that is the common case, and the
-    failures read as the harness misbehaving rather than a build race.
-    """
+    """Warm task 0's sandbox image before concurrent rollouts can race its first build."""
     cmd = [
         "openenv", "harbor", "rollout",
         "--llm-url", vllm_url,
@@ -291,8 +258,7 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
         rc = subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT, check=False).returncode
     took = time.monotonic() - started
     if rc != 0:
-        # Not fatal: the warm rollout can fail for reasons that say nothing about training (an
-        # ungradeable task 0, a flaky verifier) and the build it triggered still happened.
+        # A verifier failure does not imply that the image build failed.
         print(f"[launcher] WARNING warm rollout exited {rc} after {took:.0f}s; continuing", flush=True)
         print(f"[launcher] WARNING tail:\n{log.read_text(errors='replace')[-800:]}", flush=True)
     else:
@@ -336,7 +302,7 @@ def main() -> None:
     if mounted:
         os.environ.setdefault("HF_HOME", str(data_root / "hf-cache"))
 
-    for tool in ("openenv", "vllm"):
+    for tool in ("openenv", "vllm", "git"):
         if shutil.which(tool) is None:
             raise RuntimeError(f"`{tool}` is not on PATH; the PEP 723 dependencies did not install")
     if args.sandbox == "e2b" and not os.environ.get("E2B_API_KEY"):
@@ -358,13 +324,32 @@ def main() -> None:
             f"needs 2 GPUs (engine + trainer on one host for NCCL) but sees {n_gpu}; try --flavor h200x2"
         )
 
-    # 1. the Harbor dataset + the capture proxy, published for the sandboxed agent
+    # The pinned wheel omits harbor_env.harness; import it from the matching source checkout.
+    source = data_root / f"openenv-{uuid.uuid4().hex}"
+    subprocess.run(["git", "init", "--quiet", str(source)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "fetch",
+            "--depth=1",
+            "https://github.com/huggingface/OpenEnv.git",
+            OPENENV_REVISION,
+        ],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(source), "checkout", "--quiet", "--detach", "FETCH_HEAD"], check=True)
+    env_path = str(source.resolve() / "envs")
+    if os.environ.get("PYTHONPATH"):
+        env_path += os.pathsep + os.environ["PYTHONPATH"]
+
     server_log = logs / "openenv-server.log"
     public_proxy = start_harbor_server(args, server_log)
-    threading.Thread(target=supervise_tunnel, args=(args, server_log, args.tunnel_check_s), daemon=True).start()
+    if args.tunnel_check_s > 0:
+        threading.Thread(target=supervise_tunnel, args=(args, server_log, args.tunnel_check_s), daemon=True).start()
 
-    # 2. the policy. The token-id and logprob flags are load-bearing: without them the proxy grades
-    #    every rollout `eval` and the run produces nothing trainable.
+    # Serve processed logprobs and engine token IDs for training.
     vllm_url = f"http://127.0.0.1:{args.vllm_port}"
     vllm_log = logs / "vllm.log"
     vllm_cmd = [
@@ -387,7 +372,6 @@ def main() -> None:
     if not args.skip_warm:
         warm_sandbox_template(args, vllm_url, logs)
 
-    # 3. the training script, downloaded rather than duplicated so Jobs and local runs cannot drift
     script = pathlib.Path("async_grpo_harbor.py")
     print(f"[launcher] fetching {args.train_script_url}", flush=True)
     try:
@@ -395,7 +379,8 @@ def main() -> None:
     except (urllib.error.URLError, OSError) as exc:
         raise RuntimeError(f"could not download the training script from {args.train_script_url}: {exc}") from exc
 
-    stamp = os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or time.strftime("%m%d-%H%M%S")
+    stamp = os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
+    run_name = f"{args.model.split('/')[-1]}-{args.harness}-{stamp}-{uuid.uuid4().hex[:8]}"
     cmd = [
         sys.executable, str(script),
         "--server", f"http://127.0.0.1:{args.server_port}",
@@ -404,12 +389,15 @@ def main() -> None:
         "--split", args.split,
         "--harness", args.harness,
         "--sandbox", args.sandbox,
-        "--output-dir", str(data_root / "runs" / f"{args.model.split('/')[-1]}-{args.harness}-{stamp}"),
+        "--run-name", run_name,
+        "--output-dir", str(data_root / "runs" / run_name),
         *forwarded,
     ]  # fmt: skip
     print(f"[launcher] proxy {public_proxy}  (what the sandboxed agent calls)", flush=True)
     print(f"[launcher] train {' '.join(cmd)}", flush=True)
-    rc = subprocess.run(cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": args.train_device}, check=False).returncode
+    rc = subprocess.run(
+        cmd, env={**os.environ, "CUDA_VISIBLE_DEVICES": args.train_device, "PYTHONPATH": env_path}, check=False
+    ).returncode
     print(f"[launcher] training exited {rc}", flush=True)
     sys.exit(rc)
 

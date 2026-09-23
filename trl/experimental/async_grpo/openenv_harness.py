@@ -51,11 +51,8 @@ logger = get_logger(__name__)
 Message = dict[str, Any]
 
 
-# `TraceEntry` and `LoopOwningSession` are imported from `openenv.core.harness` above. They used to be declared here,
-# each carrying a `TODO(@openenv)` asking for exactly that move. Keeping local copies left the trainer owning the schema
-# for a record it neither produces nor can validate, and the two were free to drift with nothing to notice until the
-# token fields came back empty -- which is precisely how `prompt_token_ids` could be added on the producer side and go
-# unread here for a full training run.
+class CaptureContractError(ValueError):
+    """Captured tokens, masks or sampling metadata do not satisfy the training contract."""
 
 
 @dataclass
@@ -112,7 +109,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
 
     _provides_rollout_reward = True
 
-    # An unscorable rollout: no training rows, reward None -> `_score_group` NaNs it out of the group baseline.
+    # Unscorable rollouts are excluded from the group baseline.
     _EMPTY_ROLLOUT = ([], [], [], 0, 0, None)
 
     def __init__(
@@ -126,14 +123,12 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         lossless_capture: bool = True,
         **loop_kwargs,
     ):
-        # A re-rendered prompt is still an exact per-call training example. REALIGN can
-        # erase previously sampled, eligible tokens; fork instead when consuming capture.
+        # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
         if harness_adapter is None and lossless_capture:
             loop_kwargs["fork_threshold_tokens"] = 0
         super().__init__(**loop_kwargs)
         self._factory = harness_session_factory
-        # An adapter (e.g. MCPHarnessAdapter) selects white-box (TRL samples each turn); `None` selects loop-owning
-        # (the agent runs its own loop and we read its proxy trace).
+        # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
         self._sampling_policy = None
         if harness_adapter is None:
@@ -161,21 +156,20 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         self._agent_turn_fn = agent_turn_fn or _default_agent_entries
         self.reward_func_names.append("harness_reward")
 
-        # Sized to max_inflight so sessions run concurrently without queuing or per-rollout thread churn.
         self._session_pool = ThreadPoolExecutor(
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
-        # In-flight sessions, so `_run_loops` can close them on stop (see there). set ops are atomic under the GIL.
         self._live_sessions: set = set()
 
     async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
-        # TODO(@openenv): provide an async version for performance
-        #  OpenEnv's harness layer is synchronous, so run the whole session on the pool.
+        # OpenEnv sessions are synchronous; metrics stay on the event loop.
         loop = asyncio.get_running_loop()
         result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
-        # Pushed here and not in `_run_session`: the accumulators are plain dicts, and the pool runs many sessions at
-        # once, so a push off the event loop would race the score loop's.
         if metrics is not None:
+            correctness = metrics.pop("correctness", None)
+            if correctness is not None:
+                self._rates["rollout/correctness_mean"][0] += correctness
+                self._rates["rollout/correctness_mean"][1] += 1.0
             self._push_rollout_metrics(**metrics)
         return result
 
@@ -189,44 +183,39 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 except Exception:
                     logger.warning("closing in-flight harness session on stop failed", exc_info=True)
 
-            # TODO(@openenv): make session.close() awaitable so this cancels on the event loop, not a thread each.
             await asyncio.gather(*(asyncio.to_thread(_close, session) for session in list(self._live_sessions)))
 
+        close_task = asyncio.create_task(_close_live_sessions_on_stop())
         try:
-            await asyncio.gather(super()._run_loops(stop_event), _close_live_sessions_on_stop())
+            await super()._run_loops(stop_event)
         finally:
-            self._session_pool.shutdown(wait=True)
+            # Unblock other sessions before joining their threads, including on capture errors.
+            stop_event.set()
+            await close_task
+            await asyncio.to_thread(self._session_pool.shutdown, wait=True)
 
     def _run_session(self, prompt, group_id=0):
-        """Drive one OpenEnv session to completion, on a pool thread.
+        """Return a rollout and its metrics from a pool thread.
 
-        Returns `(the _generate_one tuple, rollout metrics or None)`. The metrics are handed back rather than pushed
-        here because this runs off the event loop; `_generate_one` pushes them once it is back on it.
-
-        The agent and its proxy are external, flaky processes; a single rollout that fails to launch or whose trace is
-        malformed must NOT crash the worker (it would kill the whole run). Such rollouts are returned as unscorable
-        (reward None, no rows) so training continues and the group baseline ignores them."""
+        Session failures are unscorable. Invalid training captures stop the worker.
+        """
         t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
-        # Stable per-group seed so seed-driven factories hand every generation of a group the same task. Keyed on
-        # `group_id` (not the prompt) so it works with or without a dataset: when there is no dataset the prompt is
-        # empty and the factory selects the task from this seed.
+        # Every generation in a group must select the same task.
         seed = group_id
-        # TODO(@openenv): session creation spins up external processes (sandbox + proxy) and is the flakiest step;
-        # it should retry with backoff (ideally inside OpenEnv's factory). For now a failed create drops the rollout as
-        # unscorable, which shrinks the effective group size - a high create-failure rate silently weakens the signal.
         try:
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
             logger.warning("harness session create failed; scoring rollout as unscorable", exc_info=True)
             return self._EMPTY_ROLLOUT, None
-        self._live_sessions.add(session)  # tracked so a stop can close it (unblocks wait_for_completion below)
+        self._live_sessions.add(session)
         timed_out = False
         trace: list[TraceEntry] = []
         tool_calls_by_name: dict[str, int] = {}
         try:
+            if self._stop_event.is_set():
+                return self._EMPTY_ROLLOUT, None
             if self._adapter is not None:
-                # white-box: the adapter runs the tool loop, calling `_sample_turn` each turn.
                 turns: list[TurnRecord] = []
                 result = self._adapter.run_white_box(
                     functools.partial(self._sample_turn, turns), session, self._limits
@@ -235,21 +224,18 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
                 tool_failure_count = sum(1 for entry in result.tool_trace if entry.result.error is not None)
             else:
-                # TODO(@openenv): ResourceSessionFactory should probably be generic over the session type it creates.
-                # so we can type hint that we need a LoopOwningSession and not a simple RessouceSession
                 loop_session = cast(LoopOwningSession, session)
                 try:
                     loop_session.wait_for_completion()
                 except TimeoutError:
                     logger.warning("harness agent timed out; training captured turns, timed_out flagged")
                     timed_out = True
-                trace = loop_session.fetch_proxy_trace()
-                # Resolve the real agent turns ONCE (dropping any framework aux calls), then derive everything from them.
-                entries = self._agent_turn_fn(trace)
-                # No tokenizer: prompts come from the capture as the engine tokenized them.
-                # require_engine_ids=True makes a trace without them a hard error rather than a
-                # silent re-render, which is decision 4 of the contract.
-                turns = _turns_from_trace(entries, self._train_turn_fn, sampling=self._sampling_policy)
+                try:
+                    trace = loop_session.fetch_proxy_trace()
+                    entries = self._agent_turn_fn(trace)
+                    turns = _turns_from_trace(entries, self._train_turn_fn, sampling=self._sampling_policy)
+                except (ValueError, TypeError, KeyError) as exc:
+                    raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
                 tool_call_count = sum(tool_calls_by_name.values())
@@ -266,18 +252,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 timed_out=timed_out,
             )
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
-            if self._rollout_reward_fn is not None and env_reward is not None:
-                # Keep the VERIFIER's score visible on its own. `rollout_reward_fn` replaces `env_reward` wholesale,
-                # and the column it feeds is already named `rewards/harness_reward`, so with a shaping term in play
-                # `reward` and `rewards/harness_reward` are the SAME shaped number and raw correctness is logged
-                # nowhere. Every shaping term then looks exactly like progress: a reward that climbs because the
-                # policy got faster is indistinguishable from one that climbs because it solved more, which is the
-                # one question the run exists to answer.
-                self._rates["rollout/correctness_mean"][0] += float(env_reward)
-                self._rates["rollout/correctness_mean"][1] += 1.0
             sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
-            # Same rollout-structure metrics the built-in loop reports, for `_generate_one` to push on the loop.
             metrics = dict(
                 turns=len(turns),
                 sequences=len(sequences),
@@ -286,7 +262,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 loop_exhausted=timed_out,
                 duration_s=time.monotonic() - t_dispatch,
             )
+            if self._rollout_reward_fn is not None and env_reward is not None:
+                metrics["correctness"] = env_reward
             return (completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward), metrics
+        except CaptureContractError:
+            raise
         except Exception:
             logger.warning("harness rollout failed; scoring as unscorable", exc_info=True)
             return self._EMPTY_ROLLOUT, None
@@ -331,20 +311,13 @@ def _trace_output_ids(entry: TraceEntry) -> list[int]:
     ]
 
 
-# TODO(@openenv): identifying which proxy-trace entries are real agent turns is really OpenEnv's job - the proxy KNOWS which
-# call is the agent loop vs an auxiliary one (title generator, context summarizer). If OpenEnv tagged each trace
-# record with its purpose, this filtering (and the `agent_turn_fn` hook below) would be unnecessary: the library would
-# just read the tag. Until then we default to a framework-agnostic filter and let the caller override.
 def _default_agent_entries(trace: list[TraceEntry]) -> list[TraceEntry]:
-    """Default `agent_turn_fn`: every captured turn that has request messages and a response. Framework-agnostic - it
-    only drops malformed/empty captures, NOT a framework's auxiliary calls (a title generator, a context summarizer,
-    etc.). An agent framework that fires such calls must pass an `agent_turn_fn` that recognizes and drops them, so
-    they are never trained with the rollout's reward, scored, or logged as the transcript (see the opencode example)."""
+    """Select captures with messages and a response. Producers or `agent_turn_fn` must exclude auxiliary calls."""
     return [entry for entry in trace if (entry.get("request") or {}).get("messages") and entry.get("response")]
 
 
 def has_tool_call(turn: HarnessTurn) -> bool:
-    """A ready-made `train_turn_fn`: keep only turns where the model took an ACTION (emitted a tool call)."""
+    """Select turns that emitted a tool call."""
     return bool(turn.tool_calls)
 
 
@@ -366,22 +339,11 @@ def _turns_from_trace(
     *,
     sampling: dict[str, float | int] | None = None,
 ) -> list[TurnRecord]:
-    """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns, using the ENGINE's own tokenization.
+    """Convert captured engine tokens into TRL turns without re-tokenizing.
 
-    Nothing here re-renders a prompt. This function used to call `apply_chat_template` on every entry, because
-    `TraceEntry` carried no prompt field. It does now, and the re-render was never safe: measured on Qwen3.5-4B over 28
-    live turns it matched the engine on ZERO of them -- off by two tokens at the generation boundary every turn -- and
-    training on those positions collapsed a run at its FIRST weight update, the model emitting `<|im_start|>bash` where
-    `<function=bash>` belongs.
-
-    A turn without `prompt_token_ids` is a hard error: the engine was not serving with `--return-tokens-as-token-ids
-    --logprobs-mode processed_logprobs`, and every prompt would be one the model never saw.
-
-    By default every agent turn is trained. Which turns to reinforce beyond that is the CALLER's policy: pass
-    `train_turn_fn(turn: HarnessTurn) -> bool` to narrow it, e.g. `has_tool_call` to train only turns that took an
-    ACTION. That suits tool-heavy agents, where advantage is stamped per-rollout and training pure-text turns would
-    reinforce prose over tool use; it is wrong for agents whose answer IS text (QA, math), so the library never imposes
-    it."""
+    OpenEnv's `loss_mask` covers prompt plus completion; `TurnRecord.output_mask` covers only completion. Partial
+    completion masks are preserved. `train_turn_fn` optionally excludes whole turns and cannot replace token masks.
+    """
     if train_turn_fn is not None:
         entries = [entry for entry in entries if train_turn_fn(_entry_to_turn(entry))]
     turns = []
@@ -397,12 +359,10 @@ def _turns_from_trace(
         if not prompt_ids:
             raise ValueError(
                 "a captured turn carried no `prompt_token_ids`. Serve the engine with "
-                "`--return-tokens-as-token-ids --logprobs-mode processed_logprobs`; without them every prompt trained "
-                "on here would be a local re-render, which matched the engine on 0 of 28 measured turns."
+                "`--return-tokens-as-token-ids --logprobs-mode processed_logprobs`."
             )
         output_ids = _trace_output_ids(entry)
-        # The producer masks over prompt+completion; keep the completion span. A turn masked out upstream (its logprobs
-        # were rejected on ingest) arrives with zeros here, and that cannot be re-derived downstream.
+        # Convert the producer's full-sequence mask at the OpenEnv boundary.
         mask = entry.get("loss_mask")
         if mask is None:
             mask = [0] * len(prompt_ids) + [1] * len(output_ids)
@@ -413,9 +373,7 @@ def _turns_from_trace(
 
 
 def _tool_call_counts_by_name(entries: list[TraceEntry]) -> dict[str, int]:
-    """Per-tool-name call counts across the real agent turns (`entries`) - the single source of tool-call counting
-    (the total is just `sum(...values())`). Generic (no tool is special-cased); a reward fn can read whichever it cares
-    about, e.g. `counts.get("bash", 0)`."""
+    """Count tool calls by name across the selected agent turns."""
     counts: dict[str, int] = {}
     for entry in entries:
         for tc in (entry.get("response", {}).get("choices") or [{}])[0].get("message", {}).get("tool_calls") or []:
@@ -426,10 +384,7 @@ def _tool_call_counts_by_name(entries: list[TraceEntry]) -> dict[str, int]:
 
 
 def _tool_failure_count(entries: list[TraceEntry]) -> int:
-    """Best-effort tool-failure count across the real agent turns (`entries`). The agent (not TRL) executed the tools,
-    so we only see their free-text RESULTS, which come back as `role="tool"` messages in a later request; a failure can
-    only be inferred from error-looking result text. The last agent request holds the fullest message list; dedupe by
-    (name, content) so a result echoed across requests is not counted twice."""
+    """Estimate failures from the last request's tool-result text, deduplicated by name and content."""
     seen, failures = set(), 0
     for msg in (entries[-1]["request"] if entries else {}).get("messages") or []:
         if msg.get("role") != "tool":
@@ -445,10 +400,7 @@ def _tool_failure_count(entries: list[TraceEntry]) -> int:
 
 
 def _messages_from_trace(entries: list[TraceEntry]) -> list[Message]:
-    """Loop-owning path: the transcript is the last agent request's messages plus the final assistant reply. Uses the
-    last REAL agent turn (`entries[-1]`, already selected by `agent_turn_fn`), not raw `trace[-1]` which can be an
-    auxiliary title/summary call the framework fired last. Some proxy entries capture an empty `choices` list (upstream
-    returned no completion), so fall back to empty content."""
+    """Return the last selected request's messages followed by its assistant reply."""
     if not entries:
         return []
     last = entries[-1]

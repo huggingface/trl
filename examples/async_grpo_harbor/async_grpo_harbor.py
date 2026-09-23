@@ -17,47 +17,36 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
-#     "openenv-harbor-env @ git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/harbor_env",
+#     "openenv @ git+https://github.com/huggingface/OpenEnv.git@34825a772ae54760fb6bf7a8b2073a4a85714004",
 # ]
 # ///
 
 """AsyncGRPO on Harbor tasks, with an off-the-shelf coding agent, served through OpenEnv.
 
-A Harbor task is a container image, an instruction, and a held-out verifier. This example trains against
-one through a *real* coding agent — `mini-swe-agent` — running in an E2B sandbox:
+A Harbor task contains a container image, instruction, and held-out verifier. This example uses
+`mini-swe-agent` in an E2B sandbox:
 
     mini-swe-agent solves a Harbor task in a sandbox
       -> every model call it makes goes through the OpenEnv server's capture proxy to your vLLM
       -> the proxy records exact token ids and the sampling distribution's logprobs
       -> AsyncGRPO trains on them and syncs new weights back into that same vLLM
 
-The agent owns its own loop. TRL never calls `step()`; it stands up an endpoint, lets the agent drive, and
-reads back what happened. Qualified installed harnesses can provide training data without a new agent loop.
+The agent owns the tool loop; TRL consumes OpenEnv's captured token IDs, logprobs, and masks.
+Rewritten histories fork into separate training rows to preserve eligible tokens. See README.md
+for the contract, dependency pin, and memory/weighting limitations.
 
-Harbor-specific session setup lives in `harbor_env.harness` (OpenEnv). TRL consumes the captured
-engine prompt IDs, sampled completion IDs, log probabilities and masks. Re-rendered prompts fork
-into separate training rows so eligible tokens are retained; this can increase memory use. Capture
-compatibility alone does not establish suitable batching or rollout weighting for every harness.
+Select another qualified agent with `--harness`. Rollouts and weight updates must use the same vLLM
+instance and full-vocabulary sampling policy. Weight updates drain active inference requests.
 
-The default `mini-swe-agent` is a small installed-agent example. Other qualified harnesses can be
-selected with `--harness`; use the server's current capability and qualification reports to choose.
-The shared capture layer bounds model calls even when an agent has no native step-limit option.
-
-The agent's inference requests and trainer weight updates must use the SAME vLLM instance. Training
-requires engine token IDs and processed logprobs; an evaluation-only endpoint is rejected. The trainer
-and capture proxy must use the same full-vocabulary sampling policy. Updates drain active inference
-requests before replacing weights, and AsyncGRPO bounds how old a completed rollout may be.
-
-THE REWARD. `harbor_reward` below is `correctness + 0.3 * tool_efficiency`, with efficiency gated on
-correctness — ungated, the cheapest way to look efficient is to do nothing. Suites that emit a reward
-dict rather than a single scalar can name a component with `--reward-key` and shape it from there.
+The reward adds `0.3 * tool_efficiency` only when correctness is at least 1.0. Use `--reward-key` to
+select a component when the verifier returns a reward dictionary.
 
 Requirements:
   - A running OpenEnv Harbor server, which owns the dataset and the sandbox templates:
         openenv harbor serve --dataset <hf-dataset> --port 8200 --capture-port 8300 --expose gradio
   - A sandbox backend credential for the server's environment, e.g. `E2B_API_KEY`.
   - An OpenAI-compatible vLLM server (below) reachable at `--vllm-url`.
-  - `pip install git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/harbor_env`
+  - The pinned OpenEnv checkout and `PYTHONPATH` setup in this example's README.md.
 
 Run (2 GPUs: vLLM on one, trainer on the other):
 
@@ -90,6 +79,7 @@ import argparse
 import logging
 import os
 import pathlib
+import uuid
 
 from datasets import Dataset
 from harbor_env.harness import HarborSessionFactory
@@ -102,9 +92,7 @@ from trl.experimental.async_grpo.openenv_harness import HarnessRolloutOutcome, H
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Weight on the efficiency term, and the tool-call budget it is measured against. The budget is a
-# property of the task family, not of the model: on data-analysis tasks a competent rollout inspects the
-# data in well under 15 calls.
+# Task-specific reward shaping; edit these constants for another task family.
 W_TOOL_EFFICIENCY = 0.3
 TOOL_BUDGET = 15.0
 
@@ -125,17 +113,14 @@ def harbor_reward(outcome: HarnessRolloutOutcome) -> float | None:
             whether the agent ran out of wall clock.
 
     Returns:
-        `float` or `None`: `None` drops the rollout from its group baseline instead of scoring it `0`.
-            That distinction matters. Scoring an unmeasured rollout `0` teaches the policy that a crashed
-            sandbox is as good as a wrong answer, and poisons the baseline with a value nothing produced.
+        `float` or `None`: Unscored rollouts are excluded from the group baseline.
     """
     correctness = outcome.env_reward
     if correctness is None:
         logger.warning("verifier did not run (tool_calls=%d); rollout unscorable", outcome.tool_call_count)
         return None
 
-    # A timeout is a real outcome, not a broken measurement: the agent had the wall clock and did not
-    # finish. Whatever the verifier scored on the partial workspace stands.
+    # Keep the verifier's score when the agent exhausts its time budget.
     if outcome.timed_out:
         logger.warning("agent timed out; keeping the verifier's score of %.3f on the partial work", correctness)
 
@@ -151,11 +136,7 @@ def harbor_reward(outcome: HarnessRolloutOutcome) -> float | None:
 
 
 def task_indices(spec: str) -> list[int] | None:
-    """Task indices from a literal list, or from `@path` to a file holding them.
-
-    The file form exists because `sbatch --export=ALL,VAR=a,b,c` splits on commas, so a comma-separated
-    list passed that way arrives truncated at the first comma — silently.
-    """
+    """Read comma-separated task indices, directly or from `@path` (safe for Slurm exports)."""
     spec = (spec or "").strip()
     if not spec:
         return None
@@ -172,31 +153,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--split", required=True, help="the Harbor task dataset the server was started with")
     p.add_argument("--harness", default="mini-swe-agent", help="any harness the server reports; see the docstring")
     p.add_argument("--sandbox", default="e2b")
-    # "" takes the verifier's single scalar. Name a component (e.g. `correctness`) when the suite emits
-    # a reward dict, rather than depending on whichever one the default picks.
+    # Select a component when the verifier returns a reward dictionary.
     p.add_argument("--reward-key", default="")
     p.add_argument("--n-tasks", type=int, default=32)
-    # Prefer tasks whose outcome actually SPLITS for your model. A group whose generations all score the
-    # same has `reward_std == 0` and teaches nothing, however healthy the loss looks — and a suite's
-    # inherited difficulty labels are usually measured with a different harness, so re-measure rather
-    # than trust them.
     p.add_argument("--task-indices", default="", help="comma-separated indices, or @path to a file of them")
-    # >1 is what creates the within-group spread the advantage is computed against.
     p.add_argument("--num-generations", type=int, default=8)
-    # Each in-flight rollout is one sandbox AND one env session on the server, so keep this under both
-    # your sandbox budget and the server's concurrency ceiling.
+    # Each in-flight rollout consumes a sandbox and a server session.
     p.add_argument("--max-inflight", type=int, default=8)
     p.add_argument("--max-completion-length", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=20)
     p.add_argument("--learning-rate", type=float, default=1e-6)
     p.add_argument("--temperature", type=float, default=1.0)
-    # A Harbor rollout is a sandbox boot plus a full agent loop, so staleness accumulates fast.
     p.add_argument("--max-staleness", type=int, default=4)
-    # The only bound on a wedged rollout: it holds a generation slot for the whole call, and the task
-    # file's own timeout covers the agent run but not sandbox setup.
+    # Sandbox setup has its own timeouts; this bounds the agent run.
     p.add_argument("--agent-timeout", type=float, default=300.0)
-    # Bound model calls as well as wall time. Rewritten histories may create multiple training rows;
-    # a call limit bounds rollout work but is not a guarantee that every row fits the trainer's memory.
+    # Bound model calls; rewritten histories can still produce multiple training rows.
     p.add_argument("--agent-step-limit", type=int, default=12)
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
     p.add_argument("--output-dir", default=None)
@@ -208,10 +179,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    # Trackio keys a run by name inside a project, so two relaunches of the same config land on top of
-    # each other and the earlier metrics read as part of the later run's history — worst exactly when
-    # relaunching after a crash. Stamping the name keeps them apart.
-    stamp = os.environ.get("SLURM_JOB_ID", "local")
+    stamp = os.environ.get("SLURM_JOB_ID") or os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
+    stamp = f"{stamp}-{uuid.uuid4().hex[:8]}"
     run_name = args.run_name or f"{args.model.split('/')[-1]}-{args.harness}-{args.max_steps}steps-{stamp}"
     output_dir = args.output_dir or f"runs/async_grpo_harbor/{run_name}"
 
@@ -229,9 +198,7 @@ def main() -> None:
         num_tasks=args.n_tasks,
         indices=task_indices(args.task_indices),
     )
-    # Built from the factory so the instruction the trainer sends is the one the server can resolve back
-    # to a task. All `num_generations` of a group share a row, so they all get the same task and the group
-    # baseline is well formed without any seed plumbing.
+    # Each group shares the task instruction resolved by the server.
     dataset = Dataset.from_list(factory.prompt_rows())
 
     print(f"server    {args.server}")
@@ -262,22 +229,19 @@ def main() -> None:
         bf16=True,
         # On: rollout sequences here are long enough that activations dominate.
         gradient_checkpointing=True,
-        # `use_reentrant=False` is required: the reentrant checkpointer does not see inputs that reach a
-        # block through anything but positional args.
+        # Support layers whose inputs are passed as keyword arguments.
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to="trackio",
         project=args.project,
         trackio_space_id=args.trackio_space_id,
         run_name=run_name,
         log_completions=True,
-        # Every rollout costs a sandbox and minutes, so nothing is logged in arrears: flush each step.
         logging_steps=1,
         seed=0,
     )
 
     worker = HarnessRolloutWorker(
         harness_session_factory=factory,
-        # Loop-owning: the agent runs its own loop in the sandbox and we read what it did.
         harness_adapter=None,
         rollout_reward_fn=harbor_reward,
         # Keep all eligible captured tokens; the capture contract carries per-token loss masks.
@@ -285,8 +249,7 @@ def main() -> None:
         dataset=dataset,
         reward_funcs=[],  # the reward is the task's own verifier, via `rollout_reward_fn`
         processing_class=tokenizer,
-        # Keep the worker's model configuration consistent with the served policy. Loop-owning
-        # prompts themselves use the captured engine IDs, without local template reconstruction.
+        # Captured prompts use engine IDs; these kwargs also cover locally sampled turns.
         chat_template_kwargs={"enable_thinking": False},
         num_generations=args.num_generations,
         max_inflight_tasks=args.max_inflight,

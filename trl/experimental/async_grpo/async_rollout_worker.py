@@ -65,11 +65,7 @@ class TurnRecord:
     prompt_ids: list[int]
     output_ids: list[int]
     output_log_probs: list[float] = field(default_factory=list)
-    # Per-token trainability over `output_ids`. None means "train all of them", which is what a
-    # locally-driven turn always wants because the loop just sampled every one of those tokens.
-    # A CAPTURED turn is different: the producer may mask a turn out while keeping its tokens as
-    # context -- e.g. its logprobs were rejected on ingest -- and that is not inferable here.
-    # Training those positions anyway means training against a logprob of 0.0, i.e. p = 1.0.
+    # Completion-token eligibility. None supervises all output tokens; zeros retain context only.
     output_mask: list[int] | None = None
 
 
@@ -79,7 +75,7 @@ class TrainingSequence:
 
     input_ids: list[int]  # full tokens (prompt included)
     completion_mask: list[int]  # 1 = train this token, 0 = context
-    old_log_probs: list[float]  # generator logprobs, 0.0 where mask is 0
+    old_log_probs: list[float]  # sampled logprobs; prompt-only context is zero-filled
     rollout_id: RolloutId  # which conversation this row came from
 
 
@@ -144,7 +140,7 @@ class _SampleBuilder:
         self.logprobs[matched:] = [0.0] * len(tail)
 
     def _append(self, ids: list[int], *, mask: int | list[int], logprobs: list[float] | None = None) -> None:
-        """`mask` is either one value for every id, or one value PER id when the producer marked them individually."""
+        """Append tokens with a uniform or per-token supervision mask."""
         masks = [mask] * len(ids) if isinstance(mask, int) else mask
         if len(masks) != len(ids) or any(type(value) is not int or value not in (0, 1) for value in masks):
             raise ValueError("loss mask must contain one binary integer per token")
