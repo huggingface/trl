@@ -183,6 +183,10 @@ def test_training_run_names_are_unique_and_can_be_overridden(monkeypatch, job_ke
     assert config.call_args.kwargs["run_name"] == "explicit"
     assert config.call_args.kwargs["output_dir"] == "runs/custom"
     assert trainer.return_value.train.call_count == 3
+    assert config.call_args.kwargs["save_strategy"] == "steps"
+    assert config.call_args.kwargs["save_steps"] == 50
+    assert config.call_args.kwargs["save_total_limit"] == 3
+    assert [call[0] for call in trainer.return_value.method_calls] == ["train", "save_model"] * 3
 
 
 def test_proxy_waiter_follows_republished_url(launcher, monkeypatch, tmp_path):

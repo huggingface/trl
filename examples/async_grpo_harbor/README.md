@@ -24,6 +24,9 @@ the trainer can use an existing server. Use the same model and vLLM endpoint for
 Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-inflight + 1` (9 for the defaults); the factory
 keeps one connection for task metadata. The Jobs launcher sets this capacity automatically.
 
+Training saves a checkpoint every 50 steps, keeps the latest three, and saves the final model and
+tokenizer in the output directory on successful completion, including runs shorter than 50 steps.
+
 ## Hugging Face Jobs
 
 [launcher.py](launcher.py) starts the server, vLLM, and trainer on one two-GPU job. It installs the pinned

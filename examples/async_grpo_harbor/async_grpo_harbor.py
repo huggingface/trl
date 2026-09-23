@@ -203,7 +203,8 @@ def main() -> None:
 
     config = AsyncGRPOConfig(
         output_dir=output_dir,
-        save_strategy="no",
+        save_strategy="steps",
+        save_steps=50,
         save_total_limit=3,
         per_device_train_batch_size=args.per_device_train_batch_size,
         num_generations=args.num_generations,
@@ -250,13 +251,15 @@ def main() -> None:
         num_completions_to_print=2,
     )
 
-    AsyncGRPOTrainer(
+    trainer = AsyncGRPOTrainer(
         model=args.model,
         args=config,
         train_dataset=dataset,
         processing_class=tokenizer,
         rollout_worker=worker,
-    ).train()
+    )
+    trainer.train()
+    trainer.save_model()
 
 
 if __name__ == "__main__":
