@@ -993,18 +993,17 @@ class TestDPOTrainer(TrlTestCase):
         text_config.logit_scale = None
         text_config.output_multiplier = 0.5
 
+        lm_head = trainer.model.get_output_embeddings()
         hidden_states = trainer.model.base_model(**model_kwargs).last_hidden_state[:, :-1]
-        labels = input_ids[:, 1:]
         mask = completion_mask[:, 1:].bool()
-        logits = trainer.model.get_output_embeddings()(hidden_states[mask]).float() * text_config.output_multiplier
-        expected_valid = torch.log_softmax(logits, dim=-1).gather(-1, labels[mask].unsqueeze(-1)).squeeze(-1)
-        expected = torch.zeros_like(completion_mask[:, 1:], dtype=expected_valid.dtype)
-        expected[mask] = expected_valid
+        logits = lm_head(hidden_states[mask]).float() * text_config.output_multiplier
+        expected_valid = torch.log_softmax(logits, dim=-1).gather(-1, input_ids[:, 1:][mask].unsqueeze(-1)).squeeze(-1)
+        expected = expected_valid.new_zeros(mask.shape).masked_scatter(mask, expected_valid)
 
         def fail_forward(*args, **kwargs):
             raise AssertionError("the chunked path must not call lm_head.forward")
 
-        monkeypatch.setattr(trainer.model.get_output_embeddings(), "forward", fail_forward)
+        monkeypatch.setattr(lm_head, "forward", fail_forward)
         with torch.no_grad():
             logps, _, _ = trainer._get_per_token_logps_and_entropies(
                 trainer.model, model_kwargs, input_ids, completion_mask
