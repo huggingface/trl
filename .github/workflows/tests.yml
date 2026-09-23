@@ -49,7 +49,7 @@ jobs:
   diag_dpo_lm_head:
     permissions:
       contents: read
-    name: DPO lm_head parity, min versions (${{ matrix.mode }})
+    name: DPO lm_head parity (${{ matrix.mode }})
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -62,12 +62,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - mode: old-isolated
+          - mode: old-pair-min
             ref: c2196d5f571ee8bb32fbfa14464f3b6854ac13d2
-          - mode: old-gw9-sequence
+            deps: min
+            parity: test_liger_loss_types_match_non_liger_loss
+          - mode: old-pair-latest
             ref: c2196d5f571ee8bb32fbfa14464f3b6854ac13d2
-          - mode: head-full-suite
+            deps: latest
+            parity: test_liger_loss_types_match_non_liger_loss
+          - mode: head-pair-min
             ref: ""
+            deps: min
+            parity: test_liger_loss_matches_non_liger_loss
+          - mode: head-gw9-min
+            ref: ""
+            deps: min
+            parity: ""
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -99,30 +109,25 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          uv pip install \
-            ".[dev]" \
-            "accelerate==1.4.0" \
-            "datasets==4.7.0" \
-            "transformers==4.56.2"
+          if [ "${{ matrix.deps }}" = "min" ]; then
+            uv pip install ".[dev]" "accelerate==1.4.0" "datasets==4.7.0" "transformers==4.56.2"
+          else
+            uv pip install ".[dev]"
+          fi
           uv pip freeze | grep -iE "^(torch|transformers|accelerate|datasets|liger-kernel|peft|kernels)=="
 
-      - name: Old commit, parity tests alone
-        if: matrix.mode == 'old-isolated'
+      - name: Liger train test, then parity tests, in one process
+        if: matrix.parity != ''
         run: |
           source .venv/bin/activate
-          pytest -s -v -p no:cacheprovider \
-            "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_loss_types_match_non_liger_loss" \
+          pytest -s -v -p no:cacheprovider -p no:randomly \
+            "tests/test_dpo_trainer.py::TestDPOTrainer::test_train_with_liger" \
+            "tests/test_dpo_trainer.py::TestDPOTrainer::${{ matrix.parity }}" \
             "tests/test_dpo_trainer.py::TestDPOTrainer::test_liger_f_divergence_matches_non_liger_loss"
 
-      - name: Old commit, gw9 sequence in one process
-        if: matrix.mode == 'old-gw9-sequence'
+      - name: gw9 sequence in one process
+        if: matrix.parity == ''
         run: |
           source .venv/bin/activate
-          mapfile -t TESTS < helper/tests/_gw9_sequence.txt
+          mapfile -t TESTS < helper/tests/_gw9_sequence_head.txt
           pytest -s -v -p no:cacheprovider -p no:randomly "${TESTS[@]}"
-
-      - name: Head, full suite as in CI
-        if: matrix.mode == 'head-full-suite'
-        run: |
-          source .venv/bin/activate
-          make test
