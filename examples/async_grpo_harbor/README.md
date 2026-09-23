@@ -24,9 +24,6 @@ the trainer can use an existing server. Use the same model and vLLM endpoint for
 Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-inflight + 1` (9 for the defaults); the factory
 keeps one connection for task metadata. The Jobs launcher sets this capacity automatically.
 
-Prebuild cold E2B task templates with serial rollouts before concurrent training; simultaneous first
-builds can fail. The Jobs launcher warms task 0 only, so other task-specific templates may need warming.
-
 ## Hugging Face Jobs
 
 [launcher.py](launcher.py) starts the server, vLLM, and trainer on one two-GPU job. It installs the pinned

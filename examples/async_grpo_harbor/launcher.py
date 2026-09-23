@@ -268,21 +268,21 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", default="Qwen/Qwen3.5-2B")  # also forwarded to the trainer
-    p.add_argument("--split", default="AdithyaSK/data_agent_rl_environment_train")  # a public Harbor suite
-    p.add_argument("--harness", default="mini-swe-agent")  # see the training script for why this default
-    p.add_argument("--sandbox", default="e2b")  # needs the matching credential as a job secret
+    p.add_argument("--model", default="Qwen/Qwen3.5-2B")
+    p.add_argument("--split", default="AdithyaSK/data_agent_rl_environment_train")
+    p.add_argument("--harness", default="mini-swe-agent")
+    p.add_argument("--sandbox", default="e2b")
     p.add_argument("--max-inflight", type=int, default=8)
     p.add_argument("--server-port", type=int, default=8200)
     p.add_argument("--capture-port", type=int, default=8300)
     p.add_argument("--vllm-port", type=int, default=8000)
-    p.add_argument("--vllm-device", default="0")  # the engine
+    p.add_argument("--vllm-device", default="0")
     p.add_argument("--train-device", default="1")  # the trainer; NCCL weight sync needs the same host
     p.add_argument("--max-model-len", type=int, default=131072)
     p.add_argument("--tool-call-parser", default="qwen3_xml")  # Qwen3.5; use `hermes` for most others
     p.add_argument("--reasoning-parser", default="qwen3")
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
-    p.add_argument("--data-root", default=str(DATA_ROOT))  # a mounted bucket, if any
+    p.add_argument("--data-root", default=str(DATA_ROOT))
     p.add_argument("--skip-warm", action="store_true")
     p.add_argument("--tunnel-check-s", type=float, default=60.0)  # 0 disables the supervisor
     return p.parse_known_args()
@@ -351,7 +351,6 @@ def main() -> None:
     if args.tunnel_check_s > 0:
         threading.Thread(target=supervise_tunnel, args=(args, server_log, args.tunnel_check_s), daemon=True).start()
 
-    # Serve processed logprobs and engine token IDs for training.
     vllm_url = f"http://127.0.0.1:{args.vllm_port}"
     vllm_log = logs / "vllm.log"
     vllm_cmd = [

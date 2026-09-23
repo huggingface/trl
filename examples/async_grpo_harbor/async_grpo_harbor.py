@@ -51,9 +51,7 @@ Requirements:
 Run (2 GPUs: vLLM on one, trainer on the other):
 
 ```sh
-# Terminal 1 - serve the policy. Tool calling, token ids, processed logprobs and NCCL weight sync are
-# all required: without the token ids and logprobs the proxy grades every rollout `eval` and nothing is
-# trainable.
+# Terminal 1: serve the policy with token capture and weight updates.
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
     --host 0.0.0.0 --port 8000 \
     --enable-auto-tool-choice --tool-call-parser qwen3_xml \
@@ -92,7 +90,6 @@ from trl.experimental.async_grpo.openenv_harness import HarnessRolloutOutcome, H
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Task-specific reward shaping; edit these constants for another task family.
 W_TOOL_EFFICIENCY = 0.3
 TOOL_BUDGET = 15.0
 
@@ -109,7 +106,7 @@ def harbor_reward(outcome: HarnessRolloutOutcome) -> float | None:
 
     Args:
         outcome (`HarnessRolloutOutcome`):
-            What the rollout produced — the verifier's reward, the transcript, the tool-call count, and
+            The verifier's reward, transcript, tool-call count, and
             whether the agent ran out of wall clock.
 
     Returns:
@@ -120,14 +117,12 @@ def harbor_reward(outcome: HarnessRolloutOutcome) -> float | None:
         logger.warning("verifier did not run (tool_calls=%d); rollout unscorable", outcome.tool_call_count)
         return None
 
-    # Keep the verifier's score when the agent exhausts its time budget.
     if outcome.timed_out:
         logger.warning("agent timed out; keeping the verifier's score of %.3f on the partial work", correctness)
 
     correctness = float(correctness)
     reward = correctness
 
-    # Gated: efficiency pays only when the answer is right.
     eff = tool_efficiency(outcome.tool_call_count)
     if eff is not None and correctness >= 1.0:
         reward += W_TOOL_EFFICIENCY * eff
@@ -153,12 +148,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--split", required=True, help="the Harbor task dataset the server was started with")
     p.add_argument("--harness", default="mini-swe-agent", help="any harness the server reports; see the docstring")
     p.add_argument("--sandbox", default="e2b")
-    # Select a component when the verifier returns a reward dictionary.
     p.add_argument("--reward-key", default="")
     p.add_argument("--n-tasks", type=int, default=32)
     p.add_argument("--task-indices", default="", help="comma-separated indices, or @path to a file of them")
     p.add_argument("--num-generations", type=int, default=8)
-    # Each in-flight rollout consumes a sandbox and a server session.
     p.add_argument("--max-inflight", type=int, default=8)
     p.add_argument("--max-completion-length", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=20)
@@ -198,7 +191,6 @@ def main() -> None:
         num_tasks=args.n_tasks,
         indices=task_indices(args.task_indices),
     )
-    # Each group shares the task instruction resolved by the server.
     dataset = Dataset.from_list(factory.prompt_rows())
 
     print(f"server    {args.server}")
@@ -211,8 +203,6 @@ def main() -> None:
 
     config = AsyncGRPOConfig(
         output_dir=output_dir,
-        # Checkpointing is off by default because a short example run has nothing worth keeping.
-        # Edit these two lines for a long run rather than reaching for a flag.
         save_strategy="no",
         save_total_limit=3,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -228,7 +218,6 @@ def main() -> None:
         optim="adamw_torch",
         dtype="bfloat16",
         bf16=True,
-        # On: rollout sequences here are long enough that activations dominate.
         gradient_checkpointing=True,
         # Support layers whose inputs are passed as keyword arguments.
         gradient_checkpointing_kwargs={"use_reentrant": False},
@@ -245,12 +234,10 @@ def main() -> None:
         harness_session_factory=factory,
         harness_adapter=None,
         rollout_reward_fn=harbor_reward,
-        # Keep all eligible captured tokens; the capture contract carries per-token loss masks.
         model_name=args.model,
         dataset=dataset,
         reward_funcs=[],  # the reward is the task's own verifier, via `rollout_reward_fn`
         processing_class=tokenizer,
-        # Captured prompts use engine IDs; these kwargs also cover locally sampled turns.
         chat_template_kwargs={"enable_thinking": False},
         num_generations=args.num_generations,
         max_inflight_tasks=args.max_inflight,
