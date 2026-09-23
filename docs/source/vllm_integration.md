@@ -122,6 +122,7 @@ The trainer asks for completions on the OpenAI-compatible `/v1/completions` endp
 Multimodal prompts take a different route: the server processes the images on their own, and the resulting features
 are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs
 and images at once.
+From vLLM 0.30.0, these endpoints are only served with `--enable-scale-out`, which `trl vllm-serve` passes for you.
 
 The server only generates. After each optimizer step the trainer streams the updated weights into it over NCCL,
 announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
