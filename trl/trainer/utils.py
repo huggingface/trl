@@ -52,7 +52,7 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import is_kernels_available, is_peft_available, is_rich_available, is_torchdynamo_compiling
 
 from ..trainer.model_config import ModelConfig
 
@@ -73,6 +73,9 @@ if is_rich_available():
 
 
 logger = get_logger(__name__)
+
+_TRL_LOSS_KERNEL: types.ModuleType | None = None
+_TRL_LOSS_KERNEL_LOAD_ATTEMPTED = False
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -498,7 +501,59 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index) -> torch.Tensor:
+def _load_trl_loss_kernel() -> types.ModuleType | None:
+    global _TRL_LOSS_KERNEL, _TRL_LOSS_KERNEL_LOAD_ATTEMPTED
+
+    if _TRL_LOSS_KERNEL is not None or _TRL_LOSS_KERNEL_LOAD_ATTEMPTED or is_torchdynamo_compiling():
+        return _TRL_LOSS_KERNEL
+
+    _TRL_LOSS_KERNEL_LOAD_ATTEMPTED = True
+    if not is_kernels_available():
+        return None
+
+    try:
+        from kernels import get_kernel
+
+        _TRL_LOSS_KERNEL = get_kernel("trl-lib/trl-losses", version=0, trust_remote_code=True)
+    except Exception:
+        pass
+    return _TRL_LOSS_KERNEL
+
+
+def _supports_trl_loss_kernel(
+    logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
+) -> bool:
+    supported = (
+        logits.device.type in ("cuda", "xpu")
+        and logits.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and 1 <= logits.ndim <= 3
+        and logits.stride(-1) == 1
+        and logits.shape[-1] > 0
+    )
+    if index is not None:
+        supported = (
+            supported
+            and index.shape == logits.shape[:-1]
+            and index.dtype in (torch.int32, torch.int64)
+            and index.device == logits.device
+        )
+    if row_mask is not None:
+        supported = (
+            supported
+            and index is not None
+            and row_mask.shape == index.shape
+            and row_mask.dtype in (torch.bool, torch.int32, torch.int64)
+            and row_mask.device == logits.device
+        )
+    return supported
+
+
+def selective_log_softmax(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -516,11 +571,25 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         index (`torch.Tensor`):
             Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the log-softmax
             output. When the last case is used, `K` log-probabilities are gathered per position (e.g. for top-K)
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero log-probability.
 
     Returns:
         `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if _supports_trl_loss_kernel(logits, index, row_mask) and (kernel := _load_trl_loss_kernel()) is not None:
+        logprobs, _ = kernel.selective_log_softmax_and_entropy(
+            logits, index, temperature=temperature, row_mask=row_mask
+        )
+        return logprobs
+
+    if temperature != 1.0:
+        logits = logits / temperature
     squeeze = index.ndim == logits.ndim - 1
     if squeeze:
         index = index.unsqueeze(-1)
@@ -541,6 +610,8 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
     if squeeze:
         per_token_logps = per_token_logps.squeeze(-1)
+    if row_mask is not None:
+        per_token_logps = per_token_logps.masked_fill(row_mask == 0, 0.0)
 
     return per_token_logps
 
@@ -566,6 +637,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
+    if _supports_trl_loss_kernel(logits) and (kernel := _load_trl_loss_kernel()) is not None:
+        index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
+        _, entropy = kernel.selective_log_softmax_and_entropy(logits, index)
+        return entropy
+
     original_shape = logits.shape[:-1]  # all dims except num_classes
     num_classes = logits.shape[-1]
 
@@ -580,6 +656,51 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
     entropies = torch.cat(entropies, dim=0)
     return entropies.reshape(original_shape)
+
+
+def selective_log_softmax_and_entropy(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    entropy_requires_grad: bool = True,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute selected log-probabilities and entropy in one pass over the logits.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Indices of shape `(...)` selecting one log-probability per row.
+        entropy_requires_grad (`bool`, *optional*, defaults to `True`):
+            Whether gradients should flow through the entropy output.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero outputs.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor]`:
+            The selected log-probabilities and per-row entropies.
+    """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if _supports_trl_loss_kernel(logits, index, row_mask) and (kernel := _load_trl_loss_kernel()) is not None:
+        logprobs, entropy = kernel.selective_log_softmax_and_entropy(
+            logits, index, temperature=temperature, row_mask=row_mask
+        )
+        return logprobs, entropy if entropy_requires_grad else entropy.detach()
+    if temperature != 1.0:
+        logits = logits / temperature
+    logprobs = selective_log_softmax(logits, index, row_mask=row_mask)
+    if entropy_requires_grad:
+        entropy = entropy_from_logits(logits)
+    else:
+        with torch.no_grad():
+            entropy = entropy_from_logits(logits)
+    if row_mask is not None:
+        entropy = entropy.masked_fill(row_mask == 0, 0.0)
+    return logprobs, entropy
 
 
 def print_prompt_completions_sample(
@@ -1248,6 +1369,21 @@ def get_config_model_id(config: PretrainedConfig) -> str:
 
 
 @contextmanager
+def global_then_local_main_first():
+    """
+    Context manager that lets the global main process run the block first, then the local main of each node, then
+    everyone else. Both scopes of `PartialState.main_process_first`, one after the other.
+
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes first,
+    which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk costs one
+    pass per node rather than one per process.
+    """
+    state = PartialState()
+    with state.main_process_first(), state.local_main_process_first():
+        yield
+
+
+@contextmanager
 def use_adapter(model: "PeftModel", adapter_name: str | None):
     """
     Context manager to temporarily set and reset the active adapter in a PEFT model.
@@ -1617,10 +1753,8 @@ def patch_chunked_lm_head(
         )
 
         if valid_mask is not None:
-            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
-            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
-            logprobs[valid_mask] = logprobs_valid
-            entropy[valid_mask] = entropy_valid
+            logprobs = logprobs_valid.new_zeros(b * s).masked_scatter(valid_mask, logprobs_valid)
+            entropy = entropy_valid.new_zeros(b * s).masked_scatter(valid_mask, entropy_valid)
         else:
             logprobs = logprobs_valid
             entropy = entropy_valid

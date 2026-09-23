@@ -27,7 +27,6 @@ import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
@@ -58,13 +57,14 @@ from .dpo_config import DPOConfig
 from .utils import (
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     flush_left,
     get_config_model_id,
+    global_then_local_main_first,
     hash_module,
     maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     use_adapter,
 )
 
@@ -1023,7 +1023,7 @@ class DPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:
@@ -1236,8 +1236,7 @@ class DPOTrainer(_BaseTrainer):
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
         ref_shift_logits = ref_outputs.logits[..., :-1, :]
-        ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-        ref_per_token_logps[shift_completion_mask == 0] = 0.0
+        ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels, row_mask=shift_completion_mask)
 
         if self.ld_alpha is None:
             ref_logps = ref_per_token_logps.sum(dim=1)
@@ -1382,8 +1381,9 @@ class DPOTrainer(_BaseTrainer):
         shift_logits = outputs.logits[..., :-1, :]
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+        per_token_logps, per_token_entropy = selective_log_softmax_and_entropy(
+            shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
+        )
         if self.ld_alpha is None:
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
         else:
@@ -1420,8 +1420,7 @@ class DPOTrainer(_BaseTrainer):
                     ref_outputs = self.ref_model(**ref_model_kwargs)
 
             ref_shift_logits = ref_outputs.logits[..., :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-            ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels, row_mask=shift_completion_mask)
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
             else:
@@ -1622,7 +1621,6 @@ class DPOTrainer(_BaseTrainer):
 
         # Log the metrics
         # Entropy
-        per_token_entropy = entropy_from_logits(shift_logits.detach())
         mask = shift_completion_mask
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()

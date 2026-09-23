@@ -28,9 +28,12 @@ from huggingface_hub.errors import NotASafetensorsRepoError
 from packaging.version import Version
 from torch import nn
 from transformers import AutoConfig, ProcessorMixin
+from transformers import set_seed as _set_seed
 
 
 ORGANIZATION = "trl-internal-testing"
+
+SEED = 42
 
 MODEL_CARD = """
 ---
@@ -70,6 +73,18 @@ def check_transformers_version(expected_version=None):
         raise RuntimeError(
             f"This script requires transformers=={expected_version}, but {transformers.__version__} is installed."
         )
+
+
+def set_seed(seed=SEED):
+    """Seed the RNGs that model construction draws from.
+
+    Without this every run produces different weights, so re-pushing a tiny model always creates a new
+    `model.safetensors` even when nothing else changed. Call it before building the model: most scripts never call
+    `init_weights_tiny_model`, and the randomness has already happened by then.
+
+    Pass a different `seed` when a script must produce weights that differ from another script's.
+    """
+    _set_seed(seed)
 
 
 def smoke_test(model, tokenizer_or_processor=None):
