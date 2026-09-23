@@ -187,6 +187,8 @@ Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (me
 
 Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
 
+[`GRPOTrainer`] computes its per-token log-probs the same way by default, streaming the LM head over the vocabulary so the full logits are never materialized. It falls back to the full logits for MoE models with the router auxiliary loss, a PEFT adapter on `lm_head`, and prompt-learning PEFT methods.
+
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.

@@ -132,6 +132,3 @@ class MiniLLMConfig(GRPOConfig):
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
                 f"({self.num_generations})."
             )
-
-        if self.delta is not None and self.use_liger_kernel:
-            raise ValueError("Liger kernel does not support two-sided GRPO loss yet.")
