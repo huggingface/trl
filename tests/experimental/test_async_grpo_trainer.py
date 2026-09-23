@@ -1101,6 +1101,13 @@ class TestTreePacking(TrlTestCase):
 
         assert next(iter(batcher), None) is None  # the whole stream fits without closing a micro-batch
 
+    def test_a_lone_group_fills_every_row_of_a_fixed_count_micro_batch(self):
+        source = (_tree_sample(list(range(6)) + [100 + i], n_prompt=6, group_id=i // 8) for i in range(16))
+        batcher = FixedCountBatcher(source, num_processes=8, microbatch_size=8, packing=TreePacking())
+
+        for micro_batch in itertools.islice(iter(batcher), 2):
+            assert all(len(group) > 0 for group in micro_batch)
+
     def test_a_group_is_split_rather_than_let_a_rank_starve(self):
         source = (_tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=0) for i in range(100))
         batcher = TokenBudgetBatcher(source, 2, 10, defaultdict(list), TreePacking())

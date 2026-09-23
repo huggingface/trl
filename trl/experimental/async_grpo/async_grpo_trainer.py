@@ -410,13 +410,22 @@ def _balance_by_attention_cost(
 
     Attention is superlinear in length while the FFN is linear, so equal token counts wouldn't equalize wall-time;
     balancing the attention cost keeps the per-micro-batch all-reduce free of stragglers. Atoms are placed
-    costliest-first into the row with the smallest running cost (LPT scheduling). With at least `num_groups` atoms
-    every row ends up non-empty.
+    costliest-first into the row with the smallest running cost (LPT scheduling).
 
     The atom is whatever the packing can move independently — a sample under sequence packing, a whole `group_id` under
     tree packing, whose samples have to stay together to share a prefix — and the cost is Σ Lᵢ² or Σ score pairs
     accordingly. Both are additive over a row, which is what keeps this a greedy bin-pack.
+
+    A tree-packing atom holds a whole group, so a micro-batch carries fewer atoms than it has rows as soon as
+    `num_generations` exceeds `per_device_train_batch_size`. The largest atom is halved until there is one per row,
+    since a rank forwarding nothing would desync FSDP/EP collectives. A micro-batch always holds at least `num_groups`
+    samples, so an atom to split always exists. Splitting a group forwards the prefix its halves share twice, the same
+    trade [`TokenBudgetBatcher`] makes rather than starve a rank.
     """
+    while len(atoms) < num_groups:
+        largest = max(range(len(atoms)), key=lambda i: len(atoms[i]))
+        atom = atoms.pop(largest)
+        atoms += [atom[: len(atom) // 2], atom[len(atom) // 2 :]]
     priced = [(packing.cost(atom)[1], atom) for atom in atoms]
     priced.sort(key=lambda item: item[0], reverse=True)
     groups = [[] for _ in range(num_groups)]
