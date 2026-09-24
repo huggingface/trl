@@ -1468,9 +1468,10 @@ class FusedCausalLMOutput(ModelOutput):
 
     Args:
         loss (`torch.Tensor`):
-            Negative log-likelihood summed over the non-ignored tokens and divided by `num_items_in_batch` (their count
-            when not passed), plus the MoE load-balancing loss weighted by the config's `router_aux_loss_coef` when
-            router logits are requested, as the model's own forward computes it.
+            Negative log-likelihood under the temperature-scaled distribution, summed over the non-ignored tokens and
+            divided by `num_items_in_batch` (their count when not passed), plus the MoE load-balancing loss weighted by
+            the config's `router_aux_loss_coef` when router logits are requested. At `temperature=1.0`, this is the
+            loss the model's own forward computes.
         log_probs (`torch.Tensor` of shape `(batch, seq_len - 1)`, or `(batch, seq_len)` with `shift_labels`):
             Log-probability of each next-token label.
         entropy (`torch.Tensor`, same shape as `log_probs`):
