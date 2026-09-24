@@ -1032,7 +1032,8 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             if not is_liger_kernel_available():
                 raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
+                    "You set `use_liger_kernel=True` but the liger kernel is not available. Please install "
+                    "liger-kernel first: `pip install liger-kernel`"
                 )
             # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
             # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the chunked projection.
