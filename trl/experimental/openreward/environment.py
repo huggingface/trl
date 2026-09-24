@@ -131,7 +131,13 @@ class _RolloutEnvironment:
 
     Attributes:
         reward (`float`):
-            Last non-null reward in the trajectory (outcome-only convention).
+            Last non-null reward in the trajectory (outcome-only convention). Only meaningful when
+            ``has_reward`` is ``True``; otherwise the default ``0.0`` is a placeholder, not a real score.
+        has_reward (`bool`):
+            ``True`` once any tool call returned a non-null ``out.reward``. The default reward func
+            (``_outcome_only_reward_func``) returns ``None`` when this is ``False`` so that unrewarded
+            rollouts are treated as unscorable rather than scored ``0.0`` (which would produce a spurious
+            positive advantage over siblings that tried and got negative rewards).
         rewards (`list[float | None]`):
             Per-step reward sequence in tool-call order.
         metadata (`list[dict | None]`):
@@ -190,6 +196,7 @@ class _RolloutEnvironment:
 
         # Episode state — read by the trainer's reward_func.
         self.reward: float = 0.0
+        self.has_reward: bool = False  # True once any tool returned a non-null reward
         self.rewards: list[float | None] = []
         self.metadata: list[dict[str, Any] | None] = []
         self.finished: bool = False
@@ -217,6 +224,7 @@ class _RolloutEnvironment:
         """
         self._teardown_session()
         self.reward = 0.0
+        self.has_reward = False
         self.rewards = []
         self.metadata = []
         self.finished = False
@@ -289,6 +297,7 @@ class _RolloutEnvironment:
         self.rewards.append(step_reward)
         if step_reward is not None:
             self.reward = step_reward  # last-non-null wins (outcome-only convention)
+            self.has_reward = True
 
         self.metadata.append(out.metadata if isinstance(out.metadata, dict) else None)
         self.finished = bool(out.finished)
