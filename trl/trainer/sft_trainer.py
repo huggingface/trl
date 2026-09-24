@@ -1208,6 +1208,32 @@ class SFTTrainer(_BaseTrainer):
                     "to at least 2."
                 )
 
+        if args.assistant_only_loss and not is_conversational(dataset_sample):
+            raise ValueError(
+                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
+                "supported for conversational datasets."
+            )
+
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
+        # if the current template doesn't already have them.
+        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
+
+        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
+        # message, leaving it out of the assistant mask so the model is never trained to stop.
+        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
+            processing_class, chat_template=self.chat_template
+        ):
+            logger.warning(
+                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
+                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
+                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
+                "or edit the chat template so the end-of-turn token falls inside "
+                "`{% generation %}...{% endgeneration %}`."
+            )
+
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
         if args.completion_only_loss is None:
@@ -1252,31 +1278,6 @@ class SFTTrainer(_BaseTrainer):
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
                 "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
                 "to one of these supported options."
-            )
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
-            raise ValueError(
-                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
-                "supported for conversational datasets."
-            )
-
-        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
-        # if the current template doesn't already have them.
-        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
-            self.chat_template = get_training_chat_template(processing_class)
-        else:
-            self.chat_template = None
-
-        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
-        # message, leaving it out of the assistant mask so the model is never trained to stop.
-        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
-            processing_class, chat_template=self.chat_template
-        ):
-            logger.warning(
-                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
-                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
-                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
-                "or edit the chat template so the end-of-turn token falls inside "
-                "`{% generation %}...{% endgeneration %}`."
             )
 
         # Dataset
