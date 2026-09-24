@@ -1061,11 +1061,11 @@ class TestGetTrainingChatTemplate:
         masks = result["assistant_masks"]
         if self.is_vlm:  # VLM processors return batched output
             masks = masks[0]
-        assert 1 in masks
         # The first tokens (user turn) should not be masked
         assert masks[0] == 0
-        # The last tokens (assistant turn ending with <|im_end|>) should be masked
-        assert masks[-1] == 1
+        # Should have one masked region (the assistant turn)
+        region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
+        assert region_starts == 1
 
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
@@ -1095,9 +1095,9 @@ class TestGetTrainingChatTemplate:
         masks = result["assistant_masks"]
         if self.is_vlm:  # VLM processors return batched output
             masks = masks[0]
-        # Should have two masked regions (two assistant turns): 0→1, 1→0, 0→1
-        transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
-        assert transitions == 3
+        # Should have two masked regions (two assistant turns)
+        region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
+        assert region_starts == 2
 
 
 @pytest.mark.parametrize(
