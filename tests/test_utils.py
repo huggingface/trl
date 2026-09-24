@@ -44,7 +44,7 @@ from trl.trainer.utils import (
     is_async_callable,
     nanstd,
     pad,
-    patch_chunked_lm_head,
+    patch_fused_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
@@ -1365,12 +1365,12 @@ class TestPatchChunkedLMHead:
     def test_masked_labels(self):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_chunked_lm_head(model)
+        patch_fused_lm_head(model)
         input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
         labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
-        out_full = model(input_ids=input_ids, labels=input_ids)
-        out = model(input_ids=input_ids, labels=labels)
+        out_full = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
         mask = labels[:, 1:] != -100
         torch.testing.assert_close(out["log_probs"][mask], out_full["log_probs"][mask])
@@ -1378,12 +1378,26 @@ class TestPatchChunkedLMHead:
         assert (out["log_probs"][~mask] == 0).all()
         assert (out["entropy"][~mask] == 0).all()
 
+    def test_shift_labels(self):
+        """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        patch_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out_shifted = model(input_ids=input_ids, shift_labels=shift_labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out_shifted["log_probs"][:, :-1], out["log_probs"])
+        torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
+        assert (out_shifted["log_probs"][:, -1] == 0).all()
+
     def test_all_masked_labels_backward(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_chunked_lm_head(model)
+        patch_fused_lm_head(model)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
 
-        out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100))
+        out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
         out["log_probs"].sum().backward()
 
         assert out["log_probs"].count_nonzero() == 0
@@ -1395,7 +1409,7 @@ class TestPatchChunkedLMHead:
         input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device=torch_device)
         expected = model.generate(input_ids, max_new_tokens=8, do_sample=False)
 
-        patch_chunked_lm_head(model)
+        patch_fused_lm_head(model)
 
         torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
 
@@ -1406,8 +1420,8 @@ class TestPatchChunkedLMHead:
         logits = model(input_ids=input_ids).logits[:, :-1]
         expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
 
-        patch_chunked_lm_head(model)
-        out = model(input_ids=input_ids, labels=input_ids)
+        patch_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
 
         assert not out["log_sum_sq_probs"].requires_grad
         torch.testing.assert_close(out["log_sum_sq_probs"], expected, rtol=1e-5, atol=1e-5)
@@ -1420,8 +1434,8 @@ class TestPatchChunkedLMHead:
         logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
         expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
 
-        patch_chunked_lm_head(model)
-        out = model(input_ids=input_ids, labels=input_ids)
+        patch_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
 
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
@@ -1429,11 +1443,11 @@ class TestPatchChunkedLMHead:
         """Under bf16 autocast, the projection runs in fp32 and matches an fp32 projection of the same hidden states."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
         model = model.to(torch_device)
-        patch_chunked_lm_head(model, cast_lm_head_to_fp32=True)
+        patch_fused_lm_head(model, cast_lm_head_to_fp32=True)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
 
         with torch.autocast(torch_device, dtype=torch.bfloat16):
-            out = model(input_ids=input_ids, labels=input_ids)
+            out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
             hidden_states = model.model(input_ids=input_ids).last_hidden_state[:, :-1]
         logps = torch.nn.functional.linear(hidden_states.float(), model.lm_head.weight).log_softmax(-1)
         expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
@@ -1450,8 +1464,14 @@ class TestPatchChunkedLMHead:
         attention_mask[1, 8:] = 0
         expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
 
-        patch_chunked_lm_head(model)
-        out = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, output_router_logits=True)
+        patch_fused_lm_head(model)
+        out = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            output_router_logits=True,
+            fused_lm_head=True,
+        )
 
         torch.testing.assert_close(out["aux_loss"], expected)
 
@@ -1476,9 +1496,9 @@ class TestPatchChunkedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        patch_chunked_lm_head(model, temperature)
+        patch_fused_lm_head(model, temperature)
         with torch.no_grad():
-            out = model(input_ids=input_ids, labels=labels)
+            out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
         torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
         torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
@@ -1509,8 +1529,8 @@ class TestPatchChunkedLMHead:
         ref_grad = model_ref.lm_head.weight.grad.clone()
 
         # Chunked backward
-        patch_chunked_lm_head(model_chunked, temperature)
-        out = model_chunked(input_ids=input_ids, labels=labels)
+        patch_fused_lm_head(model_chunked, temperature)
+        out = model_chunked(input_ids=input_ids, labels=labels, fused_lm_head=True)
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
@@ -1721,7 +1741,7 @@ class TestPatchChunkedLMHeadLoss:
     def _setup(self, model_id):
         ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
-        patch_chunked_lm_head(chunked_model)
+        patch_fused_lm_head(chunked_model)
 
         B, S = 2, 16
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
@@ -1733,7 +1753,7 @@ class TestPatchChunkedLMHeadLoss:
     def _setup_vlm(self, model_id):
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
-        patch_chunked_lm_head(chunked_model)
+        patch_fused_lm_head(chunked_model)
 
         B, S = 2, 16
         vocab_size = ref_model.config.text_config.vocab_size
@@ -1749,7 +1769,7 @@ class TestPatchChunkedLMHeadLoss:
 
         with torch.no_grad():
             ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
 
         torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
 
@@ -1767,7 +1787,7 @@ class TestPatchChunkedLMHeadLoss:
             model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
         )
         chunked_model = copy.deepcopy(ref_model)
-        patch_chunked_lm_head(chunked_model)
+        patch_fused_lm_head(chunked_model)
 
         B, S = 2, 16
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
@@ -1777,7 +1797,7 @@ class TestPatchChunkedLMHeadLoss:
 
         with torch.no_grad():
             ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
 
         torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
@@ -1789,7 +1809,7 @@ class TestPatchChunkedLMHeadLoss:
         ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
         ref_out.loss.backward()
 
-        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
         out.loss.backward()
 
         # lm_head gradient
@@ -1812,7 +1832,7 @@ class TestPatchChunkedLMHeadLoss:
 
         with torch.no_grad():
             ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
 
         torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
 
@@ -1831,7 +1851,7 @@ class TestPatchChunkedLMHeadLoss:
     def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
-        patch_chunked_lm_head(chunked_model)
+        patch_fused_lm_head(chunked_model)
 
         # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
         # removes the attribute), so we have to pass it at call time on both paths.
@@ -1846,7 +1866,11 @@ class TestPatchChunkedLMHeadLoss:
                 input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
             )
             out = chunked_model(
-                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+                input_ids=input_ids,
+                labels=labels,
+                num_items_in_batch=num_items,
+                output_router_logits=True,
+                fused_lm_head=True,
             )
 
         torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
@@ -1859,7 +1883,7 @@ class TestPatchChunkedLMHeadLoss:
         ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
         ref_out.loss.backward()
 
-        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
         out.loss.backward()
 
         # lm_head gradient
@@ -1876,23 +1900,17 @@ class TestPatchChunkedLMHeadLoss:
                     chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
                 )
 
-    def test_forward_without_labels_uses_original_path(self):
-        """With labels=None the patched forward returns real logits (for generation / eval)."""
-        _, chunked_model, input_ids, _, _ = self._setup("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+    def test_forward_without_fused_lm_head_matches_reference(self):
+        """Without `fused_lm_head=True` the patched forward is the original one: same logits (including per-model
+        post-processing such as `final_logit_softcapping` and `logit_scale`) and same loss."""
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(
+            "trl-internal-testing/tiny-CohereForCausalLM"
+        )
         with torch.no_grad():
-            out = chunked_model(input_ids=input_ids)
-        assert out.logits is not None
-        assert out.logits.shape[-1] == chunked_model.config.vocab_size
-
-    def test_forward_without_labels_matches_reference(self):
-        """labels=None logits must match the unpatched model, including per-model post-processing
-        (`final_logit_softcapping`, `logit_scale`, ...). This is what makes `.generate()` safe to call on a patched
-        model."""
-        ref_model, chunked_model, input_ids, *_ = self._setup("trl-internal-testing/tiny-CohereForCausalLM")
-        with torch.no_grad():
-            ref_out = ref_model(input_ids=input_ids)
-            out = chunked_model(input_ids=input_ids)
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
         torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
 
     @require_peft
     @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
@@ -1924,7 +1942,7 @@ class TestPatchChunkedLMHeadLoss:
         )
         ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
         chunked_model = copy.deepcopy(ref_model)
-        patch_chunked_lm_head(chunked_model.get_base_model())
+        patch_fused_lm_head(chunked_model.get_base_model())
 
         B, S = 2, 16
         input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
@@ -1933,7 +1951,7 @@ class TestPatchChunkedLMHeadLoss:
         num_items = int((labels[..., 1:] != -100).sum())
 
         ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
         torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
 
         ref_out.loss.backward()
@@ -1962,13 +1980,13 @@ class TestPatchChunkedLMHeadLoss:
         )
         peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         chunked_model = get_peft_model(base, peft_config)
-        patch_chunked_lm_head(chunked_model.get_base_model())
+        patch_fused_lm_head(chunked_model.get_base_model())
 
         B, S = 2, 16
         input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()  # all positions valid, including label[0]
 
-        out = chunked_model(input_ids=input_ids, labels=labels)
+        out = chunked_model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
         # `labels[..., 1:]` (un-padded, what compute_loss used to compute) excludes original `label[0]`,
         # but the patched forward sees padded labels and counts `label[0]` as a valid target.

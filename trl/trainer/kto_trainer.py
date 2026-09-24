@@ -65,7 +65,7 @@ from .utils import (
     global_then_local_main_first,
     hash_module,
     pad,
-    patch_chunked_lm_head,
+    patch_fused_lm_head,
     use_adapter,
 )
 
@@ -890,9 +890,9 @@ class KTOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_chunked_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
         if self.ref_model is not None:
-            patch_chunked_lm_head(self.ref_model)
+            patch_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1224,12 +1224,18 @@ class KTOTrainer(_BaseTrainer):
         ):
             labels = inputs["input_ids"].masked_fill(inputs["completion_mask"] == 0, -100)
             per_token_logps = model(
-                input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=labels
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                labels=labels,
+                fused_lm_head=True,
             ).log_probs
             if self.calculate_KL:
                 KL_labels = inputs["KL_input_ids"].masked_fill(inputs["KL_completion_mask"] == 0, -100)
                 KL_per_token_logps = model(
-                    input_ids=inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"], labels=KL_labels
+                    input_ids=inputs["KL_input_ids"],
+                    attention_mask=inputs["KL_attention_mask"],
+                    labels=KL_labels,
+                    fused_lm_head=True,
                 ).log_probs
 
         completion_logps = per_token_logps.sum(-1)
@@ -1268,7 +1274,7 @@ class KTOTrainer(_BaseTrainer):
 
             KL_labels = batch["KL_input_ids"].masked_fill(batch["KL_completion_mask"] == 0, -100)
             with torch.no_grad():
-                KL_per_token_logps = model(**KL_model_kwargs, labels=KL_labels).log_probs
+                KL_per_token_logps = model(**KL_model_kwargs, labels=KL_labels, fused_lm_head=True).log_probs
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
@@ -1298,7 +1304,7 @@ class KTOTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
         completion_labels = batch["input_ids"].masked_fill(batch["completion_mask"] == 0, -100)
-        outputs = model(**model_kwargs, labels=completion_labels)
+        outputs = model(**model_kwargs, labels=completion_labels, fused_lm_head=True)
         # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
         seq_len = batch["input_ids"].size(1) - 1
         per_token_logps = outputs.log_probs[:, -seq_len:]
@@ -1334,10 +1340,10 @@ class KTOTrainer(_BaseTrainer):
                         ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
                     ):
                         ref_KL_logps = self._compute_kl_logps(self.model, batch)
-                        ref_outputs = self.model(**ref_model_kwargs, labels=completion_labels)
+                        ref_outputs = self.model(**ref_model_kwargs, labels=completion_labels, fused_lm_head=True)
                 else:
                     ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
-                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=completion_labels)
+                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=completion_labels, fused_lm_head=True)
             ref_per_token_logps = ref_outputs.log_probs
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)

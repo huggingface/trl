@@ -68,7 +68,7 @@ from .utils import (
     get_config_model_id,
     global_then_local_main_first,
     pad,
-    patch_chunked_lm_head,
+    patch_fused_lm_head,
 )
 
 
@@ -544,7 +544,7 @@ class SFTTrainer(_BaseTrainer):
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
         compute_loss_func (`Callable`, *optional*):
-            A function that accepts the model outputs (a [`~trainer.utils.ChunkedCausalLMOutput`], with per-token
+            A function that accepts the model outputs (a [`~trainer.utils.FusedCausalLMOutput`], with per-token
             log-probabilities rather than logits), the labels, and the number of items in the entire accumulated batch
             (batch_size * gradient_accumulation_steps) and returns the loss.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -1029,7 +1029,7 @@ class SFTTrainer(_BaseTrainer):
         )
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_chunked_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
 
         # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
         # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents
@@ -1432,10 +1432,13 @@ class SFTTrainer(_BaseTrainer):
             ):
                 # Ulysses sequence parallelism reduces the model's own `loss` across ranks
                 loss, outputs = super().compute_loss(
-                    model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+                    model,
+                    {**inputs, "fused_lm_head": True},
+                    return_outputs=True,
+                    num_items_in_batch=num_items_in_batch,
                 )
             else:
-                outputs = model(**inputs)
+                outputs = model(**inputs, fused_lm_head=True)
                 if self.compute_loss_func is not None:
                     loss = self.compute_loss_func(outputs, inputs.get("labels"), num_items_in_batch=num_items_in_batch)
                 else:

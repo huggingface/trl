@@ -58,7 +58,7 @@ from .utils import (
     global_then_local_main_first,
     hash_module,
     pad,
-    patch_chunked_lm_head,
+    patch_fused_lm_head,
     use_adapter,
 )
 
@@ -872,9 +872,9 @@ class DPOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_chunked_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
         if self.ref_model is not None:
-            patch_chunked_lm_head(self.ref_model)
+            patch_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1168,7 +1168,7 @@ class DPOTrainer(_BaseTrainer):
             adapter_context,
             self.accelerator.autocast(),
         ):
-            ref_per_token_logps = model(**model_kwargs, labels=labels).log_probs
+            ref_per_token_logps = model(**model_kwargs, labels=labels, fused_lm_head=True).log_probs
 
         shift_completion_mask = inputs["completion_mask"][..., 1:]
         # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
@@ -1202,7 +1202,7 @@ class DPOTrainer(_BaseTrainer):
         completion_mask = inputs["completion_mask"]
         shift_completion_mask = completion_mask[..., 1:]
         labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
-        outputs = model(**model_kwargs, labels=labels)
+        outputs = model(**model_kwargs, labels=labels, fused_lm_head=True)
         # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
         seq_len = shift_completion_mask.size(1)
         per_token_logps = outputs.log_probs[:, -seq_len:]
@@ -1237,9 +1237,9 @@ class DPOTrainer(_BaseTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**ref_model_kwargs, labels=labels)
+                        ref_outputs = self.model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
                 else:
-                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=labels)
+                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
             ref_per_token_logps = ref_outputs.log_probs[:, -seq_len:]
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length

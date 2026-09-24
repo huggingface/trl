@@ -1456,16 +1456,17 @@ def shutdown_event_loop_in_daemon(
 
 
 @dataclass
-class ChunkedCausalLMOutput(ModelOutput):
+class FusedCausalLMOutput(ModelOutput):
     """
-    Output of a model patched with [`patch_chunked_lm_head`] and called with `labels` or `shift_labels`. Every
-    per-token field is zero where the label is `-100`.
+    Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
+    is zero where the label is `-100`.
 
     Args:
         loss (`torch.Tensor`):
-            Negative log-likelihood summed over the non-ignored tokens and divided by `num_items_in_batch` (their count
-            when not passed), plus the MoE load-balancing loss weighted by the config's `router_aux_loss_coef` when
-            router logits are requested, as the model's own forward computes it.
+            Negative log-likelihood under the temperature-scaled distribution, summed over the non-ignored tokens and
+            divided by `num_items_in_batch` (their count when not passed), plus the MoE load-balancing loss weighted by
+            the config's `router_aux_loss_coef` when router logits are requested. At `temperature=1.0`, this is the
+            loss the model's own forward computes.
         log_probs (`torch.Tensor` of shape `(batch, seq_len - 1)`, or `(batch, seq_len)` with `shift_labels`):
             Log-probability of each next-token label.
         entropy (`torch.Tensor`, same shape as `log_probs`):
@@ -1490,17 +1491,15 @@ class ChunkedCausalLMOutput(ModelOutput):
     aux_loss: torch.Tensor | None = None
 
 
-def patch_chunked_lm_head(
-    model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False
-) -> None:
+def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
     """
-    Make `model(..., labels=labels)` return per-token log-probabilities instead of logits, without materializing the
-    `(batch, seq_len, vocab)` logits.
+    Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
+    instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
 
-    Called with `labels`, the patched forward runs the backbone and projects through the LM head, in chunks, only the
-    positions whose next-token label is not `-100`, and returns a [`ChunkedCausalLMOutput`]. Pre-shifted
-    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Called with neither,
-    it is the original forward, so generation is unchanged. Patch the model before wrapping it with PEFT.
+    With `fused_lm_head=True`, the patched forward runs the backbone and projects through the LM head, in tiles, only
+    the positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted
+    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Without it, the
+    forward is the original one, so generation is unchanged. Patch the model before wrapping it with PEFT.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
@@ -1530,8 +1529,16 @@ def patch_chunked_lm_head(
 
     # Keep the original signature: `generate` validates its model kwargs against it
     @functools.wraps(type(model).forward)
-    def _chunked_forward(self, *args, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs):
-        if labels is None and shift_labels is None:
+    def _fused_forward(
+        self, *args, fused_lm_head=False, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs
+    ):
+        if not fused_lm_head:
+            if labels is not None:
+                kwargs["labels"] = labels
+            if shift_labels is not None:
+                kwargs["shift_labels"] = shift_labels
+            if num_items_in_batch is not None:
+                kwargs["num_items_in_batch"] = num_items_in_batch
             return original_forward(*args, **kwargs)
 
         # The backbone and the LM head are looked up on each call, since FSDP and PEFT replace them after patching
@@ -1594,7 +1601,7 @@ def patch_chunked_lm_head(
             )
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return ChunkedCausalLMOutput(
+        return FusedCausalLMOutput(
             loss=loss,
             log_probs=log_probs,
             entropy=entropy,
@@ -1604,7 +1611,7 @@ def patch_chunked_lm_head(
             aux_loss=aux_loss,
         )
 
-    model.forward = types.MethodType(_chunked_forward, model)
+    model.forward = types.MethodType(_fused_forward, model)
 
 
 def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:

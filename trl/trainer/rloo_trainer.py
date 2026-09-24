@@ -70,7 +70,7 @@ from .utils import (
     nanmin,
     nanstd,
     pad,
-    patch_chunked_lm_head,
+    patch_fused_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
@@ -638,12 +638,12 @@ class RLOOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_chunked_lm_head(
+        patch_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             temperature=self.temperature,
         )
         if self.ref_model is not None:
-            patch_chunked_lm_head(self.ref_model, temperature=self.temperature)
+            patch_fused_lm_head(self.ref_model, temperature=self.temperature)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -989,7 +989,7 @@ class RLOOTrainer(_BaseTrainer):
             labels = input_ids_batch.masked_fill(attention_mask_batch == 0, -100)
             labels[:, :-logits_to_keep] = -100
             with self.accelerator.autocast():
-                outputs = model(**model_inputs, labels=labels)
+                outputs = model(**model_inputs, labels=labels, fused_lm_head=True)
             all_logps.append(outputs.log_probs[:, -logits_to_keep:])
             if compute_entropy:
                 all_entropies.append(outputs.entropy[:, -logits_to_keep:])
