@@ -1369,6 +1369,80 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        reason="Processors return correct assistant masks for images since transformers 5.18.0",
+    )
+    @require_vision
+    def test_train_vlm_assistant_only(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            assistant_only_loss=True,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        reason="Processors return correct assistant masks for images since transformers 5.18.0",
+    )
+    @require_vision
+    def test_data_collator_builds_labels_for_vlm_assistant_only_loss(self):
+        """The vision data collator must mask the non-assistant tokens in the labels."""
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        batch = trainer.data_collator([dataset[0], dataset[1]])
+        for labels, input_ids, attention_mask in zip(
+            batch["labels"], batch["input_ids"], batch["attention_mask"], strict=True
+        ):
+            labels, input_ids = labels[attention_mask == 1], input_ids[attention_mask == 1]
+            # Labels are input_ids with non-assistant tokens masked to -100.
+            assert all(label == -100 or label == token_id for label, token_id in zip(labels, input_ids, strict=True))
+            assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
+            assert any(label == -100 for label in labels)  # non-assistant tokens are masked
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
+    )
+    @require_vision
+    def test_vlm_assistant_only_loss_requires_transformers_5_18(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        with pytest.raises(ValueError, match="requires transformers>=5.18.0"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     def test_fully_masked_examples_dropped_after_truncation(self):
         # Example 0's assistant tokens all lie beyond `max_length=3`, so keep_start truncation leaves it fully masked;
         # example 1 keeps a trainable token and survives.
