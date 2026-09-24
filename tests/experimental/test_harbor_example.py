@@ -197,7 +197,7 @@ def test_training_run_names_are_unique_and_can_be_overridden(monkeypatch, job_ke
 def test_dataset_metadata_client_is_closed_before_training(monkeypatch, failure):
     harbor = pytest.importorskip("harbor_env.harness")
     example = load_example("async_grpo_harbor")
-    monkeypatch.setattr(sys, "argv", ["example", "--vllm-url", "http://engine"])
+    monkeypatch.setattr(sys, "argv", ["example", "--vllm-url", "http://engine", "--split", ""])
     client = MagicMock(spec=harbor.HarborEnv)
     client.splits.return_value = [{"name": "tasks"}]
     client.num_tasks.return_value = 1

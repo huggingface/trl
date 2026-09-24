@@ -1039,11 +1039,13 @@ class TestGetTrainingChatTemplate:
         assert before == after
 
     def test_assistant_masks(self, tokenizer_name, request):
-        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
             request.node.add_marker(
                 pytest.mark.xfail(
-                    Version(transformers.__version__) < Version("5.18.0.dev0"),
-                    reason="Processor assistant masks require transformers#48793 (5.18.0.dev0).",
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
                     strict=True,
                 )
             )
@@ -1069,11 +1071,13 @@ class TestGetTrainingChatTemplate:
         assert masks[-1] == 1
 
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
-        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
             request.node.add_marker(
                 pytest.mark.xfail(
-                    Version(transformers.__version__) < Version("5.18.0.dev0"),
-                    reason="Processor assistant masks require transformers#48793 (5.18.0.dev0).",
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
                     strict=True,
                 )
             )
