@@ -8,8 +8,6 @@ on:
       - "kernels/**"
   workflow_dispatch:
 
-permissions:
-  contents: read
 
 concurrency:
   group: publish-kernels
@@ -18,8 +16,12 @@ concurrency:
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
 
+permissions: {}
+
 jobs:
   publish:
+    permissions:
+      contents: read
     name: Publish kernels
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

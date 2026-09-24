@@ -13,13 +13,14 @@ on:
   pull_request_target:
     types: [opened]
 
-permissions:
-  pull-requests: write
-  issues: write
-  statuses: write
+
+permissions: {}
 
 jobs:
   check-pr-template:
+    permissions:
+      issues: write
+      pull-requests: write
     runs-on: ubuntu-latest
     if: >
       github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
