@@ -82,6 +82,8 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
 
     def gradient_checkpointing_enable(gradient_checkpointing_kwargs: dict | None = None, **kwargs):
         gradient_checkpointing_kwargs = dict(gradient_checkpointing_kwargs or {})
+        # TRL-only key that turns SAC on in `SFTTrainer`, torch's `checkpoint` doesn't accept it
+        gradient_checkpointing_kwargs.pop("selective_activation_checkpointing", None)
         # SAC intercepts saved tensors, which only happens under non-reentrant checkpointing.
         gradient_checkpointing_kwargs["use_reentrant"] = False
         gradient_checkpointing_kwargs["context_fn"] = context_fn

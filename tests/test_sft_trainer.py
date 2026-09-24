@@ -1860,7 +1860,12 @@ class TestSFTTrainer(TrlTestCase):
 
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs",
-        [{"use_reentrant": True}, {"use_reentrant": False}, {"selective_activation_checkpointing": True}],
+        [
+            {"use_reentrant": True},
+            {"use_reentrant": False},
+            {"selective_activation_checkpointing": True},
+            {"selective_activation_checkpointing": False},
+        ],
     )
     def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

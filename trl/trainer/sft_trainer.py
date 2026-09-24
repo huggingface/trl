@@ -1133,11 +1133,6 @@ class SFTTrainer(_BaseTrainer):
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
-        # `selective_activation_checkpointing` is a TRL-only key, pop it so it never reaches `torch.utils.checkpoint`
-        selective_activation_checkpointing = (args.gradient_checkpointing_kwargs or {}).pop(
-            "selective_activation_checkpointing", False
-        )
-
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
         # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
         # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
@@ -1147,7 +1142,7 @@ class SFTTrainer(_BaseTrainer):
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
         ):
-            if selective_activation_checkpointing:
+            if (args.gradient_checkpointing_kwargs or {}).get("selective_activation_checkpointing"):
                 raise ValueError(
                     "`selective_activation_checkpointing` is not supported with PEFT + DeepSpeed ZeRO-3, which "
                     "requires reentrant gradient checkpointing while SAC requires non-reentrant checkpointing."
@@ -1379,7 +1374,9 @@ class SFTTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
-        if selective_activation_checkpointing:
+        # `selective_activation_checkpointing` is a TRL-only key: when set, the SAC wrapper strips it before it reaches
+        # `torch.utils.checkpoint`, otherwise it is dropped here (a missing key already means SAC is off)
+        if (args.gradient_checkpointing_kwargs or {}).get("selective_activation_checkpointing"):
             if not args.gradient_checkpointing:
                 raise ValueError("`selective_activation_checkpointing` requires `gradient_checkpointing=True`.")
             if (args.gradient_checkpointing_kwargs or {}).get("use_reentrant"):
@@ -1389,6 +1386,8 @@ class SFTTrainer(_BaseTrainer):
                 )
             # Wrap before `super().__init__()` so the context function is set when the Trainer enables checkpointing.
             enable_selective_activation_checkpointing(model)
+        elif args.gradient_checkpointing_kwargs:
+            args.gradient_checkpointing_kwargs.pop("selective_activation_checkpointing", None)
 
         super().__init__(
             model=model,
