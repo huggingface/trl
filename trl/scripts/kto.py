@@ -124,7 +124,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
     # Finish the trackers and destroy the process group
-    if Version(transformers.__version__) >= Version("5.18.0.dev0"):
+    if Version(transformers.__version__) >= Version("5.18.0"):
         trainer.end()
 
 
