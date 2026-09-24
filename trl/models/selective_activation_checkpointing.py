@@ -65,9 +65,9 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
     (no `torch.compile` required) and forces non-reentrant checkpointing, which SAC relies on.
 
     Wrapping the model instance's method (rather than passing a `context_fn` through the config) keeps the
-    non-serializable callable out of [`~transformers.TrainingArguments`] and covers every enable call site. The
-    wrapper is idempotent, so calling this twice on the same model (e.g. across repeated `Trainer` inits in tests) is
-    a no-op the second time.
+    non-serializable callable out of [`~transformers.TrainingArguments`] and covers every enable call site. The wrapper
+    is idempotent, so calling this twice on the same model (e.g. across repeated `Trainer` inits in tests) is a no-op
+    the second time.
 
     Args:
         model (`nn.Module`):
@@ -82,8 +82,6 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
 
     def gradient_checkpointing_enable(gradient_checkpointing_kwargs: dict | None = None, **kwargs):
         gradient_checkpointing_kwargs = dict(gradient_checkpointing_kwargs or {})
-        # TRL-only flag that turns SAC on; torch's `checkpoint` doesn't accept it.
-        gradient_checkpointing_kwargs.pop("selective_activation_checkpointing", None)
         # SAC intercepts saved tensors, which only happens under non-reentrant checkpointing.
         gradient_checkpointing_kwargs["use_reentrant"] = False
         gradient_checkpointing_kwargs["context_fn"] = context_fn

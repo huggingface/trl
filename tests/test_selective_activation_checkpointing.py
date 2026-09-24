@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
+import transformers
+from packaging.version import Version
 from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils.checkpoint import CheckpointPolicy
 from transformers import AutoModelForCausalLM
@@ -82,6 +85,11 @@ class TestSelectiveActivationCheckpointing(TrlTestCase):
         for p_full, p_sac in zip(model_full.parameters(), model_sac.parameters(), strict=True):
             torch.testing.assert_close(p_sac.grad, p_full.grad, rtol=1e-4, atol=1e-5)
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="transformers<5 passes an explicit causal mask, so SDPA on the tiny model falls back to the math path "
+        "and there is no attention op to save",
+    )
     def test_skips_attention_recompute(self):
         """Full checkpointing dispatches SDPA 3 times per layer (forward, recompute, backward), SAC only 2."""
         model, count_full = self._forward_backward(selective=False)
