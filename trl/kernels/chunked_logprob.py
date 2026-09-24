@@ -44,6 +44,7 @@ def _forward_kernel(
     x_sum_exp_ptr,
     sq_sum_exp_ptr,
     target_logit_ptr,
+    max_before_target_ptr,
     rescale_ptr,
     vocab_start,
     n_cols,
@@ -59,6 +60,8 @@ def _forward_kernel(
     row_ptr = mm_ptr + row * mm_stride
     m = tl.load(max_ptr + row)
     initial_m = m
+    local = tl.load(targets_ptr + row) - vocab_start
+    max_before_target = tl.load(max_before_target_ptr + row)
     s = tl.load(sum_exp_ptr + row)
     xs = tl.load(x_sum_exp_ptr + row)
     sq = tl.load(sq_sum_exp_ptr + row)
@@ -68,6 +71,8 @@ def _forward_kernel(
         z = tl.load(row_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
         z = _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP)
         z = tl.where(mask, z, -float("inf"))
+        # `argmax` returns the first maximum, so a tie with an earlier token does not count as a top-1 prediction
+        max_before_target = tl.maximum(max_before_target, tl.max(tl.where(offsets < local, z, -float("inf")), axis=0))
         new_m = tl.maximum(m, tl.max(z, axis=0))
         rescale = tl.exp(m - new_m)
         e = tl.where(mask, tl.exp(z - new_m), 0.0)
@@ -79,8 +84,8 @@ def _forward_kernel(
     tl.store(sum_exp_ptr + row, s)
     tl.store(x_sum_exp_ptr + row, xs)
     tl.store(sq_sum_exp_ptr + row, sq)
+    tl.store(max_before_target_ptr + row, max_before_target)
 
-    local = tl.load(targets_ptr + row) - vocab_start
     if (local >= 0) & (local < n_cols):
         z = tl.load(row_ptr + local).to(tl.float32)
         tl.store(target_logit_ptr + row, _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP))
@@ -200,6 +205,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         sq_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
+        max_before_target = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         mm_buf = torch.empty((min(N, TOKEN_CHUNK_SIZE), VOCAB_CHUNK_SIZE), device=device, dtype=compute_dtype)
         needs_hidden_grad, needs_weight_grad, needs_bias_grad = ctx.needs_input_grad[:3]
         # d log p_target / d hidden = dz_target/dy * W[target] - E_p[dz/dy * W], accumulated online like the logsumexp
@@ -229,6 +235,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     x_sum_exp[token_start:token_end],
                     sq_sum_exp[token_start:token_end],
                     target_logit[token_start:token_end],
+                    max_before_target[token_start:token_end],
                     rescale if jacobian is not None else sum_exp,
                     start,
                     end - start,
@@ -251,7 +258,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
         log_sum_sq_probs = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp)
-        is_top1 = target_logit >= running_max
+        is_top1 = (target_logit >= running_max) & (target_logit > max_before_target)
 
         ctx.save_for_backward(hidden, weight, bias, targets, log_z, entropy, jacobian)
         ctx.compute_dtype = compute_dtype

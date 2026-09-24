@@ -443,3 +443,18 @@ class TestChunkedLogProbFunction:
         (2.0 * logprobs_ref + entropy_weight * entropy_ref).sum().backward()
 
         torch.testing.assert_close(grad, hidden.grad, atol=1e-4, rtol=1e-4)
+
+    def test_is_top1_matches_argmax_with_ties(self):
+        # Duplicated head rows make exact ties; `argmax` picks the first one, and so must `is_top1`
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, device=torch_device)
+        weight = torch.randn(self.V, self.H, device=torch_device)
+        weight[self.V // 2 :] = weight[: self.V - self.V // 2]
+        argmax = (hidden @ weight.t()).argmax(-1)
+        # Half the labels are the argmax, half its duplicate further down the vocabulary
+        labels = torch.where(torch.arange(self.N, device=torch_device) % 2 == 0, argmax, argmax + self.V // 2)
+        labels = labels.clamp(max=self.V - 1)
+
+        _, _, _, is_top1 = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0)
+
+        torch.testing.assert_close(is_top1, argmax == labels)
