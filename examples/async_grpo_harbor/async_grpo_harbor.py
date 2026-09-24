@@ -192,7 +192,13 @@ def main() -> None:
         num_tasks=args.n_tasks,
         indices=task_indices(args.task_indices),
     )
-    dataset = Dataset.from_list(factory().prompt_rows())
+    metadata_factory = factory()
+    try:
+        dataset = Dataset.from_list(metadata_factory.prompt_rows())
+    finally:
+        # The pinned OpenEnv factory has no public close method.
+        if metadata_factory._env is not None:
+            metadata_factory._env.close()
 
     print(f"server    {args.server}")
     print(f"vllm      {args.vllm_url}   model {args.model}")

@@ -193,6 +193,48 @@ def test_training_run_names_are_unique_and_can_be_overridden(monkeypatch, job_ke
     assert [call[0] for call in trainer.return_value.method_calls] == ["train", "save_model"] * 3
 
 
+@pytest.mark.parametrize("failure", [None, "splits", "tasks", "dataset"])
+def test_dataset_metadata_client_is_closed_before_training(monkeypatch, failure):
+    harbor = pytest.importorskip("harbor_env.harness")
+    example = load_example("async_grpo_harbor")
+    monkeypatch.setattr(sys, "argv", ["example", "--vllm-url", "http://engine"])
+    client = MagicMock(spec=harbor.HarborEnv)
+    client.splits.return_value = [{"name": "tasks"}]
+    client.num_tasks.return_value = 1
+    client.get_task_range.return_value = [{"instruction": "solve task", "index": 0}]
+    monkeypatch.setattr(harbor, "HarborEnv", MagicMock(return_value=client))
+    if failure == "splits":
+        client.splits.side_effect = RuntimeError("metadata failed")
+    elif failure == "tasks":
+        client.get_task_range.side_effect = RuntimeError("metadata failed")
+    elif failure == "dataset":
+        monkeypatch.setattr(example.Dataset, "from_list", MagicMock(side_effect=RuntimeError("dataset failed")))
+    tokenizer = MagicMock()
+    monkeypatch.setattr(example, "AutoTokenizer", tokenizer)
+    monkeypatch.setattr(example, "AsyncGRPOConfig", MagicMock())
+    worker = MagicMock(side_effect=lambda **kwargs: client.close.assert_called_once_with())
+    monkeypatch.setattr(example, "HarnessRolloutWorker", worker)
+    trainer = MagicMock()
+    monkeypatch.setattr(example, "AsyncGRPOTrainer", trainer)
+
+    if failure:
+        with pytest.raises(RuntimeError, match="failed"):
+            example.main()
+        tokenizer.from_pretrained.assert_not_called()
+        worker.assert_not_called()
+        trainer.assert_not_called()
+    else:
+        example.main()
+        trainer.return_value.train.assert_called_once_with()
+        rows = trainer.call_args.kwargs["train_dataset"]
+        assert rows[0]["prompt"] == [{"role": "user", "content": "solve task"}]
+        # Rollout factories are still constructed independently in the worker.
+        factory = worker.call_args.kwargs["harness_session_factory"](sampling={"temperature": 0.8})
+        assert factory._env is None
+        assert factory.sampling["temperature"] == 0.8
+    client.close.assert_called_once_with()
+
+
 def test_proxy_waiter_follows_republished_url(launcher, monkeypatch, tmp_path):
     log = tmp_path / "server.log"
     log.write_text("capture :8300 -> https://old.example\n")
