@@ -3984,6 +3984,30 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_reward_model_pad_token_id_synced_with_text_config(self):
+        # A composite reward model resolves the pad token through its text config, not the top-level one.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", num_labels=1
+        )
+        reward_processing_class = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        )
+        reward_processing_class.pad_token = reward_processing_class.eos_token
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_model,
+            reward_processing_classes=reward_processing_class,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.reward_processing_classes[0].pad_token_id
+        assert pad_token_id is not None
+        assert reward_model.config.get_text_config().pad_token_id == pad_token_id
+
 
 @require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
