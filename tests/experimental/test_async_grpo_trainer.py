@@ -23,7 +23,6 @@ import time
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from typing import runtime_checkable
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -64,7 +63,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
-from trl.experimental.async_grpo.packing import PackingProtocol, SequencePacking, TreePacking
+from trl.experimental.async_grpo.packing import SequencePacking, TreePacking
 from trl.experimental.async_grpo.tree import (
     TREE_ATTENTION,
     PrefixForest,
@@ -986,12 +985,6 @@ def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group
     }
 
 
-class TestPackingProtocol(TrlTestCase):
-    @pytest.mark.parametrize("packing", [SequencePacking(), TreePacking()])
-    def test_strategies_satisfy_the_protocol(self, packing):
-        assert isinstance(packing, runtime_checkable(PackingProtocol))
-
-
 class TestTreePacking(TrlTestCase):
     """Tree packing is CPU bookkeeping up to the attention call, so everything but the forward runs without a GPU."""
 
@@ -1028,6 +1021,24 @@ class TestTreePacking(TrlTestCase):
             packed = [node_to_packed[node] for node in forest.walk(sample["input_ids"], sample["group_id"])]
             for i, q in enumerate(packed):
                 assert visible[q].tolist() == [p in packed[: i + 1] for p in range(len(row.input_ids))]
+
+    def test_collator_pads_tree_rows_and_keeps_the_stamps_aligned(self):
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2, packing=TreePacking())
+        groups = [self.ROWS, [_tree_sample([101, 102, 103, 201, 202], n_prompt=3)]]
+
+        batch = collator([groups])
+        mask = batch["attention_mask"].bool()
+
+        assert batch["input_ids"].tolist() == [
+            [101, 102, 103, 201, 202, 401, 301, 302],
+            [101, 102, 103, 201, 202, 0, 0, 0],
+        ]
+        assert batch["attention_mask"].tolist() == [[1] * 8, [1] * 5 + [0] * 3]
+        assert batch["tree_enter"][1].tolist() == [0, 1, 2, 3, 4, 0, 0, 0]  # padded stamps, dropped by the mask
+        assert batch["tree_leave"][1].tolist() == [5, 5, 5, 5, 5, 0, 0, 0]
+        assert batch["tree_enter"][0][mask[0]].tolist() == [0, 1, 2, 3, 4, 5, 6, 7]
+        assert batch["tree_leave"][0][mask[0]].tolist() == [8, 8, 8, 6, 6, 6, 8, 8]
+        assert collator.metrics["batch/packing_ratio"] == [(21, 13)]  # 21 raw tokens forwarded as 13
 
     def test_loss_terms_match_sequence_packing_one_for_one(self):
         tree = TreePacking().pack(self.ROWS)
