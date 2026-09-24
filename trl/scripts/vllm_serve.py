@@ -275,16 +275,12 @@ def main(script_args: ScriptArguments, extra_args: list[str] | None = None):
     env = os.environ.copy()
     # The weight-transfer and prefix-cache endpoints that trainers rely on live behind vLLM's dev mode.
     env["VLLM_SERVER_DEV_MODE"] = "1"
-    # We use CUDA with multiprocessing, so we must use the 'spawn' start method. Otherwise, we will get the following
-    # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must
-    # use the 'spawn' start method
-    env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
     equivalent = shlex.join(["vllm", *command[command.index("serve") :]])
     warnings.warn(
         "`trl vllm-serve` is deprecated and will be removed in v2.0.0: it now only runs vLLM's own server. Run it "
         "directly instead:\n\n"
-        f"    VLLM_SERVER_DEV_MODE=1 VLLM_WORKER_MULTIPROC_METHOD=spawn {equivalent}\n",
+        f"    VLLM_SERVER_DEV_MODE=1 {equivalent}\n",
         FutureWarning,
         stacklevel=2,
     )
