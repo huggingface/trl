@@ -58,7 +58,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # disabled for this measurement branch
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -167,7 +167,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # disabled for this measurement branch
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -219,7 +219,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # disabled for this measurement branch
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -275,7 +275,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # disabled for this measurement branch
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
