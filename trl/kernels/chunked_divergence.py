@@ -23,8 +23,8 @@ from .chunked_logprob import _BLOCK_SIZE, _transform
 
 
 # The projections run on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles, so neither model's logits exist in full
-TOKEN_CHUNK_SIZE = 2048
-VOCAB_CHUNK_SIZE = 8192
+TOKEN_CHUNK_SIZE = 4096
+VOCAB_CHUNK_SIZE = 32768
 
 
 @triton.jit

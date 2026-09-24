@@ -173,7 +173,7 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 
 ## Chunked log-probabilities
 
-At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`] never materialize it: positions with `labels == -100` are dropped before the `lm_head` matmul, and the log-probabilities are computed on `[2048 tokens × 8192 vocab]` tiles by a Triton kernel, so peak memory scales with the tile instead of `(batch × seq_len) × vocab_size`.
+At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`] never materialize it: positions with `labels == -100` are dropped before the `lm_head` matmul, and the log-probabilities are computed on `[4096 tokens × 32768 vocab]` tiles by a Triton kernel, so peak memory scales with the tile instead of `(batch × seq_len) × vocab_size`.
 
 This is always on and needs no configuration. On `Qwen3-8B` (vocab ≈ 152k) with 16k tokens, the head's forward and backward take +2.6 GiB instead of +45 GiB with full logits.
 
