@@ -115,7 +115,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     def __init__(
         self,
         *,
-        harness_session_factory: ResourceSessionFactory,
+        harness_session_factory: Callable[..., ResourceSessionFactory],
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
         # FIXME: These hooks temporarily fill gaps in the OpenEnv contract. OpenEnv should return
@@ -129,10 +129,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         if harness_adapter is None and lossless_capture:
             loop_kwargs["fork_threshold_tokens"] = 0
         super().__init__(**loop_kwargs)
-        self._factory = harness_session_factory
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
-        self._sampling_policy = None
         if harness_adapter is None:
             sampling_kwargs = {
                 "temperature": self.temperature,
@@ -142,7 +140,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 "repetition_penalty": self.repetition_penalty,
             }
             sampling_kwargs = {key: value for key, value in sampling_kwargs.items() if value is not None}
-            self._sampling_policy = training_sampling(sampling_kwargs)
+            self._factory = harness_session_factory(sampling=training_sampling(sampling_kwargs))
+        else:
+            self._factory = harness_session_factory()
         self._limits = HarnessRunLimits(
             max_turns=self.max_tool_calling_iterations if self.max_tool_calling_iterations is not None else 8,
             sampling={"temperature": self.temperature, "max_tokens": self.max_tokens},
@@ -229,7 +229,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 try:
                     trace = loop_session.fetch_proxy_trace()
                     entries = self._agent_turn_fn(trace)
-                    turns = _turns_from_trace(entries, self._train_turn_fn, sampling=self._sampling_policy)
+                    turns = _turns_from_trace(entries, self._train_turn_fn)
                 except (ValueError, TypeError, KeyError) as exc:
                     raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
@@ -335,8 +335,6 @@ def _entry_to_turn(entry: TraceEntry) -> HarnessTurn:
 def _turns_from_trace(
     entries: list[TraceEntry],
     train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
-    *,
-    sampling: dict[str, float | int] | None = None,
 ) -> list[TurnRecord]:
     """Convert captured engine tokens into TRL turns without re-tokenizing.
 
@@ -347,13 +345,6 @@ def _turns_from_trace(
         entries = [entry for entry in entries if train_turn_fn(_entry_to_turn(entry))]
     turns = []
     for entry in entries:
-        if sampling is not None:
-            captured = (entry.get("metadata") or {}).get("sampling_params") or {}
-            if any(captured.get(key) != value for key, value in sampling.items()):
-                raise ValueError(
-                    "capture sampling does not match the trainer policy; pass the trainer's temperature "
-                    "as sampling to HarborSessionFactory and use full-vocabulary sampling"
-                )
         prompt_ids = entry.get("prompt_token_ids")
         if not prompt_ids:
             raise ValueError(
@@ -411,9 +402,10 @@ def _messages_from_trace(entries: list[TraceEntry]) -> list[Message]:
 class HarnessRolloutWorker(AsyncRolloutWorker):
     """AsyncGRPO rollout worker that drives an OpenEnv `ResourceSessionFactory`.
 
-    Construct it with the usual `AsyncRolloutWorker` kwargs plus `harness_session_factory` (and optionally
-    `harness_adapter`), then inject it via `AsyncGRPOTrainer(rollout_worker=...)`. Only the spawned child's loop class
-    differs.
+    Pass `harness_session_factory` as a callable returning an OpenEnv `ResourceSessionFactory`, for example
+    `functools.partial(HarborSessionFactory, server_url, ...)`. In loop-owning mode, the worker calls it with
+    `sampling=` from its training policy. With `harness_adapter`, it calls it without arguments and samples turns
+    itself. Inject the worker via `AsyncGRPOTrainer(rollout_worker=...)`.
     """
 
     _loop_cls = _HarnessRolloutLoop

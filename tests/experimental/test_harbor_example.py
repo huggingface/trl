@@ -166,7 +166,8 @@ def test_training_run_names_are_unique_and_can_be_overridden(monkeypatch, job_ke
     factory.return_value.prompt_rows.return_value = [{"prompt": [{"role": "user", "content": "task"}]}]
     monkeypatch.setattr(example, "HarborSessionFactory", factory)
     monkeypatch.setattr(example, "AutoTokenizer", MagicMock())
-    monkeypatch.setattr(example, "HarnessRolloutWorker", MagicMock())
+    worker = MagicMock()
+    monkeypatch.setattr(example, "HarnessRolloutWorker", worker)
     config = MagicMock()
     monkeypatch.setattr(example, "AsyncGRPOConfig", config)
     trainer = MagicMock()
@@ -177,7 +178,10 @@ def test_training_run_names_are_unique_and_can_be_overridden(monkeypatch, job_ke
     assert first["run_name"] != second["run_name"]
     assert first["output_dir"] != second["output_dir"]
     assert ("job42" if job_key else "local") in first["run_name"]
-    assert factory.call_args.kwargs["sampling"] == {"temperature": 1.0, "top_p": 1.0, "top_k": -1}
+    builder = worker.call_args.kwargs["harness_session_factory"]
+    assert "sampling" not in builder.keywords
+    builder(sampling={"temperature": 0.8})
+    assert factory.call_args.kwargs["sampling"] == {"temperature": 0.8}
     monkeypatch.setattr(sys, "argv", sys.argv + ["--run-name", "explicit", "--output-dir", "runs/custom"])
     example.main()
     assert config.call_args.kwargs["run_name"] == "explicit"
@@ -248,3 +252,23 @@ def test_signal_stops_trainer_and_exits(launcher, signum):
             except ProcessLookupError:
                 pass
         proc.stdout.close()
+
+
+@pytest.mark.parametrize("name", ["async_grpo_opencode", "opencode_hf_sandbox"])
+def test_native_opencode_factory_accepts_worker_sampling(monkeypatch, name):
+    pytest.importorskip("opencode_env.harness")
+    path = Path(__file__).resolve().parents[2] / "examples" / "async_grpo_opencode" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+    factory = MagicMock()
+    policy = {"temperature": 0.8, "top_p": 1.0}
+    if name == "async_grpo_opencode":
+        monkeypatch.setattr(example, "LocalSubprocessSandboxBackend", MagicMock())
+        monkeypatch.setattr(example, "FreePortOpenCodeSessionFactory", factory)
+        example.build_factory("/unused", "http://engine", "model", {}, sampling=policy)
+    else:
+        monkeypatch.setattr(example, "HFSandboxBackend", MagicMock())
+        monkeypatch.setattr(example, "OpenCodeSessionFactory", factory)
+        example.build_factory("http://engine", "model", {}, "image", "flavor", sampling=policy)
+    assert factory.call_args.kwargs["config"].extra_opencode_json == {"agent": {"build": policy}}

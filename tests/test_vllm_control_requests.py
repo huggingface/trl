@@ -53,13 +53,13 @@ def server():
 
 
 @pytest.mark.parametrize("client_cls", [AsyncVLLMClient, DistillationVLLMClient])
-def test_async_weight_update_pause_drains_requests_and_clears_old_cache(server, client_cls):
+def test_async_weight_update_pause_keeps_requests_and_clears_old_cache(server, client_cls):
     url, state = server
     client = client_cls(url)
     client.pause()
     request = state["requests"][-1]
     assert request.path == "/pause"
-    assert parse_qs(request.query) == {"mode": ["wait"], "clear_cache": ["True"]}
+    assert parse_qs(request.query) == {"mode": ["keep"], "clear_cache": ["True"]}
     state.update(status=500, body=b"pause failed")
     with pytest.raises(Exception, match="500, pause failed"):
         client.pause()

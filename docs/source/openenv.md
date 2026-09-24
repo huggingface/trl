@@ -627,11 +627,13 @@ Each rollout runs in its own isolated session. In the example that means one san
 You pass a `HarnessRolloutWorker` to [`experimental.async_grpo.AsyncGRPOTrainer`] with `harness_adapter=None` to select loop-owning mode. Besides the usual training arguments, you provide three functions (`rollout_reward_fn`, `train_turn_fn`, and `agent_turn_fn`) that tell TRL how to score, filter, and read the agent's rollouts. They are described in [What you need to define](#what-you-need-to-define).
 
 ```python
+from functools import partial
+
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker, has_tool_call
 
 worker = HarnessRolloutWorker(
-    harness_session_factory=build_factory(...),  # your OpenEnv ResourceSessionFactory
+    harness_session_factory=partial(build_factory, ...),  # accepts sampling= and returns a ResourceSessionFactory
     harness_adapter=None,                         # loop-owning: the agent runs its own loop
     rollout_reward_fn=my_reward,                  # outcome -> float | None
     train_turn_fn=has_tool_call,                  # reinforce only action turns

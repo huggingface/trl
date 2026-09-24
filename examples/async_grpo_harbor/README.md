@@ -44,8 +44,9 @@ subsequent sessions receive the new proxy URL.
   zeros and ones. TRL maps the completion span to its generic `TurnRecord.output_mask`.
 - For example, prompt `[10, 11]`, completion `[12, 13, 14]`, and mask `[0, 0, 1, 0, 1]` train on tokens
   `12` and `14`, while retaining `13` as context. A whole-turn filter cannot express this selection.
-- Capture and trainer sampling must agree. The producer fills full-vocabulary defaults; missing or
-  mismatched effective-policy metadata is rejected.
+- The worker constructs the session factory with its sampling policy. Pass a callable such as
+  `partial(HarborSessionFactory, server_url, ...)`; do not configure sampling separately on the factory.
+  OpenEnv applies the policy to captured requests.
 - Invalid captures stop the worker. Transport failures remain unscorable; an agent timeout retains
   valid captured turns and the verifier's score.
 

@@ -36,7 +36,7 @@ Rewritten histories fork into separate training rows to preserve eligible tokens
 for the contract, dependency pin, and memory/weighting limitations.
 
 Select another qualified agent with `--harness`. Rollouts and weight updates must use the same vLLM
-instance and full-vocabulary sampling policy. Weight updates drain active inference requests.
+instance and full-vocabulary sampling policy. Weight updates pause active inference requests without waiting for them to finish.
 
 The reward adds `0.3 * tool_efficiency` only when correctness is at least 1.0. Use `--reward-key` to
 select a component when the verifier returns a reward dictionary.
@@ -78,6 +78,7 @@ import logging
 import os
 import pathlib
 import uuid
+from functools import partial
 
 from datasets import Dataset
 from harbor_env.harness import HarborSessionFactory
@@ -177,7 +178,8 @@ def main() -> None:
     run_name = args.run_name or f"{args.model.split('/')[-1]}-{args.harness}-{args.max_steps}steps-{stamp}"
     output_dir = args.output_dir or f"runs/async_grpo_harbor/{run_name}"
 
-    factory = HarborSessionFactory(
+    factory = partial(
+        HarborSessionFactory,
         args.server,
         split=args.split,
         harness=args.harness,
@@ -187,11 +189,10 @@ def main() -> None:
         agent_timeout_sec=args.agent_timeout,
         agent_step_limit=args.agent_step_limit,
         reward_key=args.reward_key,
-        sampling={"temperature": args.temperature, "top_p": 1.0, "top_k": -1},
         num_tasks=args.n_tasks,
         indices=task_indices(args.task_indices),
     )
-    dataset = Dataset.from_list(factory.prompt_rows())
+    dataset = Dataset.from_list(factory().prompt_rows())
 
     print(f"server    {args.server}")
     print(f"vllm      {args.vllm_url}   model {args.model}")

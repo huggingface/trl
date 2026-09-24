@@ -19,6 +19,7 @@ import itertools
 import queue
 import threading
 from collections import defaultdict
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -94,24 +95,18 @@ def test_loop_owning_capture_defaults_to_lossless_reconciliation(monkeypatch, ad
         self.max_inflight_tasks = 1
 
     monkeypatch.setattr(openenv_harness._AsyncRolloutLoop, "__init__", init)
+    factory = MagicMock(return_value=SimpleNamespace())
     loop = openenv_harness._HarnessRolloutLoop(
-        harness_session_factory=SimpleNamespace(), harness_adapter=adapter, lossless_capture=lossless
+        harness_session_factory=factory, harness_adapter=adapter, lossless_capture=lossless
     )
     try:
         assert loop._fork_threshold_tokens == threshold
+        if adapter is not None:
+            factory.assert_called_once_with()
+        else:
+            factory.assert_called_once_with(sampling=openenv_harness.training_sampling({"temperature": 0.8}))
     finally:
         loop._session_pool.shutdown()
-
-
-def test_captured_policy_must_match_training_temperature():
-    row = entry([1], [2], [-0.1])
-    with pytest.raises(ValueError, match="sampling"):
-        openenv_harness._turns_from_trace([row], sampling={"temperature": 0.8})
-    row["metadata"] = {"sampling_params": {"temperature": 1.0}}
-    with pytest.raises(ValueError, match="sampling"):
-        openenv_harness._turns_from_trace([row], sampling={"temperature": 0.8})
-    row["metadata"]["sampling_params"]["temperature"] = 0.8
-    assert len(openenv_harness._turns_from_trace([row], sampling={"temperature": 0.8})) == 1
 
 
 @pytest.fixture
@@ -119,10 +114,11 @@ def make_loop():
     PartialState()
     loops = []
 
-    def make(factory, **kwargs):
+    def make(factory=None, *, factory_builder=None, **kwargs):
+        kwargs.setdefault("temperature", 0.8)
         tokenizer = MagicMock(eos_token_id=0, pad_token_id=0)
         loop = openenv_harness._HarnessRolloutLoop(
-            harness_session_factory=factory,
+            harness_session_factory=factory_builder or (lambda **kwargs: factory),
             model_name="test",
             dataset=[{"prompt": [{"role": "user", "content": "task"}]}],
             reward_funcs=[],
@@ -133,7 +129,6 @@ def make_loop():
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
             metrics_queue=queue.Queue(),
-            temperature=0.8,
             max_inflight_tasks=8,
             **kwargs,
         )
@@ -174,18 +169,26 @@ class Session:
         self.closed.set()
 
 
-def test_factory_temperature_can_differ_from_trainer(make_loop, monkeypatch):
+@pytest.mark.parametrize("temperature", [0.3, 0.8, 1.2])
+def test_worker_supplies_factory_sampling_before_session_start(make_loop, monkeypatch, temperature):
     harness = pytest.importorskip("harbor_env.harness")
-    factory = harness.HarborSessionFactory("http://unused", sampling={"temperature": 1.0})
+    policy = openenv_harness.training_sampling({"temperature": temperature})
     row = captured_entry()
-    row["metadata"]["sampling_params"] = factory.sampling
+    # Token ingestion no longer depends on redundant policy metadata.
+    row.pop("metadata")
     session = Session(row)
-    monkeypatch.setattr(factory, "create", lambda *args, **kwargs: session)
-    loop = make_loop(factory)  # Trainer temperature is 0.8.
-    with pytest.raises(openenv_harness.CaptureContractError, match="sampling"):
-        loop._run_session([])
+    construct_session = MagicMock(return_value=session)
+    monkeypatch.setattr(harness, "HarborSession", construct_session)
+    monkeypatch.setattr(harness.HarborSessionFactory, "new_client", lambda self: MagicMock())
+    builder = partial(harness.HarborSessionFactory, "http://unused", sampling={"temperature": 1.0})
+    loop = make_loop(factory_builder=builder, temperature=temperature)
+    assert loop._factory.sampling == policy
+    loop._factory._tasks = [{"instruction": "task", "index": 0}]
+    loop._factory._by_instruction = {harness.instruction_id("task"): 0}
+    result, _ = loop._run_session([{"role": "user", "content": "task"}])
+    assert construct_session.call_args.kwargs["sampling"] == policy
+    assert result != loop._EMPTY_ROLLOUT
     assert session.closed.is_set()
-    assert loop.rollout_buffer.empty()
 
 
 @pytest.mark.parametrize("field,value", [("prompt_token_ids", []), ("per_token_logps", []), ("loss_mask", [1, 1, 1])])
@@ -340,19 +343,12 @@ def test_harbor_producer_defaults_and_partial_masks_round_trip():
         {"temperature": 0.8, "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0}
     )
     trace = to_trace_entries(result)
-    turns = openenv_harness._turns_from_trace(trace, sampling=policy)
+    assert factory.sampling == policy
+    turns = openenv_harness._turns_from_trace(trace)
     rows, _ = _chain_to_sequences(turns, "test", 0)
     assert rows[0].input_ids == [10, 11, 12, 13, 14]
     assert rows[0].completion_mask == [0, 0, 1, 0, 1]
     assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
-    for key in ("temperature", "repetition_penalty"):
-        original = trace[0]["metadata"]["sampling_params"].pop(key)
-        with pytest.raises(ValueError, match="sampling"):
-            openenv_harness._turns_from_trace(trace, sampling=policy)
-        trace[0]["metadata"]["sampling_params"][key] = original + 0.1
-        with pytest.raises(ValueError, match="sampling"):
-            openenv_harness._turns_from_trace(trace, sampling=policy)
-        trace[0]["metadata"]["sampling_params"][key] = original
 
 
 def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypatch):
