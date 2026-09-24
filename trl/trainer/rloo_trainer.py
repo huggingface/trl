@@ -1662,9 +1662,6 @@ class RLOOTrainer(_BaseTrainer):
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
         # Flush user-logged extra columns (from log_extra), gathering across processes.
-        # A reward function may log on some ranks only, so agree on the union of keys first and have every rank
-        # join every collective. A rank that did not log a column pads it with None so the column stays aligned
-        # with the prompt and completion columns of the completions table.
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
         for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
@@ -1673,17 +1670,11 @@ class RLOOTrainer(_BaseTrainer):
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.
-        # A reward function may log on some ranks only, so agree on the union of keys first and have every rank
-        # join every collective. Each rank contributes its [sum, count] (a rank that did not log contributes
-        # [0, 0]) so that the mean weights every logged value equally, however many a rank logged.
         # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
         # get mis-attributed across metrics (dict insertion order may differ between processes).
         for name in sorted(set(gather_object(list(self._pending_metrics)))):
-            # Cast each value before summing: a bf16 tensor value would otherwise accumulate in bf16, and the stats
-            # tensor gets an explicit dtype so every rank gathers the same dtype whatever its default.
             values = self._pending_metrics.get(name, [])
-            local_sum, local_count = sum(float(value) for value in values), float(len(values))
-            local_stats = torch.tensor([local_sum, local_count], dtype=torch.float32, device=device)
+            local_stats = torch.tensor([sum(values), len(values)], dtype=torch.float32, device=device)
             total, count = self.accelerator.gather(local_stats).view(-1, 2).sum(dim=0).tolist()
             self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()

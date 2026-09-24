@@ -29,7 +29,6 @@ def main():
     parser.add_argument("--output_dir", required=True)
     args = parser.parse_args()
 
-    # A regression shows up as a hang in a collective. Bound it so the test fails instead of stalling the lane.
     watchdog = threading.Timer(600, os._exit, args=(124,))
     watchdog.daemon = True
     watchdog.start()
@@ -39,15 +38,11 @@ def main():
 
     def reward_func(completions, log_metric, log_extra, **kwargs):
         if rank == 0:
-            # Logged on rank 0 only: the other rank must still join the collectives.
             log_metric("format_accuracy", 1.0)
             log_extra("parser_score", [1.0] * len(completions))
-            # Logged with unequal counts: rank 0 logs one value per completion, rank 1 a single value below, so the
-            # mean must weight the logged values (3 x 1.0 and 1 x 0.0 give 0.75), not the ranks (0.5).
             for _ in completions:
                 log_metric("weighted", 1.0)
         else:
-            # Logged on rank 1 only, with a different name than rank 0's metric.
             log_metric("proof_score", 0.5)
             log_metric("weighted", 0.0)
         return [float(len(c)) for c in completions]
@@ -63,7 +58,7 @@ def main():
         max_completion_length=8,
         max_steps=2,
         logging_steps=1,
-        log_completions=True,  # the main process builds the completions table, which raises on a ragged column
+        log_completions=True,
         report_to="none",
         save_strategy="no",
     )
