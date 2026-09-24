@@ -1035,11 +1035,12 @@ class TestTreePacking(TrlTestCase):
         tree = TreePacking().pack(self.ROWS)
         sequence = SequencePacking().pack(self.ROWS)
 
-        def loss_terms(row):
-            return sorted(zip(row.target_id.tolist(), row.advantages.tolist(), row.segment_id.tolist(), strict=True))
+        for field in ("target_id", "advantages", "segment_id", "old_log_probs"):
+            assert getattr(tree, field).tolist() == getattr(sequence, field).tolist(), field
 
-        assert loss_terms(tree) == loss_terms(sequence)
-        assert tree.old_log_probs.tolist() == sequence.old_log_probs.tolist()
+    def test_cost_counts_unique_tokens_and_surviving_score_pairs(self):
+        assert TreePacking().cost(self.ROWS) == (8, 15 + 9 + 6)  # depths 1..5, then 4+5 and 6 for the branches
+        assert SequencePacking().cost(self.ROWS) == (16, 25 + 25 + 36)
 
     def test_groups_never_share_a_prefix(self):
         rows = [_tree_sample([1, 2, 3], n_prompt=1, group_id=g) for g in (0, 1)]
@@ -1099,9 +1100,12 @@ class TestTreePacking(TrlTestCase):
             _tree_sample(prompt + list(range(10, 10 + n)), len(prompt) + n - t, group_id=0)
             for n, t in ((3, 3), (6, 6), (4, 4), (5, 5), (7, 4))
         ]
+        stream.append(_tree_sample(list(range(20, 34)), n_prompt=7, group_id=1))  # fits in neither row: closes
         batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list), TreePacking())
 
-        assert next(iter(batcher), None) is None  # the whole stream fits without closing a micro-batch
+        micro_batch = next(iter(batcher))
+
+        assert sum(len(group) for group in micro_batch) == 5
 
     def test_a_lone_group_fills_every_row_of_a_fixed_count_micro_batch(self):
         source = (_tree_sample(list(range(6)) + [100 + i], n_prompt=6, group_id=i // 8) for i in range(16))
@@ -1154,7 +1158,7 @@ class TestTreeAttention(TrlTestCase):
         )
         out["log_probs"].sum().backward()
         key = list(zip(row.segment_id.tolist(), row.target_id.tolist(), strict=True))
-        return out["log_probs"].float().detach(), model.lm_head.weight.grad.float().clone(), key
+        return out["log_probs"].float().detach(), self._grads(model), key
 
     def _reference(self, rows):
         """Every row forwarded on its own under ordinary causal attention: what packing has to reproduce."""
@@ -1174,7 +1178,12 @@ class TestTreeAttention(TrlTestCase):
             key += [(i, target) for target in one.target_id.tolist()]
         log_probs = torch.cat(log_probs)
         log_probs.sum().backward()
-        return log_probs.float().detach(), model.lm_head.weight.grad.float().clone(), key
+        return log_probs.float().detach(), self._grads(model), key
+
+    @staticmethod
+    def _grads(model):
+        """The head's gradient checks the forward; the embeddings' checks the backward through the attention mask."""
+        return model.lm_head.weight.grad.float().clone(), model.model.embed_tokens.weight.grad.float().clone()
 
     def test_packed_forest_matches_forwarding_every_row_on_its_own(self):
         register_tree_attention()
@@ -1186,7 +1195,8 @@ class TestTreeAttention(TrlTestCase):
         aligned = torch.stack([packed[packed_key.index(k)] for k in ref_key])
 
         torch.testing.assert_close(aligned, reference, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(packed_grad, ref_grad, atol=1e-4, rtol=1e-4)
+        for packed_g, ref_g in zip(packed_grad, ref_grad, strict=True):
+            torch.testing.assert_close(packed_g, ref_g, atol=1e-4, rtol=1e-4)
 
 
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
