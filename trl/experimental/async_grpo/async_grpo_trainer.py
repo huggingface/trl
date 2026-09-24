@@ -1106,7 +1106,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model.get_output_embeddings().requires_grad_(True)
 
         patch_chunked_lm_head(
-            model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
+            model, chunk_size=32768, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
         )
 
         # Processing class
