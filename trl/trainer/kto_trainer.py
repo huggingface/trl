@@ -17,7 +17,6 @@ import json
 import os
 import textwrap
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,7 +41,7 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import EvalPrediction, has_length
+from transformers.trainer_utils import has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
@@ -53,38 +52,31 @@ from ..data_utils import (
     prepare_multimodal_messages,
     unpair_preference_dataset,
 )
-from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
+from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .kto_config import KTOConfig
 from .utils import (
-    _ChunkedLogProbFunction,
     create_model_from_path,
     disable_dropout_in_model,
     flush_left,
     get_config_model_id,
     global_then_local_main_first,
     hash_module,
-    maybe_gather_lm_head_ctx,
     pad,
-    selective_log_softmax,
-    selective_log_softmax_and_entropy,
+    patch_chunked_lm_head,
     use_adapter,
 )
 
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
-
-
-_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
 
 
 @dataclass
@@ -528,13 +520,6 @@ class KTOTrainer(_BaseTrainer):
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
-        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function that will be used to compute metrics at evaluation. Must take a
-            [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
-            [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
-            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
-            needs to calculate and return the global summary statistics rather than accumulating the batch-level
-            statistics.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -580,7 +565,6 @@ class KTOTrainer(_BaseTrainer):
         | dict[str, Dataset | IterableDataset]
         | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
-        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
@@ -820,45 +804,14 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "Actual (not effective) batch size must be > 1. KTO will not work properly because the KL term will be equivalent to the implied reward."
             )
-        # Chunked log-probability path
-        self.use_liger_kernel = args.use_liger_kernel
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
-            if compute_metrics is not None:
-                raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
-                )
-            if is_peft_model(model):
-                # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head
-                # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
-                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
-                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
-                # Fail loudly rather than train a silently-frozen head.
-                output_embeddings = model.get_output_embeddings()
-                if isinstance(output_embeddings, BaseTunerLayer):
-                    raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The "
-                        "chunked projection reads `lm_head.weight` directly, so the adapter on the head is ignored and "
-                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
-                        "`use_liger_kernel=False`."
-                    )
-                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-                # `PeftModel.forward()`. The chunked path bypasses `PeftModel.forward()` by calling the backbone
-                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
-                # Fail loudly rather than train on a silently corrupted input.
-                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
-                    raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                        "PrefixTuning, P-Tuning). The chunked path bypasses `PeftModel.forward()` by calling the "
-                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
-                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                        "`use_liger_kernel=False`."
-                    )
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
 
         # Dataset
         # Skip dataset preparation for VLMs: tokenization and image processing happen on-the-fly in the collator.
@@ -888,7 +841,6 @@ class KTOTrainer(_BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
         )
@@ -910,12 +862,6 @@ class KTOTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
-        if self.aux_loss_enabled and self.use_liger_kernel:
-            raise ValueError(
-                "The chunked KTO path does not support the Mixture-of-Experts load-balancing auxiliary loss, because "
-                "it bypasses the model's loss wrapper. Either set `router_aux_loss_coef` to `0.0` "
-                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
-            )
 
         # Reference model
         if ref_model is None:
@@ -942,6 +888,11 @@ class KTOTrainer(_BaseTrainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        patch_chunked_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        if self.ref_model is not None:
+            patch_chunked_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -989,11 +940,6 @@ class KTOTrainer(_BaseTrainer):
                     "log-probs stale. Set `precompute_ref_log_probs=False` or disable `sync_ref_model`."
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
-
-        if self.use_liger_kernel:
-            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
-            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the chunked projection.
-            self._forward_redirection = _ForwardRedirection()
 
         # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
         self._precompute_engine = None
@@ -1261,73 +1207,8 @@ class KTOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def _get_per_token_logps_and_entropies(self, model, model_kwargs, input_ids, completion_mask):
-        """Compute selected-token log probabilities without materializing the full logits tensor."""
-        model = self.accelerator.unwrap_model(model)
-        inner_model = model.base_model.model if is_peft_model(model) else model
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone = inner_model.model
-        else:
-            backbone = inner_model.base_model
-
-        with self.accelerator.autocast():
-            outputs = backbone(**model_kwargs)
-        hidden_states = outputs.last_hidden_state[:, :-1]
-        labels = input_ids[:, 1:]
-        mask = completion_mask[:, 1:].bool()
-        hidden_states = hidden_states[mask]
-        labels = labels[mask]
-
-        lm_head = inner_model.get_output_embeddings()
-        text_config = inner_model.config.get_text_config()
-        final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is
-        # kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
-        logit_scale = getattr(text_config, "logit_scale", None)
-        if logit_scale is None:
-            logit_scale = getattr(text_config, "output_multiplier", None)
-        logit_scale = 1.0 if logit_scale is None else logit_scale
-
-        lm_head_weight = lm_head.weight
-        lm_head_bias = lm_head.bias
-        # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
-        # head once before splitting tokens so every projection uses compatible tensor types.
-        if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
-            lm_head_weight = lm_head_weight.full_tensor()
-            if lm_head_bias is not None:
-                lm_head_bias = lm_head_bias.full_tensor()
-
-        with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            logps, entropies = _ChunkedLogProbFunction.apply(
-                hidden_states,
-                lm_head_weight,
-                lm_head_bias,
-                labels,
-                1.0,
-                _CHUNKED_LOGPROB_CHUNK_SIZE,
-                final_logit_softcapping,
-                logit_scale,
-            )
-
-        per_token_logps = logps.new_zeros(mask.shape).masked_scatter(mask, logps)
-        per_token_entropies = entropies.new_zeros(mask.shape).masked_scatter(mask, entropies)
-        return per_token_logps, per_token_entropies, outputs
-
     def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
-        if self.use_liger_kernel:
-            # Precomputation runs outside `compute_loss`, so a distributed wrapper has not yet armed the hooks that
-            # gather the backbone parameters read by the chunked forward.
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            # FSDP2 modifies the model in place, so unwrapping preserves object identity even though its root forward
-            # still has to run to distribute inputs and materialize parameters.
-            if self.is_fsdp_enabled or model is not unwrapped_model:
-                return self._forward_redirection(
-                    model, unwrapped_model, self._compute_ref_log_probs, unwrapped_model, inputs
-                )
-        return self._compute_ref_log_probs(model, inputs)
-
-    def _compute_ref_log_probs(self, model, inputs):
         adapter_context = contextlib.nullcontext()
         if self.ref_model is None and is_peft_model(self.model):
             unwrapped_model = self.accelerator.unwrap_model(self.model)
@@ -1339,41 +1220,17 @@ class KTOTrainer(_BaseTrainer):
             torch.no_grad(),
             disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs),
             adapter_context,
+            self.accelerator.autocast(),
         ):
-            if self.use_liger_kernel:
-                completion_kwargs = {
-                    "input_ids": inputs["input_ids"],
-                    "attention_mask": inputs["attention_mask"],
-                    "use_cache": False,
-                }
-                per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
-                    model, completion_kwargs, inputs["input_ids"], inputs["completion_mask"]
-                )
-                if self.calculate_KL:
-                    KL_kwargs = {
-                        "input_ids": inputs["KL_input_ids"],
-                        "attention_mask": inputs["KL_attention_mask"],
-                        "use_cache": False,
-                    }
-                    KL_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
-                        model, KL_kwargs, inputs["KL_input_ids"], inputs["KL_completion_mask"]
-                    )
-            else:
-                completion_logits = model(inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
-                if self.calculate_KL:
-                    KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
-
-                shift_logits = completion_logits[:, :-1, :]
-                per_token_logps = selective_log_softmax(
-                    shift_logits, inputs["input_ids"][:, 1:], row_mask=inputs["completion_mask"][:, 1:]
-                )
-                if self.calculate_KL:
-                    shift_KL_logits = KL_logits[:, :-1, :]
-                    KL_per_token_logps = selective_log_softmax(
-                        shift_KL_logits,
-                        inputs["KL_input_ids"][:, 1:],
-                        row_mask=inputs["KL_completion_mask"][:, 1:],
-                    )
+            labels = inputs["input_ids"].masked_fill(inputs["completion_mask"] == 0, -100)
+            per_token_logps = model(
+                input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=labels
+            )["log_probs"]
+            if self.calculate_KL:
+                KL_labels = inputs["KL_input_ids"].masked_fill(inputs["KL_completion_mask"] == 0, -100)
+                KL_per_token_logps = model(
+                    input_ids=inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"], labels=KL_labels
+                )["log_probs"]
 
         completion_logps = per_token_logps.sum(-1)
 
@@ -1402,7 +1259,6 @@ class KTOTrainer(_BaseTrainer):
             KL_model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
             KL_model_kwargs["input_ids"] = KL_model_kwargs.pop("KL_input_ids")
             KL_model_kwargs["attention_mask"] = KL_model_kwargs.pop("KL_attention_mask")
-            KL_model_kwargs["use_cache"] = False
             # KL sequences have different widths from the main completion after flush_left; override token-type
             # tensors with the KL-specific ones the collator built for exactly this purpose.
             if "KL_token_type_ids" in batch:
@@ -1410,32 +1266,14 @@ class KTOTrainer(_BaseTrainer):
             if "KL_mm_token_type_ids" in batch:
                 KL_model_kwargs["mm_token_type_ids"] = batch["KL_mm_token_type_ids"]
 
+            KL_labels = batch["KL_input_ids"].masked_fill(batch["KL_completion_mask"] == 0, -100)
             with torch.no_grad():
-                if self.use_liger_kernel:
-                    KL_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
-                        model,
-                        KL_model_kwargs,
-                        batch["KL_input_ids"],
-                        batch["KL_completion_mask"],
-                    )
-                else:
-                    KL_logits = model(**KL_model_kwargs).logits
-                    shift_KL_logits = KL_logits[:, :-1, :]
-                    KL_per_token_logps = selective_log_softmax(
-                        shift_KL_logits,
-                        batch["KL_input_ids"][:, 1:],
-                        row_mask=batch["KL_completion_mask"][:, 1:],
-                    )
+                KL_per_token_logps = model(**KL_model_kwargs, labels=KL_labels)["log_probs"]
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
     def _compute_loss(self, model, inputs, return_outputs):
         """Compute the KTO loss and other metrics for the given batch of inputs for train or test."""
-        if return_outputs and self.use_liger_kernel:
-            raise RuntimeError(
-                "return_outputs=True is not supported with the chunked KTO path because it does not materialize "
-                "logits."
-            )
         mode = "train" if self.model.training else "eval"
         batch = {k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in inputs.items()}
 
@@ -1457,23 +1295,13 @@ class KTOTrainer(_BaseTrainer):
             "ref_KL_logps",
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
-        model_kwargs["use_cache"] = False
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
-
-        if self.use_liger_kernel:
-            per_token_logps, per_token_entropies, outputs = self._get_per_token_logps_and_entropies(
-                model, model_kwargs, batch["input_ids"], batch["completion_mask"]
-            )
-        else:
-            outputs = model(**model_kwargs)
-            shift_logits = outputs.logits[:, :-1, :]
-            per_token_logps, per_token_entropies = selective_log_softmax_and_entropy(
-                shift_logits,
-                batch["input_ids"][:, 1:],
-                entropy_requires_grad=False,
-                row_mask=batch["completion_mask"][:, 1:],
-            )
+        completion_labels = batch["input_ids"].masked_fill(batch["completion_mask"] == 0, -100)
+        outputs = model(**model_kwargs, labels=completion_labels)
+        # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+        seq_len = batch["input_ids"].size(1) - 1
+        per_token_logps = outputs["log_probs"][:, -seq_len:]
         completion_logps = per_token_logps.sum(-1)
 
         if completion_logps.shape[0] != len(batch["label"]):
@@ -1506,55 +1334,11 @@ class KTOTrainer(_BaseTrainer):
                         ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
                     ):
                         ref_KL_logps = self._compute_kl_logps(self.model, batch)
-                        if self.use_liger_kernel:
-                            ref_per_token_logps, _, ref_outputs = self._get_per_token_logps_and_entropies(
-                                self.model,
-                                ref_model_kwargs,
-                                batch["input_ids"],
-                                batch["completion_mask"],
-                            )
-                        else:
-                            ref_outputs = self.model(**ref_model_kwargs)
+                        ref_outputs = self.model(**ref_model_kwargs, labels=completion_labels)
                 else:
-                    if self.use_liger_kernel:
-                        ref_model_unwrapped = self.accelerator.unwrap_model(self.ref_model)
-                        if self.is_fsdp_enabled:
-                            # The reference model has its own FSDP wrapper. Route each direct-backbone pass through
-                            # that wrapper so FSDP2 distributes the inputs and materializes its sharded parameters.
-                            ref_KL_logps = self._forward_redirection(
-                                self.ref_model,
-                                ref_model_unwrapped,
-                                self._compute_kl_logps,
-                                ref_model_unwrapped,
-                                batch,
-                            )
-                            ref_per_token_logps, _, ref_outputs = self._forward_redirection(
-                                self.ref_model,
-                                ref_model_unwrapped,
-                                self._get_per_token_logps_and_entropies,
-                                ref_model_unwrapped,
-                                ref_model_kwargs,
-                                batch["input_ids"],
-                                batch["completion_mask"],
-                            )
-                        else:
-                            ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
-                            ref_per_token_logps, _, ref_outputs = self._get_per_token_logps_and_entropies(
-                                self.ref_model,
-                                ref_model_kwargs,
-                                batch["input_ids"],
-                                batch["completion_mask"],
-                            )
-                    else:
-                        ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
-                        ref_outputs = self.ref_model(**ref_model_kwargs)
-            if not self.use_liger_kernel:
-                ref_shift_logits = ref_outputs.logits[:, :-1, :]
-                ref_per_token_logps = selective_log_softmax(
-                    ref_shift_logits,
-                    batch["input_ids"][:, 1:],
-                    row_mask=batch["completion_mask"][:, 1:],
-                )
+                    ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
+                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=completion_labels)
+            ref_per_token_logps = ref_outputs["log_probs"]
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
@@ -1604,10 +1388,7 @@ class KTOTrainer(_BaseTrainer):
         self._metrics[mode]["kl"].append(kl.item())
 
         # Entropy
-        if self.use_liger_kernel:
-            per_token_entropy = per_token_entropies.detach()
-        else:
-            per_token_entropy = per_token_entropies
+        per_token_entropy = outputs["entropy"][:, -seq_len:].detach()
         mask = batch["completion_mask"][:, 1:]
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()
@@ -1623,26 +1404,6 @@ class KTOTrainer(_BaseTrainer):
             num_tokens_in_batch = self.accelerator.gather_for_metrics(batch["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
-
-        if not self.use_liger_kernel:
-            # Average logits for chosen and rejected completions
-            shift_completion_mask = batch["completion_mask"][:, 1:]
-            chosen_logits = shift_logits.detach().index_select(0, chosen_idx)
-            rejected_logits = shift_logits.detach().index_select(0, rejected_idx)
-            chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
-            rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
-            total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-            total_chosen_tokens = chosen_mask.sum()
-            total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-            total_rejected_tokens = rejected_mask.sum()
-            total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
-            total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
-            total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
-            total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
-            if total_chosen_tokens > 0:
-                self._metrics[mode]["logits/chosen"].append(total_chosen_logits / total_chosen_tokens)
-            if total_rejected_tokens > 0:
-                self._metrics[mode]["logits/rejected"].append(total_rejected_logits / total_rejected_tokens)
 
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
@@ -1670,7 +1431,7 @@ class KTOTrainer(_BaseTrainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            aux_loss = outputs.aux_loss
+            aux_loss = outputs["aux_loss"]
             loss = loss + self.router_aux_loss_coef * aux_loss
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
@@ -1746,17 +1507,6 @@ class KTOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
-            if self.use_liger_kernel:
-                # The chunked projection reads `lm_head.weight` directly, bypassing the module, so the loss has to
-                # run inside the wrapper's forward via `_forward_redirection`: that is what gathers sharded
-                # parameters under ZeRO-3 and FSDP, and what arms DDP's gradient reducer. FSDP2 shards in place, so
-                # unwrapping preserves object identity and needs its own check.
-                unwrapped_model = self.accelerator.unwrap_model(model)
-                if self.is_fsdp_enabled or model is not unwrapped_model:
-                    return self._forward_redirection(
-                        model, unwrapped_model, self._compute_loss, unwrapped_model, inputs, return_outputs
-                    )
-                return self._compute_loss(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
@@ -1788,13 +1538,8 @@ class KTOTrainer(_BaseTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
-            if prediction_loss_only:
-                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
-                logits, labels = None, None
-            else:
-                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                logits, labels = outputs.logits, inputs["input_ids"]
-        return loss, logits, labels
+            loss = self.compute_loss(model, inputs)
+        return loss, None, None
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):

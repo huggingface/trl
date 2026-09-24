@@ -1481,7 +1481,8 @@ _CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE = 2048
 class _ChunkedLogProbFunction(torch.autograd.Function):
     """Compute per-token log-probs and entropy without materializing [N, V] logits.
 
-    Processes the lm_head in chunks and uses online logsumexp
+    Processes the lm_head in chunks and uses online logsumexp. Also returns `log(sum_v p_v^2)`, without gradient, for
+    WPO weighting.
     """
 
     @staticmethod
@@ -1495,7 +1496,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         chunk_size: int,
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # entropy is often computed for logging only (no grad required); without this, autograd would
         # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
         ctx.set_materialize_grads(False)
@@ -1511,6 +1512,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         log_z = torch.empty((N,), device=device, dtype=torch.float32)
         logprobs = torch.empty((N,), device=device, dtype=torch.float32)
         entropy = torch.empty((N,), device=device, dtype=torch.float32)
+        log_sum_sq_probs = torch.empty((N,), device=device, dtype=torch.float32)
 
         # Bound both dimensions of the temporary logits tile. Keeping token chunking inside this autograd function
         # also guarantees one ZeRO-3 gather context per rank, even when ranks have different valid-token counts.
@@ -1528,6 +1530,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             max_old = torch.full((n_chunk,), float("-inf"), device=device, dtype=torch.float32)
             sum_exp = torch.zeros((n_chunk,), device=device, dtype=torch.float32)
             x_sum_exp = torch.zeros((n_chunk,), device=device, dtype=torch.float32)
+            sq_sum_exp = torch.zeros((n_chunk,), device=device, dtype=torch.float32)
             target_logit = torch.zeros((n_chunk,), device=device, dtype=torch.float32)
             row_idx = torch.arange(n_chunk, device=device)
 
@@ -1557,6 +1560,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
 
                 sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
                 x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
+                sq_sum_exp = sq_sum_exp * rescale.square() + chunk_exp.square().sum(dim=-1)
                 max_old = max_new
 
                 # Gather target logits for labels in this chunk
@@ -1569,6 +1573,7 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
             log_z[token_start:token_end] = log_z_chunk
             logprobs[token_start:token_end] = target_logit - log_z_chunk
             entropy[token_start:token_end] = log_z_chunk - x_sum_exp / sum_exp
+            log_sum_sq_probs[token_start:token_end] = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp)
 
         ctx.save_for_backward(last_hidden, weight, bias, targets, log_z, entropy)
         ctx.temperature = temperature
@@ -1576,11 +1581,12 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         ctx.compute_dtype = compute_dtype
         ctx.logit_scale = logit_scale
         ctx.final_logit_softcapping = final_logit_softcapping
+        ctx.mark_non_differentiable(log_sum_sq_probs)
 
-        return logprobs, entropy
+        return logprobs, entropy, log_sum_sq_probs
 
     @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None, _):  # type: ignore
         hidden, weight, bias, labels, log_z, entropy = ctx.saved_tensors
         temperature: float = ctx.temperature
         chunk_size: int = ctx.chunk_size
@@ -1685,7 +1691,9 @@ class _ChunkedLogProbFunction(torch.autograd.Function):
         )
 
 
-def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> None:
+def patch_chunked_lm_head(
+    model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False
+) -> None:
     """
     Make `model(..., labels=labels)` return per-token log-probabilities instead of logits, without materializing the
     `(batch, seq_len, vocab)` logits.
@@ -1699,6 +1707,8 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
             Causal language model to patch.
         temperature (`float`, *optional*, defaults to `1.0`):
             Temperature the logits are divided by.
+        cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
+            Whether to run the LM head projection in float32, outside autocast.
 
     Returns:
         The patched forward returns a `dict` with keys:
@@ -1706,6 +1716,8 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
                 Log-probability of `labels[:, 1:]`, zero where the label is `-100`.
             - `entropy` (`torch.Tensor` of shape `(batch, seq_len - 1)`):
                 Entropy of the next-token distribution, zero where the label is `-100`.
+            - `log_sum_sq_probs` (`torch.Tensor` of shape `(batch, seq_len - 1)`):
+                `log(sum_v p_v^2)` of the next-token distribution, without gradient, zero where the label is `-100`.
             - `aux_loss` (`torch.Tensor` or `None`):
                 MoE load-balancing loss, when called with `output_router_logits=True`.
     """
@@ -1724,6 +1736,8 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
     if text_config is not model.config and Version(transformers.__version__) < Version("5.0.0"):
         backbone_attr = "model"
 
+    # Keep the original signature: `generate` validates its model kwargs against it
+    @functools.wraps(type(model).forward)
     def _chunked_forward(self, *args, labels=None, **kwargs):
         if labels is None:
             return original_forward(*args, **kwargs)
@@ -1734,6 +1748,10 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
         hidden_states = outputs.last_hidden_state[:, :-1]
         labels = labels[:, 1:]
         mask = labels != -100
+        autocast_ctx = nullcontext()
+        if cast_lm_head_to_fp32:
+            hidden_states = hidden_states.float()
+            autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
 
         lm_head = self.get_output_embeddings()
         weight, bias = lm_head.weight, lm_head.bias
@@ -1743,8 +1761,8 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
             weight = weight.full_tensor()
             if bias is not None:
                 bias = bias.full_tensor()
-        with maybe_gather_lm_head_ctx(weight, bias):
-            log_probs, entropy = _ChunkedLogProbFunction.apply(
+        with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
+            log_probs, entropy, log_sum_sq_probs = _ChunkedLogProbFunction.apply(
                 hidden_states[mask],
                 weight,
                 bias,
@@ -1758,6 +1776,7 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
         # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
         log_probs = log_probs.new_zeros(mask.shape).masked_scatter(mask, log_probs)
         entropy = entropy.new_zeros(mask.shape).masked_scatter(mask, entropy)
+        log_sum_sq_probs = log_sum_sq_probs.new_zeros(mask.shape).masked_scatter(mask, log_sum_sq_probs)
 
         aux_loss = None
         if kwargs.get("output_router_logits"):
@@ -1781,7 +1800,7 @@ def patch_chunked_lm_head(model: PreTrainedModel, temperature: float = 1.0) -> N
                 outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
             )
 
-        return {"log_probs": log_probs, "entropy": entropy, "aux_loss": aux_loss}
+        return {"log_probs": log_probs, "entropy": entropy, "log_sum_sq_probs": log_sum_sq_probs, "aux_loss": aux_loss}
 
     model.forward = types.MethodType(_chunked_forward, model)
 
