@@ -64,6 +64,8 @@ def main():
     # Push to hub
     trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()

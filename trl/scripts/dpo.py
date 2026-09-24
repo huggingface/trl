@@ -62,8 +62,10 @@ import argparse
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    import transformers
     from accelerate.logging import get_logger
     from datasets import load_dataset
+    from packaging.version import Version
 
     from trl import DPOTrainer, get_dataset, get_peft_config, get_quantization_config
 
@@ -123,6 +125,10 @@ def main(script_args, training_args, model_args, dataset_args):
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
+
+    # Finish the trackers and destroy the process group
+    if Version(transformers.__version__) >= Version("5.18.0.dev0"):
+        trainer.end()
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):

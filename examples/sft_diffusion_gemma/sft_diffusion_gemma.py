@@ -355,6 +355,8 @@ def main(script_args, training_args, model_args):
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
+    trainer.end()
+
 
 def make_parser():
     dataclass_types = (DiffusionGemmaScriptArguments, DiffusionGemmaSFTConfig, DiffusionGemmaModelConfig)

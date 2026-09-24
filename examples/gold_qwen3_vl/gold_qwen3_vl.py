@@ -201,3 +201,5 @@ if __name__ == "__main__":
 
     trainer.train()
     trainer.save_model(args.output_dir)
+
+    trainer.end()
