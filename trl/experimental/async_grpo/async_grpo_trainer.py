@@ -1080,11 +1080,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
         self._is_vlm = text_config is not model.config
         if self._is_vlm:
@@ -1112,7 +1118,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # PEFT. Placed after `patch_chunked_lm_head`, which patches the bare `lm_head` and would otherwise have to

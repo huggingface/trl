@@ -14,7 +14,7 @@ from kernels import get_kernel
 trl_losses = get_kernel(
     "{{ repo_id }}",
     version={{version}},
-    trust_remote_code=["{{ repo_id }}"],
+    trust_remote_code=True,
 )
 logprobs, entropy = trl_losses.selective_log_softmax_and_entropy(logits, index)
 ```

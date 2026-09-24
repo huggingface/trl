@@ -1026,7 +1026,7 @@ class SFTTrainer(_BaseTrainer):
             # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
             # configs. The generation config may hold several eos tokens, any of which halts generation, so the new
             # one is added to the existing ones instead of replacing them.
-            model.config.eos_token_id = self._tokenizer.eos_token_id
+            model.config.get_text_config().eos_token_id = self._tokenizer.eos_token_id
             eos_token_ids = model.generation_config.eos_token_id
             if eos_token_ids is None:
                 eos_token_ids = []
@@ -1228,7 +1228,7 @@ class SFTTrainer(_BaseTrainer):
             self._tokenizer.pad_token = pad_token
             # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
             # configs.
-            model.config.pad_token_id = self._tokenizer.pad_token_id
+            model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
             model.generation_config.pad_token_id = self._tokenizer.pad_token_id
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=self._tokenizer.pad_token_id,
@@ -1423,16 +1423,23 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and self.args.router_aux_loss_coef != 0.0
-        if is_moe:
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+        if hasattr(text_config, "router_aux_loss_coef"):
             # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
             # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
             # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
             text_config.output_router_logits = self.aux_loss_enabled
-            text_config.router_aux_loss_coef = self.args.router_aux_loss_coef
+            text_config.router_aux_loss_coef = self.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

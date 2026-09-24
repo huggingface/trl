@@ -63,7 +63,6 @@ from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
@@ -75,6 +74,7 @@ from .utils import (
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -336,7 +336,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
@@ -503,7 +503,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -602,11 +602,17 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -1047,27 +1053,26 @@ class RLOOTrainer(_BaseTrainer):
                 if "logits_to_keep" not in self.model_kwarg_keys:
                     logits = logits[:, keep_idx - 1, :]  # (1, K, H)
                 completion_ids = model_inputs["input_ids"][:, keep_idx]
+                # Every packed position is a completion token, so the kernels skip no row; the padded
+                # (b, logits_to_keep) layout the callers expect is rebuilt from `target_mask` afterwards.
+                completion_mask = None
+                target_mask = completion_mask_batch[:, -logits_to_keep:]
             else:
                 # Exclude the last value: it corresponds to the next token pred
                 logits = logits[:, :-1, :]  # (B, L-1, H)
                 # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
                 logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
                 completion_ids = input_ids_batch[:, -logits_to_keep:]
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            if self.padding_free:
-                # Scatter the packed values back into the padded (b, logits_to_keep) layout the callers expect.
-                target_mask = completion_mask_batch[:, -logits_to_keep:]
-                packed_logps = logps
-                logps = torch.zeros(target_mask.shape, dtype=packed_logps.dtype, device=packed_logps.device)
-                logps[target_mask] = packed_logps[0]
-            all_logps.append(logps)
-
+                completion_mask = attention_mask_batch[:, -logits_to_keep:]
+            # Scale inside the kernel to avoid materializing another full logits tensor.
             if compute_entropy:
-                with torch.no_grad():
-                    entropies = entropy_from_logits(logits)
+                logps, entropies = selective_log_softmax_and_entropy(
+                    logits,
+                    completion_ids,
+                    entropy_requires_grad=False,
+                    temperature=self.temperature,
+                    row_mask=completion_mask,
+                )
                 if self.padding_free:
                     packed_entropies = entropies
                     entropies = torch.zeros(
@@ -1075,6 +1080,15 @@ class RLOOTrainer(_BaseTrainer):
                     )
                     entropies[target_mask] = packed_entropies[0]
                 all_entropies.append(entropies)
+            else:
+                logps = selective_log_softmax(
+                    logits, completion_ids, temperature=self.temperature, row_mask=completion_mask
+                )
+            if self.padding_free:
+                packed_logps = logps
+                logps = torch.zeros(target_mask.shape, dtype=packed_logps.dtype, device=packed_logps.device)
+                logps[target_mask] = packed_logps[0]
+            all_logps.append(logps)
 
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
