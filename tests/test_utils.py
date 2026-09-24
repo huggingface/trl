@@ -29,6 +29,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
@@ -967,6 +968,9 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
         index = torch.randint(257, (2, 3), device=device)
         row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
+        if device != "cpu":  # the comparison below must be kernel against torch, not torch against torch
+            assert trainer_utils._fused_logprob_entropy is not None
+            assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
 
         logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
         (logprobs + 0.1 * entropy).sum().backward()
