@@ -26,7 +26,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -62,7 +62,15 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 
 if is_peft_available():
-    from peft import AutoPeftModelForCausalLM, LoraConfig
+    from peft import (
+        AutoPeftModelForCausalLM,
+        LoraConfig,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 @require_peft
@@ -1671,3 +1679,367 @@ class TestAdjustedMfu(TrlTestCase):
         derived = adjusted_mfu(100.0, cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
+
+
+_CHUNKED_CE_MODEL_IDS = [
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+]
+
+
+_CHUNKED_CE_VLM_MODEL_IDS = [
+    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.5.0"),
+            reason="Gemma4 models were introduced in transformers-5.5.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5-VL requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.15.0"),
+            reason="Muse Glimmer was introduced in transformers-5.15.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Qwen3-VL series were introduced in transformers-4.57.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+]
+
+
+@require_torch_accelerator
+class TestPatchChunkedLMHeadLoss:
+    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
+
+    def _setup(self, model_id):
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        patch_chunked_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    def _setup_vlm(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        patch_chunked_lm_head(chunked_model)
+
+        B, S = 2, 16
+        vocab_size = ref_model.config.text_config.vocab_size
+        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
+    def test_forward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
+    )
+    def test_forward_matches_reference_with_aux_loss(self, model_id):
+        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
+        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
+        )
+        chunked_model = copy.deepcopy(ref_model)
+        patch_chunked_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
+    def test_backward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
+    def test_forward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        patch_chunked_lm_head(chunked_model)
+
+        # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
+        # removes the attribute), so we have to pass it at call time on both paths.
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.text_config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+            )
+            out = chunked_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+            )
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
+    def test_backward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    def test_forward_without_labels_uses_original_path(self):
+        """With labels=None the patched forward returns real logits (for generation / eval)."""
+        _, chunked_model, input_ids, _, _ = self._setup("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        with torch.no_grad():
+            out = chunked_model(input_ids=input_ids)
+        assert out.logits is not None
+        assert out.logits.shape[-1] == chunked_model.config.vocab_size
+
+    def test_forward_without_labels_matches_reference(self):
+        """labels=None logits must match the unpatched model, including per-model post-processing
+        (`final_logit_softcapping`, `logit_scale`, ...). This is what makes `.generate()` safe to call on a patched
+        model."""
+        ref_model, chunked_model, input_ids, *_ = self._setup("trl-internal-testing/tiny-CohereForCausalLM")
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids)
+            out = chunked_model(input_ids=input_ids)
+        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    @pytest.mark.parametrize(
+        "peft_config_factory",
+        [
+            pytest.param(lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"]), id="lora"),
+            pytest.param(
+                lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+                id="lora+modules_to_save",
+            ),
+            pytest.param(
+                lambda: PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_tuning"
+            ),
+            pytest.param(
+                lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
+            ),
+            pytest.param(
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
+            ),
+        ],
+    )
+    def test_forward_matches_reference_with_peft(self, peft_config_factory):
+        """Patching the inner causal LM (`peft_model.get_base_model()`) must produce a forward whose loss matches
+        the unpatched PEFT reference for both LoRA-style (adapters live in the module tree) and prompt-learning
+        (`PeftModel.forward` injects virtual tokens, then delegates into the patched inner forward)."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
+        chunked_model = copy.deepcopy(ref_model)
+        patch_chunked_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+        ref_out.loss.backward()
+        out.loss.backward()
+        chunked_params = dict(chunked_model.named_parameters())
+        for name, ref_param in ref_model.named_parameters():
+            if not ref_param.requires_grad or ref_param.grad is None:
+                continue
+            torch.testing.assert_close(
+                chunked_params[name].grad,
+                ref_param.grad,
+                atol=1e-5,
+                rtol=1e-5,
+                msg=f"gradient mismatch on {name}",
+            )
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    def test_label_mask_with_prompt_learning_peft(self):
+        """For prompt-learning PEFT (PromptTuning, P-Tuning), `PeftModel.forward` prepends `-100`-padded virtual
+        tokens before delegating into the patched inner forward. The patched output's `label_mask` must reflect the
+        padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
+        token's hidden state, so it must be included in the metric denominator to keep accuracy ≤ 1."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
+        chunked_model = get_peft_model(base, peft_config)
+        patch_chunked_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()  # all positions valid, including label[0]
+
+        out = chunked_model(input_ids=input_ids, labels=labels)
+
+        # `labels[..., 1:]` (un-padded, what compute_loss used to compute) excludes original `label[0]`,
+        # but the patched forward sees padded labels and counts `label[0]` as a valid target.
+        unpadded = int((labels[..., 1:] != -100).sum())
+        # One extra valid target per sequence (original `label[0]`).
+        assert out.label_mask.sum().item() == unpadded + B
+        # Accuracy denominator from the patched output keeps numerator/denominator aligned, so accuracy ≤ 1.
+        assert out.is_top1.sum().item() <= out.label_mask.sum().item()

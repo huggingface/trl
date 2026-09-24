@@ -1146,7 +1146,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
-        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
             from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -1464,7 +1464,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             labels=input_ids.masked_fill(completion_mask == 0, -100),
             **router_kwargs,
         )
-        log_probs, entropy = outputs["log_probs"], outputs["entropy"]
+        log_probs, entropy = outputs.log_probs, outputs.entropy
         self._last_forward_time_s = time.time() - forward_start
 
         completion_mask = completion_mask[:, 1:]
@@ -1491,7 +1491,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
+            aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():

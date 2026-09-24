@@ -1168,7 +1168,7 @@ class DPOTrainer(_BaseTrainer):
             adapter_context,
             self.accelerator.autocast(),
         ):
-            ref_per_token_logps = model(**model_kwargs, labels=labels)["log_probs"]
+            ref_per_token_logps = model(**model_kwargs, labels=labels).log_probs
 
         shift_completion_mask = inputs["completion_mask"][..., 1:]
         # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
@@ -1205,7 +1205,7 @@ class DPOTrainer(_BaseTrainer):
         outputs = model(**model_kwargs, labels=labels)
         # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
         seq_len = shift_completion_mask.size(1)
-        per_token_logps = outputs["log_probs"][:, -seq_len:]
+        per_token_logps = outputs.log_probs[:, -seq_len:]
         if self.ld_alpha is None:
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
         else:
@@ -1240,7 +1240,7 @@ class DPOTrainer(_BaseTrainer):
                         ref_outputs = self.model(**ref_model_kwargs, labels=labels)
                 else:
                     ref_outputs = self.ref_model(**ref_model_kwargs, labels=labels)
-            ref_per_token_logps = ref_outputs["log_probs"][:, -seq_len:]
+            ref_per_token_logps = ref_outputs.log_probs[:, -seq_len:]
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
             else:
@@ -1423,9 +1423,7 @@ class DPOTrainer(_BaseTrainer):
                 # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
                 completion_lengths = shift_completion_mask.sum(dim=1).clamp_min(1)
                 with torch.no_grad():
-                    aligned_logps = (
-                        per_token_logps - outputs["log_sum_sq_probs"][:, -seq_len:]
-                    ) * shift_completion_mask
+                    aligned_logps = (per_token_logps - outputs.log_sum_sq_probs[:, -seq_len:]) * shift_completion_mask
                 mean_logps = aligned_logps.sum(dim=1) / completion_lengths
                 weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
@@ -1434,13 +1432,13 @@ class DPOTrainer(_BaseTrainer):
             loss += per_sequence_loss.mean() * loss_weight
 
         if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
+            aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
         # Log the metrics
         # Entropy
-        per_token_entropy = outputs["entropy"][:, -seq_len:].detach()
+        per_token_entropy = outputs.entropy[:, -seq_len:].detach()
         mask = shift_completion_mask
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()

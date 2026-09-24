@@ -135,8 +135,8 @@ def _backward_kernel(
 
 class ChunkedLogProbFunction(torch.autograd.Function):
     """
-    Per-token log-probabilities, entropy and `log(sum_v p_v^2)` of `hidden @ weight.T`, without materializing the `[N,
-    V]` logits.
+    Per-token log-probabilities, entropy, `log(sum_v p_v^2)` and whether the target is the argmax, of `hidden @
+    weight.T`, without materializing the `[N, V]` logits.
 
     The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles; a Triton kernel folds each tile into
     online-logsumexp statistics in one pass. The backward recomputes each tile and turns it into the logits gradient in
@@ -153,7 +153,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         temperature: float,
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # entropy is often computed for logging only (no grad required); without this, autograd would
         # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
         ctx.set_materialize_grads(False)
@@ -206,15 +206,16 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
         log_sum_sq_probs = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp)
+        is_top1 = target_logit >= running_max
 
         ctx.save_for_backward(hidden, weight, bias, targets, log_z, entropy)
         ctx.compute_dtype = compute_dtype
         ctx.kernel_args = kernel_args
         ctx.mark_non_differentiable(log_sum_sq_probs)
-        return logprobs, entropy, log_sum_sq_probs
+        return logprobs, entropy, log_sum_sq_probs, is_top1
 
     @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None, _):  # type: ignore
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None, *_):  # type: ignore
         hidden, weight, bias, targets, log_z, entropy = ctx.saved_tensors
         compute_dtype = ctx.compute_dtype
         needs_hidden_grad, needs_weight_grad, needs_bias_grad = ctx.needs_input_grad[:3]

@@ -1225,12 +1225,12 @@ class KTOTrainer(_BaseTrainer):
             labels = inputs["input_ids"].masked_fill(inputs["completion_mask"] == 0, -100)
             per_token_logps = model(
                 input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"], labels=labels
-            )["log_probs"]
+            ).log_probs
             if self.calculate_KL:
                 KL_labels = inputs["KL_input_ids"].masked_fill(inputs["KL_completion_mask"] == 0, -100)
                 KL_per_token_logps = model(
                     input_ids=inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"], labels=KL_labels
-                )["log_probs"]
+                ).log_probs
 
         completion_logps = per_token_logps.sum(-1)
 
@@ -1268,7 +1268,7 @@ class KTOTrainer(_BaseTrainer):
 
             KL_labels = batch["KL_input_ids"].masked_fill(batch["KL_completion_mask"] == 0, -100)
             with torch.no_grad():
-                KL_per_token_logps = model(**KL_model_kwargs, labels=KL_labels)["log_probs"]
+                KL_per_token_logps = model(**KL_model_kwargs, labels=KL_labels).log_probs
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
@@ -1301,7 +1301,7 @@ class KTOTrainer(_BaseTrainer):
         outputs = model(**model_kwargs, labels=completion_labels)
         # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
         seq_len = batch["input_ids"].size(1) - 1
-        per_token_logps = outputs["log_probs"][:, -seq_len:]
+        per_token_logps = outputs.log_probs[:, -seq_len:]
         completion_logps = per_token_logps.sum(-1)
 
         if completion_logps.shape[0] != len(batch["label"]):
@@ -1338,7 +1338,7 @@ class KTOTrainer(_BaseTrainer):
                 else:
                     ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
                     ref_outputs = self.ref_model(**ref_model_kwargs, labels=completion_labels)
-            ref_per_token_logps = ref_outputs["log_probs"]
+            ref_per_token_logps = ref_outputs.log_probs
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
@@ -1388,7 +1388,7 @@ class KTOTrainer(_BaseTrainer):
         self._metrics[mode]["kl"].append(kl.item())
 
         # Entropy
-        per_token_entropy = outputs["entropy"][:, -seq_len:].detach()
+        per_token_entropy = outputs.entropy[:, -seq_len:].detach()
         mask = batch["completion_mask"][:, 1:]
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()
@@ -1431,7 +1431,7 @@ class KTOTrainer(_BaseTrainer):
 
         loss = losses.nanmean()
         if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
+            aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 

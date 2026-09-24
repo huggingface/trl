@@ -158,7 +158,7 @@ class TestChunkedLogProbFunction:
             return torch_mm(input, mat2, out=out)
 
         with patch("trl.kernels.chunked_logprob.torch.mm", side_effect=record_chunk):
-            logprobs_chunked, entropy_chunked, _ = ChunkedLogProbFunction.apply(
+            logprobs_chunked, entropy_chunked, _, _ = ChunkedLogProbFunction.apply(
                 hidden, weight, None, labels, temperature
             )
         logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
@@ -174,7 +174,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        _, _, log_sum_sq_probs = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7)
+        _, _, log_sum_sq_probs, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7)
         logits = (hidden @ weight.t()) / 0.7
 
         expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
@@ -194,7 +194,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        logprobs, entropy, _ = ChunkedLogProbFunction.apply(
+        logprobs, entropy, _, _ = ChunkedLogProbFunction.apply(
             hidden, weight, None, labels, 0.7, final_logit_softcapping, logit_scale
         )
         logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
@@ -212,7 +212,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
         # Chunked backward
-        logprobs_chunked, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
+        logprobs_chunked, _, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
         logprobs_chunked.sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -235,7 +235,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
         # Chunked backward
-        logprobs_chunked, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
+        logprobs_chunked, _, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
         logprobs_chunked.sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -257,7 +257,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=True, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        logprobs, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0)
+        logprobs, _, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0)
         logprobs.sum().backward()
         grad_hidden = hidden.grad.clone()
         grad_weight = weight.grad.clone()
@@ -290,8 +290,8 @@ class TestChunkedLogProbFunction:
         # Autocast gives both inputs identical projected values. Their weight gradients must therefore also match;
         # using the original fp32 hidden states in backward would make the gradients depend on the discarded bits.
         with torch.autocast(torch_device, dtype=torch.bfloat16):
-            logprobs, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0)
-            perturbed_logprobs, _, _ = ChunkedLogProbFunction.apply(
+            logprobs, _, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0)
+            perturbed_logprobs, _, _, _ = ChunkedLogProbFunction.apply(
                 perturbed_hidden, perturbed_weight, None, labels, 1.0
             )
         logprobs.sum().backward()
@@ -309,7 +309,7 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
         # Chunked backward
-        _, entropy_chunked, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
+        _, entropy_chunked, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
         entropy_chunked.sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -334,7 +334,9 @@ class TestChunkedLogProbFunction:
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
         # Chunked backward
-        logprobs_chunked, entropy_chunked, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature)
+        logprobs_chunked, entropy_chunked, _, _ = ChunkedLogProbFunction.apply(
+            hidden, weight, None, labels, temperature
+        )
         (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
         grad_hidden_chunked = hidden.grad.clone()
         grad_weight_chunked = weight.grad.clone()
@@ -357,7 +359,7 @@ class TestChunkedLogProbFunction:
         bias = torch.randn(self.V, dtype=dtype, requires_grad=True, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        logprobs_chunked, entropy_chunked, _ = ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 0.7)
+        logprobs_chunked, entropy_chunked, _, _ = ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 0.7)
         (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
         chunked_grads = hidden.grad.clone(), weight.grad.clone(), bias.grad.clone()
 
@@ -378,7 +380,7 @@ class TestChunkedLogProbFunction:
         bias = torch.randn(self.V, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        logprobs, _, _ = ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0)
+        logprobs, _, _, _ = ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0)
         with patch.object(torch, "zeros", wraps=torch.zeros) as mock_zeros:
             logprobs.sum().backward()
 
@@ -397,7 +399,7 @@ class TestChunkedLogProbFunction:
         bias = torch.randn(self.V, requires_grad=requires_grad[2], device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        logprobs, _, _ = ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0)
+        logprobs, _, _, _ = ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0)
         logprobs.sum().backward()
         chunked_grads = hidden.grad, weight.grad, bias.grad
 

@@ -1416,11 +1416,11 @@ class GRPOTrainer(_BaseTrainer):
             labels[:, :-logits_to_keep] = -100
             with self.accelerator.autocast():
                 outputs = model(**model_inputs, labels=labels)
-            all_logps.append(outputs["log_probs"][:, -logits_to_keep:])
+            all_logps.append(outputs.log_probs[:, -logits_to_keep:])
             if compute_entropy:
-                all_entropies.append(outputs["entropy"][:, -logits_to_keep:])
+                all_entropies.append(outputs.entropy[:, -logits_to_keep:])
             if compute_aux_loss:
-                all_aux_losses.append(outputs["aux_loss"])
+                all_aux_losses.append(outputs.aux_loss)
 
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None

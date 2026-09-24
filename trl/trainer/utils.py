@@ -25,6 +25,7 @@ import threading
 import types
 from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -52,7 +53,13 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_kernels_available, is_peft_available, is_rich_available, is_torchdynamo_compiling
+from transformers.utils import (
+    ModelOutput,
+    is_kernels_available,
+    is_peft_available,
+    is_rich_available,
+    is_torchdynamo_compiling,
+)
 
 from ..trainer.model_config import ModelConfig
 
@@ -1474,6 +1481,41 @@ def shutdown_event_loop_in_daemon(
     thread.join(timeout=5)
 
 
+@dataclass
+class ChunkedCausalLMOutput(ModelOutput):
+    """
+    Output of a model patched with [`patch_chunked_lm_head`] and called with `labels` or `shift_labels`. Every
+    per-token field is zero where the label is `-100`.
+
+    Args:
+        loss (`torch.Tensor`):
+            Negative log-likelihood summed over the non-ignored tokens and divided by `num_items_in_batch` (their count
+            when not passed), plus the MoE load-balancing loss weighted by the config's `router_aux_loss_coef` when
+            router logits are requested, as the model's own forward computes it.
+        log_probs (`torch.Tensor` of shape `(batch, seq_len - 1)`, or `(batch, seq_len)` with `shift_labels`):
+            Log-probability of each next-token label.
+        entropy (`torch.Tensor`, same shape as `log_probs`):
+            Entropy of the next-token distribution.
+        log_sum_sq_probs (`torch.Tensor`, same shape as `log_probs`):
+            `log(sum_v p_v^2)` of the next-token distribution, without gradient.
+        is_top1 (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is the most likely next token.
+        label_mask (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
+            sequence than the caller's labels.
+        aux_loss (`torch.Tensor`, *optional*):
+            MoE load-balancing loss, when called with `output_router_logits=True`.
+    """
+
+    loss: torch.Tensor | None = None
+    log_probs: torch.Tensor | None = None
+    entropy: torch.Tensor | None = None
+    log_sum_sq_probs: torch.Tensor | None = None
+    is_top1: torch.Tensor | None = None
+    label_mask: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
+
+
 def patch_chunked_lm_head(
     model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False
 ) -> None:
@@ -1482,8 +1524,9 @@ def patch_chunked_lm_head(
     `(batch, seq_len, vocab)` logits.
 
     Called with `labels`, the patched forward runs the backbone and projects through the LM head, in chunks, only the
-    positions whose next-token label is not `-100`. Called without `labels`, it is the original forward, so generation
-    is unchanged. Patch the model before wrapping it with PEFT.
+    positions whose next-token label is not `-100`, and returns a [`ChunkedCausalLMOutput`]. Pre-shifted
+    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Called with neither,
+    it is the original forward, so generation is unchanged. Patch the model before wrapping it with PEFT.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
@@ -1492,17 +1535,6 @@ def patch_chunked_lm_head(
             Temperature the logits are divided by.
         cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
             Whether to run the LM head projection in float32, outside autocast.
-
-    Returns:
-        The patched forward returns a `dict` with keys:
-            - `log_probs` (`torch.Tensor` of shape `(batch, seq_len - 1)`):
-                Log-probability of `labels[:, 1:]`, zero where the label is `-100`.
-            - `entropy` (`torch.Tensor` of shape `(batch, seq_len - 1)`):
-                Entropy of the next-token distribution, zero where the label is `-100`.
-            - `log_sum_sq_probs` (`torch.Tensor` of shape `(batch, seq_len - 1)`):
-                `log(sum_v p_v^2)` of the next-token distribution, without gradient, zero where the label is `-100`.
-            - `aux_loss` (`torch.Tensor` or `None`):
-                MoE load-balancing loss, when called with `output_router_logits=True`.
     """
     # Triton ships with PyTorch on Linux only, so the kernel is imported here rather than with `trl`
     from ..kernels.chunked_logprob import ChunkedLogProbFunction
@@ -1524,15 +1556,22 @@ def patch_chunked_lm_head(
 
     # Keep the original signature: `generate` validates its model kwargs against it
     @functools.wraps(type(model).forward)
-    def _chunked_forward(self, *args, labels=None, **kwargs):
-        if labels is None:
+    def _chunked_forward(self, *args, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs):
+        if labels is None and shift_labels is None:
             return original_forward(*args, **kwargs)
 
         # The backbone and the LM head are looked up on each call, since FSDP and PEFT replace them after patching
         kwargs["use_cache"] = False
+        # MoE models: like the model's own forward, request router logits when the config asks for them
+        if getattr(text_config, "output_router_logits", False):
+            kwargs.setdefault("output_router_logits", True)
         outputs = getattr(self, backbone_attr)(*args, **kwargs)
-        hidden_states = outputs.last_hidden_state[:, :-1]
-        labels = labels[:, 1:]
+        if shift_labels is None:
+            hidden_states = outputs.last_hidden_state[:, :-1]
+            labels = labels[:, 1:]
+        else:
+            hidden_states = outputs.last_hidden_state
+            labels = shift_labels
         mask = labels != -100
         autocast_ctx = nullcontext()
         if cast_lm_head_to_fp32:
@@ -1548,14 +1587,15 @@ def patch_chunked_lm_head(
             if bias is not None:
                 bias = bias.full_tensor()
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
-            log_probs, entropy, log_sum_sq_probs = ChunkedLogProbFunction.apply(
+            per_token = ChunkedLogProbFunction.apply(
                 hidden_states[mask], weight, bias, labels[mask], temperature, final_logit_softcapping, logit_scale
             )
         # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
         # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs = log_probs.new_zeros(mask.shape).masked_scatter(mask, log_probs)
-        entropy = entropy.new_zeros(mask.shape).masked_scatter(mask, entropy)
-        log_sum_sq_probs = log_sum_sq_probs.new_zeros(mask.shape).masked_scatter(mask, log_sum_sq_probs)
+        log_probs, entropy, log_sum_sq_probs, is_top1 = (
+            x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
+        )
+        loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
         if kwargs.get("output_router_logits"):
@@ -1578,8 +1618,17 @@ def patch_chunked_lm_head(
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
             )
+            loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return {"log_probs": log_probs, "entropy": entropy, "log_sum_sq_probs": log_sum_sq_probs, "aux_loss": aux_loss}
+        return ChunkedCausalLMOutput(
+            loss=loss,
+            log_probs=log_probs,
+            entropy=entropy,
+            log_sum_sq_probs=log_sum_sq_probs,
+            is_top1=is_top1,
+            label_mask=mask,
+            aux_loss=aux_loss,
+        )
 
     model.forward = types.MethodType(_chunked_forward, model)
 
