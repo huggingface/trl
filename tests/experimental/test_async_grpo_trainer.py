@@ -64,12 +64,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.experimental.async_grpo.packing import SequencePacking, TreePacking
-from trl.experimental.async_grpo.tree import (
-    TREE_ATTENTION,
-    PrefixForest,
-    build_tree_block_mask,
-    register_tree_attention,
-)
+from trl.experimental.async_grpo.tree import TREE_ATTENTION, build_tree_block_mask, register_tree_attention
 from trl.trainer.base_trainer import _BaseTrainer
 from trl.trainer.utils import get_callable_name, patch_chunked_lm_head
 
@@ -1013,14 +1008,10 @@ class TestTreePacking(TrlTestCase):
         enter, leave = row.tree_enter, row.tree_leave
         visible = (enter[None, :] <= enter[:, None]) & (enter[:, None] < leave[None, :])
 
-        forest = PrefixForest()
-        for sample in self.ROWS:
-            forest.insert(sample["input_ids"], sample["group_id"])
-        _tokens, _layout, node_to_packed = forest.linearize()
-        for sample in self.ROWS:
-            packed = [node_to_packed[node] for node in forest.walk(sample["input_ids"], sample["group_id"])]
-            for i, q in enumerate(packed):
-                assert visible[q].tolist() == [p in packed[: i + 1] for p in range(len(row.input_ids))]
+        seen = sorted(tuple(row.input_ids[visible[q]].tolist()) for q in range(len(row.input_ids)))
+        prefixes = {tuple(s["input_ids"][: i + 1]) for s in self.ROWS for i in range(len(s["input_ids"]))}
+
+        assert seen == sorted(prefixes)
 
     def test_collator_pads_tree_rows_and_keeps_the_stamps_aligned(self):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2, packing=TreePacking())
