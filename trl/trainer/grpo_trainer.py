@@ -330,6 +330,9 @@ class GRPOTrainer(_BaseTrainer):
             args = GRPOConfig(f"{model_name}-GRPO")
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
