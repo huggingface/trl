@@ -29,7 +29,6 @@ from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
-import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
@@ -962,33 +961,12 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
-    @require_torch_accelerator
-    def test_fused_kernel_matches_torch_path(self):
-        logits = torch.randn(2, 3, 257, device=torch_device, requires_grad=True)
-        index = torch.randint(257, (2, 3), device=torch_device)
-        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=torch_device, dtype=torch.bool)
-        # These inputs take the fused kernel, so the comparison below is kernel against torch
-        assert trainer_utils._fused_logprob_entropy is not None
-        assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
-
-        logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
-        (logprobs + 0.1 * entropy).sum().backward()
-
-        reference_logits = logits.detach().clone().requires_grad_()
-        with patch("trl.trainer.utils._fused_logprob_entropy", None):
-            reference_logprobs, reference_entropy = selective_log_softmax_and_entropy(
-                reference_logits, index, temperature=0.7, row_mask=row_mask
-            )
-        (reference_logprobs + 0.1 * reference_entropy).sum().backward()
-
-        torch.testing.assert_close(logprobs, reference_logprobs)
-        torch.testing.assert_close(entropy, reference_entropy)
-        torch.testing.assert_close(logits.grad, reference_logits.grad)
-
-    def test_temperature_and_row_mask_fallback(self):
-        logits = torch.randn(2, 3, 257, requires_grad=True)
-        index = torch.randint(257, (2, 3))
-        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], dtype=torch.bool)
+    # On an accelerator this takes the fused kernel, on CPU the torch path
+    @pytest.mark.parametrize("device", ["cpu", pytest.param(torch_device, marks=require_torch_accelerator)])
+    def test_temperature_and_row_mask(self, device):
+        logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
+        index = torch.randint(257, (2, 3), device=device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
 
         logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
         (logprobs + 0.1 * entropy).sum().backward()
@@ -1005,15 +983,6 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         torch.testing.assert_close(entropy, reference_entropy)
         torch.testing.assert_close(logits.grad, reference_logits.grad)
         assert torch.count_nonzero(logits.grad[~row_mask]) == 0
-
-    @require_torch_accelerator
-    def test_torch_compile_fullgraph(self):
-        logits = torch.randn(2, 3, 257, device=torch_device, requires_grad=True)
-        index = torch.randint(257, (2, 3), device=torch_device)
-
-        torch.compile(selective_log_softmax, fullgraph=True)(logits, index).sum().backward()
-
-        assert logits.grad is not None
 
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize("k", [1, 8])

@@ -20,7 +20,7 @@ from .testing_utils import require_torch_accelerator
 
 
 @pytest.fixture(scope="module")
-def trl_losses():
+def trl_kernels():
     return pytest.importorskip("trl.kernels", reason="test requires triton")
 
 
@@ -42,7 +42,7 @@ class TestLogProbEntropy:
         ("logprob_weight", "entropy_weight", "use_mask"),
         [(2, None, True), (None, 0.5, True), (2, 0.5, True), (2, 0.5, False)],
     )
-    def test_forward_and_backward(self, trl_losses, dtype, logprob_weight, entropy_weight, use_mask):
+    def test_forward_and_backward(self, trl_kernels, dtype, logprob_weight, entropy_weight, use_mask):
         # Cross two full Triton blocks and leave a partial final block.
         vocab_size = 2053
         base_logits = torch.randn(2, 5, vocab_size, device=torch_device, dtype=dtype)
@@ -59,7 +59,7 @@ class TestLogProbEntropy:
         sliced_mask = torch.tensor([[1, 1, 0, 1, 1], [1, 0, 1, 1, 1]], device=torch_device, dtype=torch.bool)[:, 1:4]
         row_mask = sliced_mask if use_mask else None
 
-        logprobs, entropy = trl_losses.selective_log_softmax_and_entropy(
+        logprobs, entropy = trl_kernels.selective_log_softmax_and_entropy(
             logits, index, temperature=temperature, row_mask=row_mask
         )
         # Mutating exposed outputs must not corrupt the private statistics saved for backward.
@@ -86,13 +86,13 @@ class TestLogProbEntropy:
         torch.testing.assert_close(entropy, reference_entropy, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(actual_grad, reference_logits.grad, rtol=1e-3, atol=1e-3)
 
-    def test_torch_compile_fullgraph(self, trl_losses):
+    def test_torch_compile_fullgraph(self, trl_kernels):
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
         index = torch.randint(257, (2, 3), device=torch_device)
         row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=torch_device, dtype=torch.bool)
 
         def loss(logits, index, row_mask):
-            logprobs, entropy = trl_losses.selective_log_softmax_and_entropy(
+            logprobs, entropy = trl_kernels.selective_log_softmax_and_entropy(
                 logits, index, temperature=0.8, row_mask=row_mask
             )
             return (logprobs + 0.1 * entropy).sum()
