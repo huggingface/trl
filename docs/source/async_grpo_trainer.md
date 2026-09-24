@@ -219,42 +219,24 @@ So `batch/samples_per_step ≈ row-slots x batch/samples_per_row`, and likewise 
 
 ### Tree packing
 
-`packing="tree"` builds each row as a prefix forest instead of a concatenation, so a token several samples share is forwarded **once**. Multi-turn agentic rollouts are full of such tokens: every turn re-sends the whole conversation, so the rows of one rollout are nested prefixes of each other, and the `num_generations` rollouts of a prompt all repeat it. Attention still shows each sample exactly what it saw in its own row — the mask is the forest's ancestry, evaluated by FlexAttention.
+With `packing="tree"`, a rank's row is a **prefix forest** rather than a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own row. Multi-turn rollouts are mostly such tokens — every turn re-sends the conversation, and the `num_generations` rollouts of a prompt all repeat it — so the decoder's work drops by the **packing ratio** (raw tokens ÷ forwarded tokens). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and the loss matches `"sequence"` packing up to floating point.
 
-The saving is the decoder's per-token work, which falls by the **packing ratio** (raw tokens ÷ forwarded tokens). Against it stands a fixed overhead: the surviving tokens attend through FlexAttention rather than FlashAttention 3, and each of them now attends over a longer ancestry.
+How it works:
 
-```
-speed-up ≈ packing ratio ÷ overhead        overhead ≈ 1.6 on Qwen3-4B, ≈ 1.3 on Qwen3-8B
-```
+- **Sharing is per prompt**: one trie per `group_id`, so a group's cost does not depend on what else is in the row and the planner stays a greedy bin-packer.
+- **The planner places by affinity**: a sample goes to the row holding its group, where it costs only its novel tokens. `token_budget` bounds a row's unique tokens and its loss terms. A group is split only when a rank would otherwise forward nothing.
+- **The collator linearizes the forest** depth-first. A token's `position_id` is its depth, and two DFS stamps define the mask — `k` is visible to `q` iff `enter[k] <= enter[q] < leave[k]` — which FlexAttention evaluates as a block mask.
+- **The loss gathers**: a packed position predicts the first trained token of every row sharing its prefix, so loss terms are explicit `(position, target)` pairs, not a mask over the sequence.
 
-The overhead shrinks as the model grows, because attention is a smaller share of a larger model's step. Take ~1.5 as a conservative break-even: below that packing ratio, tree packing is a *loss*, and `batch/packing_ratio` is the metric that says where a workload sits.
+When it pays: `speed-up ≈ packing ratio ÷ overhead`, where the overhead of FlexAttention over FlashAttention and of the longer ancestries is about 1.3–1.6 on 4–8B models and shrinks with model size. Below a `batch/packing_ratio` of ~1.5 tree packing is a loss. The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 
-**The ratio is the product of two things: how much prefix the samples in a row actually share, and how many of them fit.** Neither alone is enough — perfectly nested rows share nothing useful if only one lands per rank, and a rank full of unrelated samples shares nothing however many there are. Measured on recorded agentic groups, where rows of a group are nested prefixes of each other:
-
-| rows of a group packed together | 2 | 4 | 8 | 16 | 24 |
-| ------------------------------- | ----- | ----- | ----- | ------ | ------ |
-| 512-token prompt                | 1.44x | 1.93x | 2.23x | 2.48x  | 2.55x  |
-| 4k prompt                       | 1.86x | 3.31x | 5.20x | 7.55x  | 8.72x  |
-| 8k prompt                       | 1.92x | 3.57x | 6.21x | 10.03x | 12.50x |
-
-Down a column is the sharing (a longer shared prompt is worth more); across a row is the count. Two rows never clear break-even whatever the prompt; four or more do. So `batch/samples_per_row` is the leading indicator: if it sits near 1, no amount of shared prefix can help, and the lever is `token_budget` relative to row length.
-
-The mask runs on inductor's Triton template. FlashAttention 4 would bring the divisor to 1.47, about 7% on the step, but its CuteDSL kernels and the flashinfer vLLM builds on both register types in tvm-ffi, and whichever loads second aborts — so a server and a trainer sharing one environment could not both start.
-
-Three things to expect when reading the dashboard:
-
-- **Judge it on throughput, not on step time or MFU.** A tree-packed micro-batch holds several times more samples, so `perf/fwd_bwd_s` *rises* while the work inside it rises faster, and `perf/mfu_*` *falls* because it divides by forwarded tokens — exactly the ones packing removed. Both look like regressions and neither is. Divide instead: `batch/trained_tokens_per_step / perf/fwd_bwd_s`. On a Qwen3-8B SWE-Gym run the step went 4.5s -> 5.6s and MFU dropped, while throughput went 376 -> 1297 trained tokens/s.
-- **`token_budget` now bounds unique tokens** (and, separately, the row's loss terms, which packing does not shrink), so the same budget fits more samples per row. That is the capacity win, and it has a scheduling consequence: a micro-batch draws proportionally more rollouts from the queue, so a run that was already generation-bound becomes more so. Watch `perf/rollout_wait_s` and `sample/rollout_queue_size`. The planner keeps a prompt-group in one row, since a sample is only cheap where its group already is; it splits a group across rows only when the alternative is a rank forwarding nothing.
-- **The first step pays for compilation.** FlexAttention compiles once per shape family; on 12k-token rows that measured ~137s, after which steps settle. It is not a hang, and it is amortized in any real run.
-
-Packing is a layout change, not a semantic one: every trained token keeps its own target, advantage and old log-probability, so the loss and the reward curve should track the `"sequence"` run.
+Judge it on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/mfu_*`, which divides by forwarded tokens, falls — neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so. The first step compiles the FlexAttention kernel; it is not a hang.
 
 <Tip warning={true}>
 
-Anything that makes rows longer or fewer removes the sharing, including settings that have nothing to do with packing. `fork_threshold_tokens` is the one to check first: a turn becomes its own training row only when its re-tokenization drifts by at least that many tokens, and on agentic rollouts the drift is ~40 against a default of `1024`. Almost nothing forks, a 50-turn conversation collapses into one very long row, and one row per rank leaves little to share. On a SWE-Gym run that cost most of the win: `batch/packing_ratio` 1.45 and 1.5x throughput at the default, against 4.2x and 3.5x throughput once rows forked. `rollout/fork_frac` says which regime you are in.
+Anything that makes rows longer or fewer removes the sharing. Check `fork_threshold_tokens` first: a turn becomes its own row only when its re-tokenization drifts by that many tokens, and agentic drift is typically tens against a default of `1024`, so nothing forks and a conversation collapses into one row per rank. `rollout/fork_frac` says which regime you are in.
 
 </Tip>
-
 
 ### The rollout queue
 
