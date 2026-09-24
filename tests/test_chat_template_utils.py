@@ -826,8 +826,8 @@ class TestGetTrainingChatTemplate:
 
     def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
-            reason = f"{tokenizer_name}: the processor returns an all-zero assistant tokens mask"
-            request.node.add_marker(pytest.mark.xfail(strict=False, reason=reason))
+            reason = "Llava's official chat template emits no end-of-turn token after the assistant turn."
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         tokenizer = self._load(tokenizer_name)
         new_chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_stop_token_trained(tokenizer, chat_template=new_chat_template) is True
