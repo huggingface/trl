@@ -414,6 +414,20 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @pytest.mark.parametrize("trainer", ["grpo", "rloo"])
+    def test_conditional_metric_logging(self, trainer, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("ddp"),
+                "tests/distributed/conditional_metric_logging.py",
+                "--trainer", trainer,
+                "--output_dir", self.tmp_dir,
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
     @pytest.mark.parametrize(
         "config",
         [
