@@ -1647,18 +1647,19 @@ class RLOOTrainer(_BaseTrainer):
         # Flush user-logged extra columns (from log_extra), gathering across processes.
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
+        for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
+            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.
         # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
         # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
+        for name in sorted(set(gather_object(list(self._pending_metrics)))):
+            values = self._pending_metrics.get(name, [])
+            local_stats = torch.tensor([sum(values), len(values)], dtype=torch.float32, device=device)
+            total, count = self.accelerator.gather(local_stats).view(-1, 2).sum(dim=0).tolist()
+            self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()
 
         if images is not None and self.log_multimodal:
