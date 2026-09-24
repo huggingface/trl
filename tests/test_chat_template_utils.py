@@ -825,10 +825,7 @@ class TestGetTrainingChatTemplate:
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
     def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
-        if tokenizer_name in (
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-        ):
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
             reason = f"{tokenizer_name}: the processor returns an all-zero assistant tokens mask"
             request.node.add_marker(pytest.mark.xfail(strict=False, reason=reason))
         tokenizer = self._load(tokenizer_name)
