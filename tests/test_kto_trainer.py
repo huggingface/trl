@@ -31,7 +31,6 @@ from .testing_utils import (
     TrlTestCase,
     is_bf16_supported,
     require_bitsandbytes,
-    require_liger_kernel,
     require_peft,
     require_peft_target_parameters,
     require_vision,
@@ -694,7 +693,8 @@ class TestKTOTrainer(TrlTestCase):
             compute_metrics=dummy_compute_metrics,
         )
 
-        trainer.train()
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            trainer.train()
 
         assert trainer.state.log_history[-2]["eval_test"] == 0.0
 
@@ -921,69 +921,12 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
     @require_peft
-    def test_train_with_liger_kernel_and_peft(self):
-        # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
-        # weight. Verify the full PEFT+Liger path actually trains (peft params change, base params stay frozen).
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
-        )
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-        trainer.train()
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n:
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    @require_peft
-    def test_liger_kernel_with_peft_lm_head_raises(self):
+    def test_peft_lm_head_raises(self):
         # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -1001,123 +944,39 @@ class TestKTOTrainer(TrlTestCase):
                 peft_config=lora_config,
             )
 
-    @require_liger_kernel
     @require_peft
-    def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the chunked path bypasses.
-        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.raises(ValueError, match="prompt-learning"):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
-            )
-
-    @require_liger_kernel
-    def test_init_fails_with_compute_metrics_and_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-
-        with pytest.raises(ValueError, match="`compute_metrics` is not supported with `use_liger_kernel=True`"):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset,
-                compute_metrics=lambda _: {},
-            )
-
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "loss_type, desirable_weight, undesirable_weight",
-        [("kto", 0.7, 1.3), ("apo_zero_unpaired", 1.0, 1.0)],
-    )
-    def test_liger_loss_matches_non_liger_loss(self, loss_type, desirable_weight, undesirable_weight):
+    def test_train_peft_prompt_tuning(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
-            bf16=False,  # keep exact gradient parity separate from the mixed-precision coverage below
-            per_device_train_batch_size=2,
-            use_liger_kernel=True,
-            loss_type=loss_type,
-            desirable_weight=desirable_weight,
-            undesirable_weight=undesirable_weight,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             report_to="none",
         )
-        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        trainer.model.train()
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-
-        chunked_loss = trainer.compute_loss(trainer.model, inputs)
-        chunked_loss.backward()
-        chunked_grads = {
-            name: param.grad.detach().clone()
-            for name, param in trainer.model.named_parameters()
-            if param.grad is not None
-        }
-
-        trainer.model.zero_grad()
-        trainer._metrics["train"].clear()
-        trainer.use_liger_kernel = False
-        loss = trainer.compute_loss(trainer.model, inputs)
-        loss.backward()
-        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
-
-        assert chunked_loss.abs() > 0
-        torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
-        assert chunked_grads.keys() == grads.keys()
-        for name, grad in grads.items():
-            # Vocabulary streaming changes the GEMM reduction shape; PyTorch 2.8 differs by up to 3.1e-4 in fp32.
-            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
-
-    @require_liger_kernel
-    def test_chunked_logps_stay_differentiable_when_all_masked(self):
-        # A batch whose completion is fully masked yields no valid rows. The streamed projection still has to return
-        # log-probs attached to the model, so it contributes a differentiable zero instead of failing in `backward()`.
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            bf16=False,
-            per_device_train_batch_size=2,
-            use_liger_kernel=True,
-            report_to="none",
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
         )
-        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        input_ids = inputs["input_ids"]
-        model_kwargs = {"input_ids": input_ids, "attention_mask": inputs["attention_mask"], "use_cache": False}
-        empty_completion_mask = torch.zeros_like(inputs["completion_mask"])
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        logps, _, _ = trainer._get_per_token_logps_and_entropies(
-            trainer.model, model_kwargs, input_ids, empty_completion_mask
-        )
+        trainer.train()
 
-        assert logps.shape == (input_ids.shape[0], input_ids.shape[1] - 1)
-        assert logps.count_nonzero() == 0
-        assert logps.requires_grad
-        logps.sum().backward()
-        lm_head_grad = trainer.model.get_output_embeddings().weight.grad
-        assert lm_head_grad is not None
-        assert lm_head_grad.count_nonzero() == 0
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
-    @require_liger_kernel
+        # Check that the prompt embeddings have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "prompt_encoder" in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    def test_chunked_logps_use_mixed_precision(self):
-        # The streamed projection reads the backbone directly instead of going through the model's forward, so it has
-        # to enter autocast itself. Without that the backbone would silently run in fp32 under bf16 training.
+    def test_logps_use_mixed_precision(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             bf16=True,
             per_device_train_batch_size=2,
-            use_liger_kernel=True,
             report_to="none",
         )
         trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
@@ -1133,14 +992,12 @@ class TestKTOTrainer(TrlTestCase):
         assert projection_dtypes  # the hook fired at all
         assert set(projection_dtypes) == {torch.bfloat16}
 
-    @require_liger_kernel
-    def test_train_with_liger_and_precomputed_ref_logps(self):
+    def test_train_with_precomputed_ref_logps(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            use_liger_kernel=True,
             precompute_ref_log_probs=True,
             report_to="none",
         )
@@ -1149,49 +1006,6 @@ class TestKTOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
-
-    @require_liger_kernel
-    def test_compute_ref_log_probs_redirects_wrapped_liger_model(self, monkeypatch):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-        training_args = KTOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        wrapped_model = object()
-        redirected = False
-
-        monkeypatch.setattr(trainer.accelerator, "unwrap_model", lambda model: trainer.model)
-
-        def forward_redirection(wrapper, unwrapped, method, *args):
-            nonlocal redirected
-            redirected = True
-            assert wrapper is wrapped_model
-            assert unwrapped is trainer.model
-            return method(*args)
-
-        monkeypatch.setattr(trainer, "_forward_redirection", forward_redirection)
-        trainer.compute_ref_log_probs(wrapped_model, inputs)
-
-        # A distributed wrapper owns the hooks that gather its sharded backbone parameters, so the chunked reference
-        # forward must enter through that wrapper even though the loss itself operates on the unwrapped model.
-        assert redirected
-
-    @require_liger_kernel
-    def test_init_fails_with_moe_aux_loss_and_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
-
-        # The MoE auxiliary loss is on by default; the chunked path bypasses the wrapper that computes it.
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-
-        with pytest.raises(ValueError, match="does not support the Mixture-of-Experts load-balancing auxiliary loss"):
-            KTOTrainer(
-                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                args=training_args,
-                train_dataset=dataset,
-            )
 
     @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
     def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
@@ -1774,34 +1588,7 @@ class TestKTOTrainerVLM(TrlTestCase):
                 train_dataset=dataset,
             )
 
-    @require_liger_kernel
-    def test_train_vlm_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        trainer = KTOTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            args=training_args,
-            train_dataset=dataset,
-        )
 
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-
-@pytest.mark.slow
 class TestKTOTrainerSlow(TrlTestCase):
     # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
     # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.

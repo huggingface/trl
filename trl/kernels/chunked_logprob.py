@@ -55,6 +55,9 @@ def _forward_kernel(
     max_ptr,
     sum_exp_ptr,
     x_sum_exp_ptr,
+    sq_sum_exp_ptr,
+    z_sum_ptr,
+    max_before_target_ptr,
     target_logit_ptr,
     vocab_start,
     n_cols,
@@ -68,25 +71,35 @@ def _forward_kernel(
     row = tl.program_id(0).to(tl.int64)
     row_ptr = mm_ptr + row * mm_stride
     m = tl.load(max_ptr + row)
+    local = tl.load(targets_ptr + row) - vocab_start
+    max_before_target = tl.load(max_before_target_ptr + row)
     s = tl.load(sum_exp_ptr + row)
     xs = tl.load(x_sum_exp_ptr + row)
+    sq = tl.load(sq_sum_exp_ptr + row)
+    zs = tl.load(z_sum_ptr + row)
     for start in range(0, n_cols, BLOCK_SIZE):
         offsets = start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_cols
         z = tl.load(row_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
         z = _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP)
+        zs += tl.sum(tl.where(mask, z, 0.0), axis=0)
         z = tl.where(mask, z, -float("inf"))
+        # `argmax` returns the first maximum, so a tie with an earlier token does not count as a top-1 prediction
+        max_before_target = tl.maximum(max_before_target, tl.max(tl.where(offsets < local, z, -float("inf")), axis=0))
         new_m = tl.maximum(m, tl.max(z, axis=0))
         rescale = tl.exp(m - new_m)
         e = tl.where(mask, tl.exp(z - new_m), 0.0)
         s = s * rescale + tl.sum(e, axis=0)
         xs = xs * rescale + tl.sum(e * tl.where(mask, z, 0.0), axis=0)
+        sq = sq * rescale * rescale + tl.sum(e * e, axis=0)
         m = new_m
     tl.store(max_ptr + row, m)
     tl.store(sum_exp_ptr + row, s)
     tl.store(x_sum_exp_ptr + row, xs)
+    tl.store(sq_sum_exp_ptr + row, sq)
+    tl.store(z_sum_ptr + row, zs)
+    tl.store(max_before_target_ptr + row, max_before_target)
 
-    local = tl.load(targets_ptr + row) - vocab_start
     if (local >= 0) & (local < n_cols):
         z = tl.load(row_ptr + local).to(tl.float32)
         tl.store(target_logit_ptr + row, _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP))
@@ -144,7 +157,8 @@ def _backward_kernel(
 
 class ChunkedLogProbFunction(torch.autograd.Function):
     """
-    Per-token log-probabilities and entropy of `hidden @ weight.T`, without materializing the `[N, V]` logits.
+    Per-token log-probabilities, entropy, `log(sum_v p_v^2)`, mean logit and whether the target is the argmax, of
+    `hidden @ weight.T`, without materializing the `[N, V]` logits.
 
     The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, chunk_size]` tiles; a Triton kernel folds each tile into
     online-logsumexp statistics in one pass. The backward recomputes each tile, turns it into the logits gradient in
@@ -162,7 +176,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         chunk_size: int,
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # entropy is often computed for logging only (no grad required); without this, autograd would
         # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
         ctx.set_materialize_grads(False)
@@ -182,6 +196,9 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         running_max = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        sq_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        z_sum = torch.zeros((N,), device=device, dtype=torch.float32)
+        max_before_target = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
         mm_buf = torch.empty((min(N, TOKEN_CHUNK_SIZE), chunk_size), device=device, dtype=compute_dtype)
 
@@ -202,6 +219,9 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     running_max[token_start:token_end],
                     sum_exp[token_start:token_end],
                     x_sum_exp[token_start:token_end],
+                    sq_sum_exp[token_start:token_end],
+                    z_sum[token_start:token_end],
+                    max_before_target[token_start:token_end],
                     target_logit[token_start:token_end],
                     start,
                     end - start,
@@ -212,15 +232,19 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         log_z = running_max + torch.log(sum_exp)
         logprobs = target_logit - log_z
         entropy = log_z - x_sum_exp / sum_exp
+        log_sum_sq_probs = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp)
+        mean_logits = z_sum / vocab
+        is_top1 = (target_logit >= running_max) & (target_logit > max_before_target)
 
         ctx.save_for_backward(hidden, weight, bias, targets, log_z, entropy)
         ctx.compute_dtype = compute_dtype
         ctx.chunk_size = chunk_size
         ctx.kernel_args = kernel_args
-        return logprobs, entropy
+        ctx.mark_non_differentiable(log_sum_sq_probs, mean_logits, is_top1)
+        return logprobs, entropy, log_sum_sq_probs, mean_logits, is_top1
 
     @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
+    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None, *_):  # type: ignore
         # `trl.trainer.utils` imports this module, so import from it at call time
         from ..trainer.utils import maybe_gather_lm_head_ctx
 

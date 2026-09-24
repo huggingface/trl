@@ -1476,6 +1476,12 @@ class FusedCausalLMOutput(ModelOutput):
             Log-probability of each next-token label.
         entropy (`torch.Tensor`, same shape as `log_probs`):
             Entropy of the next-token distribution.
+        log_sum_sq_probs (`torch.Tensor`, same shape as `log_probs`):
+            `log(sum_v p_v^2)` of the next-token distribution, without gradient.
+        mean_logits (`torch.Tensor`, same shape as `log_probs`):
+            Mean of the temperature-scaled next-token logits over the vocabulary, without gradient.
+        is_top1 (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is the most likely next token.
         label_mask (`torch.Tensor`, same shape as `log_probs`):
             Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
             sequence than the caller's labels.
@@ -1486,6 +1492,9 @@ class FusedCausalLMOutput(ModelOutput):
     loss: torch.Tensor | None = None
     log_probs: torch.Tensor | None = None
     entropy: torch.Tensor | None = None
+    log_sum_sq_probs: torch.Tensor | None = None
+    mean_logits: torch.Tensor | None = None
+    is_top1: torch.Tensor | None = None
     label_mask: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
 
@@ -1576,7 +1585,9 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
             )
         # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
         # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy = (x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
+            x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
+        )
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
@@ -1602,7 +1613,16 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
             )
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return FusedCausalLMOutput(loss=loss, log_probs=log_probs, entropy=entropy, label_mask=mask, aux_loss=aux_loss)
+        return FusedCausalLMOutput(
+            loss=loss,
+            log_probs=log_probs,
+            entropy=entropy,
+            log_sum_sq_probs=log_sum_sq_probs,
+            mean_logits=mean_logits,
+            is_top1=is_top1,
+            label_mask=mask,
+            aux_loss=aux_loss,
+        )
 
     model.forward = types.MethodType(_fused_forward, model)
 
