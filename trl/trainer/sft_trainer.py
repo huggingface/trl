@@ -1090,10 +1090,14 @@ class SFTTrainer(_BaseTrainer):
                 "Padding-free training is yet not supported for vision datasets. Please set `padding_free=False` in "
                 "the `SFTConfig`."
             )
-        if self._is_vision_dataset and args.assistant_only_loss:
+        if (
+            self._is_vision_dataset
+            and args.assistant_only_loss
+            and Version(transformers.__version__) < Version("5.18.0.dev0")
+        ):
             raise ValueError(
-                "Assistant-only loss is not yet supported for vision datasets. Please set "
-                "`assistant_only_loss=False` in the `SFTConfig`."
+                "Assistant-only loss for vision datasets requires transformers>=5.18.0. Please upgrade transformers "
+                "or set `assistant_only_loss=False` in the `SFTConfig`."
             )
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
@@ -1293,6 +1297,8 @@ class SFTTrainer(_BaseTrainer):
                 completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
+                assistant_only_loss=args.assistant_only_loss,
+                chat_template=self.chat_template,
             )
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
