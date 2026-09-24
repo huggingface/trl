@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import torch
+from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils.checkpoint import CheckpointPolicy
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
@@ -24,6 +25,17 @@ from trl.models.selective_activation_checkpointing import (
 )
 
 from .testing_utils import TrlTestCase, require_torch_accelerator
+
+
+class _SDPACounter(TorchDispatchMode):
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if "scaled_dot_product" in str(func):
+            self.count += 1
+        return func(*args, **(kwargs or {}))
 
 
 class TestSelectiveActivationCheckpointingPolicy(TrlTestCase):
@@ -51,24 +63,30 @@ class TestSelectiveActivationCheckpointingPolicy(TrlTestCase):
 class TestSelectiveActivationCheckpointing(TrlTestCase):
     model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
+    def _forward_backward(self, selective):
+        model = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
+        model.train()
+        if selective:
+            enable_selective_activation_checkpointing(model)
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 32), device=torch_device)
+        with _SDPACounter() as counter:
+            model(input_ids=input_ids, labels=input_ids).loss.backward()
+        return model, counter.count
+
     def test_matches_full_checkpointing(self):
         """SAC must produce the same gradients as full checkpointing."""
-        model_full = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
-        model_full.train()
-        model_full.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-
-        model_sac = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
-        model_sac.train()
-        enable_selective_activation_checkpointing(model_sac)
-        model_sac.gradient_checkpointing_enable()
-
-        torch.manual_seed(42)
-        inp = torch.randint(0, model_full.config.vocab_size, (2, 32), device=torch_device)
-        model_full(input_ids=inp, labels=inp).loss.backward()
-        model_sac(input_ids=inp, labels=inp).loss.backward()
-
+        model_full, _ = self._forward_backward(selective=False)
+        model_sac, _ = self._forward_backward(selective=True)
         for p_full, p_sac in zip(model_full.parameters(), model_sac.parameters(), strict=True):
             torch.testing.assert_close(p_sac.grad, p_full.grad, rtol=1e-4, atol=1e-5)
+
+    def test_skips_attention_recompute(self):
+        """Full checkpointing dispatches SDPA 3 times per layer (forward, recompute, backward), SAC only 2."""
+        model, count_full = self._forward_backward(selective=False)
+        _, count_sac = self._forward_backward(selective=True)
+        assert count_full - count_sac == model.config.num_hidden_layers
 
     def test_idempotent(self):
         """Enabling SAC twice on the same model must not stack wrappers."""

@@ -1342,7 +1342,7 @@ from trl import SFTConfig
 
 training_args = SFTConfig(
     gradient_checkpointing=True,
-    selective_activation_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective_activation_checkpointing": True},
 )
 ```
 

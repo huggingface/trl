@@ -1142,12 +1142,12 @@ class SFTTrainer(_BaseTrainer):
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
         ):
-            if args.selective_activation_checkpointing:
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            if args.gradient_checkpointing_kwargs.get("selective_activation_checkpointing"):
                 raise ValueError(
-                    "`selective_activation_checkpointing=True` is not supported with PEFT + DeepSpeed ZeRO-3, which "
+                    "`selective_activation_checkpointing` is not supported with PEFT + DeepSpeed ZeRO-3, which "
                     "requires reentrant gradient checkpointing while SAC requires non-reentrant checkpointing."
                 )
-            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
                 logger.warning(
@@ -1374,12 +1374,13 @@ class SFTTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
-        if args.selective_activation_checkpointing:
+        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+        if gradient_checkpointing_kwargs.get("selective_activation_checkpointing"):
             if not args.gradient_checkpointing:
-                raise ValueError("`selective_activation_checkpointing=True` requires `gradient_checkpointing=True`.")
-            if (args.gradient_checkpointing_kwargs or {}).get("use_reentrant"):
+                raise ValueError("`selective_activation_checkpointing` requires `gradient_checkpointing=True`.")
+            if gradient_checkpointing_kwargs.get("use_reentrant"):
                 raise ValueError(
-                    "`selective_activation_checkpointing=True` requires non-reentrant gradient checkpointing. Set "
+                    "`selective_activation_checkpointing` requires non-reentrant gradient checkpointing. Set "
                     "`use_reentrant` to `False` in `gradient_checkpointing_kwargs`, or leave it unset."
                 )
             # Wrap before `super().__init__()` so the context function is set when the Trainer enables checkpointing.

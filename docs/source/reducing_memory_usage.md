@@ -350,4 +350,18 @@ training_args = SFTConfig(..., gradient_checkpointing=True)
 > [!NOTE]
 > Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
 
+### Selective activation checkpointing
+
+With [`SFTTrainer`], you can save the attention output during the forward pass instead of recomputing it in the backward pass. This recovers most of the checkpointing slowdown at long context, for one extra hidden-state-sized tensor per layer. It forces non-reentrant checkpointing.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    ...,
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective_activation_checkpointing": True},
+)
+```
+
 For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

@@ -1858,14 +1858,17 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("use_reentrant", [True, False])
-    def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs",
+        [{"use_reentrant": True}, {"use_reentrant": False}, {"selective_activation_checkpointing": True}],
+    )
+    def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             report_to="none",
         )
         trainer = SFTTrainer(
