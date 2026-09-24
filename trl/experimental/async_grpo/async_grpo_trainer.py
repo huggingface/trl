@@ -1105,9 +1105,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        patch_chunked_lm_head(
-            model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
-        )
+        patch_chunked_lm_head(model, temperature=self.temperature)
 
         # Processing class
         if processing_class is None:
@@ -1458,12 +1456,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
+        # MoE models: request router logits so the forward returns the load-balancing loss
+        router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
-            labels=input_ids,
-            completion_mask=completion_mask,
-            use_cache=False,
+            labels=input_ids.masked_fill(completion_mask == 0, -100),
+            **router_kwargs,
         )
         log_probs, entropy = outputs["log_probs"], outputs["entropy"]
         self._last_forward_time_s = time.time() - forward_start

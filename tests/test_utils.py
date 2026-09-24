@@ -22,12 +22,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -1641,35 +1640,6 @@ class TestChunkedLogProbFunction:
                 torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
 
 
-class _FakeTransformerModel(nn.Module):
-    """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
-
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self._hidden = None
-
-    def forward(self, input_ids, attention_mask=None, use_cache=False, **kwargs):
-        b, s = input_ids.shape
-        if self._hidden is None or self._hidden.shape[:2] != (b, s):
-            torch.manual_seed(123)
-            self._hidden = torch.randn(b, s, self.hidden_size, requires_grad=True)
-        return type("Out", (), {"last_hidden_state": self._hidden})()
-
-
-class _FakeCausalLM(nn.Module):
-    """Minimal CausalLM with .model and .lm_head, enough for patch_chunked_lm_head."""
-
-    def __init__(self, hidden_size, vocab_size):
-        super().__init__()
-        self.config = PretrainedConfig()
-        self.model = _FakeTransformerModel(hidden_size)
-        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
-
-    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
-        raise NotImplementedError("should be monkey-patched")
-
-
 _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
@@ -1690,6 +1660,7 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GPT2LMHeadModel",
     "trl-internal-testing/tiny-GptOssForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
@@ -1728,97 +1699,57 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
 
 @require_torch_accelerator
 class TestPatchChunkedLMHead:
-    B, S = 4, 16  # batch size, sequence length (including prompt + completion)
-    H, V = 32, 128
-    CHUNK_SIZE = 32
+    def test_masked_labels(self):
+        """Positions labelled `-100` are zero and the others match an unmasked run."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        patch_chunked_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
+        labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
-    def _build_model_and_inputs(self, temperature=1.0):
-        torch.manual_seed(42)
-        model = _FakeCausalLM(self.H, self.V)
-        patch_chunked_lm_head(model, self.CHUNK_SIZE, temperature)
+        out_full = model(input_ids=input_ids, labels=input_ids)
+        out = model(input_ids=input_ids, labels=labels)
 
-        input_ids = torch.randint(0, self.V, (self.B, self.S))
-        attention_mask = torch.ones(self.B, self.S, dtype=torch.long)
-        # First half of each sequence is prompt (0), second half is completion (1)
-        completion_mask = torch.zeros(self.B, self.S, dtype=torch.float32)
-        completion_mask[:, self.S // 2 :] = 1.0
-        return model, input_ids, attention_mask, completion_mask
+        mask = labels[:, 1:] != -100
+        torch.testing.assert_close(out["log_probs"][mask], out_full["log_probs"][mask])
+        torch.testing.assert_close(out["entropy"][mask], out_full["entropy"][mask])
+        assert (out["log_probs"][~mask] == 0).all()
+        assert (out["entropy"][~mask] == 0).all()
 
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_dummy_model_chunked_forward_with_completion_mask(self, temperature):
-        """Masked forward matches unmasked forward at completion positions and is zero at prompt positions."""
-        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
+    def test_all_masked_labels_backward(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        patch_chunked_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
 
-        # Run WITHOUT completion_mask (baseline — computes all positions)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
+        out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100))
+        out["log_probs"].sum().backward()
 
-        # Reset hidden state cache so both runs use the same hidden states
-        model.model._hidden = None
-
-        # Run WITH completion_mask
-        out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
-        )
-
-        # shifted completion_mask (matching the shift in _chunked_forward)
-        shifted_mask = completion_mask[:, 1:].bool()
-
-        # At completion positions, values should match
-        torch.testing.assert_close(
-            out_masked["log_probs"][shifted_mask],
-            out_full["log_probs"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-        torch.testing.assert_close(
-            out_masked["entropy"][shifted_mask],
-            out_full["entropy"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-
-        # At prompt positions, values should be zero
-        prompt_mask = ~shifted_mask
-        assert (out_masked["log_probs"][prompt_mask] == 0).all()
-        assert (out_masked["entropy"][prompt_mask] == 0).all()
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_dummy_model_chunked_forward_completion_mask_backward(self, temperature):
-        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
-
-        # Full forward + backward (mask applied after, as the trainer does)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
-        shifted_mask = completion_mask[:, 1:]
-        loss_full = (out_full["log_probs"] * shifted_mask).sum()
-        loss_full.backward()
-        grad_weight_full = model.lm_head.weight.grad.clone()
-
-        model.lm_head.weight.grad = None
-        model.model._hidden = None
-
-        # Masked forward + backward
-        out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
-        )
-        loss_masked = (out_masked["log_probs"] * shifted_mask).sum()
-        loss_masked.backward()
-        grad_weight_masked = model.lm_head.weight.grad.clone()
-
-        torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
-
-        model.lm_head.weight.grad = None
-        model.model._hidden = None
-        empty_completion_mask = torch.zeros_like(completion_mask)
-        out_empty = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=input_ids,
-            completion_mask=empty_completion_mask,
-        )
-        assert out_empty["log_probs"].count_nonzero() == 0
-        out_empty["log_probs"].sum().backward()
+        assert out["log_probs"].count_nonzero() == 0
         assert model.lm_head.weight.grad is not None
         assert model.lm_head.weight.grad.count_nonzero() == 0
+
+    def test_generate_unchanged(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device=torch_device)
+        expected = model.generate(input_ids, max_new_tokens=8, do_sample=False)
+
+        patch_chunked_lm_head(model)
+
+        torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
+
+    @pytest.mark.parametrize(
+        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+    )
+    def test_aux_loss(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[1, 8:] = 0
+        expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
+
+        patch_chunked_lm_head(model)
+        out = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, output_router_logits=True)
+
+        torch.testing.assert_close(out["aux_loss"], expected)
 
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1826,7 +1757,7 @@ class TestPatchChunkedLMHead:
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
         model.eval()
 
-        B, S, chunk_size = 2, 8, 32
+        B, S = 2, 8
         torch.manual_seed(42)
         input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
@@ -1841,7 +1772,7 @@ class TestPatchChunkedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        patch_chunked_lm_head(model, chunk_size, temperature)
+        patch_chunked_lm_head(model, temperature)
         with torch.no_grad():
             out = model(input_ids=input_ids, labels=labels)
 
@@ -1860,7 +1791,7 @@ class TestPatchChunkedLMHead:
         model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
-        B, S, chunk_size = 2, 8, 32
+        B, S = 2, 8
         torch.manual_seed(42)
         input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
@@ -1874,7 +1805,7 @@ class TestPatchChunkedLMHead:
         ref_grad = model_ref.lm_head.weight.grad.clone()
 
         # Chunked backward
-        patch_chunked_lm_head(model_chunked, chunk_size, temperature)
+        patch_chunked_lm_head(model_chunked, temperature)
         out = model_chunked(input_ids=input_ids, labels=labels)
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
