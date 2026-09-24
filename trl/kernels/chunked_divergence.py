@@ -19,7 +19,7 @@ import triton
 import triton.language as tl
 
 from ..trainer.utils import maybe_gather_lm_head_ctx
-from .chunked_logprob import _BLOCK_SIZE, _transform
+from .chunked_logprob import _BLOCK_SIZE, _addmm_fp32, _transform
 
 
 # The projections run on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles, so neither model's logits exist in full
@@ -421,9 +421,9 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         **ctx.kernel_args,
                     )
                     if grad_hidden is not None:
-                        grad_hidden[sl] += s_tile @ student_weight[start:end].to(s_dtype)
+                        _addmm_fp32(grad_hidden[sl], s_tile, student_weight[start:end].to(s_dtype))
                     if grad_weight is not None:
-                        grad_weight[start:end] += s_tile.t() @ h_s
+                        _addmm_fp32(grad_weight[start:end], s_tile.t(), h_s)
                     if grad_bias is not None:
                         grad_bias[start:end] += s_tile.sum(dim=0, dtype=torch.float32)
 

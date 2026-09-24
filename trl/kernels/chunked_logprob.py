@@ -15,6 +15,7 @@
 import torch
 import triton
 import triton.language as tl
+from packaging.version import Version
 
 from ..trainer.utils import maybe_gather_lm_head_ctx
 
@@ -23,6 +24,21 @@ from ..trainer.utils import maybe_gather_lm_head_ctx
 TOKEN_CHUNK_SIZE = 4096
 VOCAB_CHUNK_SIZE = 32768
 _BLOCK_SIZE = 1024
+# `torch.addmm(..., out_dtype=torch.float32)` from bf16/fp16 inputs, CUDA only
+_MM_OUT_DTYPE = Version(torch.__version__) >= Version("2.8.0")
+
+
+def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
+    """
+    `acc += a @ b` for an fp32 `acc`, without rounding `a @ b` to the inputs' dtype first.
+
+    Rounding every vocabulary chunk's product to bf16 before summing them biases training (entropy drifts lower over a
+    few dozen steps), even though each step's gradient error looks the same size as with full logits.
+    """
+    if _MM_OUT_DTYPE and acc.device.type == "cuda" and a.dtype in (torch.float16, torch.bfloat16):
+        torch.addmm(acc, a, b, out_dtype=torch.float32, out=acc)
+    else:
+        acc.addmm_(a.float(), b.float())
 
 
 @triton.jit
@@ -45,21 +61,18 @@ def _forward_kernel(
     sq_sum_exp_ptr,
     target_logit_ptr,
     max_before_target_ptr,
-    rescale_ptr,
     vocab_start,
     n_cols,
     logit_scale,
     softcap,
     inv_t,
     HAS_SOFTCAP: tl.constexpr,
-    WRITE_WEIGHTS: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
     # One program per token: fold one vocabulary chunk of its logits into the running online-logsumexp statistics
     row = tl.program_id(0).to(tl.int64)
     row_ptr = mm_ptr + row * mm_stride
     m = tl.load(max_ptr + row)
-    initial_m = m
     local = tl.load(targets_ptr + row) - vocab_start
     max_before_target = tl.load(max_before_target_ptr + row)
     s = tl.load(sum_exp_ptr + row)
@@ -89,24 +102,6 @@ def _forward_kernel(
     if (local >= 0) & (local < n_cols):
         z = tl.load(row_ptr + local).to(tl.float32)
         tl.store(target_logit_ptr + row, _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP))
-
-    if WRITE_WEIGHTS:
-        # Overwrite the tile with exp(z - m) * dz/dy, the weights of this chunk's rows of `weight` in the running
-        # expectation of dz/dh; the caller rescales its accumulator by exp(initial_m - m) before adding them
-        tl.store(rescale_ptr + row, tl.exp(initial_m - m))
-        for start in range(0, n_cols, BLOCK_SIZE):
-            offsets = start + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_cols
-            y = tl.load(row_ptr + offsets, mask=mask, other=0.0).to(tl.float32) * logit_scale
-            if HAS_SOFTCAP:
-                t = 2 * tl.sigmoid(2 * y / softcap) - 1
-                z = softcap * t * inv_t
-                dz_dy = logit_scale * inv_t * (1 - t * t)
-            else:
-                z = y * inv_t
-                dz_dy = logit_scale * inv_t
-            w = tl.where(mask, tl.exp(z - m) * dz_dy, 0.0)
-            tl.store(row_ptr + offsets, w.to(mm_ptr.dtype.element_ty), mask=mask)
 
 
 @triton.jit
@@ -167,10 +162,6 @@ class ChunkedLogProbFunction(torch.autograd.Function):
     The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles; a Triton kernel folds each tile into
     online-logsumexp statistics in one pass. The backward recomputes each tile and turns it into the logits gradient in
     place.
-
-    When the LM head is frozen and only the hidden states need a gradient (PEFT), the forward also accumulates each
-    token's `d log p / d hidden`, one extra GEMM per tile, and the backward scales it by the incoming gradient instead
-    of recomputing the tiles: two vocabulary-sized GEMMs in total instead of three.
     """
 
     @staticmethod
@@ -207,19 +198,10 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
         max_before_target = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         mm_buf = torch.empty((min(N, TOKEN_CHUNK_SIZE), VOCAB_CHUNK_SIZE), device=device, dtype=compute_dtype)
-        needs_hidden_grad, needs_weight_grad, needs_bias_grad = ctx.needs_input_grad[:3]
-        # d log p_target / d hidden = dz_target/dy * W[target] - E_p[dz/dy * W], accumulated online like the logsumexp
-        jacobian = None
-        if needs_hidden_grad and not needs_weight_grad and not needs_bias_grad:
-            jacobian = torch.empty(hidden.shape, device=device, dtype=hidden.dtype)
-            rescale = torch.empty((min(N, TOKEN_CHUNK_SIZE),), device=device, dtype=torch.float32)
-
         for token_start in range(0, N, TOKEN_CHUNK_SIZE):
             token_end = min(token_start + TOKEN_CHUNK_SIZE, N)
             n = token_end - token_start
             hidden_chunk = hidden[token_start:token_end].to(compute_dtype)
-            if jacobian is not None:
-                expected_w = torch.zeros((n, hidden.shape[1]), device=device, dtype=torch.float32)
             for start in range(0, vocab, VOCAB_CHUNK_SIZE):
                 end = min(start + VOCAB_CHUNK_SIZE, vocab)
                 tile = mm_buf[:n, : end - start]
@@ -236,23 +218,11 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     sq_sum_exp[token_start:token_end],
                     target_logit[token_start:token_end],
                     max_before_target[token_start:token_end],
-                    rescale if jacobian is not None else sum_exp,
                     start,
                     end - start,
-                    WRITE_WEIGHTS=jacobian is not None,
                     BLOCK_SIZE=_BLOCK_SIZE,
                     **kernel_args,
                 )
-                if jacobian is not None:
-                    expected_w.mul_(rescale[:n, None]).add_(tile @ weight[start:end].to(compute_dtype))
-            if jacobian is not None:
-                sl = slice(token_start, token_end)
-                # dz/dy at the target, recovered from its transformed logit z = softcap * tanh(...) * inv_t
-                dz_dy = torch.full((n,), logit_scale / temperature, device=device)
-                if final_logit_softcapping is not None:
-                    t = target_logit[sl] * temperature / final_logit_softcapping
-                    dz_dy = dz_dy * (1 - t * t)
-                jacobian[sl] = weight[targets[sl]].float() * dz_dy[:, None] - expected_w / sum_exp[sl, None]
 
         log_z = running_max + torch.log(sum_exp)
         logprobs = target_logit - log_z
@@ -260,7 +230,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         log_sum_sq_probs = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp)
         is_top1 = (target_logit >= running_max) & (target_logit > max_before_target)
 
-        ctx.save_for_backward(hidden, weight, bias, targets, log_z, entropy, jacobian)
+        ctx.save_for_backward(hidden, weight, bias, targets, log_z, entropy)
         ctx.compute_dtype = compute_dtype
         ctx.kernel_args = kernel_args
         ctx.mark_non_differentiable(log_sum_sq_probs)
@@ -268,13 +238,10 @@ class ChunkedLogProbFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None, *_):  # type: ignore
-        hidden, weight, bias, targets, log_z, entropy, jacobian = ctx.saved_tensors
+        hidden, weight, bias, targets, log_z, entropy = ctx.saved_tensors
         compute_dtype = ctx.compute_dtype
         needs_hidden_grad, needs_weight_grad, needs_bias_grad = ctx.needs_input_grad[:3]
         N = hidden.shape[0]
-        if jacobian is not None and grad_entropy is None:
-            grad_hidden = grad_logprobs[:, None] * jacobian.float() if grad_logprobs is not None else None
-            return grad_hidden.to(hidden.dtype) if grad_hidden is not None else None, *(None,) * 6
         with maybe_gather_lm_head_ctx(weight, bias):
             vocab = weight.shape[0]
             # Always accumulate in fp32, even when the inputs are not
@@ -318,9 +285,9 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                         **ctx.kernel_args,
                     )
                     if grad_hidden is not None:
-                        grad_hidden[token_start:token_end] += tile @ w_chunk
+                        _addmm_fp32(grad_hidden[token_start:token_end], tile, w_chunk)
                     if grad_weight is not None:
-                        grad_weight[start:end] += tile.t() @ hidden_chunk
+                        _addmm_fp32(grad_weight[start:end], tile.t(), hidden_chunk)
                     if grad_bias is not None:
                         grad_bias[start:end] += tile.sum(dim=0, dtype=torch.float32)
 

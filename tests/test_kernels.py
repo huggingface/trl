@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from transformers.testing_utils import torch_device
 from transformers.utils import is_kernels_available
 
-from trl.kernels.chunked_logprob import ChunkedLogProbFunction
+from trl.kernels.chunked_logprob import ChunkedLogProbFunction, _addmm_fp32
 
 from .testing_utils import require_kernels_trust_remote_code, require_torch_accelerator
 
@@ -419,7 +419,7 @@ class TestChunkedLogProbFunction:
     )
     @pytest.mark.parametrize("entropy_weight", [0.0, 0.5])
     def test_backward_frozen_head(self, temperature, logit_scale, final_logit_softcapping, entropy_weight):
-        # A frozen head takes the precomputed-Jacobian backward, unless the entropy also needs a gradient
+        # Only the hidden states need a gradient, as with a PEFT adapter
         torch.manual_seed(42)
         hidden = torch.randn(self.N, self.H, device=torch_device, requires_grad=True)
         weight = torch.randn(self.V, self.H, device=torch_device)
@@ -458,3 +458,16 @@ class TestChunkedLogProbFunction:
         _, _, _, is_top1 = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0)
 
         torch.testing.assert_close(is_top1, argmax == labels)
+
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+    def test_addmm_fp32(self, dtype):
+        # Accumulates the product in fp32, without rounding it to `dtype` first
+        torch.manual_seed(42)
+        a = torch.randn(64, 256, device=torch_device, dtype=dtype)
+        b = torch.randn(256, 32, device=torch_device, dtype=dtype)
+        acc = torch.randn(64, 32, device=torch_device)
+        expected = acc.double() + a.double() @ b.double()
+
+        _addmm_fp32(acc, a, b)
+
+        torch.testing.assert_close(acc.double(), expected, atol=1e-3, rtol=1e-4)
