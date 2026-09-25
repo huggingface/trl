@@ -24,7 +24,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import DistributedType, broadcast_object_list, gather_object
+from accelerate.utils import DistributedType, broadcast_object_list, gather_object, set_seed
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, TrainerCallback, is_trackio_available, is_wandb_available
@@ -405,6 +405,9 @@ class IWOPDTrainer(_BaseTrainer):
             args = IWOPDConfig(output_dir="tmp_iw_opd")
 
         # ── Student model loading ──
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model_init_kwargs, str):
             import json

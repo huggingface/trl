@@ -32,7 +32,7 @@ from typing import Any, Protocol
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import broadcast_object_list, is_peft_model
+from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
@@ -1064,6 +1064,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.temperature = args.temperature
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
