@@ -680,6 +680,18 @@ class TestEntropyFromLogits(TrlTestCase):
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
+    def test_tool_calling_turn_with_null_content(self, mock_stdout):
+        print_prompt_completions_sample(
+            [[{"role": "user", "content": "fix it"}]],
+            [[{"role": "assistant", "content": None, "tool_calls": [{"function": {"name": "bash"}}]}]],
+            {"reward": [1.0]},
+            [0.5],
+            step=1,
+            num_samples=1,
+        )
+        assert "fix it" in mock_stdout.getvalue()
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
@@ -1660,6 +1672,18 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
 ]
 
 
+def _next_token_selection(completion_mask: torch.Tensor, input_ids: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """Fill the head's `(pred_index, target_id)` contract the way ordinary next-token shifting would.
+
+    The head no longer shifts or masks — it gathers — so a caller that wants next-token prediction over the completion
+    says so explicitly: position `p - 1` predicts token `p`, for every `p` the mask marks.
+    """
+    flat_mask = completion_mask.reshape(-1).bool().clone()
+    flat_mask[:: completion_mask.shape[-1]] = False  # a row's first token has no predecessor
+    target_positions = flat_mask.nonzero(as_tuple=True)[0]
+    return target_positions - 1, input_ids.reshape(-1)[target_positions]
+
+
 @require_torch_accelerator
 class TestPatchChunkedLMHead:
     B, S = 4, 16  # batch size, sequence length (including prompt + completion)
@@ -1680,79 +1704,73 @@ class TestPatchChunkedLMHead:
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_dummy_model_chunked_forward_with_completion_mask(self, temperature):
-        """Masked forward matches unmasked forward at completion positions and is zero at prompt positions."""
+        """A narrowed selection matches the full one at the positions it keeps."""
         model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
 
-        # Run WITHOUT completion_mask (baseline — computes all positions)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
+        full_index, full_target = _next_token_selection(torch.ones_like(completion_mask), input_ids)
+        out_full = model(
+            input_ids=input_ids, attention_mask=attention_mask, pred_index=full_index, target_id=full_target
+        )
 
         # Reset hidden state cache so both runs use the same hidden states
         model.model._hidden = None
 
-        # Run WITH completion_mask
+        pred_index, target_id = _next_token_selection(completion_mask, input_ids)
         out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
+            input_ids=input_ids, attention_mask=attention_mask, pred_index=pred_index, target_id=target_id
         )
 
-        # shifted completion_mask (matching the shift in _chunked_forward)
-        shifted_mask = completion_mask[:, 1:].bool()
-
-        # At completion positions, values should match
-        torch.testing.assert_close(
-            out_masked["log_probs"][shifted_mask],
-            out_full["log_probs"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-        torch.testing.assert_close(
-            out_masked["entropy"][shifted_mask],
-            out_full["entropy"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-
-        # At prompt positions, values should be zero
-        prompt_mask = ~shifted_mask
-        assert (out_masked["log_probs"][prompt_mask] == 0).all()
-        assert (out_masked["entropy"][prompt_mask] == 0).all()
+        kept = torch.isin(full_index, pred_index)
+        assert out_masked["log_probs"].shape == pred_index.shape
+        torch.testing.assert_close(out_masked["log_probs"], out_full["log_probs"][kept], atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out_masked["entropy"], out_full["entropy"][kept], atol=1e-5, rtol=1e-5)
 
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_dummy_model_chunked_forward_completion_mask_backward(self, temperature):
         model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
 
-        # Full forward + backward (mask applied after, as the trainer does)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
-        shifted_mask = completion_mask[:, 1:]
-        loss_full = (out_full["log_probs"] * shifted_mask).sum()
-        loss_full.backward()
+        full_index, full_target = _next_token_selection(torch.ones_like(completion_mask), input_ids)
+        out_full = model(
+            input_ids=input_ids, attention_mask=attention_mask, pred_index=full_index, target_id=full_target
+        )
+        pred_index, target_id = _next_token_selection(completion_mask, input_ids)
+        kept = torch.isin(full_index, pred_index)
+        (out_full["log_probs"] * kept).sum().backward()
         grad_weight_full = model.lm_head.weight.grad.clone()
 
         model.lm_head.weight.grad = None
         model.model._hidden = None
 
-        # Masked forward + backward
         out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
+            input_ids=input_ids, attention_mask=attention_mask, pred_index=pred_index, target_id=target_id
         )
-        loss_masked = (out_masked["log_probs"] * shifted_mask).sum()
-        loss_masked.backward()
+        out_masked["log_probs"].sum().backward()
         grad_weight_masked = model.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
 
         model.lm_head.weight.grad = None
         model.model._hidden = None
-        empty_completion_mask = torch.zeros_like(completion_mask)
+        empty_index, empty_target = _next_token_selection(torch.zeros_like(completion_mask), input_ids)
         out_empty = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=input_ids,
-            completion_mask=empty_completion_mask,
+            input_ids=input_ids, attention_mask=attention_mask, pred_index=empty_index, target_id=empty_target
         )
-        assert out_empty["log_probs"].count_nonzero() == 0
+        assert out_empty["log_probs"].numel() == 0
         out_empty["log_probs"].sum().backward()
         assert model.lm_head.weight.grad is not None
         assert model.lm_head.weight.grad.count_nonzero() == 0
+
+    def test_dummy_model_one_position_feeds_several_targets(self):
+        """A packed forest reuses a position for several targets, which is why selection is a gather, not a mask."""
+        model, input_ids, attention_mask, _ = self._build_model_and_inputs()
+
+        pred_index = torch.tensor([3, 3, 3])
+        target_id = torch.tensor([7, 11, 13])
+        out = model(input_ids=input_ids, attention_mask=attention_mask, pred_index=pred_index, target_id=target_id)
+
+        assert out["log_probs"].shape == (3,)
+        torch.testing.assert_close(out["entropy"], out["entropy"][0].expand(3))
+        assert len(set(out["log_probs"].tolist())) == 3
 
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1774,13 +1792,13 @@ class TestPatchChunkedLMHead:
         ref_p = ref_logits.softmax(dim=-1)
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
-        # Chunked forward
         patch_chunked_lm_head(model, chunk_size, temperature)
+        pred_index, target_id = _next_token_selection(torch.ones_like(input_ids), input_ids)
         with torch.no_grad():
-            out = model(input_ids=input_ids, labels=labels)
+            out = model(input_ids=input_ids, pred_index=pred_index, target_id=target_id)
 
-        torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
-        torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
+        torch.testing.assert_close(out["log_probs"], ref_logprobs.reshape(-1), atol=5e-3, rtol=5e-3)
+        torch.testing.assert_close(out["entropy"], ref_entropy.reshape(-1), atol=5e-3, rtol=5e-3)
 
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1809,7 +1827,8 @@ class TestPatchChunkedLMHead:
 
         # Chunked backward
         patch_chunked_lm_head(model_chunked, chunk_size, temperature)
-        out = model_chunked(input_ids=input_ids, labels=labels)
+        pred_index, target_id = _next_token_selection(torch.ones_like(input_ids), input_ids)
+        out = model_chunked(input_ids=input_ids, pred_index=pred_index, target_id=target_id)
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 

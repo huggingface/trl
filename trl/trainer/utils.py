@@ -771,7 +771,7 @@ def print_prompt_completions_sample(
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
                     if "content" in msg:
-                        t.append(msg["content"])
+                        t.append(msg["content"] or "")
                 elif "name" in msg and "args" in msg:
                     # Tool call
                     t.append(f"{role.upper()}\n", style="bold red")
@@ -1674,13 +1674,11 @@ def patch_chunked_lm_head(
         self: torch.nn.Module,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
-        completion_mask: torch.Tensor | None = None,
+        pred_index: torch.Tensor | None = None,
+        target_id: torch.Tensor | None = None,
         use_cache: bool = False,
         **kwargs,
     ) -> dict[str, torch.Tensor]:
-        assert labels is not None, "requires labels to not be None for logprob computation"
-
         decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
         outputs = self.model(
             input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
@@ -1691,23 +1689,9 @@ def patch_chunked_lm_head(
         if logit_scale is None:
             logit_scale = getattr(text_config, "output_multiplier", None)
         logit_scale = 1.0 if logit_scale is None else logit_scale
-        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
+        hidden_states = outputs.last_hidden_state  # [B, S, H]
 
-        # Shift: predict next token
-        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
-        labels = labels[:, 1:]  # [B, S-1]
-
-        b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h)
-        targets_flat = labels.reshape(b * s)
-
-        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
-        valid_mask = None
-        if completion_mask is not None:
-            completion_mask = completion_mask[:, 1:]  # same shift as labels
-            valid_mask = completion_mask.bool().reshape(b * s)
-            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
-            targets_flat = targets_flat[valid_mask]  # [N_valid]
+        hidden_flat = hidden_states.reshape(-1, hidden_states.shape[-1])[pred_index]  # [M, H]
 
         # This function reads `lm_head.weight` instead of calling the module, so it never fires the pre-forward
         # hook that unshards the head's FSDP2 group. Without PEFT the group unshards anyway, via the final norm that
@@ -1720,23 +1704,16 @@ def patch_chunked_lm_head(
         if isinstance(lm_head_bias, DTensor):
             lm_head_bias = lm_head_bias.full_tensor()
 
-        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
+        logprobs, entropy = _ChunkedLogProbFunction.apply(
             hidden_flat,
             lm_head_weight,
             lm_head_bias,
-            targets_flat,
+            target_id,
             temperature,
             chunk_size,
             final_logit_softcapping,
             logit_scale,
         )
-
-        if valid_mask is not None:
-            logprobs = logprobs_valid.new_zeros(b * s).masked_scatter(valid_mask, logprobs_valid)
-            entropy = entropy_valid.new_zeros(b * s).masked_scatter(valid_mask, entropy_valid)
-        else:
-            logprobs = logprobs_valid
-            entropy = entropy_valid
 
         aux_loss = None
         if output_router_logits:
@@ -1763,11 +1740,7 @@ def patch_chunked_lm_head(
                 outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
             )
 
-        return {
-            "log_probs": logprobs.reshape(b, s),
-            "entropy": entropy.reshape(b, s),
-            "aux_loss": aux_loss,
-        }
+        return {"log_probs": logprobs, "entropy": entropy, "aux_loss": aux_loss}
 
     model.forward = types.MethodType(_chunked_forward, model)
 
