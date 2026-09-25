@@ -58,6 +58,11 @@ config = DeepseekV3Config(
         "original_max_position_embeddings": 4096,
         "type": "yarn",
     },
+    ep_size=1,
+    moe_layer_freq=1,
+    num_nextn_predict_layers=1,
+    scoring_func="sigmoid",
+    topk_method="noaux_tc",
 )
 model = DeepseekV3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
