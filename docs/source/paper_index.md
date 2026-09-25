@@ -711,6 +711,41 @@ trainer = A2POTrainer(
 trainer.train()
 ```
 
+## KL-Regularized Policy Optimization
+
+Papers relating to the [`experimental.klpo.KLPOTrainer`].
+
+### KL-Regularized Policy Optimization for Critic-Free Agentic Reinforcement Learning
+
+**📜 Paper**: https://yifanzhang-pro.github.io/KLPO/ (tech report, no arXiv/Hugging Face paper page available)
+
+KLPO is a critic-free, single-rollout method for off-policy agentic reinforcement learning: one complete response per prompt is sufficient, with no same-prompt response group or learned value/normalizer model. Its default route, **token regression + Monte Carlo KL (MC-KL)**, weights each token's score by the detached feedback coefficient \\( R - \beta \, \ell_u \\) (terminal reward minus a KL penalty toward the sampler, with \\( \ell_u = \log p(a_u) - \log q(a_u) \\)) and centers the score with \\( M \\) independent auxiliary token draws from the sampler at each visited prefix:
+
+$$
+\mathcal{L} = -\underset{\text{responses}}{\text{mean}} \sum_{\text{tokens } u} \operatorname{sg}\!\left[R - \beta\,\ell_u\right] \left( \log p(a_u) - \frac{1}{M}\sum_{j=1}^{M} \log p(v_j) \right), \qquad v_j \sim q
+$$
+
+Tokens are summed without length normalization and responses averaged; there is no importance-ratio multiplier, reward centering, ratio clipping, or reference-model pass. The report also describes a sequence-regression route (one trajectory residual shared across tokens) and three alternative conditional-KL estimators (TopK-KL, Binary KL, Full KL); all eight route/estimator combinations are implemented. TRL provides an experimental implementation, see [Experimental - KLPO](klpo_trainer):
+
+```python
+from trl.experimental.klpo import KLPOConfig, KLPOTrainer
+
+training_args = KLPOConfig(
+    num_generations=1,  # "One complete response per prompt is sufficient"
+    klpo_beta=0.1,  # "beta=0.1 [is a] starting value, not [a] tuned KLPO benchmark setting"
+    klpo_route="token",  # "All recipes default to --route token"
+    kl_estimator="mc",  # "--kl-estimator mc"; also selectable: "topk", "binary", "full"
+    mc_samples=128,  # "the launchers default to M=128, and token regression allows any M >= 1"
+)
+trainer = KLPOTrainer(
+    model=...,
+    reward_funcs=...,  # terminal (sequence-level) reward
+    args=training_args,
+    train_dataset=...,
+)
+trainer.train()
+```
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]
