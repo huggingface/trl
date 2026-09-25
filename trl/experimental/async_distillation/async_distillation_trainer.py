@@ -1005,9 +1005,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
             optimizers=optimizers,
             compute_loss_func="non-None value to disable scaling",
         )
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether
-        # the model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
+        # compute_loss normalizes the loss across the accumulation window. The non-None compute_loss_func above
+        # disables Trainer's extra gradient_accumulation_steps divisor.
         self.model_accepts_loss_kwargs = False
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
@@ -1208,6 +1207,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         )
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, _ = super().get_batch_samples(epoch_iterator, num_batches, device)
+        num_items_in_batch = None
+        if batch_samples:
+            # The collator repeats the global token count on each rank. Sum across the accumulation window only.
+            num_items_in_batch = sum(batch["global_n_tokens"][0] for batch in batch_samples).to(device)
+        return batch_samples, num_items_in_batch
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed. In
         # AsyncDistillationTrainer, we need additional columns to compute the loss, hence the override.
@@ -1232,10 +1239,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # sharded parameters (including the `lm_head`) materialized for the projection. Mirrors
         # `DistillationTrainer.compute_loss`.
         unwrapped_model = self.accelerator.unwrap_model(model)
-        loss = self._forward_redirection(model, unwrapped_model, self._compute_loss, unwrapped_model, inputs)
+        loss = self._forward_redirection(
+            model, unwrapped_model, self._compute_loss, unwrapped_model, inputs, num_items_in_batch
+        )
         return (loss, None) if return_outputs else loss
 
-    def _compute_loss(self, unwrapped_model, inputs):
+    def _compute_loss(self, unwrapped_model, inputs, num_items_in_batch=None):
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
         # `position_ids` resetting per sequence), then padded the row to the longest rank's length so
         # DataLoaderDispatcher could scatter rectangular rows. Strip that trailing inter-rank padding here.
@@ -1281,13 +1290,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # position would degenerate through `_add_tail_bucket` into a fabricated "100% tail mass" distribution on
         # both sides, i.e. a synthetic near-zero divergence trained on, instead of being excluded like padding.
         has_teacher_signal = valid_candidate_mask.any(dim=-1)
-        # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
-        # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
-        # Mirrors AsyncGRPOTrainer.compute_loss's scaling: this is infra-level (padding-free packing, DDP averaging,
-        # gradient accumulation), not policy-gradient-specific, so it needs no adaptation here. `global_n_tokens` is
-        # computed by the collator from `completion_mask` alone, so it does not shrink when `has_teacher_signal`
-        # excludes a position above; a run with such gaps is very slightly under-scaled rather than exactly
-        # renormalized, which is an acceptable trade-off for what should be a rare, teacher-side data gap.
+        # The collator counts tokens from `completion_mask` alone. The denominator therefore includes positions
+        # excluded by `has_teacher_signal`. This retains the existing scale for rare teacher-side data gaps.
         token_mask_1d = (completion_mask.bool() & has_teacher_signal)[0]  # (seq_len - 1,), batch dim always 1
 
         # Memory-efficient path: get the student's backbone hidden states (skip `lm_head`, so this alone never
@@ -1371,9 +1375,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
-        tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
-        loss = loss / tokens_per_rank.to(torch.float32)
-        loss = loss / self.current_gradient_accumulation_steps
+        # Use one denominator for the whole accumulation window. DDP/FSDP averages gradients across ranks, so
+        # divide the global token count by world_size. Direct calls without a window count retain the batch scale.
+        if num_items_in_batch is None:
+            num_items_in_batch = global_n_tokens * self.current_gradient_accumulation_steps
+        normalizer = num_items_in_batch.clamp(min=1.0).to(torch.float32) / world_size
+        loss = loss / normalizer
 
         with torch.no_grad():
             local_count = token_mask_1d.sum().float()
