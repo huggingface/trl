@@ -1,0 +1,70 @@
+# Temporary workflow: runs the vLLM client/server tests with the minimum supported dependencies, including the
+# minimum supported vLLM. Not meant to be merged.
+name: CI vLLM min versions
+
+on:
+  push:
+    branches:
+      - ci-*
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+permissions: {}
+
+jobs:
+  vllm_client_server_min_versions:
+    permissions:
+      contents: read
+    name: vLLM client/server tests with minimum versions
+    runs-on:
+      group: aws-g5-12xlarge-cache
+    env:
+      CUDA_VISIBLE_DEVICES: "0,1,2,3"
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all --shm-size "16gb"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install \
+            ".[dev]" \
+            "accelerate==1.4.0" \
+            "datasets==4.7.0" \
+            "transformers==4.56.2" \
+            "vllm==0.20.0"
+
+      - name: Show installed versions
+        run: |
+          source .venv/bin/activate
+          uv pip list | grep -E "^(accelerate|datasets|torch|transformers|vllm) "
+
+      - name: Run the vLLM client/server tests
+        run: |
+          source .venv/bin/activate
+          pytest -m slow -v tests/test_vllm_client_server.py
