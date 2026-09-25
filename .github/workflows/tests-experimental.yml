@@ -7,6 +7,7 @@ on:
       - ".github/workflows/tests-experimental.yml"
       - "trl/experimental/**"
       - "tests/experimental/**"
+      - "examples/async_grpo_harbor/**"
 
 env:
   TQDM_DISABLE: 1
@@ -22,6 +23,37 @@ concurrency:
 permissions: {}
 
 jobs:
+  openenv_contract:
+    permissions:
+      contents: read
+    name: OpenEnv capture contract (CPU)
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: temp/openenv/envs
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: huggingface/OpenEnv
+          ref: 34825a772ae54760fb6bf7a8b2073a4a85714004
+          path: temp/openenv
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+      - name: Install CPU test dependencies
+        run: |
+          uv venv
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install ".[test]" ./temp/openenv
+      - name: Check pinned producer and consumer
+        run: |
+          source .venv/bin/activate
+          python -c "import harbor_env.harness; import trl.experimental.async_grpo.openenv_harness"
+          python -m pytest -q tests/experimental/test_openenv_tito.py tests/experimental/test_harbor_example.py \
+            tests/experimental/test_async_grpo_trainer.py::TestReconciler tests/test_vllm_control_requests.py
+
   tests:
     permissions:
       contents: read

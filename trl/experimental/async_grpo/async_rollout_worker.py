@@ -66,6 +66,8 @@ class TurnRecord:
     prompt_ids: list[int]
     output_ids: list[int]
     output_log_probs: list[float] = field(default_factory=list)
+    # Completion-token eligibility. None supervises all output tokens; zeros retain context only.
+    output_mask: list[int] | None = None
 
 
 @dataclass
@@ -74,7 +76,7 @@ class TrainingSequence:
 
     input_ids: list[int]  # full tokens (prompt included)
     completion_mask: list[int]  # 1 = train this token, 0 = context
-    old_log_probs: list[float]  # generator logprobs, 0.0 where mask is 0
+    old_log_probs: list[float]  # sampled logprobs; prompt-only context is zero-filled
     rollout_id: RolloutId  # which conversation this row came from
 
 
@@ -125,7 +127,11 @@ class _SampleBuilder:
         else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
             self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
         self.last_response_start_idx = len(self.tokens)
-        self._append(turn.output_ids, mask=1, logprobs=turn.output_log_probs)
+        self._append(
+            turn.output_ids,
+            mask=turn.output_mask if turn.output_mask is not None else 1,
+            logprobs=turn.output_log_probs,
+        )
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         matched = _common_prefix_len(self.tokens, prompt_ids)
@@ -134,10 +140,18 @@ class _SampleBuilder:
         self.loss_mask[matched:] = [0] * len(tail)
         self.logprobs[matched:] = [0.0] * len(tail)
 
-    def _append(self, ids: list[int], *, mask: int, logprobs: list[float] | None = None) -> None:
+    def _append(self, ids: list[int], *, mask: int | list[int], logprobs: list[float] | None = None) -> None:
+        """Append tokens with a uniform or per-token supervision mask."""
+        masks = [mask] * len(ids) if isinstance(mask, int) else mask
+        if len(masks) != len(ids):
+            raise ValueError("loss mask must contain one entry per token")
+        if any(masks) and logprobs is None:
+            raise ValueError("trainable tokens require one sampled logprob per token")
+        if logprobs is not None and len(logprobs) != len(ids):
+            raise ValueError("logprobs must contain one entry per token")
         self.tokens.extend(ids)
-        self.loss_mask.extend([mask] * len(ids))
-        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
+        self.loss_mask.extend(masks)
+        self.logprobs.extend(logprobs if logprobs is not None else [0.0] * len(ids))
 
     def has_trained_token(self) -> bool:
         return any(self.loss_mask)

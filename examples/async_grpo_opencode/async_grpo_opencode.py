@@ -71,6 +71,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -463,8 +464,11 @@ class FreePortOpenCodeSessionFactory(OpenCodeSessionFactory):
         return proxy_job, f"http://127.0.0.1:{port}/v1", trace_path
 
 
-def build_factory(sandbox_root: str, vllm_url: str, model: str, tests_by_id: dict) -> OpencodeTaskFactory:
+def build_factory(
+    sandbox_root: str, vllm_url: str, model: str, tests_by_id: dict, *, sampling: dict
+) -> OpencodeTaskFactory:
     config = OpenCodeConfig(
+        extra_opencode_json={"agent": {"build": {"temperature": sampling["temperature"], "top_p": sampling["top_p"]}}},
         provider="openai_compatible",
         base_url=f"{vllm_url}/v1",
         model=model,  # proxy --model-override forces this exact id on upstream requests
@@ -582,7 +586,7 @@ def main() -> None:
     )
 
     worker = HarnessRolloutWorker(
-        harness_session_factory=build_factory(sandbox_root, args.vllm_url, args.model, tests_by_id),
+        harness_session_factory=partial(build_factory, sandbox_root, args.vllm_url, args.model, tests_by_id),
         harness_adapter=None,  # loop-owning: opencode runs its own loop; TRL reads the proxy trace
         rollout_reward_fn=opencode_reward,  # reward policy (binary verifier + degeneracy penalties)
         train_turn_fn=has_tool_call,  # coding agent: reinforce only action turns, not prose

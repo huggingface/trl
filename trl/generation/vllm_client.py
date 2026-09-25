@@ -848,7 +848,10 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        self._post(f"{self.base_url}/reset_prefix_cache")
+        # vLLM acknowledges this control request with an empty HTTP 200 body.
+        response = self.session.post(f"{self.base_url}/reset_prefix_cache")
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
         """

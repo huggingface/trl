@@ -81,6 +81,7 @@ import argparse
 import hashlib
 import json
 import random
+from functools import partial
 from typing import Any
 
 from datasets import Dataset, load_dataset
@@ -256,9 +257,10 @@ class OpencodeTaskFactory(ResourceSessionFactory):
 
 
 def build_factory(
-    sandbox_vllm_url: str, model: str, tests_by_id: dict, image: str, flavor: str
+    sandbox_vllm_url: str, model: str, tests_by_id: dict, image: str, flavor: str, *, sampling: dict
 ) -> OpencodeTaskFactory:
     config = OpenCodeConfig(
+        extra_opencode_json={"agent": {"build": {"temperature": sampling["temperature"], "top_p": sampling["top_p"]}}},
         provider="openai_compatible",
         base_url=f"{sandbox_vllm_url}/v1",  # the in-sandbox proxy forwards here; remote, so a public url (tunnel)
         model=model,  # proxy --model-override forces this exact id on upstream requests
@@ -389,8 +391,8 @@ def main() -> None:
     )
 
     worker = HarnessRolloutWorker(
-        harness_session_factory=build_factory(
-            args.sandbox_vllm_url, args.model, tests_by_id, args.sandbox_image, args.sandbox_flavor
+        harness_session_factory=partial(
+            build_factory, args.sandbox_vllm_url, args.model, tests_by_id, args.sandbox_image, args.sandbox_flavor
         ),
         harness_adapter=None,  # loop-owning: opencode runs its own loop; TRL reads the proxy trace
         rollout_reward_fn=opencode_reward,  # reward policy (binary verifier + degeneracy penalties)
