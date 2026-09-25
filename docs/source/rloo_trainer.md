@@ -222,6 +222,22 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+### Padding-free forward
+
+By default the per-token log-prob forward runs on a dense block: prompts are left-padded and completions right-padded to the longest sequence in the micro-batch, and the padding tokens are computed and then masked. With `padding_free=True`, each micro-batch's real tokens are packed into a single row with position ids that restart per sample and no attention mask, so a Flash Attention implementation separates the samples from the position resets and the padded compute is skipped. The per-token log-probs are scattered back into the padded layout, so every loss type and metric is unchanged.
+
+```python
+from transformers import AutoModelForCausalLM
+from trl import RLOOConfig
+
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", attn_implementation="flash_attention_2")
+training_args = RLOOConfig(..., padding_free=True)
+```
+
+`padding_free=True` requires a Flash Attention `attn_implementation` (`flash_attention_2`, `flash_attention_3` or one of the `kernels-community` flash-attn kernels) and is not supported with vision-language models.
+
+The isolation depends on the model forwarding `position_ids` to the Flash Attention kernel and on every sequence-mixing layer being attention. A model whose Flash Attention path drops `position_ids` (OLMoE in transformers 4.56, for example) or a hybrid architecture with recurrent or state-space layers that read the whole row (Jamba, for example) is not separated by the position resets, and `padding_free=True` silently mixes samples on it. The same limit applies to the `padding_free` option of [`SFTTrainer`].
+
 ### RLOO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
