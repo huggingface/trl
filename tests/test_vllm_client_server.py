@@ -57,6 +57,23 @@ class TestConnectionPoolSize(TrlTestCase):
             assert pool.pool.maxsize >= _DEFAULT_GENERATION_CONCURRENCY
 
 
+class TestResetPrefixCache(TrlTestCase):
+    def test_empty_response_body(self):
+        # vLLM 0.20 answers `/reset_prefix_cache` with an empty body, which has no JSON to parse
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            client = VLLMClient(host="127.0.0.1")
+
+        response = SimpleNamespace(status_code=200, content=b"")
+        with patch.object(client.session, "post", return_value=response) as post:
+            client.reset_prefix_cache()
+
+        post.assert_called_once_with(f"{client.base_url}/reset_prefix_cache")
+
+
 class TestParseLogprobs(TrlTestCase):
     def test_completion_logprobs_sorted_by_probability(self):
         logprobs = {

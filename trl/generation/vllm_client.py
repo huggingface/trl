@@ -263,7 +263,8 @@ class VLLMClient:
         response = self.session.post(url, **kwargs)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
-        return response.json()
+        # vLLM 0.20 answers `/reset_prefix_cache` with an empty body, which has no JSON to parse
+        return response.json() if response.content else {}
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
