@@ -25,6 +25,7 @@ import threading
 import types
 from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -52,7 +53,7 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
 
@@ -1456,86 +1457,131 @@ def shutdown_event_loop_in_daemon(
     thread.join(timeout=5)
 
 
-def patch_chunked_lm_head(
-    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
-) -> None:
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
+
+
+@dataclass
+class FusedCausalLMOutput(ModelOutput):
+    """
+    Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
+    is zero where the label is `-100`.
+
+    Args:
+        loss (`torch.Tensor`):
+            Negative log-likelihood under the temperature-scaled distribution, summed over the non-ignored tokens and
+            divided by `num_items_in_batch` (their count when not passed), plus the MoE load-balancing loss weighted by
+            the config's `router_aux_loss_coef` when router logits are requested. At `temperature=1.0`, this is the
+            loss the model's own forward computes.
+        log_probs (`torch.Tensor` of shape `(batch, seq_len - 1)`, or `(batch, seq_len)` with `shift_labels`):
+            Log-probability of each next-token label.
+        entropy (`torch.Tensor`, same shape as `log_probs`):
+            Entropy of the next-token distribution.
+        label_mask (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
+            sequence than the caller's labels.
+        aux_loss (`torch.Tensor`, *optional*):
+            MoE load-balancing loss, when called with `output_router_logits=True`.
+    """
+
+    loss: torch.Tensor | None = None
+    log_probs: torch.Tensor | None = None
+    entropy: torch.Tensor | None = None
+    label_mask: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
+
+
+def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
+    """
+    Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
+    instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
+
+    With `fused_lm_head=True`, the patched forward runs the backbone and projects through the LM head, in tiles, only
+    the positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted
+    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Without it, the
+    forward is the original one, so generation is unchanged. Patch the model before wrapping it with PEFT.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Causal language model to patch.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature the logits are divided by.
+        cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
+            Whether to run the LM head projection in float32, outside autocast.
+    """
+    original_forward = model.forward
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+    # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+    # as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
+    logit_scale = getattr(text_config, "logit_scale", None)
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "output_multiplier", None)
+    logit_scale = 1.0 if logit_scale is None else logit_scale
+    # Before transformers 5, vision-language models expose their language backbone as `model` rather than through
+    # `base_model_prefix`.
+    backbone_attr = "base_model"
+    if text_config is not model.config and Version(transformers.__version__) < Version("5.0.0"):
+        backbone_attr = "model"
 
-    def _chunked_forward(
-        self: torch.nn.Module,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
-        completion_mask: torch.Tensor | None = None,
-        use_cache: bool = False,
-        **kwargs,
-    ) -> dict[str, torch.Tensor]:
-        assert labels is not None, "requires labels to not be None for logprob computation"
+    # Keep the original signature: `generate` validates its model kwargs against it
+    @functools.wraps(type(model).forward)
+    def _fused_forward(
+        self, *args, fused_lm_head=False, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs
+    ):
+        if not fused_lm_head:
+            if labels is not None:
+                kwargs["labels"] = labels
+            if shift_labels is not None:
+                kwargs["shift_labels"] = shift_labels
+            if num_items_in_batch is not None:
+                kwargs["num_items_in_batch"] = num_items_in_batch
+            return original_forward(*args, **kwargs)
 
-        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
-        outputs = self.model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
-        )
-        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is
-        # kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
-        logit_scale = getattr(text_config, "logit_scale", None)
-        if logit_scale is None:
-            logit_scale = getattr(text_config, "output_multiplier", None)
-        logit_scale = 1.0 if logit_scale is None else logit_scale
-        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
-
-        # Shift: predict next token
-        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
-        labels = labels[:, 1:]  # [B, S-1]
-
-        b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h)
-        targets_flat = labels.reshape(b * s)
-
-        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
-        valid_mask = None
-        if completion_mask is not None:
-            completion_mask = completion_mask[:, 1:]  # same shift as labels
-            valid_mask = completion_mask.bool().reshape(b * s)
-            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
-            targets_flat = targets_flat[valid_mask]  # [N_valid]
-
-        # This function reads `lm_head.weight` instead of calling the module, so it never fires the pre-forward
-        # hook that unshards the head's FSDP2 group. Without PEFT the group unshards anyway, via the final norm that
-        # shares it; with PEFT accelerate fails to find that norm through the wrapper, and the weight arrives as a
-        # sharded `DTensor` that `torch.mm` rejects. Keyed off the tensor type, so it stops firing once accelerate's
-        # lookup handles PEFT. `full_tensor` is differentiable.
-        lm_head_weight, lm_head_bias = self.lm_head.weight, self.lm_head.bias
-        if isinstance(lm_head_weight, DTensor):
-            lm_head_weight = lm_head_weight.full_tensor()
-        if isinstance(lm_head_bias, DTensor):
-            lm_head_bias = lm_head_bias.full_tensor()
-
-        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
-            hidden_flat,
-            lm_head_weight,
-            lm_head_bias,
-            targets_flat,
-            temperature,
-            chunk_size,
-            final_logit_softcapping,
-            logit_scale,
-        )
-
-        if valid_mask is not None:
-            logprobs = logprobs_valid.new_zeros(b * s).masked_scatter(valid_mask, logprobs_valid)
-            entropy = entropy_valid.new_zeros(b * s).masked_scatter(valid_mask, entropy_valid)
+        # The backbone and the LM head are looked up on each call, since FSDP and PEFT replace them after patching
+        kwargs["use_cache"] = False
+        # MoE models: like the model's own forward, request router logits when the config asks for them
+        if getattr(text_config, "output_router_logits", False):
+            kwargs.setdefault("output_router_logits", True)
+        outputs = getattr(self, backbone_attr)(*args, **kwargs)
+        if shift_labels is None:
+            hidden_states = outputs.last_hidden_state[:, :-1]
+            labels = labels[:, 1:]
         else:
-            logprobs = logprobs_valid
-            entropy = entropy_valid
+            hidden_states = outputs.last_hidden_state
+            labels = shift_labels
+        mask = labels != -100
+        autocast_ctx = nullcontext()
+        if cast_lm_head_to_fp32:
+            hidden_states = hidden_states.float()
+            autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
+
+        lm_head = self.get_output_embeddings()
+        weight, bias = lm_head.weight, lm_head.bias
+        # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
+        # head once before splitting tokens so every projection uses compatible tensor types.
+        if isinstance(weight, DTensor):
+            weight = weight.full_tensor()
+            if bias is not None:
+                bias = bias.full_tensor()
+        with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
+            per_token = _ChunkedLogProbFunction.apply(
+                hidden_states[mask],
+                weight,
+                bias,
+                labels[mask],
+                temperature,
+                _CHUNKED_LOGPROB_CHUNK_SIZE,
+                final_logit_softcapping,
+                logit_scale,
+            )
+        # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+        # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+        log_probs, entropy = (x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
-        if output_router_logits:
-            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
-            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
-            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
-            # single import keeps us in lockstep with upstream for every family we test.
+        if kwargs.get("output_router_logits"):
+            # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
             if Version(transformers.__version__) < Version("5.0.0"):
@@ -1552,16 +1598,13 @@ def patch_chunked_lm_head(
                 num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
-                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
+                outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
             )
+            loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return {
-            "log_probs": logprobs.reshape(b, s),
-            "entropy": entropy.reshape(b, s),
-            "aux_loss": aux_loss,
-        }
+        return FusedCausalLMOutput(loss=loss, log_probs=log_probs, entropy=entropy, label_mask=mask, aux_loss=aux_loss)
 
-    model.forward = types.MethodType(_chunked_forward, model)
+    model.forward = types.MethodType(_fused_forward, model)
 
 
 def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:

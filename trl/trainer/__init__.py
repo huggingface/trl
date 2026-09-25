@@ -45,7 +45,7 @@ _import_structure = {
         "ensure_master_addr_port",
         "get_peft_config",
         "get_quantization_config",
-        "patch_chunked_lm_head",
+        "patch_fused_lm_head",
     ],
 }
 
@@ -77,7 +77,7 @@ if TYPE_CHECKING:
         ensure_master_addr_port,
         get_peft_config,
         get_quantization_config,
-        patch_chunked_lm_head,
+        patch_fused_lm_head,
     )
 else:
     import sys
