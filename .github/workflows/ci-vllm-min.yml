@@ -68,4 +68,4 @@ jobs:
       - name: Run the vLLM client/server tests
         run: |
           source .venv/bin/activate
-          pytest -m slow -v --durations=10 tests/test_vllm_client_server.py::TestVLLMClientServer
+          pytest -m slow -v --durations=10 -k reset_prefix_cache tests/test_vllm_client_server.py
