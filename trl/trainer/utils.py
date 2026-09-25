@@ -1301,8 +1301,10 @@ def create_model_from_path(
         )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    # On MPS, device_map="auto" can also segfault while loading non-float32 checkpoints
+    # (see https://github.com/huggingface/transformers/issues/48029), so we avoid it there too.
     if "device_map" not in kwargs:
-        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
+        kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
