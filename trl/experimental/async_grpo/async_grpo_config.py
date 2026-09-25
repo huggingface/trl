@@ -21,7 +21,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class AsyncGRPOConfig(_BaseConfig):
     r"""
-    Configuration class for the [`AsyncGRPOTrainer`].
+    Configuration class for the [`experimental.async_grpo.AsyncGRPOTrainer`].
 
     This class includes only the parameters that are specific to asynchronous GRPO training. For a full list of
     training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values
@@ -32,7 +32,7 @@ class AsyncGRPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            model from a path.
+            model from a path. The `revision` value is also used when loading the processing class.
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It defaults
             to `"float32"` because the training-inference mismatch this trainer is measured against ([Defeating the
@@ -45,10 +45,10 @@ class AsyncGRPOConfig(_BaseConfig):
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
 
         > Parameters that control generation
 
@@ -164,14 +164,14 @@ class AsyncGRPOConfig(_BaseConfig):
     >   decaying schedule together with an explicit `max_steps`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when instantiating "
-            "the model from a path."
+            "the model from a path. The `revision` value is also used when loading the processing class."
         },
     )
     dtype: str = field(
@@ -190,12 +190,12 @@ class AsyncGRPOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
 
@@ -270,7 +270,7 @@ class AsyncGRPOConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "

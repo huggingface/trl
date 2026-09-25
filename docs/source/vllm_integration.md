@@ -3,16 +3,14 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.19.1` to `0.27.1`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.20.0` to `0.30.0`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
 >
 > - [`GRPOTrainer`]
 > - [`RLOOTrainer`]
-> - [`experimental.nash_md.NashMDTrainer`]
 > - [`experimental.online_dpo.OnlineDPOTrainer`]
-> - [`experimental.xpo.XPOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
 
@@ -84,46 +82,6 @@ trainer.train()
 ```
 
 </hfoption>
-<hfoption id="NashMD">
-
-```python
-from datasets import load_dataset
-from trl.experimental.nash_md import NashMDConfig, NashMDTrainer
-from trl.rewards import accuracy_reward
-
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
-
-trainer = NashMDTrainer(
-    model="Qwen/Qwen2.5-7B",
-    args=NashMDConfig(use_vllm=True, vllm_mode="server"),
-    reward_funcs=accuracy_reward,
-    train_dataset=dataset,
-)
-
-trainer.train()
-```
-
-</hfoption>
-<hfoption id="XPO">
-
-```python
-from datasets import load_dataset
-from trl.experimental.xpo import XPOTrainer, XPOConfig
-from trl.rewards import accuracy_reward
-
-dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
-
-trainer = XPOTrainer(
-    model="Qwen/Qwen2.5-7B",
-    args=XPOConfig(use_vllm=True, vllm_mode="server"),
-    reward_funcs=accuracy_reward,
-    train_dataset=dataset,
-)
-
-trainer.train()
-```
-
-</hfoption>
 <hfoption id="RLOO">
 
 ```python
@@ -182,6 +140,7 @@ Only the following are required by TRL:
 | `--weight-transfer-config '{"backend": "nccl"}'` | Enables the NCCL weight-transfer engine. Use `"ipc"` instead when the trainer and the server share a GPU. |
 | `--logprobs-mode processed_logprobs` | Returns logprobs after temperature scaling and logit processing, which is what the importance sampling correction expects. |
 | `--max-logprobs -1` | Lifts the OpenAI-compatible cap of 20 logprobs per token, required to request the top-k teacher distribution for distillation. |
+| `--enable-scale-out` | vLLM 0.30.0 and later, for multimodal prompts only: registers `/v1/chat/completions/render` and `/inference/v1/generate`, which the trainer uses to process images. Earlier versions reject the flag. |
 
 > [!WARNING]
 > `trl vllm-serve` is deprecated: it now only builds this command and runs vLLM's server. It prints the exact `vllm serve` command it runs, so you can copy it and drop the wrapper.
@@ -206,7 +165,8 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm 
     --tensor-parallel-size 1 --port 8000 --enforce-eager --model-impl transformers \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+    --max-logprobs -1 \
+    --enable-scale-out  # vLLM 0.30.0 and later, drop on earlier versions
 ```
 
 ### Modes of Using vLLM During Training
@@ -239,30 +199,6 @@ training_args = GRPOConfig(
 from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
-    ...,
-    use_vllm=True,  # vllm_mode="colocate" by default
-)
-```
-
-</hfoption>
-<hfoption id="NashMD">
-
-```python
-from trl.experimental.nash_md import NashMDConfig
-
-training_args = NashMDConfig(
-    ...,
-    use_vllm=True,  # vllm_mode="colocate" by default
-)
-```
-
-</hfoption>
-<hfoption id="XPO">
-
-```python
-from trl.experimental.xpo import XPOConfig
-
-training_args = XPOConfig(
     ...,
     use_vllm=True,  # vllm_mode="colocate" by default
 )
@@ -310,32 +246,6 @@ training_args = GRPOConfig(
 from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="server",
-)
-```
-
-</hfoption>
-<hfoption id="NashMD">
-
-```python
-from trl.experimental.nash_md import NashMDConfig
-
-training_args = NashMDConfig(
-    ...,
-    use_vllm=True,
-    vllm_mode="server",
-)
-```
-
-</hfoption>
-<hfoption id="XPO">
-
-```python
-from trl.experimental.xpo import XPOConfig
-
-training_args = XPOConfig(
     ...,
     use_vllm=True,
     vllm_mode="server",

@@ -17,6 +17,7 @@ import copy
 import functools
 import hashlib
 import importlib.resources as pkg_resources
+import inspect
 import os
 import random
 import socket
@@ -24,6 +25,7 @@ import threading
 import types
 from collections.abc import Callable, Mapping, Sequence, Sized
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from importlib.metadata import version
 from itertools import accumulate
 from typing import TypeVar
@@ -38,6 +40,7 @@ from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
+from torch.distributed.tensor import DTensor
 from torch.utils.data import Sampler
 from transformers import (
     AutoConfig,
@@ -50,7 +53,7 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
 
@@ -193,10 +196,10 @@ def maybe_gather_lm_head_ctx(*params: torch.nn.Parameter):
     Fused losses (e.g. Liger) read `lm_head.weight` directly and hand it to the kernel without ever calling the
     `lm_head` module. Under DeepSpeed ZeRO-3 every parameter is sharded to `numel 0` and only re-materialized inside
     its owning module's forward hook, so the head's gather hook never fires and the kernel receives an empty weight.
-    This gathers the given parameters for the duration of the forward, so the fused matmul sees the full weight. The
-    weight gradient is computed and stashed during this forward, so the parameters need not stay gathered for the
-    backward — but the backward's gradient reduction relies on the ZeRO-3 pre-forward hooks being armed, so the caller
-    must run the fused loss inside the model's forward (e.g. via `_ForwardRedirection`).
+    This gathers the given parameters for the duration of a direct access, so the matmul sees the full weight. Fused
+    losses compute and stash their gradients during the forward; custom autograd functions that recompute during the
+    backward must enter this context again. The backward's gradient reduction relies on the ZeRO-3 pre-forward hooks
+    being armed, so the caller must run the loss inside the model's forward (e.g. via `_ForwardRedirection`).
 
     Returns a null context when ZeRO-3 is not enabled, or when the parameters are already gathered — with tied
     embeddings `embed_tokens` keeps the weight `AVAILABLE`, and re-partitioning it on exit would collide with
@@ -233,6 +236,20 @@ def get_callable_name(func: Callable) -> str:
     return getattr(func, "__name__", type(func).__name__)
 
 
+def is_async_callable(func: Callable) -> bool:
+    """
+    Return whether calling `func` returns a coroutine, for the same forms as [`get_callable_name`]: module-level
+    functions, [`functools.partial`](https://docs.python.org/3/library/functools.html#functools.partial) (unwrapped to
+    the wrapped callable), and callable class instances (which carry the `async` on their `__call__`).
+
+    `inspect.iscoroutinefunction` alone covers only the first two: it inspects the instance itself, not its `__call__`,
+    so an async callable class reads as synchronous and its coroutine is never awaited.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    return inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(func.__call__)
+
+
 def get_quantization_config(model_args: ModelConfig) -> BitsAndBytesConfig | None:
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
@@ -262,17 +279,22 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
             "Make sure to run `pip install -U peft`."
         )
 
+    # `target_parameters` was added in PEFT 0.17.0, so only pass it when the user asked for it
+    lora_config_kwargs = {}
+    if model_args.lora_target_parameters is not None:
+        lora_config_kwargs["target_parameters"] = model_args.lora_target_parameters
+
     peft_config = LoraConfig(
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
-        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
         use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
+        **lora_config_kwargs,
     )
 
     return peft_config
@@ -311,18 +333,18 @@ def generate_model_card(
             Weights & Biases run URL.
         trackio_url (`str` or `None`):
             Trackio Space URL.
-        comet_url (`str` or `None`):
-            Comet experiment URL.
         trainer_name (`str`):
             Trainer name.
-        trainer_citation (`str` or `None`, defaults to `None`):
+        trainer_citation (`str`, *optional*):
             Trainer citation as a BibTeX entry.
-        template_file (`str` *optional*):
+        template_file (`str`, *optional*):
             Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
-        paper_title (`str` or `None`, defaults to `None`):
+        paper_title (`str`, *optional*):
             Paper title.
-        paper_id (`str` or `None`, defaults to `None`):
+        paper_id (`str`, *optional*):
             ArXiv paper ID as `YYMM.NNNNN`.
+        comet_url (`str`, *optional*):
+            Comet experiment URL.
 
     Returns:
         [`~huggingface_hub.ModelCard`]:
@@ -477,7 +499,48 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index) -> torch.Tensor:
+try:
+    from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
+except ImportError:  # Triton ships with PyTorch on Linux only
+    _ChunkedLogProbFunction = None
+    _fused_logprob_entropy = None
+
+
+def _supports_trl_loss_kernel(
+    logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
+) -> bool:
+    supported = (
+        logits.device.type in ("cuda", "xpu")
+        and logits.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and 1 <= logits.ndim <= 3
+        and logits.stride(-1) == 1
+        and logits.shape[-1] > 0
+    )
+    if index is not None:
+        supported = (
+            supported
+            and index.shape == logits.shape[:-1]
+            and index.dtype in (torch.int32, torch.int64)
+            and index.device == logits.device
+        )
+    if row_mask is not None:
+        supported = (
+            supported
+            and index is not None
+            and row_mask.shape == index.shape
+            and row_mask.dtype in (torch.bool, torch.int32, torch.int64)
+            and row_mask.device == logits.device
+        )
+    return supported
+
+
+def selective_log_softmax(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -495,11 +558,23 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         index (`torch.Tensor`):
             Index tensor of shape `(..., K)` or `(...)`, specifying the positions to gather from the log-softmax
             output. When the last case is used, `K` log-probabilities are gathered per position (e.g. for top-K)
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero log-probability.
 
     Returns:
         `torch.Tensor`:
             Gathered log probabilities with the same shape as `index`.
     """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+        logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
+        return logprobs
+
+    if temperature != 1.0:
+        logits = logits / temperature
     squeeze = index.ndim == logits.ndim - 1
     if squeeze:
         index = index.unsqueeze(-1)
@@ -520,6 +595,8 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
     if squeeze:
         per_token_logps = per_token_logps.squeeze(-1)
+    if row_mask is not None:
+        per_token_logps = per_token_logps.masked_fill(row_mask == 0, 0.0)
 
     return per_token_logps
 
@@ -545,6 +622,11 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
+    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits):
+        index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
+        _, entropy = _fused_logprob_entropy(logits, index)
+        return entropy
+
     original_shape = logits.shape[:-1]  # all dims except num_classes
     num_classes = logits.shape[-1]
 
@@ -559,6 +641,49 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
     entropies = torch.cat(entropies, dim=0)
     return entropies.reshape(original_shape)
+
+
+def selective_log_softmax_and_entropy(
+    logits: torch.Tensor,
+    index: torch.Tensor,
+    entropy_requires_grad: bool = True,
+    temperature: float = 1.0,
+    row_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute selected log-probabilities and entropy in one pass over the logits.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+        index (`torch.Tensor`):
+            Indices of shape `(...)` selecting one log-probability per row.
+        entropy_requires_grad (`bool`, *optional*, defaults to `True`):
+            Whether gradients should flow through the entropy output.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature used to scale the logits.
+        row_mask (`torch.Tensor`, *optional*):
+            Mask with the same shape as `index`. Rows containing zero are skipped and return zero outputs.
+
+    Returns:
+        `tuple[torch.Tensor, torch.Tensor]`:
+            The selected log-probabilities and per-row entropies.
+    """
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+        logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
+        return logprobs, entropy if entropy_requires_grad else entropy.detach()
+    if temperature != 1.0:
+        logits = logits / temperature
+    logprobs = selective_log_softmax(logits, index, row_mask=row_mask)
+    if entropy_requires_grad:
+        entropy = entropy_from_logits(logits)
+    else:
+        with torch.no_grad():
+            entropy = entropy_from_logits(logits)
+    if row_mask is not None:
+        entropy = entropy.masked_fill(row_mask == 0, 0.0)
+    return logprobs, entropy
 
 
 def print_prompt_completions_sample(
@@ -964,10 +1089,12 @@ def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -979,10 +1106,12 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     Compute the maximum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
 
     Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
 
     Returns:
-        `torch.Tensor`: Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+        `torch.Tensor`:
+            Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
     """
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
@@ -1151,7 +1280,7 @@ def create_model_from_path(
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
-        architecture (`_BaseAutoModelClass` or `None`, *optional*):
+        architecture (`_BaseAutoModelClass`, *optional*):
             Model architecture class to instantiate. The model is initialized using the `from_pretrained` method of
             this class. If `None`, the architecture will be inferred from the model's configuration.
         kwargs (`dict`):
@@ -1227,6 +1356,21 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+@contextmanager
+def global_then_local_main_first():
+    """
+    Context manager that lets the global main process run the block first, then the local main of each node, then
+    everyone else. Both scopes of `PartialState.main_process_first`, one after the other.
+
+    Work that writes to a cache only has to happen once per cache the processes can read. The global main goes first,
+    which is enough when the cache is shared. The local mains then go first, so a cache on node-local disk costs one
+    pass per node rather than one per process.
+    """
+    state = PartialState()
+    with state.main_process_first(), state.local_main_process_first():
+        yield
 
 
 @contextmanager
@@ -1321,221 +1465,131 @@ def shutdown_event_loop_in_daemon(
     thread.join(timeout=5)
 
 
-class _ChunkedLogProbFunction(torch.autograd.Function):
-    """Compute per-token log-probs and entropy without materializing [N, V] logits.
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
-    Processes the lm_head in chunks and uses online logsumexp
+
+@dataclass
+class FusedCausalLMOutput(ModelOutput):
+    """
+    Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
+    is zero where the label is `-100`.
+
+    Args:
+        loss (`torch.Tensor`):
+            Negative log-likelihood under the temperature-scaled distribution, summed over the non-ignored tokens and
+            divided by `num_items_in_batch` (their count when not passed), plus the MoE load-balancing loss weighted by
+            the config's `router_aux_loss_coef` when router logits are requested. At `temperature=1.0`, this is the
+            loss the model's own forward computes.
+        log_probs (`torch.Tensor` of shape `(batch, seq_len - 1)`, or `(batch, seq_len)` with `shift_labels`):
+            Log-probability of each next-token label.
+        entropy (`torch.Tensor`, same shape as `log_probs`):
+            Entropy of the next-token distribution.
+        label_mask (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
+            sequence than the caller's labels.
+        aux_loss (`torch.Tensor`, *optional*):
+            MoE load-balancing loss, when called with `output_router_logits=True`.
     """
 
-    @staticmethod
-    def forward(
-        ctx,
-        last_hidden: torch.Tensor,  # [N, H]
-        weight: torch.Tensor,  # [V, H]
-        targets: torch.Tensor,  # [N]
-        temperature: float,
-        chunk_size: int,
-        final_logit_softcapping: float | None = None,
-        logit_scale: float = 1.0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # entropy is often computed for logging only (no grad required); without this, autograd would
-        # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
-        ctx.set_materialize_grads(False)
-
-        device = last_hidden.device
-        N, _ = last_hidden.shape
-        vocab, _ = weight.shape
-        inv_t = 1 / temperature
-
-        # NOTE(@aminediro): always acc in fp32 for stability
-        max_old = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
-        sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
-        x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
-        target_logit = torch.zeros((N,), device=device, dtype=torch.float32)
-
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
-        mm_buf = torch.empty((N, chunk_size), device=device, dtype=last_hidden.dtype)
-        logits_buf = torch.empty((N, chunk_size), device=device, dtype=torch.float32)
-
-        for start in range(0, vocab, chunk_size):
-            end = min(start + chunk_size, vocab)
-            C = end - start
-            # using fp16=True, the model's hidden states get cast to float16 by autocast, but the mm_buf is allocated
-            # with last_hidden.dtype (float16) while w_chunk (the lm_head weights) is not auto casted
-            w_chunk = weight[start:end].to(last_hidden.dtype)  # [C, H]
-            torch.mm(last_hidden, w_chunk.t(), out=mm_buf[:, :C])
-            logits_chunk = logits_buf[:, :C]
-            logits_chunk.copy_(mm_buf[:, :C])
-
-            logits_chunk.mul_(logit_scale)
-            if final_logit_softcapping is not None:
-                logits_chunk.div_(final_logit_softcapping).tanh_().mul_(final_logit_softcapping)
-
-            logits_chunk.mul_(inv_t)  # [N, C]
-
-            # Online logsumexp update
-            chunk_max = logits_chunk.amax(dim=-1)  # [N]
-            max_new = torch.maximum(max_old, chunk_max)
-            rescale = torch.exp(max_old - max_new)
-            chunk_exp = torch.exp(logits_chunk - max_new.unsqueeze(-1))  # [N, C]
-
-            sum_exp = sum_exp * rescale + chunk_exp.sum(dim=-1)
-            x_sum_exp = x_sum_exp * rescale + (chunk_exp * logits_chunk).sum(dim=-1)
-            max_old = max_new
-
-            # Gather target logits for labels in this chunk
-            in_chunk_cond = (targets >= start) & (targets < end)
-            local_idx = torch.clamp(targets - start, 0, end - start - 1)
-            # take the new logit if target_idx is in this chunk bounds else 0
-            target_logit += logits_chunk[torch.arange(N, device=device), local_idx] * in_chunk_cond
-
-        log_z = max_old + torch.log(sum_exp)
-        logprobs = target_logit - log_z
-        entropy = log_z - x_sum_exp / sum_exp
-
-        ctx.save_for_backward(last_hidden, weight, targets, log_z, entropy)
-        ctx.temperature = temperature
-        ctx.chunk_size = chunk_size
-        ctx.logit_scale = logit_scale
-        ctx.final_logit_softcapping = final_logit_softcapping
-
-        return logprobs, entropy
-
-    @staticmethod
-    def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):  # type: ignore
-        hidden, weight, labels, log_z, entropy = ctx.saved_tensors
-        temperature: float = ctx.temperature
-        chunk_size: int = ctx.chunk_size
-        logit_scale: float = ctx.logit_scale
-        final_logit_softcapping: float = ctx.final_logit_softcapping
-        inv_t = 1 / temperature
-
-        N, _ = hidden.shape
-        vocab = weight.shape[0]
-
-        # NOTE(@aminediro): always acc in fp32 even if input is not
-        grad_hidden = torch.zeros(hidden.shape, device=hidden.device, dtype=torch.float32)
-        grad_weight = torch.zeros(weight.shape, device=weight.device, dtype=torch.float32)
-
-        # Pre-allocate reusable buffers to avoid per-chunk allocation
-        mm_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=hidden.dtype)
-        logits_buf = torch.empty((N, chunk_size), device=hidden.device, dtype=torch.float32)
-
-        g = grad_logprobs.to(torch.float32) if grad_logprobs is not None else None  # [N]
-        g_entropy = grad_entropy.to(torch.float32) if grad_entropy is not None else None  # [N]
-        row_idx = torch.arange(N, device=hidden.device)
-
-        for start in range(0, vocab, chunk_size):
-            end = min(start + chunk_size, vocab)
-            C = end - start
-            w_chunk = weight[start:end]  # [C, H]
-
-            torch.mm(hidden, w_chunk.t(), out=mm_buf[:, :C])
-            logits_chunk = logits_buf[:, :C]
-            logits_chunk.copy_(mm_buf[:, :C])
-
-            logits_chunk.mul_(logit_scale)
-            if final_logit_softcapping is not None:
-                tanh_scaled = torch.tanh(logits_chunk / final_logit_softcapping)
-                logits_chunk.copy_(tanh_scaled * final_logit_softcapping)
-
-            logits_chunk.mul_(inv_t)  # [N, C]
-            probs = torch.exp(logits_chunk - log_z.unsqueeze(-1))  # [N, C]
-
-            if g is not None:
-                # dL/d(logits) = g * (1_[label] - p)
-                grad_logits = (-g).unsqueeze(-1) * probs  # [N, C]
-
-                in_chunk_cond = (labels >= start) & (labels < end)
-                local_idx = torch.clamp(labels - start, 0, end - start - 1)
-                # If label in chunk add g to grad else it stays the same
-                grad_logits[row_idx, local_idx] += g * in_chunk_cond
-            else:
-                grad_logits = torch.zeros_like(probs)
-
-            if g_entropy is not None:
-                # d(entropy)/d(logits_j) = -p_j * (log_p_j + entropy), entropy = -sum_k p_k * log_p_k
-                log_p_chunk = logits_chunk - log_z.unsqueeze(-1)  # [N, C]
-                grad_logits += (-g_entropy).unsqueeze(-1) * probs * (log_p_chunk + entropy.unsqueeze(-1))
-
-            grad_logits = grad_logits * inv_t
-            if final_logit_softcapping is not None:
-                grad_logits.mul_(1 - tanh_scaled.pow(2))
-
-            grad_logits = grad_logits * logit_scale
-
-            grad_hidden.add_(grad_logits @ w_chunk.float())
-            grad_weight[start:end].add_(grad_logits.t() @ hidden.float())
-
-        return grad_hidden.to(hidden.dtype), grad_weight.to(weight.dtype), None, None, None, None, None
+    loss: torch.Tensor | None = None
+    log_probs: torch.Tensor | None = None
+    entropy: torch.Tensor | None = None
+    label_mask: torch.Tensor | None = None
+    aux_loss: torch.Tensor | None = None
 
 
-def patch_chunked_lm_head(
-    model: torch.nn.Module, chunk_size: int, temperature: float, output_router_logits: bool = False
-) -> None:
+def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
+    """
+    Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
+    instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
+
+    With `fused_lm_head=True`, the patched forward runs the backbone and projects through the LM head, in tiles, only
+    the positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted
+    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Without it, the
+    forward is the original one, so generation is unchanged. Patch the model before wrapping it with PEFT.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Causal language model to patch.
+        temperature (`float`, *optional*, defaults to `1.0`):
+            Temperature the logits are divided by.
+        cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
+            Whether to run the LM head projection in float32, outside autocast.
+    """
+    original_forward = model.forward
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
+    # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
+    # as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
+    logit_scale = getattr(text_config, "logit_scale", None)
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "output_multiplier", None)
+    logit_scale = 1.0 if logit_scale is None else logit_scale
+    # Before transformers 5, vision-language models expose their language backbone as `model` rather than through
+    # `base_model_prefix`.
+    backbone_attr = "base_model"
+    if text_config is not model.config and Version(transformers.__version__) < Version("5.0.0"):
+        backbone_attr = "model"
 
-    def _chunked_forward(
-        self: torch.nn.Module,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
-        completion_mask: torch.Tensor | None = None,
-        use_cache: bool = False,
-        **kwargs,
-    ) -> dict[str, torch.Tensor]:
-        assert labels is not None, "requires labels to not be None for logprob computation"
+    # Keep the original signature: `generate` validates its model kwargs against it
+    @functools.wraps(type(model).forward)
+    def _fused_forward(
+        self, *args, fused_lm_head=False, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs
+    ):
+        if not fused_lm_head:
+            if labels is not None:
+                kwargs["labels"] = labels
+            if shift_labels is not None:
+                kwargs["shift_labels"] = shift_labels
+            if num_items_in_batch is not None:
+                kwargs["num_items_in_batch"] = num_items_in_batch
+            return original_forward(*args, **kwargs)
 
-        decoder_kwargs = {"output_router_logits": True} if output_router_logits else {}
-        outputs = self.model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=use_cache, **decoder_kwargs, **kwargs
-        )
-        # NOTE(@aminediro): supporting Cohere2 models
-        logit_scale = getattr(text_config, "logit_scale", 1.0)
-        hidden_states = outputs.last_hidden_state  # [B, S+1, H]
-
-        # Shift: predict next token
-        hidden_states = hidden_states[:, :-1, :]  # [B, S-1, H]
-        labels = labels[:, 1:]  # [B, S-1]
-
-        b, s, h = hidden_states.shape
-        hidden_flat = hidden_states.reshape(b * s, h)
-        targets_flat = labels.reshape(b * s)
-
-        # Filter to completion tokens only to avoid expensive matmuls on prompt tokens and tool results
-        valid_mask = None
-        if completion_mask is not None:
-            completion_mask = completion_mask[:, 1:]  # same shift as labels
-            valid_mask = completion_mask.bool().reshape(b * s)
-            hidden_flat = hidden_flat[valid_mask]  # [N_valid, H]
-            targets_flat = targets_flat[valid_mask]  # [N_valid]
-
-        logprobs_valid, entropy_valid = _ChunkedLogProbFunction.apply(
-            hidden_flat,
-            self.lm_head.weight,
-            targets_flat,
-            temperature,
-            chunk_size,
-            final_logit_softcapping,
-            logit_scale,
-        )
-
-        if valid_mask is not None:
-            logprobs = torch.zeros(b * s, device=logprobs_valid.device, dtype=logprobs_valid.dtype)
-            entropy = torch.zeros(b * s, device=entropy_valid.device, dtype=entropy_valid.dtype)
-            logprobs[valid_mask] = logprobs_valid
-            entropy[valid_mask] = entropy_valid
+        # The backbone and the LM head are looked up on each call, since FSDP and PEFT replace them after patching
+        kwargs["use_cache"] = False
+        # MoE models: like the model's own forward, request router logits when the config asks for them
+        if getattr(text_config, "output_router_logits", False):
+            kwargs.setdefault("output_router_logits", True)
+        outputs = getattr(self, backbone_attr)(*args, **kwargs)
+        if shift_labels is None:
+            hidden_states = outputs.last_hidden_state[:, :-1]
+            labels = labels[:, 1:]
         else:
-            logprobs = logprobs_valid
-            entropy = entropy_valid
+            hidden_states = outputs.last_hidden_state
+            labels = shift_labels
+        mask = labels != -100
+        autocast_ctx = nullcontext()
+        if cast_lm_head_to_fp32:
+            hidden_states = hidden_states.float()
+            autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
+
+        lm_head = self.get_output_embeddings()
+        weight, bias = lm_head.weight, lm_head.bias
+        # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
+        # head once before splitting tokens so every projection uses compatible tensor types.
+        if isinstance(weight, DTensor):
+            weight = weight.full_tensor()
+            if bias is not None:
+                bias = bias.full_tensor()
+        with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
+            per_token = _ChunkedLogProbFunction.apply(
+                hidden_states[mask],
+                weight,
+                bias,
+                labels[mask],
+                temperature,
+                _CHUNKED_LOGPROB_CHUNK_SIZE,
+                final_logit_softcapping,
+                logit_scale,
+            )
+        # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+        # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+        log_probs, entropy = (x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
-        if output_router_logits:
-            # Mirror the per-family MoE forward: add `router_aux_loss_coef * load_balancing_loss_func(...)` to
-            # the main loss. Mixtral is the source of truth — every MoE family (Qwen3Moe, GptOss, OLMoE,
-            # Qwen2Moe, DBRX, JetMoE, PhiMoE, …) pulls this function from mixtral via the modular system, so a
-            # single import keeps us in lockstep with upstream for every family we test.
+        if kwargs.get("output_router_logits"):
+            # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
             if Version(transformers.__version__) < Version("5.0.0"):
@@ -1552,16 +1606,13 @@ def patch_chunked_lm_head(
                 num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
-                outputs.router_logits, num_experts, num_experts_per_tok, attention_mask
+                outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
             )
+            loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return {
-            "log_probs": logprobs.reshape(b, s),
-            "entropy": entropy.reshape(b, s),
-            "aux_loss": aux_loss,
-        }
+        return FusedCausalLMOutput(loss=loss, log_probs=log_probs, entropy=entropy, label_mask=mask, aux_loss=aux_loss)
 
-    model.forward = types.MethodType(_chunked_forward, model)
+    model.forward = types.MethodType(_fused_forward, model)
 
 
 def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:

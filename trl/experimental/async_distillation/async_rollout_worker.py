@@ -67,6 +67,7 @@ class RolloutSample:
     model_version: int
     metrics: dict[str, float]
     teacher_id: str  # which teacher_server_urls entry scored this sample (see _resolve_teacher_server_url)
+    prompt_id: int  # index of the dataset row this came from, counted across epochs; drives the epoch-driven stop
     enqueued_at: float | None = None
 
 
@@ -217,10 +218,15 @@ class _AsyncRolloutLoop:
         log_completions: bool = False,
         log_completions_steps: int = 100,
         num_completions_to_print: int | None = None,
+        dataset_start_index: int = 0,
     ):
         self.model_name = model_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            start = dataset_start_index % len(dataset)
+            self._dataset_iter = iter(dataset.select(range(start, len(dataset))))
+        else:
+            self._dataset_iter = iter(dataset)
         self.tokenizer = processing_class
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
@@ -324,9 +330,9 @@ class _AsyncRolloutLoop:
             while True:
                 self._heartbeat_value.value = time.time()
                 while free_slots and not stop_event.is_set():
-                    row = next(work_iter)
+                    prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
-                    task = asyncio.create_task(self._generate_and_score_one(row))
+                    task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
                     inflight_tasks[task] = slot
 
                 if not inflight_tasks:
@@ -465,14 +471,17 @@ class _AsyncRolloutLoop:
             }
         )
 
-    def _repeat_iterator(self) -> Iterator[dict[str, Any]]:
+    def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
+        prompt_id = 0
         while True:
             try:
                 row = next(self._dataset_iter)
             except StopIteration:
                 self._dataset_iter = iter(self.dataset)
                 row = next(self._dataset_iter)
-            yield row
+            # One sample per row, so this is `AsyncGRPOTrainer`'s `group_id` with `num_generations` fixed at 1.
+            yield prompt_id, row
+            prompt_id += 1
 
     def _resolve_teacher_server_url(self, row: dict[str, Any]) -> tuple[str, str]:
         """Pick which teacher server scores `row` (MOPD: multi-teacher on-policy distillation).
@@ -494,7 +503,7 @@ class _AsyncRolloutLoop:
             )
         return teacher_id, self.teacher_server_urls[teacher_id]
 
-    async def _generate_and_score_one(self, row: dict[str, Any]) -> RolloutSample:
+    async def _generate_and_score_one(self, prompt_id: int, row: dict[str, Any]) -> RolloutSample:
         model_version = self.model_version
         t_dispatch = time.monotonic()
         prompt = row["prompt"]
@@ -532,6 +541,7 @@ class _AsyncRolloutLoop:
             teacher_topk_logprobs=full_teacher_logprobs,
             model_version=model_version,
             teacher_id=teacher_id,
+            prompt_id=prompt_id,
             metrics={},
         )
 
@@ -653,6 +663,7 @@ class AsyncRolloutWorker:
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded, the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
+        loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None

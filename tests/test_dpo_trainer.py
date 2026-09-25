@@ -27,10 +27,12 @@ from trl.trainer.dpo_trainer import DataCollatorForPreference, DataCollatorForVi
 from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
+    is_bf16_supported,
     require_bitsandbytes,
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_peft_target_parameters,
     require_vision,
 )
 
@@ -698,6 +700,25 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=DPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_dense_with_peft_config_lora(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -732,7 +753,7 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -800,7 +821,7 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -904,7 +925,224 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def _assert_liger_loss_matches(self, **config_kwargs):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+            **config_kwargs,
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        trainer.model.train()
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+
+        chunked_loss = trainer.compute_loss(trainer.model, inputs)
+        chunked_loss.backward()
+        chunked_grads = {
+            name: param.grad.detach().clone()
+            for name, param in trainer.model.named_parameters()
+            if param.grad is not None
+        }
+
+        trainer.model.zero_grad()
+        trainer._metrics["train"].clear()
+        trainer.use_liger_kernel = False
+        loss = trainer.compute_loss(trainer.model, inputs)
+        loss.backward()
+        grads = {name: param.grad for name, param in trainer.model.named_parameters() if param.grad is not None}
+
+        assert chunked_loss.abs() > 0
+        torch.testing.assert_close(chunked_loss, loss, rtol=1e-4, atol=1e-5)
+        assert chunked_grads.keys() == grads.keys()
+        for name, grad in grads.items():
+            # Vocabulary streaming changes the GEMM reduction shape; PyTorch 2.8 differs by up to 3.1e-4 in fp32.
+            torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
+
     @require_liger_kernel
+    @pytest.mark.parametrize(
+        "loss_types",
+        [
+            ["sigmoid", "hinge", "ipo", "exo_pair", "robust"],
+            ["nca_pair", "bco_pair", "sppo_hard", "aot", "aot_unpaired"],
+            ["apo_zero", "apo_down", "discopop", "sft", "sigmoid_norm"],
+        ],
+    )
+    def test_liger_loss_matches_non_liger_loss(self, loss_types):
+        self._assert_liger_loss_matches(
+            loss_type=loss_types,
+            loss_weights=[1.0 / len(loss_types)] * len(loss_types),
+            label_smoothing=0.1,
+        )
+
+    @require_liger_kernel
+    @pytest.mark.parametrize("f_divergence_type", ["forward_kl", "js_divergence", "alpha_divergence"])
+    def test_liger_f_divergence_matches_non_liger_loss(self, f_divergence_type):
+        self._assert_liger_loss_matches(f_divergence_type=f_divergence_type)
+
+    @require_liger_kernel
+    def test_chunked_logps_honor_output_multiplier_without_calling_lm_head(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        input_ids = inputs["input_ids"]
+        completion_mask = inputs["completion_mask"]
+        model_kwargs = {
+            "input_ids": input_ids,
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        text_config = trainer.model.config.get_text_config()
+        text_config.logit_scale = None
+        text_config.output_multiplier = 0.5
+
+        lm_head = trainer.model.get_output_embeddings()
+        hidden_states = trainer.model.base_model(**model_kwargs).last_hidden_state[:, :-1]
+        mask = completion_mask[:, 1:].bool()
+        logits = lm_head(hidden_states[mask]).float() * text_config.output_multiplier
+        expected_valid = torch.log_softmax(logits, dim=-1).gather(-1, input_ids[:, 1:][mask].unsqueeze(-1)).squeeze(-1)
+        expected = expected_valid.new_zeros(mask.shape).masked_scatter(mask, expected_valid)
+
+        def fail_forward(*args, **kwargs):
+            raise AssertionError("the chunked path must not call lm_head.forward")
+
+        monkeypatch.setattr(lm_head, "forward", fail_forward)
+        with torch.no_grad():
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, input_ids, completion_mask
+            )
+
+        torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
+
+    @require_liger_kernel
+    def test_chunked_logps_stay_differentiable_when_all_masked(self):
+        # A batch whose completion is fully masked yields no valid rows. The streamed projection still has to return
+        # log-probs attached to the model, so it contributes a differentiable zero instead of failing in `backward()`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        input_ids = inputs["input_ids"]
+        model_kwargs = {
+            "input_ids": input_ids,
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        empty_completion_mask = torch.zeros_like(inputs["completion_mask"])
+
+        logps, _, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, model_kwargs, input_ids, empty_completion_mask
+        )
+
+        assert logps.shape == (input_ids.shape[0], input_ids.shape[1] - 1)
+        assert logps.count_nonzero() == 0
+        assert logps.requires_grad
+        logps.sum().backward()
+        lm_head_grad = trainer.model.get_output_embeddings().weight.grad
+        assert lm_head_grad is not None
+        assert lm_head_grad.count_nonzero() == 0
+
+    @require_liger_kernel
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_chunked_logps_use_mixed_precision(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=True,
+            per_device_train_batch_size=2,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        model_kwargs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "use_cache": False,
+        }
+        projection = next(module for name, module in trainer.model.named_modules() if name.endswith("q_proj"))
+        projection_dtypes = []
+
+        def record_projection_dtype(_module, _args, output):
+            projection_dtypes.append(output.dtype)
+
+        with projection.register_forward_hook(record_projection_dtype), torch.no_grad():
+            logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model, model_kwargs, inputs["input_ids"], inputs["completion_mask"]
+            )
+
+        assert projection_dtypes == [torch.bfloat16]
+        assert torch.isfinite(logps).all()
+
+    @require_liger_kernel
+    def test_train_with_liger_and_precomputed_ref_logps(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=1,
+            use_liger_kernel=True,
+            precompute_ref_log_probs=True,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_liger_kernel
+    def test_compute_ref_log_probs_redirects_wrapped_liger_model(self, monkeypatch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        wrapped_model = object()
+        redirected = False
+
+        monkeypatch.setattr(trainer.accelerator, "unwrap_model", lambda model: trainer.model)
+
+        def forward_redirection(wrapper, unwrapped, method, *args):
+            nonlocal redirected
+            redirected = True
+            assert wrapper is wrapped_model
+            assert unwrapped is trainer.model
+            return method(*args)
+
+        monkeypatch.setattr(trainer, "_forward_redirection", forward_redirection)
+        trainer.compute_ref_log_probs(wrapped_model, inputs)
+
+        # A distributed wrapper owns the hooks that gather its sharded backbone parameters, so the chunked reference
+        # forward must enter through that wrapper even though the loss itself operates on the unwrapped model.
+        assert redirected
+
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
         # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
@@ -938,7 +1176,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_liger_kernel
     @require_peft
     def test_liger_kernel_with_peft_lm_head_raises(self):
-        # The Liger fused DPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
@@ -962,7 +1200,7 @@ class TestDPOTrainer(TrlTestCase):
     @require_liger_kernel
     @require_peft
     def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger DPO loss bypasses.
+        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the chunked path bypasses.
         # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
@@ -978,7 +1216,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_init_fails_with_moe_aux_loss_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # The MoE auxiliary loss is on by default; it is incompatible with the Liger fused loss.
+        # The MoE auxiliary loss is on by default; the chunked path bypasses the wrapper that computes it.
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=True,
@@ -993,18 +1231,17 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_liger_kernel
-    def test_init_fails_with_f_divergence_and_liger(self):
+    def test_init_fails_with_weighting_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
-        # The Liger fused loss always uses the reverse-KL parameterization; it can't honor another f-divergence.
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             use_liger_kernel=True,
-            f_divergence_type="js_divergence",
+            use_weighting=True,
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="incompatible with a non-default `f_divergence_type`"):
+        with pytest.raises(ValueError, match="incompatible with `use_weighting=True`"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -1021,7 +1258,7 @@ class TestDPOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
+        with pytest.raises(ValueError, match="`compute_metrics` is not supported with `use_liger_kernel=True`"):
             DPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -1090,11 +1327,6 @@ class TestDPOTrainer(TrlTestCase):
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-    )
-    @pytest.mark.xfail(
-        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
-        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
-        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -1447,6 +1679,21 @@ class TestDPOTrainer(TrlTestCase):
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2", args=training_args, train_dataset=dataset
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
+
 
 @require_vision
 class TestDPOTrainerVLM(TrlTestCase):
@@ -1692,6 +1939,29 @@ class TestDPOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
+
+    def test_pad_token_synced_with_model_config_vision(self):
+        # A vision dataset takes the other collator branch, which used to skip the pad token handling entirely, so
+        # the requested pad token reached neither the tokenizer nor the model configs.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference", split="train")
+
+        with pytest.warns(FutureWarning, match="`pad_token` is deprecated"):
+            training_args = DPOConfig(
+                output_dir=self.tmp_dir,
+                max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+                pad_token="<|fim_pad|>",
+                report_to="none",
+            )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.tokenizer.convert_tokens_to_ids("<|fim_pad|>")
+        assert trainer.processing_class.tokenizer.pad_token_id == pad_token_id
+        assert trainer.model.config.get_text_config().pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
 
 
 @pytest.mark.slow

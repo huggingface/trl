@@ -4,14 +4,14 @@ description: 'Send results to slack'
 author: 'Hugging Face'
 inputs:
   slack_channel:
+    description: 'Slack channel id, channel name, or user id to post the message to'
     required: true
-    type: string
   title:
+    description: 'Title shown in the message and in the notification summary'
     required: true
-    type: string
   slack_token:
+    description: 'Slack bot token used to call the chat.postMessage API'
     required: true
-    type: string
 
 runs:
   using: "composite"
