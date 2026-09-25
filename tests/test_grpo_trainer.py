@@ -459,6 +459,44 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_logps_match_plain_forward(self):
+        # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,  # compare in full precision
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            temperature=0.7,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 16), device=trainer.accelerator.device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[0, :3] = 0  # left padding
+        attention_mask[1, -2:] = 0  # padding after the end of the completion
+
+        logps, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, input_ids, attention_mask, logits_to_keep=10, compute_entropy=True
+        )
+        with torch.no_grad():
+            logits = trainer.model(input_ids=input_ids, attention_mask=attention_mask).logits[:, -11:-1] / 0.7
+        ref_logps = logits.log_softmax(-1)
+        completion_mask = attention_mask[:, -10:].bool()
+
+        expected_logps = ref_logps.gather(-1, input_ids[:, -10:, None]).squeeze(-1)
+        expected_entropies = -(ref_logps.exp() * ref_logps).sum(-1)
+        torch.testing.assert_close(logps[completion_mask], expected_logps[completion_mask], atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(
+            entropies[completion_mask], expected_entropies[completion_mask], atol=1e-4, rtol=1e-4
+        )
+        assert (logps[~completion_mask] == 0).all()
+
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
     def test_logps_use_mixed_precision(self):
         # Scoring runs outside `compute_loss`, so it has to enter autocast itself. Without that the backbone would
