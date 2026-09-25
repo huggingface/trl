@@ -798,9 +798,12 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
+        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
+        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -1622,6 +1625,8 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
         def dummy_compute_metrics(eval_pred):
+            # The logits are the full-vocabulary logits, as before the fused LM head
+            assert eval_pred.predictions.shape[-1] == trainer.model.config.vocab_size
             return {"my_metric": 0.123}
 
         training_args = SFTConfig(
@@ -1638,9 +1643,55 @@ class TestSFTTrainer(TrlTestCase):
             compute_metrics=dummy_compute_metrics,
         )
 
-        trainer.train()
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            trainer.train()
 
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
+
+    def test_train_with_compute_loss_func(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        vocab_sizes = []
+
+        def compute_loss_func(outputs, labels, num_items_in_batch=None):
+            # The outputs are the model's own, with the full logits, as before the fused LM head
+            vocab_sizes.append(outputs.logits.shape[-1])
+            return outputs.loss
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=2, logging_steps=1, report_to="none")
+        with pytest.warns(FutureWarning, match="`compute_loss_func` receives the model's own outputs"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                compute_loss_func=compute_loss_func,
+            )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert vocab_sizes and all(v == trainer.model.config.vocab_size for v in vocab_sizes)
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-2]["mean_token_accuracy"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_predict_returns_logits(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="test")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            predictions = trainer.predict(trainer.train_dataset)
+
+        assert predictions.predictions.shape[-1] == trainer.model.config.vocab_size
+
+    def test_chunked_nll_is_deprecated_alias_of_nll(self):
+        with pytest.warns(FutureWarning, match="`loss_type='chunked_nll'` is deprecated"):
+            training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        assert training_args.loss_type == "nll"
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient

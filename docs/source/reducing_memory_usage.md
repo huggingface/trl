@@ -130,6 +130,12 @@ PEFT can be combined with other memory reduction techniques such as quantization
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
+<Tip warning={true}>
+
+`use_liger_kernel=True` is deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0. These trainers compute the log-probabilities with a fused LM head, so only Liger's layer kernels (`RMSNorm`, `RoPE`, `SwiGLU`) apply. Use the Hub kernels instead, with `model_init_kwargs={"use_kernels": True}`.
+
+</Tip>
+
 To use Liger for reducing peak memory usage, use the following code snippet:
 
 <hfoptions id="liger">

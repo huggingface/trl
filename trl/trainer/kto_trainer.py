@@ -905,6 +905,23 @@ class KTOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
+
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
         # `mean_logits` feeds the `logits/*` metrics
         patch_fused_lm_head(
@@ -1258,10 +1275,11 @@ class KTOTrainer(_BaseTrainer):
                     fused_lm_head=True,
                 ).log_probs
 
-        completion_logps = per_token_logps.sum(-1)
+        # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+        completion_logps = per_token_logps[:, -(inputs["input_ids"].size(1) - 1) :].sum(-1)
 
         if self.calculate_KL:
-            KL_logps = KL_per_token_logps.sum(-1)
+            KL_logps = KL_per_token_logps[:, -(inputs["KL_input_ids"].size(1) - 1) :].sum(-1)
         else:
             KL_logps = None
 
@@ -1295,7 +1313,8 @@ class KTOTrainer(_BaseTrainer):
             KL_labels = batch["KL_input_ids"].masked_fill(batch["KL_completion_mask"] == 0, -100)
             with torch.no_grad():
                 KL_per_token_logps = model(**KL_model_kwargs, labels=KL_labels, fused_lm_head=True).log_probs
-            KL_logps = KL_per_token_logps.sum(-1)
+            # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+            KL_logps = KL_per_token_logps[:, -(KL_labels.size(1) - 1) :].sum(-1)
         return KL_logps
 
     def _compute_loss(self, model, inputs, return_outputs):
@@ -1364,7 +1383,7 @@ class KTOTrainer(_BaseTrainer):
                 else:
                     ref_KL_logps = self._compute_kl_logps(self.ref_model, batch)
                     ref_outputs = self.ref_model(**ref_model_kwargs, labels=completion_labels, fused_lm_head=True)
-            ref_per_token_logps = ref_outputs.log_probs
+            ref_per_token_logps = ref_outputs.log_probs[:, -seq_len:]
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)

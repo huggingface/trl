@@ -108,6 +108,8 @@ class SFTConfig(_BaseConfig):
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
+            - `"chunked_nll"`: deprecated alias of `"nll"`, which computes the loss the same way. It will be removed in
+              v2.0.0.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -279,7 +281,7 @@ class SFTConfig(_BaseConfig):
         metadata={
             "help": "Type of loss to use. Possible values are `'nll'` (standard negative log-likelihood) and `'dft'` "
             "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629).",
-            "choices": ["nll", "dft"],
+            "choices": ["nll", "dft", "chunked_nll"],
         },
     )
     activation_offloading: bool = field(
@@ -297,6 +299,14 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.loss_type == "chunked_nll":
+            warnings.warn(
+                "`loss_type='chunked_nll'` is deprecated and will be removed in v2.0.0. Use `loss_type='nll'` (the "
+                "default), which computes the loss the same way, without materializing the full logits.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.loss_type = "nll"
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "

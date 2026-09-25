@@ -15,6 +15,7 @@
 import contextlib
 import json
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -545,16 +546,18 @@ class SFTTrainer(_BaseTrainer):
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
         compute_loss_func (`Callable`, *optional*):
-            A function that accepts the model outputs (a [`~trainer.utils.FusedCausalLMOutput`], with per-token
-            log-probabilities rather than logits), the labels, and the number of items in the entire accumulated batch
-            (batch_size * gradient_accumulation_steps) and returns the loss.
+            A function that accepts the model outputs, the labels, and the number of items in the entire accumulated
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. The outputs, with the full logits,
+            come from a forward pass that does not use the fused LM head. This is deprecated: from v2.0.0, it will
+            receive the fused LM head's outputs ([`~trainer.utils.FusedCausalLMOutput`]) instead.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
             [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
             `compute_result` argument. This will be triggered after the last eval batch to signal that the function
             needs to calculate and return the global summary statistics rather than accumulating the batch-level
-            statistics.
+            statistics. The logits it receives are recomputed with an extra forward pass. This is deprecated and will
+            be removed in v2.0.0.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -1000,6 +1003,14 @@ class SFTTrainer(_BaseTrainer):
                 "`loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
                 "`compute_loss_func` is not allowed."
             )
+        if compute_loss_func is not None:
+            warnings.warn(
+                "`compute_loss_func` receives the model's own outputs, with the full logits, from a forward pass that "
+                "does not use the fused LM head. This is deprecated: from v2.0.0, it will receive the fused LM head's "
+                "outputs (`FusedCausalLMOutput`, with per-token log-probabilities) instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
             # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
             # adapter on the LM head would be ignored and never trained.
@@ -1031,6 +1042,23 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
         # `is_top1` feeds the `mean_token_accuracy` metric
@@ -1446,10 +1474,16 @@ class SFTTrainer(_BaseTrainer):
                     num_items_in_batch=num_items_in_batch,
                 )
             else:
-                outputs = model(**inputs, fused_lm_head=True)
                 if self.compute_loss_func is not None:
-                    loss = self.compute_loss_func(outputs, inputs.get("labels"), num_items_in_batch=num_items_in_batch)
+                    # `compute_loss_func` receives the model's own outputs, with the logits; the fused outputs only feed
+                    # the metrics
+                    loss = self.compute_loss_func(
+                        model(**inputs), inputs.get("labels"), num_items_in_batch=num_items_in_batch
+                    )
+                    with torch.no_grad():
+                        outputs = model(**inputs, fused_lm_head=True)
                 else:
+                    outputs = model(**inputs, fused_lm_head=True)
                     per_token_loss = -outputs.log_probs  # zero on ignored positions
                     if self.args.loss_type == "dft":
                         # DFT: https://huggingface.co/papers/2508.05629
@@ -1458,8 +1492,8 @@ class SFTTrainer(_BaseTrainer):
                         loss = per_token_loss.sum() / outputs.label_mask.sum().clamp(min=1)
                     else:
                         loss = per_token_loss.sum() / num_items_in_batch
-                if self.aux_loss_enabled:
-                    loss = loss + self.router_aux_loss_coef * outputs.aux_loss
+                    if self.aux_loss_enabled:
+                        loss = loss + self.router_aux_loss_coef * outputs.aux_loss
                 # Like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages
                 # the gradients across ranks
                 if self.args.average_tokens_across_devices and num_items_in_batch is not None:
@@ -1499,7 +1533,30 @@ class SFTTrainer(_BaseTrainer):
             aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
             self._metrics[mode]["aux_loss"].append(aux_loss)
 
+        if return_outputs:
+            warnings.warn(
+                "`return_outputs=True`, and the logits it passes to `compute_metrics` and "
+                "`preprocess_logits_for_metrics`, are deprecated and will be removed in v2.0.0. The fused LM head does "
+                "not build the logits, so they are recomputed with an extra forward pass.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            with torch.no_grad():
+                outputs = model(**inputs)
         return (loss, outputs) if return_outputs else loss
+
+    # During eval, Trainer calls prediction_step, which asks `compute_loss` for the outputs even when only the loss is
+    # needed. Ask for them only when the logits are, since they take an extra forward pass.
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad(), self.compute_loss_context_manager():
+            if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)
+                logits, labels = None, None
+            else:
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                logits, labels = outputs.logits, inputs.get("labels")
+        return loss, logits, labels
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):
