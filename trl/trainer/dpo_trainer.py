@@ -1274,8 +1274,10 @@ class DPOTrainer(_BaseTrainer):
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
                     # - New adapter: disabling adapters yields the base model.
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
+                    ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(
+                        ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
+                    ):
                         ref_outputs = self.model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
                 else:
                     ref_outputs = self.ref_model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
