@@ -1587,7 +1587,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     self.vllm_importance_sampling_clip_min,
                     self.vllm_importance_sampling_clip_max,
                 )
-                coef_1 = torch.exp(log_ratio)
+                # A dropped token's ratio must not reach the exponential: exp overflows to inf past ~89 nats, and
+                # although the loss-level torch.where zeroes the forward, backward feeds the dropped branch a zero
+                # upstream gradient that multiplies the inf coefficient into 0 * inf = NaN. Substituting log-ratio 0
+                # gives the dropped token a finite placeholder ratio of 1, discarded by the loss-level where, so its
+                # gradient is exactly zero. (The clip metrics below then read the placeholder 1.0 for a dropped
+                # token, matching its exclusion from the loss.)
+                coef_1 = torch.exp(torch.where(importance_sampling_mask.bool(), log_ratio, 0.0))
                 gate_changed = importance_sampling_mask != 1.0
         else:
             coef_1 = torch.exp(log_ratio)

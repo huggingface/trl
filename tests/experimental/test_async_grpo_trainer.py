@@ -2245,6 +2245,17 @@ class TestImportanceSamplingGate(TrlTestCase):
         loss = trainer.compute_loss(model, self._packed_inputs([100.0] * 8))
         assert loss.item() == pytest.approx(0.8, rel=1e-4)
 
+    class _ShiftLogProbModel(torch.nn.Module):
+        # Stand-in policy whose per-token log-probs all equal one learnable scalar, so d loss / d shift
+        # reads the per-token gradient weight directly.
+        def __init__(self):
+            super().__init__()
+            self.shift = torch.nn.Parameter(torch.tensor(0.0))
+
+        def forward(self, input_ids, **kwargs):
+            t = input_ids.shape[1] - 1
+            return {"log_probs": self.shift.expand(1, t), "entropy": torch.zeros(1, t), "aux_loss": None}
+
     def test_mask_drops_overflowed_tokens_instead_of_making_the_loss_nan(self):
         # In token_mask an out-of-range token whose ratio overflowed float32 exp produces an inf
         # per-token loss; multiplying by the 0 mask would turn it into NaN. torch.where drops it.
@@ -2252,6 +2263,40 @@ class TestImportanceSamplingGate(TrlTestCase):
         trainer.vllm_importance_sampling_mode = "token_mask"
         loss = trainer.compute_loss(model, self._packed_inputs([-100.0] * 8))
         assert loss.item() == pytest.approx(0.0)
+
+    @pytest.mark.parametrize("mode", ["token_mask", "sequence_mask"])
+    def test_masked_overflowed_tokens_do_not_nan_the_backward_pass(self, mode):
+        # The loss-level torch.where only protects the forward pass: with exp(log_ratio) still in
+        # the graph, backward feeds the dropped branch a zero upstream gradient and 0 * inf = NaN
+        # lands in the parameters. The log-ratio must be masked before the exponential, so a
+        # dropped token carries a finite placeholder ratio of 1 and a gradient of exactly zero.
+        trainer, _ = self._stub_trainer_for_loss()
+        trainer.vllm_importance_sampling_mode = mode
+        model = self._ShiftLogProbModel()
+        # First half overflowed (+100 nats, out of range and past float32 exp), second half at
+        # log-ratio 0.1: dropped under token_mask, and dropping the whole row under sequence_mask
+        # (single packed segment) exercises the same dropped-token gradient path.
+        old = [-100.0] * 4 + [-0.1] * 4
+        loss = trainer.compute_loss(model, self._packed_inputs(old))
+        loss.backward()
+        assert torch.isfinite(model.shift.grad).all(), "an overflowed masked token leaked NaN into the gradient"
+
+    def test_masked_backward_gradient_flows_only_through_kept_tokens(self):
+        # Companion to the NaN regression: kept tokens keep their exact gradient next to a dropped
+        # overflowed one. Tokens at ratio e^0.1 (in range) contribute -rho * A each; the overflowed
+        # tokens contribute exactly zero.
+        trainer, _ = self._stub_trainer_for_loss()
+        trainer.vllm_importance_sampling_mode = "token_mask"
+        model = self._ShiftLogProbModel()
+        # After the label shift the 6 completion tokens read old[2:]: one overflowed (dropped), five at
+        # log-ratio 0.1 (kept, inside the [0.5, 3.0] bounds).
+        old = [0.0, 0.0, -100.0] + [-0.1] * 5
+        loss = trainer.compute_loss(model, self._packed_inputs(old))
+        loss.backward()
+        # A = -1, kept ratio rho = e^0.1: per kept token d loss / d shift = rho (the unclipped arm),
+        # averaged over the 6 completion tokens with the dropped one contributing 0: 5 * rho / 6.
+        expected = 5 * math.exp(0.1) / 6
+        assert model.shift.grad.item() == pytest.approx(expected, rel=1e-4)
 
     def test_nan_sampler_logprob_trains_at_ratio_one_and_keeps_metrics_finite(self):
         # A NaN sampler logprob has no ratio to correct; the loss substitutes the current logp so
