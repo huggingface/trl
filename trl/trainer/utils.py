@@ -52,7 +52,7 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import is_kernels_available, is_peft_available, is_rich_available, is_torchdynamo_compiling
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..trainer.model_config import ModelConfig
 
@@ -73,9 +73,6 @@ if is_rich_available():
 
 
 logger = get_logger(__name__)
-
-_TRL_LOSS_KERNEL: types.ModuleType | None = None
-_TRL_LOSS_KERNEL_LOAD_ATTEMPTED = False
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -501,23 +498,10 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-def _load_trl_loss_kernel() -> types.ModuleType | None:
-    global _TRL_LOSS_KERNEL, _TRL_LOSS_KERNEL_LOAD_ATTEMPTED
-
-    if _TRL_LOSS_KERNEL is not None or _TRL_LOSS_KERNEL_LOAD_ATTEMPTED or is_torchdynamo_compiling():
-        return _TRL_LOSS_KERNEL
-
-    _TRL_LOSS_KERNEL_LOAD_ATTEMPTED = True
-    if not is_kernels_available():
-        return None
-
-    try:
-        from kernels import get_kernel
-
-        _TRL_LOSS_KERNEL = get_kernel("trl-lib/trl-losses", version=0, trust_remote_code=True)
-    except Exception:
-        pass
-    return _TRL_LOSS_KERNEL
+try:
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
+except ImportError:  # Triton ships with PyTorch on Linux only
+    _fused_logprob_entropy = None
 
 
 def _supports_trl_loss_kernel(
@@ -582,10 +566,8 @@ def selective_log_softmax(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _supports_trl_loss_kernel(logits, index, row_mask) and (kernel := _load_trl_loss_kernel()) is not None:
-        logprobs, _ = kernel.selective_log_softmax_and_entropy(
-            logits, index, temperature=temperature, row_mask=row_mask
-        )
+    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+        logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs
 
     if temperature != 1.0:
@@ -637,9 +619,9 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    if _supports_trl_loss_kernel(logits) and (kernel := _load_trl_loss_kernel()) is not None:
+    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits):
         index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
-        _, entropy = kernel.selective_log_softmax_and_entropy(logits, index)
+        _, entropy = _fused_logprob_entropy(logits, index)
         return entropy
 
     original_shape = logits.shape[:-1]  # all dims except num_classes
@@ -685,10 +667,8 @@ def selective_log_softmax_and_entropy(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _supports_trl_loss_kernel(logits, index, row_mask) and (kernel := _load_trl_loss_kernel()) is not None:
-        logprobs, entropy = kernel.selective_log_softmax_and_entropy(
-            logits, index, temperature=temperature, row_mask=row_mask
-        )
+    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+        logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs, entropy if entropy_requires_grad else entropy.detach()
     if temperature != 1.0:
         logits = logits / temperature

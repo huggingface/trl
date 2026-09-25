@@ -816,8 +816,8 @@ class DPOTrainer(_BaseTrainer):
                 )
             if compute_metrics is not None:
                 raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                    "`compute_metrics` is not supported with `use_liger_kernel=True`. It needs the logits from the "
+                    "forward pass, and the chunked log-probability path does not materialize them."
                 )
             if is_peft_model(model):
                 # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head

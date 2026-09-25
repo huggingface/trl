@@ -14,11 +14,9 @@
 
 import copy
 import functools
-import sys
 import textwrap
-import types
 from io import StringIO
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -964,64 +962,15 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
-    @pytest.mark.parametrize(
-        "error", [pytest.param(None, id="success"), pytest.param(OSError("offline"), id="failure")]
-    )
-    def test_hub_kernel_load_is_cached(self, error):
-        kernel = types.ModuleType("trl_losses")
-        kernels = types.ModuleType("kernels")
-        kernels.get_kernel = Mock(return_value=kernel, side_effect=error)
-        expected = None if error is not None else kernel
-
-        with (
-            patch.dict(sys.modules, {"kernels": kernels}),
-            patch("trl.trainer.utils.is_kernels_available", return_value=True),
-            patch("trl.trainer.utils._TRL_LOSS_KERNEL", None),
-            patch("trl.trainer.utils._TRL_LOSS_KERNEL_LOAD_ATTEMPTED", False),
-        ):
-            assert trainer_utils._load_trl_loss_kernel() is expected
-            # Cache failures too, otherwise an offline run retries Hub I/O every training step.
-            assert trainer_utils._load_trl_loss_kernel() is expected
-
-        kernels.get_kernel.assert_called_once_with("trl-lib/trl-losses", version=0, trust_remote_code=True)
-
-    @require_torch_accelerator
-    def test_hub_kernel_dispatch(self):
-        def fused_logprobs_and_entropy(logits, index, temperature=1.0, row_mask=None):
-            logprobs = (logits.float() / temperature).log_softmax(-1)
-            selected_logprobs = logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
-            entropy = -(logprobs.exp() * logprobs).sum(-1)
-            if row_mask is not None:
-                selected_logprobs = selected_logprobs.masked_fill(row_mask == 0, 0.0)
-                entropy = entropy.masked_fill(row_mask == 0, 0.0)
-            return selected_logprobs, entropy
-
-        kernel = types.SimpleNamespace(selective_log_softmax_and_entropy=Mock(side_effect=fused_logprobs_and_entropy))
-        logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
-        index = torch.randint(257, (2, 3), device=torch_device)
-        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=torch_device, dtype=torch.bool)
-
-        with patch("trl.trainer.utils._load_trl_loss_kernel", return_value=kernel):
-            logprobs = selective_log_softmax(logits, index, temperature=0.7, row_mask=row_mask)
-            entropy = entropy_from_logits(logits)
-            combined_logprobs, combined_entropy = selective_log_softmax_and_entropy(
-                logits, index, entropy_requires_grad=False, temperature=0.7, row_mask=row_mask
-            )
-
-        torch.testing.assert_close(logprobs, combined_logprobs)
-        expected_entropy = fused_logprobs_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)[1]
-        torch.testing.assert_close(combined_entropy, expected_entropy)
-        assert torch.all(entropy > 0)
-        assert combined_logprobs.requires_grad
-        assert not combined_entropy.requires_grad
-        combined_logprobs.sum().backward()
-        assert logits.grad is not None
-        assert kernel.selective_log_softmax_and_entropy.call_count == 3
-
-    def test_temperature_and_row_mask_fallback(self):
-        logits = torch.randn(2, 3, 257, requires_grad=True)
-        index = torch.randint(257, (2, 3))
-        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], dtype=torch.bool)
+    # On an accelerator this takes the fused kernel, on CPU the torch path
+    @pytest.mark.parametrize("device", ["cpu", pytest.param(torch_device, marks=require_torch_accelerator)])
+    def test_temperature_and_row_mask(self, device):
+        logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
+        index = torch.randint(257, (2, 3), device=device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
+        if device != "cpu":  # the comparison below must be kernel against torch, not torch against torch
+            assert trainer_utils._fused_logprob_entropy is not None
+            assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
 
         logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
         (logprobs + 0.1 * entropy).sum().backward()
@@ -1038,21 +987,6 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         torch.testing.assert_close(entropy, reference_entropy)
         torch.testing.assert_close(logits.grad, reference_logits.grad)
         assert torch.count_nonzero(logits.grad[~row_mask]) == 0
-
-    @require_torch_accelerator
-    def test_torch_compile_does_not_load_hub_kernel(self):
-        logits = torch.randn(2, 3, 257, device=torch_device, requires_grad=True)
-        index = torch.randint(257, (2, 3), device=torch_device)
-
-        with (
-            patch("trl.trainer.utils.is_kernels_available", side_effect=AssertionError("unexpected Hub lookup")),
-            patch("trl.trainer.utils._TRL_LOSS_KERNEL", None),
-            patch("trl.trainer.utils._TRL_LOSS_KERNEL_LOAD_ATTEMPTED", False),
-        ):
-            torch.compile(selective_log_softmax, fullgraph=True)(logits, index).sum().backward()
-            assert not trainer_utils._TRL_LOSS_KERNEL_LOAD_ATTEMPTED
-
-        assert logits.grad is not None
 
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize("k", [1, 8])
