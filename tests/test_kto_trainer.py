@@ -662,6 +662,42 @@ class TestKTOTrainer(TrlTestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     assert not torch.equal(param, new_param)
 
+    def test_compute_metrics(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        tokenizer.pad_token = tokenizer.eos_token
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
+
+        def dummy_compute_metrics(*args, **kwargs):
+            return {"test": 0.0}
+
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            do_eval=True,
+            eval_strategy="steps",
+            eval_steps=1,
+            per_device_eval_batch_size=2,
+            report_to="none",
+        )
+
+        trainer = KTOTrainer(
+            model=model,
+            ref_model=ref_model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=dummy_compute_metrics,
+        )
+
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            trainer.train()
+
+        assert trainer.state.log_history[-2]["eval_test"] == 0.0
+
     def test_train_with_explicit_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
@@ -753,6 +789,25 @@ class TestKTOTrainer(TrlTestCase):
             # Check the torch dtype
             assert new_param.dtype == torch.float16
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=KTOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @require_peft
     def test_train_peft_model(self):

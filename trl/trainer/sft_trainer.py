@@ -37,6 +37,7 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
@@ -641,6 +642,9 @@ class SFTTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -1029,7 +1033,11 @@ class SFTTrainer(_BaseTrainer):
         )
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        # `is_top1` feeds the `mean_token_accuracy` metric
+        patch_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            outputs=("log_probs", "entropy", "is_top1"),
+        )
 
         # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
         # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents

@@ -699,6 +699,25 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=DPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_dense_with_peft_config_lora(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -1272,6 +1291,58 @@ class TestDPOTrainer(TrlTestCase):
         else:
             assert "prompt_ids" in next(iter(trainer.eval_dataset))
 
+    def test_train_with_compute_metrics(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        def dummy_compute_metrics(eval_pred):
+            # The logits are the full-vocabulary logits, as before the fused LM head
+            assert eval_pred.predictions.shape[-1] == trainer.model.config.vocab_size
+            return {"my_metric": 0.123}
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            eval_strategy="steps",
+            eval_steps=3,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            compute_metrics=dummy_compute_metrics,
+        )
+
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            trainer.train()
+
+        assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
+
+    def test_logits_metrics_match_full_logits(self):
+        # `logits/*` and `mean_token_accuracy` come from the fused LM head's kernel; check them against the full logits
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, per_device_train_batch_size=4, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        trainer.model.eval()
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+
+        with torch.no_grad():
+            trainer.compute_loss(trainer.model, inputs)
+            logits = trainer.model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"]).logits
+
+        logits = logits[:, :-1].float()
+        mask = inputs["completion_mask"][:, 1:].bool()
+        chosen_logits, rejected_logits = logits.chunk(2)
+        chosen_mask, rejected_mask = mask.chunk(2)
+        chosen_labels, _ = inputs["input_ids"][:, 1:].chunk(2)
+        metrics = trainer._metrics["eval"]
+        assert metrics["logits/chosen"][-1] == pytest.approx(chosen_logits[chosen_mask].mean().item(), rel=1e-4)
+        assert metrics["logits/rejected"][-1] == pytest.approx(rejected_logits[rejected_mask].mean().item(), rel=1e-4)
+        accuracy = (chosen_logits.argmax(-1) == chosen_labels)[chosen_mask].float().mean().item()
+        assert metrics["mean_token_accuracy"][-1] == pytest.approx(accuracy)
+
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `DPOTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
     # checkpointing, which has caused issues in the past.
@@ -1351,6 +1422,7 @@ class TestDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
 
         # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
         # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during

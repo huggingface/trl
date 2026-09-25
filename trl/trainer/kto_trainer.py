@@ -16,7 +16,9 @@ import contextlib
 import json
 import os
 import textwrap
+import warnings
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,9 +41,10 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import has_length
+from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
@@ -520,6 +523,14 @@ class KTOTrainer(_BaseTrainer):
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
+            The function that will be used to compute metrics at evaluation. Must take a
+            [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
+            [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
+            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
+            needs to calculate and return the global summary statistics rather than accumulating the batch-level
+            statistics. The logits it receives are recomputed with an extra forward pass. This is deprecated and will
+            be removed in v2.0.0.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -565,6 +576,7 @@ class KTOTrainer(_BaseTrainer):
         | dict[str, Dataset | IterableDataset]
         | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         quantization_config: "BitsAndBytesConfig | None" = None,
@@ -594,6 +606,9 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -841,6 +856,7 @@ class KTOTrainer(_BaseTrainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
+            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
         )
@@ -890,9 +906,13 @@ class KTOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        # `mean_logits` feeds the `logits/*` metrics
+        patch_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            outputs=("log_probs", "entropy", "mean_logits"),
+        )
         if self.ref_model is not None:
-            patch_fused_lm_head(self.ref_model)
+            patch_fused_lm_head(self.ref_model, outputs=("log_probs",))
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1411,6 +1431,26 @@ class KTOTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
+        # Average logits for chosen and rejected completions
+        shift_completion_mask = batch["completion_mask"][:, 1:]
+        mean_logits = outputs.mean_logits[:, -seq_len:]
+        chosen_mean_logits = mean_logits.index_select(0, chosen_idx)
+        rejected_mean_logits = mean_logits.index_select(0, rejected_idx)
+        chosen_mask = shift_completion_mask.index_select(0, chosen_idx)
+        rejected_mask = shift_completion_mask.index_select(0, rejected_idx)
+        total_chosen_logits = chosen_mean_logits[chosen_mask.bool()].sum()
+        total_chosen_tokens = chosen_mask.sum()
+        total_rejected_logits = rejected_mean_logits[rejected_mask.bool()].sum()
+        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+        if total_chosen_tokens > 0:
+            self._metrics[mode]["logits/chosen"].append(total_chosen_logits / total_chosen_tokens)
+        if total_rejected_tokens > 0:
+            self._metrics[mode]["logits/rejected"].append(total_rejected_logits / total_rejected_tokens)
+
         all_num_chosen = self.accelerator.gather_for_metrics(num_chosen).sum().item()
         all_num_rejected = self.accelerator.gather_for_metrics(num_rejected).sum().item()
 
@@ -1441,6 +1481,15 @@ class KTOTrainer(_BaseTrainer):
             loss = loss + self.router_aux_loss_coef * aux_loss
             self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
 
+        if return_outputs:
+            warnings.warn(
+                "`return_outputs=True`, and the logits it passes to `compute_metrics`, are deprecated and will be removed "
+                "in v2.0.0. The fused LM head does not build the logits, so they are recomputed with an extra forward pass.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            with torch.no_grad():
+                outputs = model(**model_kwargs)
         return (loss, outputs) if return_outputs else loss
 
     def evaluate(
@@ -1544,8 +1593,13 @@ class KTOTrainer(_BaseTrainer):
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: list[str] | None = None):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs)
-        return loss, None, None
+            if prediction_loss_only:
+                loss = self.compute_loss(model, inputs, return_outputs=False)
+                logits, labels = None, None
+            else:
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                logits, labels = outputs.logits, inputs["input_ids"]
+        return loss, logits, labels
 
     # Ensure the model card is saved along with the checkpoint
     def _save_checkpoint(self, model, trial):
