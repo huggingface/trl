@@ -18,11 +18,17 @@ import logging
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
-from transformers import HfArgumentParser, TrainerCallback
+from transformers import HfArgumentParser, TrainerCallback, TrainerControl, TrainerState
+from transformers.utils import is_peft_available
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
+from trl.experimental.sdpo.teacher_sync import PEFTAdapterEMACallback
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+
+
+if is_peft_available():
+    from peft import LoraConfig, get_peft_model_state_dict
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -77,6 +83,34 @@ class TestSDPOTrainer(TrlTestCase):
     def teardown_method(self):
         if hasattr(self, "_liger_module"):
             importlib.reload(importlib.import_module(self._liger_module))
+
+    @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
+    def test_peft_ema_teacher_is_initialized_before_training(self):
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_kind="ema"),
+            train_dataset=Dataset.from_dict({"prompt": ["Solve 2+2."]}),
+            peft_config=LoraConfig(r=4, target_modules=["q_proj", "v_proj"]),
+        )
+
+        callbacks = [
+            callback for callback in trainer.callback_handler.callbacks if isinstance(callback, PEFTAdapterEMACallback)
+        ]
+        assert len(callbacks) == 1
+        assert callbacks[0]._initialized
+        assert "teacher" in trainer.model.peft_config
+        assert trainer.model.active_adapter == "default"
+
+        teacher_state = get_peft_model_state_dict(trainer.model, adapter_name="teacher")
+        assert teacher_state and all(torch.count_nonzero(value) == 0 for value in teacher_state.values())
+
+        student_state = get_peft_model_state_dict(trainer.model, adapter_name="default")
+        callbacks[0].on_step_end(trainer.args, TrainerState(global_step=1), TrainerControl())
+        teacher_state = get_peft_model_state_dict(trainer.model, adapter_name="teacher")
+        for key, value in student_state.items():
+            torch.testing.assert_close(teacher_state[key], trainer.args.teacher_update_rate * value)
+        assert trainer.model.active_adapter == "default"
 
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict(
