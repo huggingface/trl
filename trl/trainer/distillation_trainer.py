@@ -413,6 +413,9 @@ class DistillationTrainer(_BaseTrainer):
             args = DistillationConfig(f"{model_name}-Distillation")
 
         # Student model loading
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
         # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
         model_init_kwargs = dict(args.model_init_kwargs or {})
