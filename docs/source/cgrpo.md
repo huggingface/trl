@@ -2,7 +2,7 @@
 
 C-GRPO (Conformal Group Relative Policy Optimization) replaces GRPO's fixed group size with a per-prompt sampling budget chosen by split-conformal prediction. GRPO draws the same `num_generations` completions for every prompt, which wastes compute on prompts the policy already answers consistently. C-GRPO samples each prompt in increments along a budget grid (by default `2, 4, 8, 16, 32`) and stops as soon as the conformal prediction set over the completions drawn so far is a singleton.
 
-One threshold per budget is fitted on a held-out calibration set with the current policy, before the first step and every `recalibrate_every` steps. By default the miscoverage level is set from the policy's own solve rate at the largest budget, so a weak policy does not end up with thresholds pinned at 1.0 and no early stopping.
+One threshold per budget is fitted on a held-out calibration set with the current policy, before the first step and every `recalibrate_every` steps. By default the miscoverage level is set from the policy's own solve rate at the largest budget, so a weak policy does not end up with every threshold pinned at 1.0, where a prompt stops early only when all of its sampled answers agree.
 
 To use C-GRPO, use the [`experimental.cgrpo.CGRPOTrainer`] class in `trl.experimental.cgrpo`.
 
@@ -70,6 +70,8 @@ Two caveats:
 C-GRPO works with `use_vllm=True` in both `vllm_mode="server"` and `vllm_mode="colocate"`. Each budget increment is a separate generation request for the prompts still being sampled, so a training batch costs at most `len(budget_grid)` requests. Padded rows are given a NaN sampling logprob, so `vllm_importance_sampling_correction` leaves them uncorrected (ratio 1) instead of applying a spurious ratio.
 
 ## Limitations
+
+C-GRPO supports the token-normalized loss types (`dapo`, the default, `bnpo`, `cispo` and `vespo`): prompts that stop early are padded with masked rows, which these losses exclude exactly. The sequence-mean (`grpo`, `sapo`, `luspo`) and row-normalized (`dr_grpo`) losses would be diluted by the padding and raise `NotImplementedError`.
 
 The current implementation supports single-process training. Multi-process training, tool calling, environments, `rollout_func` and vision-language models raise `NotImplementedError`. Padded rows appear in the logged completion-length statistics and completion tables as one-token completions.
 

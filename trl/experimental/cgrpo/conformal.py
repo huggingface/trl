@@ -77,6 +77,22 @@ def prediction_set(answers: Sequence[str], k: int, qhat: float, rng: random.Rand
     return out
 
 
+def resolves_singleton(answers: Sequence[str], k: int, qhat: float, rng: random.Random) -> bool:
+    """
+    Whether the APS prediction set after `k` completions is a *complete* singleton.
+
+    The set must be a single answer whose empirical mass reaches `qhat`. Failed extractions (empty strings) carry no
+    mass, so a lone extracted answer among unparseable completions forms a one-element set that never reaches `qhat`;
+    that set is incomplete and does not stop sampling. With `qhat == 1.0` a prompt stops only when every one of the `k`
+    answers agrees.
+    """
+    pset = prediction_set(answers, k, qhat, rng)
+    if len(pset) != 1:
+        return False
+    mass = sum(1 for a in answers[:k] if a == pset[0]) / k
+    return mass >= qhat
+
+
 def first_success_score(passes: Sequence[bool], k: int) -> float:
     """Execution score `j* / k`, where `j*` is the 1-based position of the first passing completion (1.0 if none)."""
     for j, passed in enumerate(passes[:k], start=1):
@@ -97,8 +113,8 @@ def select_delta_auto(
     Choose `delta = (1 - solve_rate) + margin`, clipped to `[low, high]`, where `solve_rate` is the fraction of
     calibration examples the policy solves within the largest budget.
 
-    Returns `(delta, solve_rate)`. A fixed stringent `delta` on a weak policy pins every threshold at 1.0, which
-    disables early stopping entirely.
+    Returns `(delta, solve_rate)`. A fixed stringent `delta` on a weak policy pins every threshold at 1.0, so a prompt
+    stops early only when all of its sampled answers agree.
     """
     s = np.asarray(list(scores_at_kmax), dtype=float)
     solve_rate = float((s < 1.0 - 1e-9).mean()) if s.size else 0.0

@@ -28,9 +28,15 @@ from .conformal import (
     conformal_quantile,
     first_success_score,
     pass_rate_score,
-    prediction_set,
+    resolves_singleton,
     select_delta_auto,
 )
+
+
+# Loss types whose normalizer counts tokens through the completion mask. Padded rows have an all-zero mask, so they
+# drop out exactly. The sequence-mean losses ("grpo", "sapo", "luspo") and "dr_grpo" divide by the number of rows,
+# so padded rows would shrink the gradient (and the KL term) in proportion to how many prompts stopped early.
+_SUPPORTED_LOSS_TYPES = ("dapo", "bnpo", "cispo", "vespo")
 
 
 def _as_answer(value: Any) -> str:
@@ -88,6 +94,12 @@ class CGRPOTrainer(GRPOTrainer):
         for name in ("tools", "environment_factory", "rollout_func"):
             if kwargs.get(name) is not None:
                 raise NotImplementedError(f"CGRPOTrainer does not support `{name}` yet.")
+        if args.loss_type not in _SUPPORTED_LOSS_TYPES:
+            raise NotImplementedError(
+                f"CGRPOTrainer supports loss_type in {_SUPPORTED_LOSS_TYPES}, got {args.loss_type!r}. Prompts that "
+                "stop early are padded with masked rows; token-normalized losses exclude them exactly, while "
+                "sequence-mean and row-normalized losses would be diluted by them."
+            )
         if calibration_dataset is None:
             raise ValueError("CGRPOTrainer requires a `calibration_dataset` to fit the conformal thresholds.")
         if isinstance(calibration_dataset, IterableDataset):
@@ -161,7 +173,9 @@ class CGRPOTrainer(GRPOTrainer):
         if args.num_calibration_samples is not None:
             n = min(n, args.num_calibration_samples)
         examples = [self.calibration_dataset[i] for i in range(n)]
-        batch_size = args.calibration_batch_size or args.per_device_train_batch_size
+        # Prompts per generation call. Each prompt expands to max(budget_grid) rows, so the default keeps a calibration
+        # call the same size as a training generation call (per_device_train_batch_size rows).
+        batch_size = args.calibration_batch_size or max(1, args.per_device_train_batch_size // k_max)
 
         scores = []  # scores[i][k]
         for start in range(0, n, batch_size):
@@ -206,7 +220,7 @@ class CGRPOTrainer(GRPOTrainer):
         """Whether the conformal prediction set after `k` completions is a singleton."""
         qhat = self.qhats[k]
         if self.args.score == "aps":
-            return len(prediction_set(outcomes, k, qhat, self._rng)) == 1
+            return resolves_singleton(outcomes, k, qhat, self._rng)
         # For execution scores the set is {pass} once a passing completion has been seen early enough that its score
         # falls within the calibrated threshold.
         if not any(outcomes[:k]):

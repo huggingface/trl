@@ -52,7 +52,11 @@ class CGRPOConfig(GRPOConfig):
             Number of calibration examples to use. Defaults to the whole calibration dataset. Each calibration
             generates `num_calibration_samples * max(budget_grid)` completions.
         calibration_batch_size (`int`, *optional*):
-            Prompts per generation call during calibration. Defaults to `per_device_train_batch_size`.
+            Prompts per generation call during calibration. Each prompt is sampled `max(budget_grid)` times, so the
+            default, `per_device_train_batch_size // max(budget_grid)` (at least 1), makes a calibration call the same
+            number of rows as a training generation call.
+        per_device_train_batch_size (`int`, *optional*, defaults to `32`):
+            Rows per device per step. Must be a multiple of `num_generations`; the default fits the default grid.
         calibration_answer_column (`str`, *optional*, defaults to `"answer"`):
             Column of the calibration dataset holding the reference answer, used when `score="aps"`.
     """
@@ -91,7 +95,15 @@ class CGRPOConfig(GRPOConfig):
     )
     calibration_batch_size: int | None = field(
         default=None,
-        metadata={"help": "Prompts per generation call during calibration. Defaults to per_device_train_batch_size."},
+        metadata={
+            "help": "Prompts per generation call during calibration. Defaults to "
+            "per_device_train_batch_size // max(budget_grid), so a calibration call has as many rows as a training "
+            "generation call."
+        },
+    )
+    per_device_train_batch_size: int = field(
+        default=32,
+        metadata={"help": "Rows per device per step; a multiple of num_generations (max(budget_grid))."},
     )
     calibration_answer_column: str = field(
         default="answer",

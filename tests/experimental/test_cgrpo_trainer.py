@@ -26,6 +26,7 @@ from trl.experimental.cgrpo.conformal import (
     first_success_score,
     pass_rate_score,
     prediction_set,
+    resolves_singleton,
     select_delta_auto,
 )
 
@@ -64,6 +65,20 @@ class TestConformal:
         assert set(prediction_set(["7", "7", "1", "1"], 4, 0.9, rng)) == {"7", "1"}
         assert prediction_set(["", ""], 2, 0.5, rng) == []  # failed extractions carry no mass
 
+    def test_incomplete_singleton_does_not_resolve(self):
+        rng = random.Random(0)
+        # one extracted answer among failed extractions: a one-element set holding 1/4 of the mass
+        assert prediction_set(["7", "", "", ""], 4, 0.5, rng) == ["7"]
+        assert not resolves_singleton(["7", "", "", ""], 4, 0.5, rng)
+        # the same answer holding enough mass does resolve
+        assert resolves_singleton(["7", "7", "7", ""], 4, 0.5, rng)
+
+    def test_threshold_one_requires_unanimity(self):
+        rng = random.Random(0)
+        assert resolves_singleton(["7", "7", "7", "7"], 4, 1.0, rng)
+        assert not resolves_singleton(["7", "7", "7", "1"], 4, 1.0, rng)
+        assert not resolves_singleton(["7", "7", "7", ""], 4, 1.0, rng)
+
     def test_execution_scores(self):
         assert first_success_score([False, True, True, False], 4) == 0.5
         assert first_success_score([False] * 4, 4) == 1.0
@@ -81,6 +96,11 @@ class TestCGRPOConfig:
         args = CGRPOConfig("dummy", budget_grid=[4, 2, 8], per_device_train_batch_size=8)
         assert args.budget_grid == [2, 4, 8]
         assert args.num_generations == 8
+
+    def test_default_config_constructs(self):
+        args = CGRPOConfig("dummy")
+        assert args.num_generations == 32
+        assert args.per_device_train_batch_size % args.num_generations == 0
 
     def test_num_generations_must_match_largest_budget(self):
         with pytest.raises(ValueError, match="must equal max"):
@@ -123,6 +143,7 @@ class FakeVLLMGeneration:
         self.tokenizer = tokenizer
         self.max_completion_length = max_completion_length
         self.calls = []
+        self.rows = []
         self.syncs = 0
 
     def sync_weights(self):
@@ -134,6 +155,7 @@ class FakeVLLMGeneration:
             block = prompts[start : start + num_generations]
             assert all(list(row) == list(block[0]) for row in block)
         self.calls.append(num_generations)
+        self.rows.append(len(prompts))
         generator = torch.Generator().manual_seed(len(self.calls))
         completion_ids, logprobs = [], []
         for _ in prompts:
@@ -222,6 +244,19 @@ class TestCGRPOTrainer(TrlTestCase):
         for batch in trainer.recorded:
             assert batch["completion_mask"][2:].sum() == 0
 
+    @pytest.mark.parametrize("loss_type", ["grpo", "sapo", "luspo", "dr_grpo"])
+    def test_row_normalized_losses_rejected(self, loss_type):
+        dataset, calibration_dataset, args = self._setup(loss_type=loss_type)
+        with pytest.raises(NotImplementedError, match="loss_type"):
+            CGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=length_reward,
+                args=args,
+                train_dataset=dataset,
+                calibration_dataset=calibration_dataset,
+                answer_extractor=lambda text: "x",
+            )
+
     def test_requires_calibration_dataset(self):
         dataset, _, args = self._setup()
         with pytest.raises(ValueError, match="calibration_dataset"):
@@ -263,8 +298,10 @@ class TestCGRPOTrainer(TrlTestCase):
     def test_vllm_requests_one_generation_per_increment(self):
         trainer = self._vllm_trainer(answer_extractor=lambda text: "")  # never resolves: 2, then 2 more
         trainer.train()
-        # per step: calibration asks for max(budget_grid)=4 per prompt, then the increments 2 and 2
-        assert trainer.vllm_generation.calls == [4, 2, 2] * 2
+        # per step: 4 calibration calls (one prompt x max(budget_grid)=4 rows each, the same size as a training
+        # generation call), then the increments 2 and 2
+        assert trainer.vllm_generation.calls == ([4] * 4 + [2, 2]) * 2
+        assert max(trainer.vllm_generation.rows) <= trainer.args.per_device_train_batch_size
         assert trainer.vllm_generation.syncs >= 1
         for batch in trainer.recorded:
             assert torch.all(batch["completion_mask"].sum(dim=1) > 0)
@@ -272,7 +309,7 @@ class TestCGRPOTrainer(TrlTestCase):
     def test_vllm_padded_rows_get_no_importance_correction(self):
         trainer = self._vllm_trainer(answer_extractor=lambda text: "x")  # resolves at k=2
         trainer.train()
-        assert trainer.vllm_generation.calls == [4, 2] * 2
+        assert trainer.vllm_generation.calls == ([4] * 4 + [2]) * 2
         for batch in trainer.recorded:
             assert batch["completion_mask"][2:].sum() == 0
             assert torch.isnan(batch["sampling_per_token_logps"][2:, 0]).all()
