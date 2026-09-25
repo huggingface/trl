@@ -906,9 +906,13 @@ class KTOTrainer(_BaseTrainer):
                 disable_dropout_in_model(self.ref_model)
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model)
+        # `mean_logits` feeds the `logits/*` metrics
+        patch_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            outputs=("log_probs", "entropy", "mean_logits"),
+        )
         if self.ref_model is not None:
-            patch_fused_lm_head(self.ref_model)
+            patch_fused_lm_head(self.ref_model, outputs=("log_probs",))
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
