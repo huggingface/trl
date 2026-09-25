@@ -355,6 +355,9 @@ class GRPOConfig(_BaseConfig):
             exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level="token"`; with
             `"sequence"` a sequence-level weight is broadcast onto the per-token KL.
 
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
@@ -974,6 +977,10 @@ class GRPOConfig(_BaseConfig):
             "exactly 1. The unbiased reverse-KL property holds for `importance_sampling_level='token'`; with "
             "'sequence' a sequence-level weight is broadcast onto the per-token KL."
         },
+    )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Parameters that control the logging
