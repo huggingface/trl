@@ -15,7 +15,6 @@ Liger Kernel is supported in the following TRL trainers:
 - **DPO** (Direct Preference Optimization)
 - **GRPO** (Group Relative Policy Optimization)
 - **KTO** (Kahneman-Tversky Optimization)
-- **GKD** (Generalized Knowledge Distillation)
 
 ## Usage
 
@@ -26,6 +25,15 @@ Liger Kernel is supported in the following TRL trainers:
   ```
 
 2. Once installed, set `use_liger_kernel=True` in your trainer config. No other changes are needed!
+
+<Tip warning={true}>
+
+In DPO, GRPO and KTO the flag additionally replaces the full-vocabulary `log_softmax` with TRL's chunked
+log-probability path, which fits roughly twice the tokens. That path does not support WPO weighting
+(`use_weighting`), `compute_metrics`, `return_outputs`, PEFT adapters on `lm_head`, or prompt-learning PEFT; set
+`use_liger_kernel=False` to use any of those.
+
+</Tip>
 
 <hfoptions id="liger">
 <hfoption id="SFT">
@@ -61,15 +69,6 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 from trl import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GKD">
-
-```python
-from trl.experimental.gkd import GKDConfig
-
-training_args = GKDConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>

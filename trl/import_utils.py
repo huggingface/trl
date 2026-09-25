@@ -69,10 +69,6 @@ def is_jmespath_available() -> bool:
     return _is_package_available("jmespath")
 
 
-def is_joblib_available() -> bool:
-    return _is_package_available("joblib")
-
-
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
     _liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
     return _liger_kernel_available and Version(_liger_kernel_version) >= Version(min_version)
@@ -104,9 +100,9 @@ def is_vllm_available(min_version: str | None = None) -> bool:
         # Use base_version to drop any local segment (e.g. the "+cu129" in "0.24.0+cu129"), which PEP 440 orders
         # above the plain release and would otherwise fail the upper-bound check.
         _vllm_base_version = Version(Version(_vllm_version).base_version)
-        if not (Version("0.19.1") <= _vllm_base_version <= Version("0.28.0")):
+        if not (Version("0.20.0") <= _vllm_base_version <= Version("0.30.0")):
             warnings.warn(
-                f"TRL currently supports vLLM versions from 0.19.1 to 0.28.0. You have version {_vllm_version} "
+                f"TRL currently supports vLLM versions from 0.20.0 to 0.30.0. You have version {_vllm_version} "
                 "installed. We recommend installing a supported version to avoid compatibility issues.",
                 stacklevel=2,
             )
