@@ -919,6 +919,26 @@ class TestDistillationTrainer(TrlTestCase):
         release_memory(trainer.model, trainer)
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = DistillationTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+                args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_peft_config(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -1235,6 +1255,24 @@ class TestDistillationTrainer(TrlTestCase):
             reference = jsd.sum() / num_valid
 
         torch.testing.assert_close(loss, reference, rtol=1e-4, atol=1e-6)
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            teacher_model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
 
 
 @require_vision

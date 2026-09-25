@@ -21,23 +21,27 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
 
+set_seed()
+
 MODEL_ID = "EleutherAI/pythia-14m"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GPTNeoXConfig(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=50304,
     hidden_size=8,
     num_attention_heads=4,
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    eos_token_id=0,
 )
 model = GPTNeoXForCausalLM(config).to(dtype=torch.float16)
 init_weights_tiny_model(model)

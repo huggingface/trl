@@ -29,10 +29,10 @@ from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
-    _ChunkedLogProbFunction,
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
@@ -42,12 +42,14 @@ from trl.trainer.utils import (
     get_callable_name,
     get_peft_config,
     hash_module,
+    is_async_callable,
     nanstd,
     pad,
     patch_chunked_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
@@ -69,8 +71,11 @@ class TestUseAdapter(TrlTestCase):
             "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
         )
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        enabled = model(input_ids).logits
         with model.disable_adapter():
             expected = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(enabled, expected)
 
         with use_adapter(model, None):
             output = model(input_ids).logits
@@ -104,6 +109,8 @@ class TestUseAdapter(TrlTestCase):
         expected_1 = model(input_ids).logits
         model.set_adapter("my_adapter_2")
         expected_2 = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(expected_1, expected_2)
 
         with use_adapter(model, "my_adapter_1"):
             output_1 = model(input_ids).logits
@@ -313,6 +320,47 @@ class TestGetCallableName(TrlTestCase):
         assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
 
 
+class TestIsAsyncCallable(TrlTestCase):
+    def test_function(self):
+        def reward(completions):
+            return [0.0] * len(completions)
+
+        assert not is_async_callable(reward)
+
+    def test_async_function(self):
+        async def reward(completions):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(reward)
+
+    def test_partial(self):
+        async def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(reward, threshold=0.5))
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert not is_async_callable(LengthReward())
+
+    def test_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(LengthReward())
+
+    def test_partial_of_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions, threshold):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(LengthReward(), threshold=0.5))
+
+
 class TestNanStd(TrlTestCase):
     def test_nanstd_ignores_nans(self):
         x = torch.tensor([1.0, 2.0, 3.0, float("nan")])
@@ -350,7 +398,7 @@ class TestGenerateModelCard(TrlTestCase):
         card_text = str(model_card)
         assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
         assert "](https://huggingface.co/spaces/username/space_id)" in card_text
@@ -376,7 +424,7 @@ class TestGenerateModelCard(TrlTestCase):
         )
         card_text = str(model_card)
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "My Trainer" in card_text
 
 
@@ -913,6 +961,32 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
+    # On an accelerator this takes the fused kernel, on CPU the torch path
+    @pytest.mark.parametrize("device", ["cpu", pytest.param(torch_device, marks=require_torch_accelerator)])
+    def test_temperature_and_row_mask(self, device):
+        logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
+        index = torch.randint(257, (2, 3), device=device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
+        if device != "cpu":  # the comparison below must be kernel against torch, not torch against torch
+            assert trainer_utils._fused_logprob_entropy is not None
+            assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
+
+        logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
+        (logprobs + 0.1 * entropy).sum().backward()
+
+        reference_logits = logits.detach().clone().requires_grad_()
+        reference_logprobs = (reference_logits / 0.7).log_softmax(-1)
+        reference_entropy = -(reference_logprobs.exp() * reference_logprobs).sum(-1)
+        reference_logprobs = reference_logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
+        reference_logprobs = reference_logprobs.masked_fill(~row_mask, 0.0)
+        reference_entropy = reference_entropy.masked_fill(~row_mask, 0.0)
+        (reference_logprobs + 0.1 * reference_entropy).sum().backward()
+
+        torch.testing.assert_close(logprobs, reference_logprobs)
+        torch.testing.assert_close(entropy, reference_entropy)
+        torch.testing.assert_close(logits.grad, reference_logits.grad)
+        assert torch.count_nonzero(logits.grad[~row_mask]) == 0
+
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize("k", [1, 8])
     def test_selective_log_softmax_multi_index(self, dtype, k):
@@ -1222,158 +1296,6 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["pixel_values"], original)
 
 
-class TestChunkedLogProbFunction:
-    N, H, V = 64, 32, 128
-    CHUNK_SIZE = 32
-
-    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature, bias=None):
-        logits = hidden @ weight.t()
-        if bias is not None:
-            logits = logits + bias
-        logits = logits.to(torch.float32) / temperature  # [N, V]
-        log_p = F.log_softmax(logits, dim=-1)
-        logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
-        p = torch.softmax(logits, dim=-1)
-        entropy = -(p * log_p).sum(dim=-1)
-        return logprobs, entropy
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_forward(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H)
-        weight = torch.randn(self.V, self.H)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-
-        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
-        logprobs_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        logprobs_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_bfloat16(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
-        weight = torch.randn(self.V, self.H, dtype=torch.bfloat16, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
-        logprobs_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        logprobs_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_entropy(self, temperature):
-        """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        _, entropy_chunked = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
-        entropy_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        _, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        entropy_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_combined(self, temperature):
-        """Backprop through `logprobs` and `entropy` together, to catch the gradients overwriting each other
-        instead of accumulating."""
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-        )
-        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_bias(self, dtype):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, dtype=dtype, requires_grad=True)
-        weight = torch.randn(self.V, self.H, dtype=dtype, requires_grad=True)
-        bias = torch.randn(self.V, dtype=dtype, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, bias, labels, 0.7, self.CHUNK_SIZE
-        )
-        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
-        chunked_grads = hidden.grad.clone(), weight.grad.clone(), bias.grad.clone()
-
-        hidden.grad = weight.grad = bias.grad = None
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, 0.7, bias)
-        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
-
-        atol, rtol = (5e-2, 2e-2) if dtype == torch.bfloat16 else (1e-4, 1e-4)
-        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=atol, rtol=rtol)
-        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=atol, rtol=rtol)
-        for actual, expected in zip(chunked_grads, (hidden.grad, weight.grad, bias.grad), strict=True):
-            torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
-
-
 class _FakeTransformerModel(nn.Module):
     """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
 
@@ -1386,7 +1308,7 @@ class _FakeTransformerModel(nn.Module):
         b, s = input_ids.shape
         if self._hidden is None or self._hidden.shape[:2] != (b, s):
             torch.manual_seed(123)
-            self._hidden = torch.randn(b, s, self.hidden_size, requires_grad=True)
+            self._hidden = torch.randn(b, s, self.hidden_size, device=input_ids.device, requires_grad=True)
         return type("Out", (), {"last_hidden_state": self._hidden})()
 
 
@@ -1467,13 +1389,13 @@ class TestPatchChunkedLMHead:
 
     def _build_model_and_inputs(self, temperature=1.0):
         torch.manual_seed(42)
-        model = _FakeCausalLM(self.H, self.V)
+        model = _FakeCausalLM(self.H, self.V).to(torch_device)
         patch_chunked_lm_head(model, self.CHUNK_SIZE, temperature)
 
-        input_ids = torch.randint(0, self.V, (self.B, self.S))
-        attention_mask = torch.ones(self.B, self.S, dtype=torch.long)
+        input_ids = torch.randint(0, self.V, (self.B, self.S), device=torch_device)
+        attention_mask = torch.ones(self.B, self.S, dtype=torch.long, device=torch_device)
         # First half of each sequence is prompt (0), second half is completion (1)
-        completion_mask = torch.zeros(self.B, self.S, dtype=torch.float32)
+        completion_mask = torch.zeros(self.B, self.S, dtype=torch.float32, device=torch_device)
         completion_mask[:, self.S // 2 :] = 1.0
         return model, input_ids, attention_mask, completion_mask
 
@@ -1538,6 +1460,20 @@ class TestPatchChunkedLMHead:
         grad_weight_masked = model.lm_head.weight.grad.clone()
 
         torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
+
+        model.lm_head.weight.grad = None
+        model.model._hidden = None
+        empty_completion_mask = torch.zeros_like(completion_mask)
+        out_empty = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            completion_mask=empty_completion_mask,
+        )
+        assert out_empty["log_probs"].count_nonzero() == 0
+        out_empty["log_probs"].sum().backward()
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
 
     @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])

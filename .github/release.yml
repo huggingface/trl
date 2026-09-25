@@ -1,0 +1,25 @@
+# Sections for the auto-generated release notes draft.
+# A PR lands in the first category whose labels match, so "*" must stay last.
+changelog:
+  categories:
+    - title: Breaking
+      labels:
+        - 💥 breaking
+    - title: Features
+      labels:
+        - ✨ enhancement
+    - title: Fixes
+      labels:
+        - 🐛 bug
+    - title: Documentation
+      labels:
+        - 📚 documentation
+    - title: CI and maintenance
+      labels:
+        - 🔧 maintenance
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other
+      labels:
+        - "*"

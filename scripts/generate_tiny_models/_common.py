@@ -24,12 +24,16 @@ from pathlib import Path
 
 import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
+from huggingface_hub.errors import NotASafetensorsRepoError
 from packaging.version import Version
 from torch import nn
 from transformers import AutoConfig, ProcessorMixin
+from transformers import set_seed as _set_seed
 
 
 ORGANIZATION = "trl-internal-testing"
+
+SEED = 42
 
 MODEL_CARD = """
 ---
@@ -69,6 +73,18 @@ def check_transformers_version(expected_version=None):
         raise RuntimeError(
             f"This script requires transformers=={expected_version}, but {transformers.__version__} is installed."
         )
+
+
+def set_seed(seed=SEED):
+    """Seed the RNGs that model construction draws from.
+
+    Without this every run produces different weights, so re-pushing a tiny model always creates a new
+    `model.safetensors` even when nothing else changed. Call it before building the model: most scripts never call
+    `init_weights_tiny_model`, and the randomness has already happened by then.
+
+    Pass a different `seed` when a script must produce weights that differ from another script's.
+    """
+    _set_seed(seed)
 
 
 def smoke_test(model, tokenizer_or_processor=None):
@@ -153,7 +169,11 @@ def check_dtype_pattern(reference_id, model):
     Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
     like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
     """
-    metadata = api.get_safetensors_metadata(reference_id)
+    try:
+        metadata = api.get_safetensors_metadata(reference_id)
+    except NotASafetensorsRepoError:
+        print(f"[dtype_check] {reference_id}: not a safetensors repo, skipping")
+        return
     ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
     mismatches = []
@@ -174,8 +194,22 @@ def check_dtype_pattern(reference_id, model):
         print(f"  {name}: reference={ref}, tiny={tiny}")
 
 
-def print_config_diff(reference_id, model):
-    """Print the flat, recursive diff between the reference Hub config and the tiny-model config."""
+def _format_diff_value(value, width):
+    """Render a config value for the diff table, tagging lists with their length and marking truncation."""
+    text = f"[{len(value)} items] {value}" if isinstance(value, list) else str(value)
+    if width is None or len(text) <= width:
+        return text
+    return text[: width - 1] + "\u2026"
+
+
+def print_config_diff(reference_id, model, full=None):
+    """Print the flat, recursive diff between the reference Hub config and the tiny-model config.
+
+    Values are truncated to keep the table aligned; pass `--full-diff` (or `full=True`) to print them in full.
+    """
+    if full is None:
+        full = _parse_args().full_diff
+    width = None if full else 34
     reference_config = AutoConfig.from_pretrained(reference_id)
     ref_flat = _flatten(reference_config.to_dict())
     tiny_flat = _flatten(model.config.to_dict())
@@ -191,7 +225,7 @@ def print_config_diff(reference_id, model):
 
     print(f"[config_diff] {reference_id} vs tiny ({len(rows)} differences)")
     for k, r, t in rows:
-        print(f"  {k:48s} {str(r)[:34]:34s} → {str(t)[:34]}")
+        print(f"  {k:48s} {_format_diff_value(r, width):34s} → {_format_diff_value(t, width)}")
 
 
 def _parse_args():
@@ -200,6 +234,11 @@ def _parse_args():
         "--create-pr",
         action="store_true",
         help="If the repo already exists, open a PR instead of skipping.",
+    )
+    parser.add_argument(
+        "--full-diff",
+        action="store_true",
+        help="Print untruncated values in the config diff.",
     )
     args, _ = parser.parse_known_args()
     return args

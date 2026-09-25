@@ -41,9 +41,9 @@ class _BaseConfig(TrainingArguments):
             Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts. See
             the documentation of each scheduler for possible values.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
-            Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations. Increases multi-GPU
-            throughput by ~20% and reduces memory usage by ~60%. Works with Flash Attention, FSDP, and DeepSpeed.
-            Currently, supports Llama, Mistral, Mixtral, and Gemma models.
+            Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations. In DPO, GRPO and KTO it also
+            selects TRL's chunked log-probability path, which has restrictions; see the [Liger Kernel
+            Integration](liger_kernel_integration) guide.
         torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
             will not be emptied. This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of
@@ -90,7 +90,7 @@ class _BaseConfig(TrainingArguments):
     use_liger_kernel: bool = field(
         default=False,
         metadata={
-            "help": "Enable Liger Kernel optimizations. Increases throughput by ~20%% and reduces memory by ~60%%."
+            "help": "Enable Liger Kernel optimizations. In DPO, GRPO and KTO, also selects the chunked log-probability path."
         },
     )
     # - Introduced in v4.54.1; fixed in v5.3.0

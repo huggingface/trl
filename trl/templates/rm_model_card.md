@@ -13,7 +13,7 @@ It has been trained using [TRL](https://github.com/huggingface/trl).
 from transformers import pipeline
 
 text = "The capital of France is Paris."
-rewarder = pipeline(model="{{ hub_model_id }}", device="cuda")
+rewarder = pipeline(model="{{ hub_model_id }}", device_map="auto")
 output = rewarder(text)[0]
 print(output["score"])
 ```

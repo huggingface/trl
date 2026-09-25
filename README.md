@@ -176,7 +176,7 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
 ```bash
 trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name argilla/Capybara-Preferences \
-    --output_dir Qwen2.5-0.5B-DPO 
+    --output_dir Qwen2.5-0.5B-DPO
 ```
 
 **KTO:**
