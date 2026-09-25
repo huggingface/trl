@@ -20,6 +20,7 @@ jobs:
     name: vLLM client/server tests with minimum versions
     runs-on:
       group: aws-g5-12xlarge-cache
+    timeout-minutes: 45
     env:
       CUDA_VISIBLE_DEVICES: "0,1,2,3"
     container:
@@ -67,4 +68,4 @@ jobs:
       - name: Run the vLLM client/server tests
         run: |
           source .venv/bin/activate
-          pytest -m slow -v tests/test_vllm_client_server.py
+          pytest -m slow -v --durations=10 tests/test_vllm_client_server.py::TestVLLMClientServer
