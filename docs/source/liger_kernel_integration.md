@@ -26,6 +26,12 @@ Liger Kernel is supported in the following TRL trainers:
 
 2. Once installed, set `use_liger_kernel=True` in your trainer config. No other changes are needed!
 
+<Tip warning={true}>
+
+`use_liger_kernel=True` is deprecated in [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0. These trainers compute the log-probabilities with a fused LM head, so only Liger's layer kernels (`RMSNorm`, `RoPE`, `SwiGLU`) apply. Use the Hub kernels instead, with `model_init_kwargs={"use_kernels": True}`.
+
+</Tip>
+
 <hfoptions id="liger">
 <hfoption id="SFT">
 
