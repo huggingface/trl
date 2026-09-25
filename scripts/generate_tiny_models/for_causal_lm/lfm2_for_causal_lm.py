@@ -61,7 +61,7 @@ config = Lfm2Config(
     # The reference tokenizer's EOS is <|im_end|> (7), not <|endoftext|> (2) which `Lfm2Config` defaults to.
     eos_token_id=7,
     pad_token_id=0,
-    use_cache=False,
+    use_cache=True,
 )
 model = Lfm2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
