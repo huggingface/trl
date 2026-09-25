@@ -37,7 +37,7 @@ MODEL_ID = "deepseek-ai/DeepSeek-R1-0528"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
-    vocab_size=len(tokenizer.vocab),
+    vocab_size=129280,
     hidden_size=8,
     # DeepSeek-V3 uses MLA, not GQA: kv_b_proj always reconstructs K/V with the full
     # num_attention_heads, so num_key_value_heads must equal num_attention_heads (i.e.
@@ -48,6 +48,16 @@ config = DeepseekV3Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    max_position_embeddings=163840,
+    rope_scaling={
+        "beta_fast": 32.0,
+        "beta_slow": 1.0,
+        "factor": 40.0,
+        "mscale": 1.0,
+        "mscale_all_dim": 1.0,
+        "original_max_position_embeddings": 4096,
+        "type": "yarn",
+    },
 )
 model = DeepseekV3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
