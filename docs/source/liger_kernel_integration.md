@@ -28,10 +28,7 @@ Liger Kernel is supported in the following TRL trainers:
 
 <Tip warning={true}>
 
-In DPO and KTO the flag additionally replaces the full-vocabulary `log_softmax` with TRL's chunked
-log-probability path, which fits roughly twice the tokens. That path does not support WPO weighting
-(`use_weighting`), `compute_metrics`, `return_outputs`, PEFT adapters on `lm_head`, or prompt-learning PEFT; set
-`use_liger_kernel=False` to use any of those.
+In DPO and KTO the flag additionally replaces the full-vocabulary `log_softmax` with TRL's chunked log-probability path, which fits roughly twice the tokens. That path does not support WPO weighting (`use_weighting`), `compute_metrics`, `return_outputs`, PEFT adapters on `lm_head`, or prompt-learning PEFT; set `use_liger_kernel=False` to use any of those.
 
 </Tip>
 
