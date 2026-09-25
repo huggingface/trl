@@ -62,6 +62,22 @@ config = Lfm2Config(
     eos_token_id=7,
     pad_token_id=0,
     use_cache=True,
+    # Reference-only keys: `Lfm2Config` does not model any of these.
+    block_mlp_init_scale=1.0,
+    block_norm_eps=1e-05,
+    block_out_init_scale=1.0,
+    block_use_swiglu=True,
+    block_use_xavier_init=True,
+    conv_use_xavier_init=True,
+    use_pos_enc=True,
+    # Aliases the reference carries for size fields, so they take the scaled-down value: `block_dim`,
+    # `conv_dim` and `conv_dim_out` alias `hidden_size`, `block_ff_dim` aliases `intermediate_size`, and
+    # `num_heads` aliases `num_attention_heads`.
+    block_dim=8,
+    block_ff_dim=32,
+    conv_dim=8,
+    conv_dim_out=8,
+    num_heads=4,
 )
 model = Lfm2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
