@@ -130,6 +130,21 @@ class TestDistributed(TrlTestCase):
         )
         assert result.returncode == 0
 
+    def test_sft_trainer_zero3_unequal_chunks(self):
+        result = subprocess.run(
+            [
+                "torchrun",
+                "--standalone",
+                "--nproc_per_node=2",
+                "tests/distributed/sft_trainer_zero3_unequal_chunks.py",
+                self.tmp_dir,
+            ],
+            env=os.environ.copy(),
+            cwd=ROOT,
+            timeout=120,
+        )
+        assert result.returncode == 0
+
     @pytest.mark.parametrize(
         "config",
         [
