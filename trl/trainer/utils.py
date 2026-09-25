@@ -1464,7 +1464,7 @@ _CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 class FusedCausalLMOutput(ModelOutput):
     """
     Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
-    is zero where the label is `-100`.
+    is zero where the label is `-100`. Per-token fields not listed in the patch's `outputs` are `None`.
 
     Args:
         loss (`torch.Tensor`):
@@ -1476,6 +1476,12 @@ class FusedCausalLMOutput(ModelOutput):
             Log-probability of each next-token label.
         entropy (`torch.Tensor`, same shape as `log_probs`):
             Entropy of the next-token distribution.
+        log_sum_sq_probs (`torch.Tensor`, same shape as `log_probs`):
+            `log(sum_v p_v^2)` of the next-token distribution, without gradient.
+        mean_logits (`torch.Tensor`, same shape as `log_probs`):
+            Mean of the temperature-scaled next-token logits over the vocabulary, without gradient.
+        is_top1 (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is the most likely next token.
         label_mask (`torch.Tensor`, same shape as `log_probs`):
             Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
             sequence than the caller's labels.
@@ -1486,11 +1492,19 @@ class FusedCausalLMOutput(ModelOutput):
     loss: torch.Tensor | None = None
     log_probs: torch.Tensor | None = None
     entropy: torch.Tensor | None = None
+    log_sum_sq_probs: torch.Tensor | None = None
+    mean_logits: torch.Tensor | None = None
+    is_top1: torch.Tensor | None = None
     label_mask: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
 
 
-def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
+def patch_fused_lm_head(
+    model: PreTrainedModel,
+    temperature: float = 1.0,
+    cast_lm_head_to_fp32: bool = False,
+    outputs: tuple[str, ...] = ("log_probs", "entropy"),
+) -> None:
     """
     Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
     instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
@@ -1507,6 +1521,10 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
             Temperature the logits are divided by.
         cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
             Whether to run the LM head projection in float32, outside autocast.
+        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs", "entropy")`):
+            Per-token fields of [`FusedCausalLMOutput`] the kernel computes, among `"log_probs"`, `"entropy"`,
+            `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
+            is always computed; each extra field costs a little on every call.
     """
     original_forward = model.forward
     text_config = model.config.get_text_config()
@@ -1542,12 +1560,12 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
         # MoE models: like the model's own forward, request router logits when the config asks for them
         if getattr(text_config, "output_router_logits", False):
             kwargs.setdefault("output_router_logits", True)
-        outputs = getattr(self, backbone_attr)(*args, **kwargs)
+        backbone_outputs = getattr(self, backbone_attr)(*args, **kwargs)
         if shift_labels is None:
-            hidden_states = outputs.last_hidden_state[:, :-1]
+            hidden_states = backbone_outputs.last_hidden_state[:, :-1]
             labels = labels[:, 1:]
         else:
-            hidden_states = outputs.last_hidden_state
+            hidden_states = backbone_outputs.last_hidden_state
             labels = shift_labels
         mask = labels != -100
         autocast_ctx = nullcontext()
@@ -1573,10 +1591,13 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
                 _CHUNKED_LOGPROB_CHUNK_SIZE,
                 final_logit_softcapping,
                 logit_scale,
+                outputs,
             )
         # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
         # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy = (x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
+            None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
+        )
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
@@ -1598,11 +1619,20 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
                 num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
-                outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                backbone_outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
             )
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return FusedCausalLMOutput(loss=loss, log_probs=log_probs, entropy=entropy, label_mask=mask, aux_loss=aux_loss)
+        return FusedCausalLMOutput(
+            loss=loss,
+            log_probs=log_probs,
+            entropy=entropy,
+            log_sum_sq_probs=log_sum_sq_probs,
+            mean_logits=mean_logits,
+            is_top1=is_top1,
+            label_mask=mask,
+            aux_loss=aux_loss,
+        )
 
     model.forward = types.MethodType(_fused_forward, model)
 
