@@ -192,8 +192,7 @@ Follow these steps to start contributing:
 
     Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
-    It is a good idea to sync your copy of the code with the original
-    repository regularly. This way you can quickly account for changes:
+    It is a good idea to sync your copy of the code with the original repository regularly. This way you can quickly account for changes:
 
     ```bash
     git fetch upstream
@@ -220,11 +219,9 @@ Follow these steps to start contributing:
 
 ### Tests
 
-An extensive test suite is included to test the library behavior and several examples. Library tests can be found in
-the [tests folder](https://github.com/huggingface/trl/tree/main/tests).
+An extensive test suite is included to test the library behavior and several examples. Library tests can be found in the [tests folder](https://github.com/huggingface/trl/tree/main/tests).
 
-We use `pytest` to run the tests. From the root of the
-repository here's how to run tests with `pytest` for the library:
+We use `pytest` to run the tests. From the root of the repository here's how to run tests with `pytest` for the library:
 
 ```bash
 python -m pytest -sv ./tests
@@ -232,8 +229,7 @@ python -m pytest -sv ./tests
 
 That's how `make test` is implemented (without the `pip install` line)!
 
-You can specify a smaller set of tests to test only the feature
-you're working on.
+You can specify a smaller set of tests to test only the feature you're working on.
 
 ### Default values guidelines
 
