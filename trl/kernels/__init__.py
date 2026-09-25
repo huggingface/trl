@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .chunked_logprob import ChunkedLogProbFunction
 from .logprob_entropy import selective_log_softmax_and_entropy
 
 
-__all__ = ["selective_log_softmax_and_entropy"]
+__all__ = ["ChunkedLogProbFunction", "selective_log_softmax_and_entropy"]

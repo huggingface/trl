@@ -434,7 +434,7 @@ class TestGRPOTrainer(TrlTestCase):
         # The streamed projection must return the same log-probs and entropies as the full-logits path, and must never
         # call the LM head: doing so would materialize the [N, V] logits the projection exists to avoid. Loss-type math
         # lives in `_compute_loss` and is path-independent, so comparing log-probs covers every loss type. 2200 scored
-        # tokens is above `_CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE`, so this crosses a token-chunk boundary too.
+        # tokens is above the 1024-token tile set below, so this crosses a token-chunk boundary too.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -453,7 +453,10 @@ class TestGRPOTrainer(TrlTestCase):
         input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 1101), device=trainer.accelerator.device)
         attention_mask = torch.ones_like(input_ids)
 
-        with patch.object(trainer.model.get_output_embeddings(), "forward", side_effect=AssertionError):
+        with (
+            patch.object(trainer.model.get_output_embeddings(), "forward", side_effect=AssertionError),
+            patch("trl.kernels.chunked_logprob.TOKEN_CHUNK_SIZE", 1024),
+        ):
             chunked_logps, chunked_entropies, _ = trainer._get_per_token_logps_and_entropies(
                 trainer.model, input_ids, attention_mask, logits_to_keep=1100, compute_entropy=True
             )

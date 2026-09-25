@@ -79,7 +79,7 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
 
 @dataclass

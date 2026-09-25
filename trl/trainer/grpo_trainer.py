@@ -120,7 +120,7 @@ if is_wandb_available():
 logger = get_logger(__name__)
 
 
-_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
