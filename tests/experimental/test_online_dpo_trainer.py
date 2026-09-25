@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
@@ -190,6 +191,28 @@ class TestOnlineDPOTrainer(TrlTestCase):
                 processing_class=self.tokenizer,
                 reward_processing_classes=self.reward_tokenizer,
             )
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = OnlineDPOTrainer(
+                model=self.model_id,
+                reward_funcs=self.reward_model,
+                args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @require_peft
     def test_train_with_peft(self):
