@@ -560,7 +560,9 @@ class VLLMGeneration:
             prompts: List of token ID lists, one per prompt (already tokenized).
             images: Optional list of image lists for VLM support. Each element is a list of PIL images for the
                 corresponding prompt, or `None` if no images for that prompt. `None` if no images at all.
-            num_generations: Number of generations per prompt.
+            num_generations: Number of times each original prompt is repeated in `prompts`. Server mode assumes
+                each group contains identical inputs and requests this many completions for its first entry. Pass 1
+                after tool calls because histories can diverge.
             profiler: Optional profiler for performance tracking.
 
         Returns:
@@ -624,7 +626,7 @@ class VLLMGeneration:
                     "max_tokens": max_completion_length,
                     "logprobs": self.logprobs,
                     "structured_outputs_regex": self.structured_outputs_regex,
-                    "generation_kwargs": self.generation_kwargs,
+                    "generation_kwargs": {**self.generation_kwargs, "n": num_generations},
                 }
                 with profiler:
                     output = self.vllm_client.generate(

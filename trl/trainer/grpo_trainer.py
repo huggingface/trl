@@ -1700,7 +1700,9 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
+    def _generate_single_turn(
+        self, prompt_ids, images, multimodal_fields, has_tool_images=False, is_continuation=False
+    ):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -1714,6 +1716,9 @@ class GRPOTrainer(_BaseTrainer):
 
             # Generate using vLLM with raw token IDs
             num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            if is_continuation:
+                # Tool calls and results can differ between completions. Generate one response per history.
+                num_generations = 1
             _, completion_ids, logprobs, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
@@ -2049,6 +2054,7 @@ class GRPOTrainer(_BaseTrainer):
                 loop_images,
                 loop_multimodal_fields,
                 has_tool_images=any(imgs for imgs in tool_images),
+                is_continuation=True,
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
