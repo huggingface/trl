@@ -20,19 +20,18 @@ from unittest.mock import patch
 
 import pytest
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
-    _ChunkedLogProbFunction,
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
@@ -45,10 +44,11 @@ from trl.trainer.utils import (
     is_async_callable,
     nanstd,
     pad,
-    patch_chunked_lm_head,
+    patch_fused_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
@@ -60,7 +60,15 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 
 if is_peft_available():
-    from peft import AutoPeftModelForCausalLM, LoraConfig
+    from peft import (
+        AutoPeftModelForCausalLM,
+        LoraConfig,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 @require_peft
@@ -960,6 +968,32 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
+    # On an accelerator this takes the fused kernel, on CPU the torch path
+    @pytest.mark.parametrize("device", ["cpu", pytest.param(torch_device, marks=require_torch_accelerator)])
+    def test_temperature_and_row_mask(self, device):
+        logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
+        index = torch.randint(257, (2, 3), device=device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
+        if device != "cpu":  # the comparison below must be kernel against torch, not torch against torch
+            assert trainer_utils._fused_logprob_entropy is not None
+            assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
+
+        logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
+        (logprobs + 0.1 * entropy).sum().backward()
+
+        reference_logits = logits.detach().clone().requires_grad_()
+        reference_logprobs = (reference_logits / 0.7).log_softmax(-1)
+        reference_entropy = -(reference_logprobs.exp() * reference_logprobs).sum(-1)
+        reference_logprobs = reference_logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
+        reference_logprobs = reference_logprobs.masked_fill(~row_mask, 0.0)
+        reference_entropy = reference_entropy.masked_fill(~row_mask, 0.0)
+        (reference_logprobs + 0.1 * reference_entropy).sum().backward()
+
+        torch.testing.assert_close(logprobs, reference_logprobs)
+        torch.testing.assert_close(entropy, reference_entropy)
+        torch.testing.assert_close(logits.grad, reference_logits.grad)
+        assert torch.count_nonzero(logits.grad[~row_mask]) == 0
+
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize("k", [1, 8])
     def test_selective_log_softmax_multi_index(self, dtype, k):
@@ -1269,316 +1303,229 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["pixel_values"], original)
 
 
-class TestChunkedLogProbFunction:
-    N, H, V = 64, 32, 128
-    CHUNK_SIZE = 32
-
-    def _reference_logprobs_and_entropy(
-        self, hidden, weight, labels, temperature, bias=None, logit_scale=1.0, final_logit_softcapping=None
-    ):
-        logits = hidden @ weight.t()
-        if bias is not None:
-            logits = logits + bias
-        logits = logits.to(torch.float32) * logit_scale
-        if final_logit_softcapping is not None:
-            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
-        logits = logits / temperature  # [N, V]
-        log_p = F.log_softmax(logits, dim=-1)
-        logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
-        p = torch.softmax(logits, dim=-1)
-        entropy = -(p * log_p).sum(dim=-1)
-        return logprobs, entropy
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_forward(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H)
-        weight = torch.randn(self.V, self.H)
-        labels = torch.randint(0, self.V, (self.N,))
-        chunk_rows = []
-        torch_mm = torch.mm
-
-        def record_chunk(input, mat2, *, out=None):
-            chunk_rows.append(input.size(0))
-            return torch_mm(input, mat2, out=out)
-
-        with (
-            patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17),
-            patch("trl.trainer.utils.torch.mm", side_effect=record_chunk),
-        ):
-            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-            )
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-
-        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
-        assert max(chunk_rows) <= 17
-        assert chunk_rows[-1] == 13
-
-    @pytest.mark.parametrize(
-        ("logit_scale", "final_logit_softcapping"),
-        [
-            (0.5, None),  # models that scale but don't softcap, e.g. MPT
-            (1.0, 30.0),  # models that softcap but don't scale, e.g. Gemma 2
-            (0.5, 30.0),  # both, applied in that order
-        ],
-    )
-    def test_logit_scale_and_softcapping(self, logit_scale, final_logit_softcapping):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H)
-        weight = torch.randn(self.V, self.H)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs, entropy = _ChunkedLogProbFunction.apply(
-            hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
-        )
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
-            hidden, weight, labels, 0.7, logit_scale=logit_scale, final_logit_softcapping=final_logit_softcapping
-        )
-
-        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
-        logprobs_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        logprobs_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_bfloat16(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
-        weight = torch.randn(self.V, self.H, dtype=torch.bfloat16, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
-        logprobs_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        logprobs_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
-
-    def test_backward_bfloat16_hidden_float32_weight(self):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
-        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
-        logprobs.sum().backward()
-        grad_hidden = hidden.grad.clone()
-        grad_weight = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-        reference, _ = self._reference_logprobs_and_entropy(hidden, weight.to(hidden.dtype), labels, 1.0)
-        reference.sum().backward()
-
-        torch.testing.assert_close(logprobs, reference, atol=1e-2, rtol=1e-2)
-        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-2, rtol=1e-2)
-        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-2, rtol=1e-2)
-
-    def test_backward_uses_autocast_hidden_for_weight_gradient(self):
-        torch.manual_seed(42)
-        hidden = torch.linspace(1.0, 2.0, self.N * self.H).reshape(self.N, self.H).to(torch.bfloat16).float()
-        perturbed_hidden = hidden + 1e-4
-        assert torch.equal(hidden.to(torch.bfloat16), perturbed_hidden.to(torch.bfloat16))
-        hidden.requires_grad_()
-        perturbed_hidden.requires_grad_()
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        perturbed_weight = weight.detach().clone().requires_grad_()
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Autocast gives both inputs identical projected values. Their weight gradients must therefore also match;
-        # using the original fp32 hidden states in backward would make the gradients depend on the discarded bits.
-        with torch.autocast("cpu", dtype=torch.bfloat16):
-            logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
-            perturbed_logprobs, _ = _ChunkedLogProbFunction.apply(
-                perturbed_hidden, perturbed_weight, None, labels, 1.0, self.CHUNK_SIZE
-            )
-        logprobs.sum().backward()
-        perturbed_logprobs.sum().backward()
-
-        torch.testing.assert_close(logprobs, perturbed_logprobs, rtol=0, atol=0)
-        torch.testing.assert_close(weight.grad, perturbed_weight.grad, rtol=0, atol=0)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_entropy(self, temperature):
-        """Backprop through the `entropy` output alone (as opposed to `logprobs`, covered above)."""
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        _, entropy_chunked = _ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)
-        entropy_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        _, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        entropy_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_combined(self, temperature):
-        """Backprop through `logprobs` and `entropy` together, to catch the gradients overwriting each other
-        instead of accumulating."""
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        with patch("trl.trainer.utils._CHUNKED_LOGPROB_TOKEN_CHUNK_SIZE", 17):
-            logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-                hidden, weight, None, labels, temperature, self.CHUNK_SIZE
-            )
-            (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-4, rtol=1e-4)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-    def test_bias(self, dtype):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, dtype=dtype, requires_grad=True)
-        weight = torch.randn(self.V, self.H, dtype=dtype, requires_grad=True)
-        bias = torch.randn(self.V, dtype=dtype, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, bias, labels, 0.7, self.CHUNK_SIZE
-        )
-        (2.0 * logprobs_chunked + 0.5 * entropy_chunked).sum().backward()
-        chunked_grads = hidden.grad.clone(), weight.grad.clone(), bias.grad.clone()
-
-        hidden.grad = weight.grad = bias.grad = None
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, 0.7, bias)
-        (2.0 * logprobs_ref + 0.5 * entropy_ref).sum().backward()
-
-        atol, rtol = (5e-2, 2e-2) if dtype == torch.bfloat16 else (1e-4, 1e-4)
-        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=atol, rtol=rtol)
-        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=atol, rtol=rtol)
-        for actual, expected in zip(chunked_grads, (hidden.grad, weight.grad, bias.grad), strict=True):
-            torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
-
-    def test_backward_skips_frozen_parameter_gradients(self):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H)
-        bias = torch.randn(self.V)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
-        with patch.object(torch, "zeros", wraps=torch.zeros) as mock_zeros:
-            logprobs.sum().backward()
-
-        # A frozen LM head should not allocate full-vocabulary gradient buffers. These shapes are distinct from the
-        # per-token accumulators and the hidden-state gradient allocated by the same backward pass.
-        allocated_shapes = [call.args[0] for call in mock_zeros.call_args_list]
-        assert weight.shape not in allocated_shapes
-        assert bias.shape not in allocated_shapes
-        assert hidden.grad is not None
-
-    @pytest.mark.parametrize("requires_grad", [(True, False, False), (False, True, False), (False, False, True)])
-    def test_backward_with_partially_frozen_inputs(self, requires_grad):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=requires_grad[0])
-        weight = torch.randn(self.V, self.H, requires_grad=requires_grad[1])
-        bias = torch.randn(self.V, requires_grad=requires_grad[2])
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs, _ = _ChunkedLogProbFunction.apply(hidden, weight, bias, labels, 1.0, self.CHUNK_SIZE)
-        logprobs.sum().backward()
-        chunked_grads = hidden.grad, weight.grad, bias.grad
-
-        hidden_ref = hidden.detach().clone().requires_grad_(requires_grad[0])
-        weight_ref = weight.detach().clone().requires_grad_(requires_grad[1])
-        bias_ref = bias.detach().clone().requires_grad_(requires_grad[2])
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden_ref, weight_ref, labels, 1.0, bias_ref)
-        logprobs_ref.sum().backward()
-
-        for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
-            if expected is not None:
-                torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
-
-
-class _FakeTransformerModel(nn.Module):
-    """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
-
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self._hidden = None
-
-    def forward(self, input_ids, attention_mask=None, use_cache=False, **kwargs):
-        b, s = input_ids.shape
-        if self._hidden is None or self._hidden.shape[:2] != (b, s):
-            torch.manual_seed(123)
-            self._hidden = torch.randn(b, s, self.hidden_size, requires_grad=True)
-        return type("Out", (), {"last_hidden_state": self._hidden})()
-
-
-class _FakeCausalLM(nn.Module):
-    """Minimal CausalLM with .model and .lm_head, enough for patch_chunked_lm_head."""
-
-    def __init__(self, hidden_size, vocab_size):
-        super().__init__()
-        self.config = PretrainedConfig()
-        self.model = _FakeTransformerModel(hidden_size)
-        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
-
-    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
-        raise NotImplementedError("should be monkey-patched")
-
-
-_CHUNKED_LM_HEAD_MODEL_IDS = [
+_FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GPT2LMHeadModel",
+    "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Olmo 3 was introduced in transformers>=4.57.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+]
+
+
+@require_torch_accelerator
+class TestPatchFusedLMHead:
+    def test_masked_labels(self):
+        """Positions labelled `-100` are zero and the others match an unmasked run."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        patch_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
+        labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
+
+        out_full = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        mask = labels[:, 1:] != -100
+        torch.testing.assert_close(out["log_probs"][mask], out_full["log_probs"][mask])
+        torch.testing.assert_close(out["entropy"][mask], out_full["entropy"][mask])
+        assert (out["log_probs"][~mask] == 0).all()
+        assert (out["entropy"][~mask] == 0).all()
+
+    def test_shift_labels(self):
+        """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        patch_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out_shifted = model(input_ids=input_ids, shift_labels=shift_labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out_shifted["log_probs"][:, :-1], out["log_probs"])
+        torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
+        assert (out_shifted["log_probs"][:, -1] == 0).all()
+
+    def test_all_masked_labels_backward(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        patch_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
+
+        out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
+        out["log_probs"].sum().backward()
+
+        assert out["log_probs"].count_nonzero() == 0
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
+
+    def test_generate_unchanged(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device=torch_device)
+        expected = model.generate(input_ids, max_new_tokens=8, do_sample=False)
+
+        patch_fused_lm_head(model)
+
+        torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
+
+    def test_output_multiplier(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        model.config.output_multiplier = 0.5
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        patch_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    def test_cast_lm_head_to_fp32(self):
+        """Under bf16 autocast, the projection runs in fp32 and matches an fp32 projection of the same hidden states."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        patch_fused_lm_head(model, cast_lm_head_to_fp32=True)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        with torch.autocast(torch_device, dtype=torch.bfloat16):
+            out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+            hidden_states = model.model(input_ids=input_ids).last_hidden_state[:, :-1]
+        logps = torch.nn.functional.linear(hidden_states.float(), model.lm_head.weight).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+    )
+    def test_aux_loss(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[1, 8:] = 0
+        expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
+
+        patch_fused_lm_head(model)
+        out = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            output_router_logits=True,
+            fused_lm_head=True,
+        )
+
+        torch.testing.assert_close(out["aux_loss"], expected)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_forward(self, model_id, temperature):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
+        model.eval()
+
+        B, S = 2, 8
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+
+        # Reference: standard forward → shifted logits → logprobs & entropy
+        with torch.no_grad():
+            ref_logits = model(input_ids=input_ids).logits[:, :-1, :].float() / temperature
+        shifted_labels = labels[:, 1:]
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_p = ref_logits.softmax(dim=-1)
+        ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
+
+        # Chunked forward
+        patch_fused_lm_head(model, temperature)
+        with torch.no_grad():
+            out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
+        torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("temperature", [1.0, 0.7])
+    def test_backward(self, model_id, temperature):
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        model_chunked = copy.deepcopy(model_ref)
+
+        B, S = 2, 8
+        torch.manual_seed(42)
+        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        shifted_labels = labels[:, 1:]
+
+        # Reference backward: standard logits → logprobs → backward
+        ref_logits = model_ref(input_ids=input_ids).logits[:, :-1, :].float() / temperature
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_logprobs.sum().backward()
+        ref_grad = model_ref.lm_head.weight.grad.clone()
+
+        # Chunked backward
+        patch_fused_lm_head(model_chunked, temperature)
+        out = model_chunked(input_ids=input_ids, labels=labels, fused_lm_head=True)
+        out["log_probs"].sum().backward()
+        chunked_grad = model_chunked.lm_head.weight.grad.clone()
+
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
+
+
+_FUSED_LM_HEAD_LOSS_MODEL_IDS = [
+    "trl-internal-testing/tiny-CohereForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
         marks=pytest.mark.skipif(
@@ -1617,175 +1564,324 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
             reason="Nemotron 3 was introduced in transformers>=5.3.0",
         ),
     ),
-    pytest.param(
-        "trl-internal-testing/tiny-Olmo3ForCausalLM",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("4.57.0"),
-            reason="Olmo 3 was introduced in transformers>=4.57.0",
-        ),
-    ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
-    "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+]
+
+
+_FUSED_LM_HEAD_VLM_MODEL_IDS = [
+    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.5.0"),
+            reason="Gemma4 models were introduced in transformers-5.5.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5-VL requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.15.0"),
+            reason="Muse Glimmer was introduced in transformers-5.15.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Qwen3-VL series were introduced in transformers-4.57.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
 ]
 
 
 @require_torch_accelerator
-class TestPatchChunkedLMHead:
-    B, S = 4, 16  # batch size, sequence length (including prompt + completion)
-    H, V = 32, 128
-    CHUNK_SIZE = 32
+class TestPatchFusedLMHeadLoss:
+    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
 
-    def _build_model_and_inputs(self, temperature=1.0):
-        torch.manual_seed(42)
-        model = _FakeCausalLM(self.H, self.V)
-        patch_chunked_lm_head(model, self.CHUNK_SIZE, temperature)
+    def _setup(self, model_id):
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        patch_fused_lm_head(chunked_model)
 
-        input_ids = torch.randint(0, self.V, (self.B, self.S))
-        attention_mask = torch.ones(self.B, self.S, dtype=torch.long)
-        # First half of each sequence is prompt (0), second half is completion (1)
-        completion_mask = torch.zeros(self.B, self.S, dtype=torch.float32)
-        completion_mask[:, self.S // 2 :] = 1.0
-        return model, input_ids, attention_mask, completion_mask
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_dummy_model_chunked_forward_with_completion_mask(self, temperature):
-        """Masked forward matches unmasked forward at completion positions and is zero at prompt positions."""
-        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
-
-        # Run WITHOUT completion_mask (baseline — computes all positions)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
-
-        # Reset hidden state cache so both runs use the same hidden states
-        model.model._hidden = None
-
-        # Run WITH completion_mask
-        out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
-        )
-
-        # shifted completion_mask (matching the shift in _chunked_forward)
-        shifted_mask = completion_mask[:, 1:].bool()
-
-        # At completion positions, values should match
-        torch.testing.assert_close(
-            out_masked["log_probs"][shifted_mask],
-            out_full["log_probs"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-        torch.testing.assert_close(
-            out_masked["entropy"][shifted_mask],
-            out_full["entropy"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-
-        # At prompt positions, values should be zero
-        prompt_mask = ~shifted_mask
-        assert (out_masked["log_probs"][prompt_mask] == 0).all()
-        assert (out_masked["entropy"][prompt_mask] == 0).all()
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_dummy_model_chunked_forward_completion_mask_backward(self, temperature):
-        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
-
-        # Full forward + backward (mask applied after, as the trainer does)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
-        shifted_mask = completion_mask[:, 1:]
-        loss_full = (out_full["log_probs"] * shifted_mask).sum()
-        loss_full.backward()
-        grad_weight_full = model.lm_head.weight.grad.clone()
-
-        model.lm_head.weight.grad = None
-        model.model._hidden = None
-
-        # Masked forward + backward
-        out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
-        )
-        loss_masked = (out_masked["log_probs"] * shifted_mask).sum()
-        loss_masked.backward()
-        grad_weight_masked = model.lm_head.weight.grad.clone()
-
-        torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
-
-        model.lm_head.weight.grad = None
-        model.model._hidden = None
-        empty_completion_mask = torch.zeros_like(completion_mask)
-        out_empty = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=input_ids,
-            completion_mask=empty_completion_mask,
-        )
-        assert out_empty["log_probs"].count_nonzero() == 0
-        out_empty["log_probs"].sum().backward()
-        assert model.lm_head.weight.grad is not None
-        assert model.lm_head.weight.grad.count_nonzero() == 0
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_forward(self, model_id, temperature):
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
-        model.eval()
-
-        B, S, chunk_size = 2, 8, 32
-        torch.manual_seed(42)
-        input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
+        labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
 
-        # Reference: standard forward → shifted logits → logprobs & entropy
-        with torch.no_grad():
-            ref_logits = model(input_ids=input_ids).logits[:, :-1, :].float() / temperature
-        shifted_labels = labels[:, 1:]
-        ref_log_p = F.log_softmax(ref_logits, dim=-1)
-        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
-        ref_p = ref_logits.softmax(dim=-1)
-        ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
+    def _setup_vlm(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        patch_fused_lm_head(chunked_model)
 
-        # Chunked forward
-        patch_chunked_lm_head(model, chunk_size, temperature)
-        with torch.no_grad():
-            out = model(input_ids=input_ids, labels=labels)
-
-        torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
-        torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward(self, model_id, temperature):
-        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
-        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
-        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
-        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
-        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
-        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
-        model_chunked = copy.deepcopy(model_ref)
-
-        B, S, chunk_size = 2, 8, 32
-        torch.manual_seed(42)
-        input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
+        B, S = 2, 16
+        vocab_size = ref_model.config.text_config.vocab_size
+        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
-        shifted_labels = labels[:, 1:]
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
 
-        # Reference backward: standard logits → logprobs → backward
-        ref_logits = model_ref(input_ids=input_ids).logits[:, :-1, :].float() / temperature
-        ref_log_p = F.log_softmax(ref_logits, dim=-1)
-        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
-        ref_logprobs.sum().backward()
-        ref_grad = model_ref.lm_head.weight.grad.clone()
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_LOSS_MODEL_IDS)
+    def test_forward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
 
-        # Chunked backward
-        patch_chunked_lm_head(model_chunked, chunk_size, temperature)
-        out = model_chunked(input_ids=input_ids, labels=labels)
-        out["log_probs"].sum().backward()
-        chunked_grad = model_chunked.lm_head.weight.grad.clone()
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
 
-        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
+    )
+    def test_forward_matches_reference_with_aux_loss(self, model_id):
+        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
+        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
+        )
+        chunked_model = copy.deepcopy(ref_model)
+        patch_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_LOSS_MODEL_IDS)
+    def test_backward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    def test_forward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        patch_fused_lm_head(chunked_model)
+
+        # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
+        # removes the attribute), so we have to pass it at call time on both paths.
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.text_config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+            )
+            out = chunked_model(
+                input_ids=input_ids,
+                labels=labels,
+                num_items_in_batch=num_items,
+                output_router_logits=True,
+                fused_lm_head=True,
+            )
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    def test_backward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    def test_forward_without_fused_lm_head_matches_reference(self):
+        """Without `fused_lm_head=True` the patched forward is the original one: same logits (including per-model
+        post-processing such as `final_logit_softcapping` and `logit_scale`) and same loss."""
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(
+            "trl-internal-testing/tiny-CohereForCausalLM"
+        )
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    @pytest.mark.parametrize(
+        "peft_config_factory",
+        [
+            pytest.param(lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"]), id="lora"),
+            pytest.param(
+                lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+                id="lora+modules_to_save",
+            ),
+            pytest.param(
+                lambda: PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_tuning"
+            ),
+            pytest.param(
+                lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
+            ),
+            pytest.param(
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
+            ),
+        ],
+    )
+    def test_forward_matches_reference_with_peft(self, peft_config_factory):
+        """Patching the inner causal LM (`peft_model.get_base_model()`) must produce a forward whose loss matches
+        the unpatched PEFT reference for both LoRA-style (adapters live in the module tree) and prompt-learning
+        (`PeftModel.forward` injects virtual tokens, then delegates into the patched inner forward)."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
+        chunked_model = copy.deepcopy(ref_model)
+        patch_fused_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+        ref_out.loss.backward()
+        out.loss.backward()
+        chunked_params = dict(chunked_model.named_parameters())
+        for name, ref_param in ref_model.named_parameters():
+            if not ref_param.requires_grad or ref_param.grad is None:
+                continue
+            torch.testing.assert_close(
+                chunked_params[name].grad,
+                ref_param.grad,
+                atol=1e-5,
+                rtol=1e-5,
+                msg=f"gradient mismatch on {name}",
+            )
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    def test_label_mask_with_prompt_learning_peft(self):
+        """For prompt-learning PEFT (PromptTuning, P-Tuning), `PeftModel.forward` prepends `-100`-padded virtual
+        tokens before delegating into the patched inner forward. The patched output's `label_mask` must reflect the
+        padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
+        token's hidden state."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
+        chunked_model = get_peft_model(base, peft_config)
+        patch_fused_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()  # all positions valid, including label[0]
+
+        out = chunked_model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        # `labels[..., 1:]` (un-padded, what compute_loss used to compute) excludes original `label[0]`,
+        # but the patched forward sees padded labels and counts `label[0]` as a valid target.
+        unpadded = int((labels[..., 1:] != -100).sum())
+        # One extra valid target per sequence (original `label[0]`).
+        assert out.label_mask.sum().item() == unpadded + B
 
 
 class TestComputeFlopsPerToken(TrlTestCase):

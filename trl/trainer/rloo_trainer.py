@@ -15,10 +15,10 @@
 import asyncio
 import atexit
 import copy
-import inspect
 import math
 import textwrap
 import time
+import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
@@ -63,7 +63,6 @@ from .utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
@@ -72,9 +71,9 @@ from .utils import (
     nanmin,
     nanstd,
     pad,
+    patch_fused_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
-    selective_log_softmax,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -88,6 +87,7 @@ from .utils import (
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 if is_trackio_available():
@@ -259,6 +259,9 @@ class RLOOTrainer(_BaseTrainer):
             args = RLOOConfig(f"{model_name}-RLOO")
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -289,14 +292,6 @@ class RLOOTrainer(_BaseTrainer):
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
-        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
-        # Inspect the forward method before we wrap the model with PEFT
-        self.model_kwarg_keys = (
-            inspect.signature(model.forward).parameters.keys()
-            if not hasattr(model, "get_base_model")
-            else inspect.signature(model.get_base_model().forward).parameters.keys()
-        )
-
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -325,7 +320,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
@@ -492,7 +487,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -576,11 +571,25 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -631,6 +640,31 @@ class RLOOTrainer(_BaseTrainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
+
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        patch_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            temperature=self.temperature,
+        )
+        if self.ref_model is not None:
+            patch_fused_lm_head(self.ref_model, temperature=self.temperature)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -968,36 +1002,18 @@ class RLOOTrainer(_BaseTrainer):
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
-            # Only add logits_to_keep if the model supports it
-            if "logits_to_keep" in self.model_kwarg_keys:
-                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-                model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-            model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
-            # as a forward kwarg (not from the model config), so it must be passed here.
+            # MoE models: request router logits so the model returns the load-balancing loss
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
-            outputs = model(**model_inputs)
-            logits = outputs.logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-            completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            # Only the completion tokens are scored
+            labels = input_ids_batch.masked_fill(attention_mask_batch == 0, -100)
+            labels[:, :-logits_to_keep] = -100
+            with self.accelerator.autocast():
+                outputs = model(**model_inputs, labels=labels, fused_lm_head=True)
+            all_logps.append(outputs.log_probs[:, -logits_to_keep:])
             if compute_entropy:
-                with torch.no_grad():
-                    entropies = entropy_from_logits(logits)
-                all_entropies.append(entropies)
-
+                all_entropies.append(outputs.entropy[:, -logits_to_keep:])
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
 
@@ -1652,18 +1668,19 @@ class RLOOTrainer(_BaseTrainer):
         # Flush user-logged extra columns (from log_extra), gathering across processes.
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
+        for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
+            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.
         # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
         # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
+        for name in sorted(set(gather_object(list(self._pending_metrics)))):
+            values = self._pending_metrics.get(name, [])
+            local_stats = torch.tensor([sum(values), len(values)], dtype=torch.float32, device=device)
+            total, count = self.accelerator.gather(local_stats).view(-1, 2).sum(dim=0).tolist()
+            self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()
 
         if images is not None and self.log_multimodal:

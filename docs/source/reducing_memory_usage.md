@@ -169,15 +169,6 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
-<hfoption id="GKD">
-
-```python
-from trl.experimental.gkd import GKDConfig
-
-training_args = GKDConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
 </hfoptions>
 
 ## Chunked cross-entropy for reducing peak memory usage

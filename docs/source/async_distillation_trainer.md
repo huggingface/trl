@@ -12,69 +12,31 @@
 
 ## Overview
 
-[`experimental.async_distillation.AsyncDistillationTrainer`] is the async counterpart to [`~trl.experimental.distillation.DistillationTrainer`],
-architected like [`experimental.async_grpo.AsyncGRPOTrainer`]: a background rollout worker generates the student's own on-policy
-completions and scores them against a teacher, while training proceeds concurrently instead of alternating between
-generation and gradient updates. Unlike the synchronous trainer, the teacher is never loaded locally — only a vLLM
-server URL is needed, so the teacher can run on entirely separate hardware from the student and trainer, or even be
-a much larger model than would otherwise fit alongside the student.
+[`experimental.async_distillation.AsyncDistillationTrainer`] is the async counterpart to [`~trl.experimental.distillation.DistillationTrainer`], architected like [`experimental.async_grpo.AsyncGRPOTrainer`]: a background rollout worker generates the student's own on-policy completions and scores them against a teacher, while training proceeds concurrently instead of alternating between generation and gradient updates. Unlike the synchronous trainer, the teacher is never loaded locally — only a vLLM server URL is needed, so the teacher can run on entirely separate hardware from the student and trainer, or even be a much larger model than would otherwise fit alongside the student.
 
-`compute_loss` minimizes a generalized Jensen-Shannon Divergence between the student's and teacher's per-position
-token distributions (`beta=0.0` is forward KL, `beta=1.0` is reverse KL, values in between interpolate), the same
-objective [`~trl.experimental.distillation.DistillationTrainer`] and
-[`~trl.experimental.server_distillation.ServerDistillationTrainer`] use. Training is always on-policy: the student
-generates every completion it trains on.
+`compute_loss` minimizes a generalized Jensen-Shannon Divergence between the student's and teacher's per-position token distributions (`beta=0.0` is forward KL, `beta=1.0` is reverse KL, values in between interpolate), the same objective [`~trl.experimental.distillation.DistillationTrainer`] and [`~trl.experimental.server_distillation.ServerDistillationTrainer`] use. Training is always on-policy: the student generates every completion it trains on.
 
 ### Multi-teacher on-policy distillation (MOPD)
 
-MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective
-is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in
-[MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training](
-https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then
-independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single
-student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must
-already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you
-point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's
-default `beta=0.0` (forward KL).
+MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) paper this trainer's core objective is based on (which describes a synchronous, single-teacher setting); it's a separate method, described in [MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training]( https://huggingface.co/papers/2606.30406). There, MOPD is the third of three stages — general SFT, then independent per-domain RL training of one expert per domain, then MOPD fuses those frozen experts into a single student. `AsyncDistillationTrainer` implements that third, fusion stage only: the per-domain expert teachers must already exist (e.g. trained separately with [`GRPOTrainer`]/[`RLOOTrainer`]) and be served over HTTP before you point `teacher_server_urls` at them. The paper's own Stage 3 uses reverse KL (`beta=1.0`), not this trainer's default `beta=0.0` (forward KL).
 
-`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher
-(plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which
-teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a
-code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never
-averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently
-falling back to the wrong teacher. See `examples/async_distillation_math/async_distillation_mopd.py` for a runnable two-teacher
-example.
+`teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_math/async_distillation_mopd.py` for a runnable two-teacher example.
 
 > [!WARNING]
-> Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the
-> candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from
-> the same model family as the student (as in the MOPD example, where a Qwen2.5 student is fused from Qwen2.5 and
-> Qwen2.5-Coder experts) satisfy this; a teacher with a different vocabulary trains the student against the wrong
-> tokens, silently unless its vocabulary is larger than the student's.
+> Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from the same model family as the student (as in the MOPD example, where a Qwen2.5 student is fused from Qwen2.5 and Qwen2.5-Coder experts) satisfy this; a teacher with a different vocabulary trains the student against the wrong tokens, silently unless its vocabulary is larger than the student's.
 
 **Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
 
 ## How it differs from [`~trl.experimental.distillation.DistillationTrainer`]
 
-In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation,
-teacher forward pass, and the gradient update all happen sequentially in the same process.
-[`experimental.async_distillation.AsyncDistillationTrainer`] separates these concerns the same way [`experimental.async_grpo.AsyncGRPOTrainer`] separates GRPO's rollout
-from its update:
+In [`~trl.experimental.distillation.DistillationTrainer`], the teacher is a locally loaded model: generation, teacher forward pass, and the gradient update all happen sequentially in the same process. [`experimental.async_distillation.AsyncDistillationTrainer`] separates these concerns the same way [`experimental.async_grpo.AsyncGRPOTrainer`] separates GRPO's rollout from its update:
 
-- **Rollout worker** (background process) — generates completions from the student's vLLM server, sends the full
-  sequence back to the resolved teacher's `/v1/completions` with `prompt_logprobs` for teacher-forced scoring (no new
-  tokens generated by the teacher), and pushes ready-to-train samples into a queue.
-- **Training loop** (main process) — pulls samples from the queue, computes the generalized-JSD loss, and updates
-  the student's weights.
+- **Rollout worker** (background process) — generates completions from the student's vLLM server, sends the full sequence back to the resolved teacher's `/v1/completions` with `prompt_logprobs` for teacher-forced scoring (no new tokens generated by the teacher), and pushes ready-to-train samples into a queue.
+- **Training loop** (main process) — pulls samples from the queue, computes the generalized-JSD loss, and updates the student's weights.
 
-Because the teacher is scored over HTTP rather than a local forward pass, only a sparse, top-k slice of its
-distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`experimental.async_distillation.AsyncDistillationConfig`]'s
-`beta` and `teacher_top_k` documentation for exactly which candidates the wire protocol guarantees a teacher
-logprob for at each `beta` regime.
+Because the teacher is scored over HTTP rather than a local forward pass, only a sparse, top-k slice of its distribution is ever transmitted (`teacher_top_k`), not the full vocabulary — see [`experimental.async_distillation.AsyncDistillationConfig`]'s `beta` and `teacher_top_k` documentation for exactly which candidates the wire protocol guarantees a teacher logprob for at each `beta` regime.
 
-After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via
-NCCL. As with [`experimental.async_grpo.AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale
-policy; `max_staleness` controls how many weight updates a sample can lag behind before being discarded.
+After every `weight_sync_steps` training steps, the updated student weights are transferred to its vLLM server via NCCL. As with [`experimental.async_grpo.AsyncGRPOTrainer`], generation runs ahead of training, so samples may reflect a slightly stale policy; `max_staleness` controls how many weight updates a sample can lag behind before being discarded.
 
 ## Quick start
 
@@ -92,11 +54,7 @@ trainer = AsyncDistillationTrainer(
 trainer.train()
 ```
 
-The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm
-serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode
-processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k`
-can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer
-enabled so the trainer can push updated weights into it:
+The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k` can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer enabled so the trainer can push updated weights into it:
 
 ```bash
 # Terminal 1: teacher server on GPU 0 (static, never updated)
@@ -297,9 +255,7 @@ The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync
 
 ## Design philosophy
 
-This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a
-feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs
-directly. New features will only be considered when there is significant community demand.
+This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
 
 ## AsyncDistillationConfig
 
