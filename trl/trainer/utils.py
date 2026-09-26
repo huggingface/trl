@@ -1463,8 +1463,8 @@ _CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 @dataclass
 class FusedCausalLMOutput(ModelOutput):
     """
-    Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
-    is zero where the label is `-100`.
+    Output of a model given a fused LM head with [`add_fused_lm_head`] and called with `fused_lm_head=True`. Every
+    per-token field is zero where the label is `-100`.
 
     Args:
         loss (`torch.Tensor`):
@@ -1490,15 +1490,15 @@ class FusedCausalLMOutput(ModelOutput):
     aux_loss: torch.Tensor | None = None
 
 
-def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
+def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
     """
     Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
     instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
 
-    With `fused_lm_head=True`, the patched forward runs the backbone and projects through the LM head, in tiles, only
-    the positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted
-    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Without it, the
-    forward is the original one, so generation is unchanged. Patch the model before wrapping it with PEFT.
+    With `fused_lm_head=True`, the forward runs the backbone and projects through the LM head, in tiles, only the
+    positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted `shift_labels`,
+    as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
+    original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):

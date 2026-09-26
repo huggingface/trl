@@ -41,11 +41,11 @@ _import_structure = {
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
+        "add_fused_lm_head",
         "disable_dropout_in_model",
         "ensure_master_addr_port",
         "get_peft_config",
         "get_quantization_config",
-        "patch_fused_lm_head",
     ],
 }
 
@@ -73,11 +73,11 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
+        add_fused_lm_head,
         disable_dropout_in_model,
         ensure_master_addr_port,
         get_peft_config,
         get_quantization_config,
-        patch_fused_lm_head,
     )
 else:
     import sys

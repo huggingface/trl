@@ -43,6 +43,7 @@ from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
+    add_fused_lm_head,
     compute_flops_per_token,
     compute_mfu,
     create_model_from_path,
@@ -51,7 +52,6 @@ from ...trainer.utils import (
     nanmax,
     nanmin,
     pad,
-    patch_fused_lm_head,
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
@@ -1105,7 +1105,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        patch_fused_lm_head(model, temperature=self.temperature)
+        add_fused_lm_head(model, temperature=self.temperature)
 
         # Processing class
         if processing_class is None:
@@ -1119,7 +1119,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
-        # PEFT. Placed after `patch_fused_lm_head`, which patches the bare `lm_head` and would otherwise have to
+        # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
         if peft_config is not None:
             if not is_peft_available():
@@ -1142,7 +1142,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
 
-        # `patch_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
+        # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
