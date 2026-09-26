@@ -641,13 +641,14 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        if "messages" in examples[0] or self.dataset_text_field in examples[0]:
+        is_prompt_completion = "prompt" in examples[0] and "completion" in examples[0]
+        if "messages" in examples[0] or (self.dataset_text_field in examples[0] and not is_prompt_completion):
             if self.completion_only_loss:
                 raise ValueError(
                     "The `completion_only_loss` argument is not supported for language modeling datasets."
                 )
             return self._collate_language_modeling(examples)
-        elif "prompt" in examples[0] and "completion" in examples[0]:
+        elif is_prompt_completion:
             return self._collate_prompt_completion(examples)
         else:
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
@@ -1721,6 +1722,7 @@ class SFTTrainer(_BaseTrainer):
         if self._signature_columns is None:
             if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "image", "images"]
+                self._signature_columns.append(self.args.dataset_text_field)
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths"]
 
