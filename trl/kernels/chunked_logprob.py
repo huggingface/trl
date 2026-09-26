@@ -20,6 +20,8 @@ from packaging.version import Version
 
 # Tokens per projection tile; the caller sets the vocabulary width with `chunk_size`
 TOKEN_CHUNK_SIZE = 4096
+# Per-token outputs besides the log-probabilities, each computed only when requested
+OPTIONAL_OUTPUTS = ("entropy",)
 _BLOCK_SIZE = 1024
 # `torch.addmm(..., out_dtype=torch.float32)` from bf16/fp16 inputs, CUDA only
 _MM_OUT_DTYPE = Version(torch.__version__) >= Version("2.8.0")
@@ -62,6 +64,7 @@ def _forward_kernel(
     softcap,
     inv_t,
     HAS_SOFTCAP: tl.constexpr,
+    HAS_ENTROPY: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
     # One program per token: fold one vocabulary chunk of its logits into the running online-logsumexp statistics
@@ -80,11 +83,13 @@ def _forward_kernel(
         rescale = tl.exp(m - new_m)
         e = tl.where(mask, tl.exp(z - new_m), 0.0)
         s = s * rescale + tl.sum(e, axis=0)
-        xs = xs * rescale + tl.sum(e * tl.where(mask, z, 0.0), axis=0)
+        if HAS_ENTROPY:
+            xs = xs * rescale + tl.sum(e * tl.where(mask, z, 0.0), axis=0)
         m = new_m
     tl.store(max_ptr + row, m)
     tl.store(sum_exp_ptr + row, s)
-    tl.store(x_sum_exp_ptr + row, xs)
+    if HAS_ENTROPY:
+        tl.store(x_sum_exp_ptr + row, xs)
 
     local = tl.load(targets_ptr + row) - vocab_start
     if (local >= 0) & (local < n_cols):
@@ -144,7 +149,8 @@ def _backward_kernel(
 
 class ChunkedLogProbFunction(torch.autograd.Function):
     """
-    Per-token log-probabilities and entropy of `hidden @ weight.T`, without materializing the `[N, V]` logits.
+    Per-token log-probabilities of `hidden @ weight.T`, without materializing the `[N, V]` logits, and optionally the
+    entropy (`outputs`, `None` when not requested).
 
     The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, chunk_size]` tiles; a Triton kernel folds each tile into
     online-logsumexp statistics in one pass. The backward recomputes each tile, turns it into the logits gradient in
@@ -162,7 +168,8 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         chunk_size: int,
         final_logit_softcapping: float | None = None,
         logit_scale: float = 1.0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        outputs: tuple[str, ...] = OPTIONAL_OUTPUTS,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # entropy is often computed for logging only (no grad required); without this, autograd would
         # materialize its incoming gradient as zeros and backward would waste compute on a no-op term
         ctx.set_materialize_grads(False)
@@ -178,6 +185,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
             "inv_t": 1 / temperature,
             "HAS_SOFTCAP": final_logit_softcapping is not None,
         }
+        output_flags = {f"HAS_{name.upper()}": name in outputs for name in OPTIONAL_OUTPUTS}
 
         running_max = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
@@ -206,14 +214,16 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     start,
                     end - start,
                     BLOCK_SIZE=_BLOCK_SIZE,
+                    **output_flags,
                     **kernel_args,
                 )
 
         log_z = running_max + torch.log(sum_exp)
         logprobs = target_logit - log_z
-        entropy = log_z - x_sum_exp / sum_exp
+        entropy = log_z - x_sum_exp / sum_exp if "entropy" in outputs else None
 
-        ctx.save_for_backward(hidden, weight, bias, targets, log_z, entropy)
+        # Without entropy there is no entropy gradient, so `log_z` only fills its slot
+        ctx.save_for_backward(hidden, weight, bias, targets, log_z, log_z if entropy is None else entropy)
         ctx.compute_dtype = compute_dtype
         ctx.chunk_size = chunk_size
         ctx.kernel_args = kernel_args
@@ -280,6 +290,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
             grad_hidden.to(hidden.dtype) if grad_hidden is not None else None,
             grad_weight.to(weight.dtype) if grad_weight is not None else None,
             grad_bias.to(bias.dtype) if grad_bias is not None else None,
+            None,
             None,
             None,
             None,

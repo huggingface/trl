@@ -150,6 +150,30 @@ class TestChunkedLogProbFunction:
         assert max(chunk_rows) <= 17
         assert chunk_rows[-1] == 13
 
+    @pytest.mark.parametrize("outputs", [(), ("entropy",)])
+    def test_outputs_subset(self, outputs):
+        # Outputs that are not requested are `None`, and the others, with the gradients, are unchanged
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, device=torch_device, requires_grad=True)
+        weight = torch.randn(self.V, self.H, device=torch_device, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+
+        full = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
+        full[0].sum().backward()
+        grads = hidden.grad.clone(), weight.grad.clone()
+        hidden.grad = weight.grad = None
+        subset = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, None, 1.0, outputs)
+        subset[0].sum().backward()
+
+        names = ("log_probs", "entropy")
+        for name, x, y in zip(names, full, subset, strict=True):
+            if name == "log_probs" or name in outputs:
+                torch.testing.assert_close(y, x)
+            else:
+                assert y is None
+        torch.testing.assert_close(hidden.grad, grads[0])
+        torch.testing.assert_close(weight.grad, grads[1])
+
     @pytest.mark.parametrize(
         ("logit_scale", "final_logit_softcapping"),
         [
