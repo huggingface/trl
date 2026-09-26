@@ -258,10 +258,11 @@ class GRPOTrainer(_BaseTrainer):
             Function to use for generating completions. It receives the list of prompts allocated to the current
             process and the trainer instance. It must return a dict with `"prompt_ids"`, `"completion_ids"`, and
             `"logprobs"` fields, and can optionally return `"logprob_token_ids"` (same shape as `"logprobs"`). Any
-            other fields are forwarded to the reward functions. The function receives the raw per-process prompt slice
-            with no duplication; it is responsible for returning the correct number of completions per prompt (see
-            `num_generations` / `num_generations_eval` on the trainer). This feature is experimental and may change or
-            be removed at any time without prior notice.
+            other fields are forwarded to the reward functions. The prompts are already repeated `num_generations`
+            times (`num_generations_eval` during evaluation) before they are split across processes, so the function
+            must return exactly one completion per received prompt, in the same order. The copies of the same prompt
+            may be split across processes, so they are not guaranteed to arrive in the same call. This feature is
+            experimental and may change or be removed at any time without prior notice.
         environment_factory (`EnvironmentFactory` or `dict[str, EnvironmentFactory]`, *optional*):
             A callable that creates and returns an environment instance, or a dictionary mapping environment names to
             such callables. The environment class should define methods that can be invoked as tools during generation.
