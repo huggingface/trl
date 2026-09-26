@@ -659,9 +659,11 @@ class RLOOTrainer(_BaseTrainer):
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        # `entropy` feeds the `entropy` metric
         patch_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             temperature=self.temperature,
+            outputs=("log_probs", "entropy"),
         )
         if self.ref_model is not None:
             patch_fused_lm_head(self.ref_model, temperature=self.temperature)
