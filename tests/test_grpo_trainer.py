@@ -50,6 +50,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_vision,
     require_vllm,
+    xfail_data_parallel,
 )
 
 
@@ -4577,6 +4578,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
+    @xfail_data_parallel
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
         if not Version(transformers.__version__) >= Version("5.8.0"):

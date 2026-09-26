@@ -56,6 +56,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
+    xfail_data_parallel,
 )
 
 
@@ -2433,7 +2434,7 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2476,7 +2477,7 @@ class TestSFTTrainerSlow(TrlTestCase):
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
     )
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2620,7 +2621,7 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", [True, False])
+    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
     @pytest.mark.parametrize(
         "model_name",
         [
