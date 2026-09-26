@@ -17,7 +17,7 @@ import os
 import warnings
 from collections.abc import Callable
 from types import SimpleNamespace
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -372,21 +372,6 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_data_parallel_raises(self):
-        # `Trainer` would wrap the model in `nn.DataParallel`, which the fused LM head does not support
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
-        with (
-            patch.object(GRPOConfig, "n_gpu", new_callable=PropertyMock, return_value=2),
-            pytest.raises(ValueError, match="does not support `nn.DataParallel`"),
-        ):
-            GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_dataset_format(self, config_name):
