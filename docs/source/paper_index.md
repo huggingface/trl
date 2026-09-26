@@ -151,6 +151,35 @@ training_args = GMPOConfig(
 )
 ```
 
+### C-GRPO: Conformal Group Relative Policy Optimization
+
+Conformal Group Relative Policy Optimization (C-GRPO) replaces GRPO's fixed group size  \\( G \\) with a per-prompt sampling budget chosen by split-conformal prediction. Completions are drawn in increments along a budget grid  \\( k_1 < k_2 < \dots < k_M \\), and sampling stops at the smallest  \\( k_m \\) whose prediction set over the answers drawn so far is a singleton:
+
+$$
+k^\star(x) = \min\left\{ k_m : \left| \mathcal{C}_{k_m}(x) \right| = 1 \right\}, \qquad \mathcal{C}_{k}(x) = \left\{ y : s\left(y; o_{1:k}\right) \le \hat{q}_k \right\}
+$$
+
+where  \\( s \\) is a randomized APS nonconformity score over the empirical answer distribution (or the position of the first passing completion for execution-verified tasks), and  \\( \hat{q}_k \\) is the  \\( \lceil (n+1)(1-\delta) \rceil \\)-th smallest calibration score at budget  \\( k \\). The thresholds are refitted with the current policy every  \\( \Delta_{\text{cal}} \\) steps, and by default  \\( \delta \\) is set from the policy's solve rate at  \\( k_M \\).
+
+TRL provides an experimental implementation, see [Experimental - C-GRPO](cgrpo):
+
+```python
+from trl.experimental.cgrpo import CGRPOConfig, CGRPOTrainer
+
+training_args = CGRPOConfig(
+    budget_grid=[2, 4, 8, 16, 32],  # num_generations defaults to max(budget_grid)
+    recalibrate_every=50,
+)
+trainer = CGRPOTrainer(
+    model=...,
+    reward_funcs=...,
+    args=training_args,
+    train_dataset=...,
+    calibration_dataset=...,  # held-out, with a reference answer column
+    answer_extractor=...,
+)
+```
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
