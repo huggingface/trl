@@ -929,7 +929,7 @@ class KTOTrainer(_BaseTrainer):
             outputs=("log_probs", "entropy", "mean_logits"),
         )
         if self.ref_model is not None:
-            patch_fused_lm_head(self.ref_model, outputs=("log_probs",))
+            patch_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

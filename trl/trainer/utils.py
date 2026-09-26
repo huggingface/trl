@@ -1503,7 +1503,7 @@ def patch_fused_lm_head(
     model: PreTrainedModel,
     temperature: float = 1.0,
     cast_lm_head_to_fp32: bool = False,
-    outputs: tuple[str, ...] = ("log_probs", "entropy"),
+    outputs: tuple[str, ...] = ("log_probs",),
 ) -> None:
     """
     Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
@@ -1521,7 +1521,7 @@ def patch_fused_lm_head(
             Temperature the logits are divided by.
         cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
             Whether to run the LM head projection in float32, outside autocast.
-        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs", "entropy")`):
+        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs",)`):
             Per-token fields of [`FusedCausalLMOutput`] the kernel computes, among `"log_probs"`, `"entropy"`,
             `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
             is always computed; each extra field costs a little on every call.

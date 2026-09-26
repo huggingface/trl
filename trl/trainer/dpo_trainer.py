@@ -913,7 +913,7 @@ class DPOTrainer(_BaseTrainer):
             outputs += ("log_sum_sq_probs",)
         patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model, outputs=outputs)
         if self.ref_model is not None:
-            patch_fused_lm_head(self.ref_model, outputs=("log_probs",))
+            patch_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

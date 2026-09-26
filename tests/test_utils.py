@@ -1365,7 +1365,7 @@ class TestPatchFusedLMHead:
     def test_masked_labels(self):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_fused_lm_head(model)
+        patch_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
         labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
@@ -1392,7 +1392,7 @@ class TestPatchFusedLMHead:
     def test_shift_labels(self):
         """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_fused_lm_head(model)
+        patch_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
 
@@ -1507,7 +1507,7 @@ class TestPatchFusedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        patch_fused_lm_head(model, temperature)
+        patch_fused_lm_head(model, temperature, outputs=("log_probs", "entropy"))
         with torch.no_grad():
             out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
