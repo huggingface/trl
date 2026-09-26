@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from transformers.testing_utils import torch_device
+from transformers.testing_utils import backend_device_count, torch_device
 
 from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
@@ -801,10 +801,13 @@ class TestVLLMClientServerVLM(TrlTestCase):
 
     @classmethod
     def setup_class(cls):
-        # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
+        # Run the server on the last visible accelerator, since the test process may hold memory on the first one
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
-        env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        visible_devices = os.environ.get(VISIBLE_DEVICES)
+        env[VISIBLE_DEVICES] = (
+            visible_devices.split(",")[-1] if visible_devices else str(backend_device_count(torch_device) - 1)
+        )
 
         # Start the server process
         cls.server_process = subprocess.Popen(
