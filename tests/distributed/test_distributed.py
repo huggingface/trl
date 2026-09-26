@@ -20,6 +20,7 @@ import pytest
 import torch
 import transformers
 from packaging.version import Version
+from transformers.utils import is_peft_available
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
@@ -112,6 +113,19 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
+    def test_sdpo_peft_ema_zero3(self, get_config_path):
+        run_command(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                get_config_path("zero3"),
+                "tests/distributed/sdpo_peft_ema_zero3.py",
+            ],
+            os.environ.copy(),
+        )
 
     @pytest.mark.parametrize(
         "config",
