@@ -38,6 +38,16 @@ from .testing_utils import (
 if is_vllm_available():
     from vllm import LLM, SamplingParams
 
+# The `vllm serve` settings required by TRL, as documented in the vLLM integration guide.
+VLLM_SERVE_TRL_ARGS = [
+    "--weight-transfer-config",
+    '{"backend": "nccl"}',
+    "--logprobs-mode",
+    "processed_logprobs",
+    "--max-logprobs",
+    "-1",
+]
+
 
 class TestConnectionPoolSize(TrlTestCase):
     @pytest.mark.parametrize("scheme", ["http", "https"])
@@ -158,10 +168,14 @@ class TestVLLMClientServer(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
 
         # Initialize the client
@@ -403,10 +417,14 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
 
         # Initialize the client
@@ -566,10 +584,11 @@ class TestVLLMClientServerTP(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1,2"  # Restrict to accelerator 1 and 2
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2"],
+            ["vllm", "serve", cls.model_id, "--tensor-parallel-size", "2", *VLLM_SERVE_TRL_ARGS],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -734,10 +753,14 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
 
     def test_init_communicator_with_device_int(self):
@@ -803,7 +826,10 @@ class TestVLLMClientServerVLM(TrlTestCase):
     def setup_class(cls):
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={**os.environ, "VLLM_SERVER_DEV_MODE": "1"},
         )
 
         # Initialize the client (no communicator needed for generation-only tests)
