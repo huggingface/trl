@@ -172,6 +172,28 @@ class TestCPOTrainer(TrlTestCase):
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        from peft import LoraConfig
+
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = CPOTrainer(
+                model=self.model_id,
+                args=CPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=self.tokenizer,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
     @pytest.mark.parametrize(
         "config_name",
         [
