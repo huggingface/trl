@@ -59,7 +59,7 @@ from ...data_utils import (
 from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
-from ...models import prepare_deepspeed
+from ...models import prepare_deepspeed, prepare_fsdp
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
@@ -999,6 +999,8 @@ class GOLDTrainer(SFTTrainer):
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+        elif self.is_fsdp_enabled:
+            self.teacher_model = prepare_fsdp(teacher_model, self.accelerator)
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 

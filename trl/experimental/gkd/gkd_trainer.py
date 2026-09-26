@@ -36,7 +36,7 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...models import prepare_deepspeed
+from ...models import prepare_deepspeed, prepare_fsdp
 from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import disable_dropout_in_model
@@ -190,6 +190,8 @@ class GKDTrainer(SFTTrainer):
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
+        elif self.is_fsdp_enabled:
+            self.teacher_model = prepare_fsdp(teacher_model, self.accelerator)
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
