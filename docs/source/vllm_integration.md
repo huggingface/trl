@@ -3,7 +3,7 @@
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
-> TRL currently only supports vLLM versions from `0.19.1` to `0.29.0`. Please ensure you have a version in this range installed to avoid compatibility issues.
+> TRL currently only supports vLLM versions from `0.20.0` to `0.30.0`. Please ensure you have a version in this range installed to avoid compatibility issues.
 
 > [!TIP]
 > The following trainers currently support generation with vLLM:
@@ -112,19 +112,13 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 
 ## Why using vLLM?
 
-Online methods generate completions during training, and generating them with the model's own `generate` is the
-bottleneck. vLLM serves those completions far faster, thanks to techniques like
-[PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html).
+Online methods generate completions during training, and generating them with the model's own `generate` is the bottleneck. vLLM serves those completions far faster, thanks to techniques like [PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html).
 
 ## How TRL uses the server 🔍
 
-The trainer asks for completions on the OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs.
-Multimodal prompts take a different route: the server processes the images on their own, and the resulting features
-are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs
-and images at once.
+The trainer asks for completions on the OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs. Multimodal prompts take a different route: the server processes the images on their own, and the resulting features are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs and images at once.
 
-The server only generates. After each optimizer step the trainer streams the updated weights into it over NCCL,
-announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
+The server only generates. After each optimizer step the trainer streams the updated weights into it over NCCL, announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
 
 ## Advanced usage
 
@@ -140,15 +134,14 @@ Only the following are required by TRL:
 | `--weight-transfer-config '{"backend": "nccl"}'` | Enables the NCCL weight-transfer engine. Use `"ipc"` instead when the trainer and the server share a GPU. |
 | `--logprobs-mode processed_logprobs` | Returns logprobs after temperature scaling and logit processing, which is what the importance sampling correction expects. |
 | `--max-logprobs -1` | Lifts the OpenAI-compatible cap of 20 logprobs per token, required to request the top-k teacher distribution for distillation. |
+| `--enable-scale-out` | vLLM 0.30.0 and later, for multimodal prompts only: registers `/v1/chat/completions/render` and `/inference/v1/generate`, which the trainer uses to process images. Earlier versions reject the flag. |
 
 > [!WARNING]
 > `trl vllm-serve` is deprecated: it now only builds this command and runs vLLM's server. It prints the exact `vllm serve` command it runs, so you can copy it and drop the wrapper.
 
 ### 💆🏻‍♀️ What's the best distributed setup?
 
-Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since
-[vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel
-scaling for non-MoE models is not supported.
+Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since [vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel scaling for non-MoE models is not supported.
 
 ### vLLM with Transformers Backend
 
@@ -164,7 +157,8 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm 
     --tensor-parallel-size 1 --port 8000 --enforce-eager --model-impl transformers \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+    --max-logprobs -1 \
+    --enable-scale-out  # vLLM 0.30.0 and later, drop on earlier versions
 ```
 
 ### Modes of Using vLLM During Training

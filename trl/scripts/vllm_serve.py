@@ -20,6 +20,8 @@ import sys
 import warnings
 from dataclasses import dataclass, field
 
+from trl.import_utils import is_vllm_available
+
 
 @dataclass
 class ScriptArguments:
@@ -194,7 +196,7 @@ def build_command(script_args: ScriptArguments, extra_args: list[str] | None = N
     """
     Build the `vllm serve` command line that serves `script_args` the way TRL trainers expect.
 
-    Beyond the plain argument translation, three settings are imposed by TRL:
+    Beyond the plain argument translation, the following settings are imposed by TRL:
 
     - `--weight-transfer-config`: enables the NCCL weight-transfer engine, used by
       [`~generation.vllm_client.VLLMClient`] to push the training weights into the server.
@@ -202,6 +204,8 @@ def build_command(script_args: ScriptArguments, extra_args: list[str] | None = N
       returned logprobs, which trainers use for importance sampling correction.
     - `--max-logprobs -1`: lifts the OpenAI-compatible cap of 20 logprobs per token, so that trainers can request the
       top-k teacher distribution (used for distillation).
+    - `--enable-scale-out` (vLLM 0.30.0 and later): registers `/v1/chat/completions/render` and
+      `/inference/v1/generate`, used by [`~generation.vllm_client.VLLMClient`] for multimodal prompts.
 
     Args:
         script_args (`ScriptArguments`):
@@ -259,6 +263,8 @@ def build_command(script_args: ScriptArguments, extra_args: list[str] | None = N
     if script_args.speculative_config is not None:
         command += ["--speculative-config", script_args.speculative_config]
 
+    if is_vllm_available(min_version="0.30.0"):
+        command += ["--enable-scale-out"]
     command += [
         "--weight-transfer-config",
         json.dumps({"backend": "nccl"}),
@@ -275,16 +281,12 @@ def main(script_args: ScriptArguments, extra_args: list[str] | None = None):
     env = os.environ.copy()
     # The weight-transfer and prefix-cache endpoints that trainers rely on live behind vLLM's dev mode.
     env["VLLM_SERVER_DEV_MODE"] = "1"
-    # We use CUDA with multiprocessing, so we must use the 'spawn' start method. Otherwise, we will get the following
-    # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must
-    # use the 'spawn' start method
-    env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
     equivalent = shlex.join(["vllm", *command[command.index("serve") :]])
     warnings.warn(
         "`trl vllm-serve` is deprecated and will be removed in v2.0.0: it now only runs vLLM's own server. Run it "
         "directly instead:\n\n"
-        f"    VLLM_SERVER_DEV_MODE=1 VLLM_WORKER_MULTIPROC_METHOD=spawn {equivalent}\n",
+        f"    VLLM_SERVER_DEV_MODE=1 {equivalent}\n",
         FutureWarning,
         stacklevel=2,
     )

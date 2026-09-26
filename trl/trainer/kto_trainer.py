@@ -40,6 +40,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction, has_length
@@ -63,7 +64,6 @@ from .utils import (
     _ChunkedLogProbFunction,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     flush_left,
     get_config_model_id,
     global_then_local_main_first,
@@ -71,6 +71,7 @@ from .utils import (
     maybe_gather_lm_head_ctx,
     pad,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     use_adapter,
 )
 
@@ -84,7 +85,7 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
 
 @dataclass
@@ -610,6 +611,9 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -664,7 +668,7 @@ class KTOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
@@ -830,8 +834,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             if compute_metrics is not None:
                 raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                    "`compute_metrics` is not supported with `use_liger_kernel=True`. It needs the logits from the "
+                    "forward pass, and the chunked log-probability path does not materialize them."
                 )
             if is_peft_model(model):
                 # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head
@@ -902,11 +906,17 @@ class KTOTrainer(_BaseTrainer):
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
         if self.aux_loss_enabled and self.use_liger_kernel:
             raise ValueError(
                 "The chunked KTO path does not support the Mixture-of-Experts load-balancing auxiliary loss, because "
@@ -1361,12 +1371,16 @@ class KTOTrainer(_BaseTrainer):
                     KL_logits = model(inputs["KL_input_ids"], attention_mask=inputs["KL_attention_mask"]).logits
 
                 shift_logits = completion_logits[:, :-1, :]
-                per_token_logps = selective_log_softmax(shift_logits, inputs["input_ids"][:, 1:])
-                per_token_logps[inputs["completion_mask"][:, 1:] == 0] = 0.0
+                per_token_logps = selective_log_softmax(
+                    shift_logits, inputs["input_ids"][:, 1:], row_mask=inputs["completion_mask"][:, 1:]
+                )
                 if self.calculate_KL:
                     shift_KL_logits = KL_logits[:, :-1, :]
-                    KL_per_token_logps = selective_log_softmax(shift_KL_logits, inputs["KL_input_ids"][:, 1:])
-                    KL_per_token_logps[inputs["KL_completion_mask"][:, 1:] == 0] = 0.0
+                    KL_per_token_logps = selective_log_softmax(
+                        shift_KL_logits,
+                        inputs["KL_input_ids"][:, 1:],
+                        row_mask=inputs["KL_completion_mask"][:, 1:],
+                    )
 
         completion_logps = per_token_logps.sum(-1)
 
@@ -1414,8 +1428,11 @@ class KTOTrainer(_BaseTrainer):
                 else:
                     KL_logits = model(**KL_model_kwargs).logits
                     shift_KL_logits = KL_logits[:, :-1, :]
-                    KL_per_token_logps = selective_log_softmax(shift_KL_logits, batch["KL_input_ids"][:, 1:])
-                    KL_per_token_logps[batch["KL_completion_mask"][:, 1:] == 0] = 0.0
+                    KL_per_token_logps = selective_log_softmax(
+                        shift_KL_logits,
+                        batch["KL_input_ids"][:, 1:],
+                        row_mask=batch["KL_completion_mask"][:, 1:],
+                    )
             KL_logps = KL_per_token_logps.sum(-1)
         return KL_logps
 
@@ -1458,8 +1475,12 @@ class KTOTrainer(_BaseTrainer):
         else:
             outputs = model(**model_kwargs)
             shift_logits = outputs.logits[:, :-1, :]
-            per_token_logps = selective_log_softmax(shift_logits, batch["input_ids"][:, 1:])
-            per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+            per_token_logps, per_token_entropies = selective_log_softmax_and_entropy(
+                shift_logits,
+                batch["input_ids"][:, 1:],
+                entropy_requires_grad=False,
+                row_mask=batch["completion_mask"][:, 1:],
+            )
         completion_logps = per_token_logps.sum(-1)
 
         if completion_logps.shape[0] != len(batch["label"]):
@@ -1536,8 +1557,11 @@ class KTOTrainer(_BaseTrainer):
                         ref_outputs = self.ref_model(**ref_model_kwargs)
             if not self.use_liger_kernel:
                 ref_shift_logits = ref_outputs.logits[:, :-1, :]
-                ref_per_token_logps = selective_log_softmax(ref_shift_logits, batch["input_ids"][:, 1:])
-                ref_per_token_logps[batch["completion_mask"][:, 1:] == 0] = 0.0
+                ref_per_token_logps = selective_log_softmax(
+                    ref_shift_logits,
+                    batch["input_ids"][:, 1:],
+                    row_mask=batch["completion_mask"][:, 1:],
+                )
             ref_completion_logps = ref_per_token_logps.sum(-1)
             ref_chosen_logps = ref_completion_logps.index_select(0, chosen_idx)
             ref_rejected_logps = ref_completion_logps.index_select(0, rejected_idx)
@@ -1590,7 +1614,7 @@ class KTOTrainer(_BaseTrainer):
         if self.use_liger_kernel:
             per_token_entropy = per_token_entropies.detach()
         else:
-            per_token_entropy = entropy_from_logits(shift_logits.detach())
+            per_token_entropy = per_token_entropies
         mask = batch["completion_mask"][:, 1:]
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()

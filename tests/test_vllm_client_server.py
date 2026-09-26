@@ -15,12 +15,14 @@
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+import requests
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import torch_device
 
-from trl.generation.vllm_client import VLLMClient, parse_logprobs
+from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
 
@@ -36,6 +38,44 @@ from .testing_utils import (
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+
+
+class TestConnectionPoolSize(TrlTestCase):
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_pool_capacity_covers_default_concurrency(self, scheme):
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            client = VLLMClient(host="127.0.0.1")
+
+        with client.session:
+            url = f"{scheme}://127.0.0.1:8000"
+            adapter = client.session.get_adapter(url)
+            pool = adapter.poolmanager.connection_from_url(url)
+            # Retain enough connections for the default generation concurrency.
+            assert pool.pool.maxsize >= _DEFAULT_GENERATION_CONCURRENCY
+
+
+class TestResetPrefixCache(TrlTestCase):
+    def test_empty_response_body(self):
+        # Before vLLM 0.26.0 (vllm-project/vllm#46893), `/reset_prefix_cache` answers with an empty body.
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b""
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            client = VLLMClient(host="127.0.0.1")
+
+        with (
+            patch("trl.generation.vllm_client._HAS_RESET_PREFIX_CACHE_SUCCESS", False),
+            patch.object(client.session, "post", return_value=response),
+        ):
+            client.reset_prefix_cache()
 
 
 class TestParseLogprobs(TrlTestCase):
