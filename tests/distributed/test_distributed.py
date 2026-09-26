@@ -113,6 +113,38 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @pytest.mark.parametrize("mode", ["sft", "distillation"])
+    def test_chunked_loss_zero3_unequal_valid_tokens(self, mode, get_config_path):
+        result = subprocess.run(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                get_config_path("zero3"),
+                "tests/distributed/chunked_loss_zero3.py",
+                mode,
+            ],
+            env=os.environ.copy(),
+            cwd=ROOT,
+            timeout=300,
+        )
+        assert result.returncode == 0
+
+    def test_sft_trainer_zero3_unequal_chunks(self):
+        result = subprocess.run(
+            [
+                "torchrun",
+                "--standalone",
+                "--nproc_per_node=2",
+                "tests/distributed/sft_trainer_zero3_unequal_chunks.py",
+                self.tmp_dir,
+            ],
+            env=os.environ.copy(),
+            cwd=ROOT,
+            timeout=120,
+        )
+        assert result.returncode == 0
+
     @pytest.mark.parametrize(
         "config",
         [
