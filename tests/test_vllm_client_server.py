@@ -71,7 +71,10 @@ class TestResetPrefixCache(TrlTestCase):
         ):
             client = VLLMClient(host="127.0.0.1")
 
-        with patch.object(client.session, "post", return_value=response):
+        with (
+            patch("trl.generation.vllm_client._HAS_RESET_PREFIX_CACHE_SUCCESS", False),
+            patch.object(client.session, "post", return_value=response),
+        ):
             client.reset_prefix_cache()
 
 
