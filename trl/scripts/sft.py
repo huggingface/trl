@@ -105,7 +105,7 @@ def main(script_args, training_args, model_args, dataset_args):
     )
 
     # Train the model
-    trainer.train()
+    trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
     # Log training complete
     trainer.accelerator.print("✅ Training completed.")

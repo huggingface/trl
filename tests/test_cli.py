@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 from io import StringIO
 from unittest.mock import patch
@@ -35,6 +36,73 @@ def test_help_no_type_error(command):
 
 
 class TestCLI(TrlTestCase):
+    @pytest.mark.parametrize(
+        "command,trainer_name",
+        [
+            ("distillation", "DistillationTrainer"),
+            ("dpo", "DPOTrainer"),
+            ("grpo", "GRPOTrainer"),
+            ("kto", "KTOTrainer"),
+            ("reward", "RewardTrainer"),
+            ("rloo", "RLOOTrainer"),
+            ("sft", "SFTTrainer"),
+        ],
+    )
+    @pytest.mark.parametrize("checkpoint", [None, "checkpoint-2"])
+    def test_resume_argument(self, command, trainer_name, checkpoint):
+        script = importlib.import_module(f"trl.scripts.{command}")
+        argv = ["--output_dir", self.tmp_dir, "--dataset_name", "unused", "--report_to", "none"]
+        if command == "distillation":
+            argv += ["--teacher_model_name_or_path", "unused"]
+        if checkpoint is not None:
+            argv += ["--resume_from_checkpoint", checkpoint]
+        parsed = script.make_parser().parse_args_and_config(argv)
+
+        with patch("datasets.load_dataset", return_value={"train": []}), patch(f"trl.{trainer_name}") as trainer:
+            script.main(*parsed)
+
+        trainer.return_value.train.assert_called_once_with(resume_from_checkpoint=checkpoint)
+
+    def test_sft_resume(self):
+        from trl import SFTTrainer
+        from trl.scripts import sft
+
+        argv = [
+            "--output_dir",
+            self.tmp_dir,
+            "--model_name_or_path",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "--dataset_name",
+            "trl-internal-testing/zen",
+            "--dataset_config",
+            "standard_language_modeling",
+            "--report_to",
+            "none",
+            "--max_steps",
+            "2",
+            "--save_steps",
+            "2",
+            "--per_device_train_batch_size",
+            "2",
+            "--gradient_accumulation_steps",
+            "1",
+            "--use_cpu",
+            "true",
+            "--bf16",
+            "false",
+            "--loss_type",
+            "nll",
+        ]
+        sft.main(*sft.make_parser().parse_args_and_config(argv))
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-2")
+        argv[argv.index("--max_steps") + 1] = "3"
+        argv += ["--resume_from_checkpoint", checkpoint]
+
+        # Execute the real training step: only step 3 remains after restoring checkpoint-2.
+        with patch.object(SFTTrainer, "training_step", autospec=True, side_effect=SFTTrainer.training_step) as step:
+            sft.main(*sft.make_parser().parse_args_and_config(argv))
+        assert step.call_count == 1
+
     def test_distillation(self):
         from trl.cli import main
 
