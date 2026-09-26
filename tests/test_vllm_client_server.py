@@ -801,9 +801,14 @@ class TestVLLMClientServerVLM(TrlTestCase):
 
     @classmethod
     def setup_class(cls):
+        # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
 
         # Initialize the client (no communicator needed for generation-only tests)
