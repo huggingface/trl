@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
+
 import pytest
 import torch
 from datasets import DatasetDict, load_dataset
@@ -80,3 +82,79 @@ class TestMiniLLMTrainer(TrlTestCase):
             assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
         else:
             assert trainer.eval_dataset is eval_dataset
+
+
+class TestMiniLLMComputeAdvantage(TrlTestCase):
+    """Unit tests for the discounted advantage (issue #6626). `_compute_advantage` only reads `self.gamma` and
+    `self.length_normalization`, so it is exercised with a stub `self` and no model."""
+
+    def test_discount_is_relative_not_absolute(self):
+        # advantages_t must be sum_{i>=t} gamma^(i-t) R_i, not gamma^t times that. With a constant reward of
+        # 1.0 (teacher=1, student=0) and no length normalization, the closed form is
+        # A_t = (1 - gamma^(T-t)) / (1 - gamma). The absolute-index gamma^i weighting scaled every position
+        # by an extra gamma^t, suppressing later tokens toward zero.
+        gamma, seq_len = 0.9, 64
+        student = torch.zeros(1, seq_len)
+        teacher = torch.ones(1, seq_len)
+        stub = types.SimpleNamespace(gamma=gamma, length_normalization=False)
+
+        advantages = MiniLLMTrainer._compute_advantage(stub, student, teacher)[0]
+
+        t = torch.arange(seq_len)
+        expected = (1 - gamma ** (seq_len - t)) / (1 - gamma)
+        torch.testing.assert_close(advantages, expected.float())
+
+    def test_length_normalized_is_finite_on_long_sequences(self):
+        # With length normalization the gamma^t factor cancels, so a constant reward gives advantage 1.0 at
+        # every position. The absolute-index gamma^i weighting underflowed to 0.0 in float32 on long
+        # completions, turning the ratio into 0/0 = nan.
+        gamma, seq_len = 0.5, 512
+        student = torch.zeros(1, seq_len)
+        teacher = torch.ones(1, seq_len)
+        stub = types.SimpleNamespace(gamma=gamma, length_normalization=True)
+
+        advantages = MiniLLMTrainer._compute_advantage(stub, student, teacher)[0]
+
+        assert torch.isfinite(advantages).all(), "length-normalized advantages contain non-finite values"
+        torch.testing.assert_close(advantages, torch.ones(seq_len))
+
+    @pytest.mark.parametrize("length_normalization", [False, True])
+    def test_matches_reference_on_varying_rewards_and_mask(self, length_normalization):
+        # The two constant-reward cases above cannot tell the discounted sum of the rewards from a discounted sum
+        # of the mask alone. Random log-probs and a ragged mask pin the dependence on both, against a float64
+        # loop that applies the docstring formula position by position.
+        torch.manual_seed(0)
+        gamma, seq_len = 0.9, 48
+        student = torch.randn(2, seq_len)
+        teacher = torch.randn(2, seq_len)
+        mask = (torch.rand(2, seq_len) > 0.25).float()
+        stub = types.SimpleNamespace(gamma=gamma, length_normalization=length_normalization)
+
+        advantages = MiniLLMTrainer._compute_advantage(stub, student, teacher, mask)
+
+        rewards = ((teacher - student) * mask).double()
+        weights = torch.where(mask < 0.5, 1e-4, mask).double()
+        expected = torch.zeros_like(rewards)
+        for t in range(seq_len):
+            factors = gamma ** torch.arange(seq_len - t, dtype=torch.float64)
+            expected[:, t] = (rewards[:, t:] * factors).sum(dim=1)
+            if length_normalization:
+                expected[:, t] /= (weights[:, t:] * factors).sum(dim=1)
+        torch.testing.assert_close(advantages, expected.float())
+
+    def test_stays_float32_under_autocast(self):
+        # `compute_loss` runs under the trainer's autocast context with mixed precision, and a matmul is
+        # autocast-eligible, so the discounted sum came back in bfloat16 with rounding the float32 promotion was
+        # meant to avoid. The advantage must keep the promoted dtype and the float32 result.
+        torch.manual_seed(0)
+        gamma, seq_len = 0.9, 256
+        student = torch.randn(1, seq_len)
+        teacher = torch.randn(1, seq_len)
+        stub = types.SimpleNamespace(gamma=gamma, length_normalization=True)
+
+        expected = MiniLLMTrainer._compute_advantage(stub, student, teacher)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            advantages = MiniLLMTrainer._compute_advantage(stub, student, teacher)
+
+        assert advantages.dtype == torch.float32
+        torch.testing.assert_close(advantages, expected)
