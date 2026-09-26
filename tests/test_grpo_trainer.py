@@ -283,6 +283,47 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    def test_transform_advantages_used_for_output_and_logging(self):
+        class CustomAdvantageTrainer(GRPOTrainer):
+            def _transform_advantages(self, advantages: torch.Tensor) -> torch.Tensor:
+                transformed = advantages * 10 + 123
+                self.transformed_advantages = transformed.detach().clone()
+                return transformed
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+        )
+
+        trainer = CustomAdvantageTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=lambda completions, **kwargs: [float(i) for i in range(len(completions))],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.model.train()
+        generation_batch = next(iter(trainer.get_train_dataloader()))
+        output = trainer._generate_and_score_completions(generation_batch)
+
+        assert hasattr(trainer, "transformed_advantages")
+
+        process_slice = slice(
+            trainer.accelerator.process_index * len(generation_batch),
+            (trainer.accelerator.process_index + 1) * len(generation_batch),
+        )
+        expected_training_advantages = trainer.transformed_advantages[process_slice]
+
+        torch.testing.assert_close(output["advantages"], expected_training_advantages)
+
+        logged_advantages = torch.tensor(list(trainer._logs["advantages"]))
+        torch.testing.assert_close(logged_advantages, trainer.transformed_advantages.cpu())
+
     @pytest.mark.parametrize(
         "model_id",
         [
