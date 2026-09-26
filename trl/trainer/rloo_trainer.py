@@ -564,7 +564,11 @@ class RLOOTrainer(_BaseTrainer):
                 f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
                 f"provided value ({args.dataloader_num_workers})."
             )
+            # A multiprocessing start method is only valid with workers, so clear it along with the worker count.
+            # transformers sets it to "fork" on MPS when `dataloader_num_workers > 1`; the field was added in 5.15.0.
             args.dataloader_num_workers = 0
+            if Version(transformers.__version__) >= Version("5.15.0"):
+                args.dataloader_multiprocessing_context = None
 
         # Multi-step
         self.num_iterations = args.num_iterations
@@ -914,9 +918,13 @@ class RLOOTrainer(_BaseTrainer):
             self.accelerator.dataloader_config.dispatch_batches = False
             eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
             eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
-            # Force a single worker for this loader only, without persisting the change
+            # Force a single worker for this loader only, without persisting the change. A multiprocessing start
+            # method is only valid with workers, so it is cleared and restored the same way.
             num_workers = self.args.dataloader_num_workers
             self.args.dataloader_num_workers = 0
+            if Version(transformers.__version__) >= Version("5.15.0"):
+                mp_context = self.args.dataloader_multiprocessing_context
+                self.args.dataloader_multiprocessing_context = None
 
         try:
             return self._get_dataloader(
@@ -929,6 +937,8 @@ class RLOOTrainer(_BaseTrainer):
         finally:
             if isinstance(eval_dataset, IterableDataset):
                 self.args.dataloader_num_workers = num_workers
+                if Version(transformers.__version__) >= Version("5.15.0"):
+                    self.args.dataloader_multiprocessing_context = mp_context
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
