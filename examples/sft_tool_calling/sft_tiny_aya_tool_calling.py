@@ -159,6 +159,8 @@ def main():
     trainer.save_model(output_dir)
     trainer.push_to_hub(dataset_name=dataset_name)
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()

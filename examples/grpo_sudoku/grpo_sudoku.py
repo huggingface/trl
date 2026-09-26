@@ -666,6 +666,8 @@ def main() -> None:
     print(f"Starting GRPO training: {args.num_generations} generations, {args.max_turns} max turns")
     trainer.train()
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()
