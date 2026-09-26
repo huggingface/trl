@@ -847,8 +847,14 @@ class VLLMClient:
     def reset_prefix_cache(self):
         """
         Resets the prefix cache for the model.
+
+        The `/reset_prefix_cache` endpoint returns `200` with an empty body on vLLM 0.20.0-0.25.x
+        (it returns `{"success": ...}` only from vLLM 0.26.0), so only the status code is checked
+        instead of parsing the body as JSON.
         """
-        self._post(f"{self.base_url}/reset_prefix_cache")
+        response = self.session.post(f"{self.base_url}/reset_prefix_cache")
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
         """
