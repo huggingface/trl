@@ -560,7 +560,9 @@ class VLLMGeneration:
             prompts: List of token ID lists, one per prompt (already tokenized).
             images: Optional list of image lists for VLM support. Each element is a list of PIL images for the
                 corresponding prompt, or `None` if no images for that prompt. `None` if no images at all.
-            num_generations: Number of generations per prompt.
+            num_generations: Number of times each original prompt is repeated in `prompts`. Server mode groups
+                repeats with identical token IDs into one request with `n=num_generations`. Repeated rows must also
+                refer to the same images. Pass 1 after tool calls because histories can diverge.
             profiler: Optional profiler for performance tracking.
 
         Returns:
@@ -598,9 +600,17 @@ class VLLMGeneration:
             if all(img is None for img in all_images):
                 all_images = None
 
+            if num_generations > 1:
+                # Group prompts when their token IDs match
+                for start in range(0, len(all_prompts), num_generations):
+                    group = all_prompts[start : start + num_generations]
+                    if len(group) != num_generations or any(prompt != group[0] for prompt in group[1:]):
+                        num_generations = 1
+                        break
+
             if accelerator.is_main_process:
-                # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and
-                # generate num_generations outputs for each one. This is faster than generating outputs for each
+                # After checking that each group contains num_generations duplicates, we take one prompt per group
+                # and generate num_generations outputs for each one. This is faster than generating outputs for each
                 # duplicate prompt individually.
                 ordered_set_of_prompt_ids = all_prompts[::num_generations]
 
@@ -624,7 +634,7 @@ class VLLMGeneration:
                     "max_tokens": max_completion_length,
                     "logprobs": self.logprobs,
                     "structured_outputs_regex": self.structured_outputs_regex,
-                    "generation_kwargs": self.generation_kwargs,
+                    "generation_kwargs": {**self.generation_kwargs, "n": num_generations},
                 }
                 with profiler:
                     output = self.vllm_client.generate(
