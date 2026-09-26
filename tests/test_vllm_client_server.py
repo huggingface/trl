@@ -804,10 +804,7 @@ class TestVLLMClientServerVLM(TrlTestCase):
         # Run the server on the last visible accelerator, since the test process may hold memory on the first one
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
-        visible_devices = os.environ.get(VISIBLE_DEVICES)
-        env[VISIBLE_DEVICES] = (
-            visible_devices.split(",")[-1] if visible_devices else str(backend_device_count(torch_device) - 1)
-        )
+        env[VISIBLE_DEVICES] = str(backend_device_count(torch_device) - 1)
 
         # Start the server process
         cls.server_process = subprocess.Popen(
