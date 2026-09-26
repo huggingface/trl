@@ -959,6 +959,57 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize(
+        "initial_modules_to_save, initial_trainable_token_indices",
+        [
+            # "score" avoids peft's conflict check (embed_tokens in both keys raises ValueError)
+            (["score"], None),
+            (None, {"embed_tokens": [0]}),
+            (["score"], {"embed_tokens": [0]}),
+        ],
+    )
+    @require_peft
+    def test_peft_config_not_mutated_when_tokens_added(
+        self, initial_modules_to_save, initial_trainable_token_indices
+    ):
+        """SFTTrainer must not mutate the caller's peft_config when chat_template_path adds tokens."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        peft_config = LoraConfig(
+            modules_to_save=initial_modules_to_save,
+            trainable_token_indices=initial_trainable_token_indices,
+        )
+        original_modules = list(peft_config.modules_to_save) if peft_config.modules_to_save is not None else None
+        original_indices = (
+            {k: list(v) for k, v in peft_config.trainable_token_indices.items()}
+            if peft_config.trainable_token_indices is not None
+            else None
+        )
+
+        with patch(
+            "trl.trainer.sft_trainer.clone_chat_template",
+            side_effect=lambda model, proc, path: (model, proc, [32000]),
+        ):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SFTConfig(
+                    output_dir=self.tmp_dir,
+                    report_to="none",
+                    chat_template_path="dummy-path-intercepted-by-mock",
+                ),
+                train_dataset=dataset,
+                peft_config=peft_config,
+            )
+
+        assert peft_config.modules_to_save == original_modules, (
+            f"SFTTrainer mutated peft_config.modules_to_save: "
+            f"expected {original_modules!r}, got {peft_config.modules_to_save!r}"
+        )
+        assert peft_config.trainable_token_indices == original_indices, (
+            f"SFTTrainer mutated peft_config.trainable_token_indices: "
+            f"expected {original_indices!r}, got {peft_config.trainable_token_indices!r}"
+        )
+
     @require_liger_kernel
     def test_train_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")

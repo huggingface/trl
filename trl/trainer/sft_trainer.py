@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import copy
 import inspect
 import json
 import os
@@ -1101,6 +1102,14 @@ class SFTTrainer(_BaseTrainer):
                     "with the new `peft_config` to the trainer."
                 )
             if added_tokens:
+                # Shadow with a local copy so the caller's peft_config is not mutated as a side effect.
+                peft_config = copy.copy(peft_config)
+                if peft_config.modules_to_save is not None:
+                    peft_config.modules_to_save = list(peft_config.modules_to_save)
+                if peft_config.trainable_token_indices is not None:
+                    peft_config.trainable_token_indices = {
+                        k: list(v) for k, v in peft_config.trainable_token_indices.items()
+                    }
                 # Ensure that the added tokens are trainable
                 if peft_config.trainable_token_indices is None:
                     peft_config.trainable_token_indices = {"embed_tokens": added_tokens}
