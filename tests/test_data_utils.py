@@ -202,6 +202,65 @@ class TestPrepareMultimodalMessages:
 
         assert messages == expected
 
+    @pytest.mark.parametrize("image_turn", [0, 2])
+    def test_explicit_image_placeholder_with_raw_user_turn(self, image_turn):
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {"role": "user", "content": "Describe the image."},
+            {"role": "assistant", "content": "It is blue."},
+            {"role": "user", "content": "What else can you see?"},
+        ]
+        messages[image_turn]["content"] = [{"type": "image"}, {"type": "text", "text": "Look at this image."}]
+        original = copy.deepcopy(messages)
+        expected = copy.deepcopy(messages)
+        expected[image_turn]["content"][0]["image"] = image
+        for message in expected:
+            if isinstance(message["content"], str):
+                message["content"] = [{"type": "text", "text": message["content"]}]
+
+        assert prepare_multimodal_messages(messages, images=[image]) == expected
+        assert messages == original
+
+    @pytest.mark.parametrize("num_images", [0, 2])
+    def test_explicit_image_placeholder_mismatch(self, num_images):
+        messages = [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe."}]},
+            {"role": "assistant", "content": "A cat."},
+            {"role": "user", "content": "What color?"},
+        ]
+        images = [Image.new("RGB", (10, 10)) for _ in range(num_images)]
+        with pytest.raises(ValueError, match=rf"provided \({num_images}\).*placeholders \(1\)"):
+            prepare_multimodal_messages(messages, images=images)
+
+    @pytest.mark.parametrize("role", ["user", "tool"])
+    def test_embedded_image_does_not_prevent_new_image_insertion(self, role):
+        embedded = Image.new("RGB", (10, 10), color="red")
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {"role": role, "content": [{"type": "image", "image": embedded}]},
+            {"role": "user", "content": "Describe the new image."},
+        ]
+
+        result = prepare_multimodal_messages(messages, images=[image])
+
+        assert result[0]["content"][0]["image"] is embedded
+        assert result[1]["content"] == [
+            {"type": "image", "image": image},
+            {"type": "text", "text": "Describe the new image."},
+        ]
+
+    def test_tool_placeholder_does_not_consume_provided_image(self):
+        image = Image.new("RGB", (10, 10), color="blue")
+        messages = [
+            {"role": "tool", "content": [{"type": "image"}]},
+            {"role": "user", "content": "Describe the image."},
+        ]
+
+        result = prepare_multimodal_messages(messages, images=[image])
+
+        assert result[0] == messages[0]
+        assert result[1]["content"][0]["image"] is image
+
     def test_message_with_tool_calling_turns(self):
         """Test that both the assistant tool call and the tool role turns messages are properly transformed."""
         messages = [
