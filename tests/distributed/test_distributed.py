@@ -42,6 +42,24 @@ def get_config_path(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
+    def test_a2po_fsdp2(self, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path("fsdp2"),
+                "tests/distributed/scripts/a2po_fsdp.py",
+                "--output_dir", self.tmp_dir,
+                "--per_device_train_batch_size", "2",
+                "--max_steps", "1",
+                "--max_completion_length", "4",
+                "--num_value_samples", "2",
+                "--filter_all_incorrect", "false",
+                "--report_to", "none",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
     @pytest.mark.parametrize(
         "config",
         [

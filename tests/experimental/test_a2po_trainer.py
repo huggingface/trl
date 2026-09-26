@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import Mock, patch
+
 import pytest
 import torch
 from datasets import Dataset, DatasetDict
@@ -27,6 +29,38 @@ def completion_parity_reward(completions, **kwargs):
 
 
 class TestA2POTrainer(TrlTestCase):
+    @pytest.mark.parametrize("fsdp_enabled", [False, True])
+    def test_reference_model_preparation(self, fsdp_enabled):
+        create_accelerator = A2POTrainer.create_accelerator_and_postprocess
+
+        def configure_accelerator(trainer):
+            create_accelerator(trainer)
+            # Exercise constructor dispatch without requiring a distributed GPU job.
+            trainer.is_fsdp_enabled = fsdp_enabled
+            trainer.accelerator.prepare_model = Mock(wraps=trainer.accelerator.prepare_model)
+
+        with (
+            patch.object(A2POTrainer, "create_accelerator_and_postprocess", configure_accelerator),
+            patch(
+                "trl.experimental.a2po.a2po_trainer.prepare_fsdp", side_effect=lambda model, accelerator: model
+            ) as fsdp,
+        ):
+            trainer = A2POTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=completion_parity_reward,
+                args=A2POConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=Dataset.from_dict({"prompt": ["Hello"]}),
+            )
+
+        if fsdp_enabled:
+            fsdp.assert_called_once_with(trainer.ref_model, trainer.accelerator)
+            trainer.accelerator.prepare_model.assert_not_called()
+        else:
+            fsdp.assert_not_called()
+            trainer.accelerator.prepare_model.assert_called_once_with(trainer.ref_model, evaluation_mode=True)
+        assert not trainer.ref_model.training
+        assert all(not parameter.requires_grad for parameter in trainer.ref_model.parameters())
+
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict({"prompt": ["The capital of France is", "Two plus two equals"]})
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
