@@ -658,15 +658,6 @@ class RLOOTrainer(_BaseTrainer):
                 )
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
-        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
-        # replicas would run the fused LM head bound to the original model
-        if args.n_gpu > 1:
-            raise ValueError(
-                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
-                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
-                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
-            )
-
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
         add_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import PropertyMock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -145,21 +145,6 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_data_parallel_raises(self):
-        # `Trainer` would wrap the model in `nn.DataParallel`, which the fused LM head does not support
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
-        with (
-            patch.object(RLOOConfig, "n_gpu", new_callable=PropertyMock, return_value=2),
-            pytest.raises(ValueError, match="does not support `nn.DataParallel`"),
-        ):
-            RLOOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
 
     def test_logps_match_plain_forward(self):
         # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
