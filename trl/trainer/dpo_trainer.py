@@ -958,6 +958,10 @@ class DPOTrainer(_BaseTrainer):
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
+        self._precompute_model_hash = (
+            hash_module(self.ref_model or self.model) if args.precompute_ref_log_probs else None
+        )
+
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
@@ -985,7 +989,8 @@ class DPOTrainer(_BaseTrainer):
                 )
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        # Reference forwards during precompute reuse a single DeepSpeed inference engine (see `_precompute_ref_logps`).
+        # Reference forwards during precompute reuse a single DeepSpeed/FSDP inference engine (see
+        # `_precompute_ref_logps`).
         self._precompute_engine = None
         if args.precompute_ref_log_probs:
             self.train_dataset = self._precompute_ref_logps(
@@ -1141,7 +1146,7 @@ class DPOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        model_hash = hash_module(self.ref_model or self.model)
+        model_hash = self._precompute_model_hash or hash_module(self.ref_model or self.model)
         # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
         # value so all ranks share one cache file.
         fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
@@ -1163,11 +1168,31 @@ class DPOTrainer(_BaseTrainer):
         data_loader = self.accelerator.prepare(dataloader)
 
         # This runs before the parent class prepares the model in `train`, so with DeepSpeed the parameters are still
-        # on CPU (ZeRO-1/2) and sharded (ZeRO-3). Wrap the model in an inference engine to place and gather them. Build
-        # it once and reuse it across precompute passes (train, eval, and later `evaluate` calls)
+        # on CPU (ZeRO-1/2) and sharded (ZeRO-3), and with FSDP they are still on the meta/CPU device. Wrap the model
+        # in an inference engine to place and gather them. Build it once and reuse it across precompute passes (train,
+        # eval, and later `evaluate` calls)
         if self.ref_model is None and self.is_deepspeed_enabled:
             if self._precompute_engine is None:
                 self._precompute_engine = prepare_deepspeed(self.model, self.accelerator)
+            model = self._precompute_engine
+        elif self.ref_model is None and self.is_fsdp_enabled:
+            if self._precompute_engine is None:
+                if self.accelerator.state.fsdp_plugin.fsdp_version == 2:
+                    # FSDP2 must prepare the model and optimizer together so optimizer parameters map to DTensors.
+                    self.create_optimizer()
+                    self.model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+                else:
+                    # Match Trainer's FSDP1 PEFT setup before the early reference pass prepares the policy.
+                    if is_peft_model(self.model):
+                        if Version(transformers.__version__) >= Version("5.2.0"):
+                            from transformers.trainer import update_fsdp_plugin_peft
+
+                            update_fsdp_plugin_peft(self.model, self.accelerator)
+                        else:
+                            self._fsdp_qlora_plugin_updates()
+                    self.model = self.accelerator.prepare(self.model)
+                self.model_wrapped = self.model
+                self._precompute_engine = self.model.eval()
             model = self._precompute_engine
         else:
             model = self.ref_model or self.model
@@ -1209,6 +1234,44 @@ class DPOTrainer(_BaseTrainer):
         self.accelerator.wait_for_everyone()
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
+
+    def _prepare_for_training(self, max_steps, train_dataloader, resume_from_checkpoint):
+        if self._precompute_engine is None or not self.is_fsdp_enabled:
+            return super()._prepare_for_training(max_steps, train_dataloader, resume_from_checkpoint)
+
+        # FSDP precompute prepares the policy before `train()`. Re-register those objects after Trainer's
+        # `accelerator.free_memory()` instead of preparing and sharding the same model a second time.
+        if self._created_lr_scheduler:
+            self.lr_scheduler = None
+            self._created_lr_scheduler = False
+
+        model = self.accelerator.prepare_model(self._precompute_engine)
+        if self.optimizer is None:
+            self.create_optimizer()
+        self.optimizer = self.accelerator.prepare_optimizer(self.optimizer)
+        self.create_scheduler(num_training_steps=max_steps)
+
+        self.model = self.model_wrapped = self._precompute_engine = model
+        if Version(accelerate.__version__) >= Version("1.10.0"):
+            parallelism_config = self.accelerator.parallelism_config
+            if (
+                parallelism_config is not None
+                and parallelism_config.sp_backend == "deepspeed"
+                and parallelism_config.sp_enabled
+            ):
+                train_dataloader = self.accelerator.deepspeed_ulysses_dl_adapter(train_dataloader, model)
+
+        if resume_from_checkpoint is not None:
+            self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
+            self._load_optimizer_and_scheduler(resume_from_checkpoint)
+            self._load_scaler(resume_from_checkpoint)
+
+        self.callback_handler.model = self.model
+        self.callback_handler.optimizer = self.optimizer
+        self.callback_handler.lr_scheduler = self.lr_scheduler
+        self.callback_handler.train_dataloader = train_dataloader
+        model.train()
+        return model, train_dataloader
 
     def _get_per_token_logps_and_entropies(self, model, model_kwargs, input_ids, completion_mask):
         """Compute selected-token log probabilities without materializing the full logits tensor."""

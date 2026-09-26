@@ -40,8 +40,8 @@ if Version(torch.__version__) >= Version("2.6.0"):
 else:  # the FSDP2 API was public only from torch 2.6
     from torch.distributed._composable.fsdp import FSDPModule
 
-if Version(accelerate.__version__) >= Version("1.11.0"):
-    from accelerate.utils.fsdp_utils import get_parameters_from_modules
+if Version(accelerate.__version__) >= Version("1.6.0"):
+    from accelerate.utils.fsdp_utils import fsdp2_prepare_model
 
 if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
@@ -302,31 +302,28 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             }
             model = FSDP(model, **kwargs)
         elif fsdp_plugin.fsdp_version == 2:
-            if Version(torch.__version__) >= Version("2.6.0"):
-                from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+            if Version(accelerate.__version__) >= Version("1.6.0"):
+                model = fsdp2_prepare_model(accelerator, model)
             else:
-                from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
+                if Version(torch.__version__) >= Version("2.6.0"):
+                    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+                else:
+                    from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
 
-            mesh = getattr(accelerator, "torch_device_mesh", None)
-            if Version(accelerate.__version__) >= Version("1.11.0"):
-                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
-            else:
+                mesh = getattr(accelerator, "torch_device_mesh", None)
                 warnings.warn(
-                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
-                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
+                    "FSDP version 2 is being used with accelerate version < 1.6.0, which does not expose its "
+                    "auto-wrapping helper. Only the root module will be sharded for this inference-only model. "
+                    "Please upgrade accelerate to v1.6.0 or later for per-layer sharding."
                 )
-                ignored_params = None
-            fsdp2_kwargs = {
-                "reshard_after_forward": fsdp_plugin.reshard_after_forward,
-                "offload_policy": fsdp_plugin.cpu_offload,
-                # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
-                "mp_policy": fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
-                "mesh": mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
-            }
-            # `ignored_params` is only supported in torch >= 2.7.0
-            if Version(torch.__version__) >= Version("2.7.0"):
-                fsdp2_kwargs["ignored_params"] = ignored_params
-            fully_shard(model, **fsdp2_kwargs)
+                fully_shard(
+                    model,
+                    reshard_after_forward=fsdp_plugin.reshard_after_forward,
+                    offload_policy=fsdp_plugin.cpu_offload,
+                    # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
+                    mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                    mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+                )
         else:
             raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
