@@ -73,31 +73,6 @@ def pytest_runtest_makereport(item, call):
             stack.append(exc.__cause__)
 
 
-@pytest.fixture
-def make_grpo_trainer():
-    """Provide a factory for CPU GRPO trainer shells without model or backend initialization."""
-    from trl import GRPOTrainer
-
-    def make_trainer(*, global_step=0, last_loaded_step=0, use_vllm=False):
-        trainer = object.__new__(GRPOTrainer)
-        trainer.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            is_main_process=True,
-            process_index=0,
-            gather=lambda t: t,
-        )
-        trainer.args = SimpleNamespace(report_to=[])
-        trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=global_step, num_input_tokens_seen=0)
-        trainer._last_loaded_step = last_loaded_step
-        trainer.use_vllm = use_vllm
-        trainer.use_transformers_continuous_batching = False
-        trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
-        return trainer
-
-    return make_trainer
-
-
 def _make_server_generation(accelerator, *, max_completion_length):
     """Keep the real server batching code and replace only the client that sends generation requests."""
     from trl.generation.vllm_generation import VLLMGeneration
@@ -131,10 +106,18 @@ def _make_server_generation(accelerator, *, max_completion_length):
 
 
 @pytest.fixture
-def server_tool_trainer(make_grpo_trainer):
+def server_tool_trainer():
     """Provide a two-sibling tool scenario; restore patched dependencies after the test."""
-    trainer = make_grpo_trainer(use_vllm=True)
-    trainer.model.config = SimpleNamespace(max_position_embeddings=128)
+    from trl import GRPOTrainer
+
+    trainer = object.__new__(GRPOTrainer)
+    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True, process_index=0)
+    trainer.args = SimpleNamespace(report_to=[])
+    trainer.model = SimpleNamespace(training=True, config=SimpleNamespace(max_position_embeddings=128))
+    trainer.state = SimpleNamespace(global_step=0)
+    trainer._last_loaded_step = 0
+    trainer.use_vllm = True
+    trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
     trainer.vllm_mode = "server"
     trainer.num_generations = 2
     trainer.max_tool_calling_iterations = 1
