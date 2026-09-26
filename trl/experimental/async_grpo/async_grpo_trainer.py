@@ -302,6 +302,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         check_health_fn,
         stale_after_s,
         metrics,
+        dropped_prompts: set[int],
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
@@ -314,6 +315,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # `dispatch_batches=True`), which is also the only process where the queue wait is real, so its metrics need no
         # communication at all — they are appended straight into the sink the trainer reduces in `log()`.
         self.metrics = metrics
+        self.dropped_prompts = dropped_prompts
         # Blocking-get time, accumulated here and flushed by `training_step` at the optimizer-step boundary — the only
         # place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
@@ -363,6 +365,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             if staleness > self.max_staleness:
                 logger.info(f"dropping stale sample (staleness={staleness}, max={self.max_staleness})")
                 self.metrics["sample/dropped_stale_total"].append(1.0)
+                self.dropped_prompts.add(sample.group_id)
                 continue  # drop stale, pull next
 
             # Three different views of the same queue, and they must not be confused with each other:
@@ -1206,6 +1209,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        self._dropped_groups: set[int] = set()
         # Tracks restart to match `num_train_epochs`
         self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
@@ -1377,6 +1381,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 metrics=self._metrics["train"],
+                dropped_prompts=self._dropped_groups,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -1806,12 +1811,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            trained = self._trained_groups
-            first_untrained = next(g for g in itertools.count() if g not in trained)
+            resolved = self._trained_groups | self._dropped_groups
+            first_untrained = next(g for g in itertools.count() if g not in resolved)
             prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
-            rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
+            trained_prompt_count = self._groups_before_resume + len(self._trained_groups)
+            rollout_state = {
+                "trained_prompt_count": trained_prompt_count,
+                "prompt_index": prompt_index,
+                "model_version": self.model_version,
+            }
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
@@ -1820,6 +1830,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
         # Always reset first so a stale value from a prior train() call is never carried over.
+        self._trained_groups.clear()
+        self._dropped_groups.clear()
         if isinstance(self.rollout_worker, AsyncRolloutWorker):
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
             self._groups_before_resume = 0
@@ -1838,7 +1850,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     with open(rollout_state_file) as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
-                    self._groups_before_resume = rollout_state["prompt_index"]
+                    self._groups_before_resume = rollout_state.get(
+                        "trained_prompt_count", rollout_state["prompt_index"]
+                    )
                     # Older checkpoints predate this field; resuming from one restarts numbering at v1, which is
                     # only safe against a freshly started server.
                     self.model_version = rollout_state.get("model_version", 0)

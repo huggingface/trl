@@ -594,6 +594,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
     def _stub_trainer_for_save(self, trained_groups, dataset_start_index=10, groups_before_resume=0, model_version=7):
         trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)  # __new__ skips __init__ (requires GPU + model)
+        trainer._dropped_groups = set()
+        trainer._trained_groups = set()
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = True
         trainer.model_version = model_version
@@ -633,9 +635,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         assert written_before_super == [True]
 
-    def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
-        # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
-        # prompts get re-generated on resume instead of being silently skipped.
+    def test_save_checkpoint_stops_at_inflight_group(self):
+        # Group 2 is still in flight, so the cursor must not skip it on resume.
         trainer = self._stub_trainer_for_save({0, 1, 3, 4, 5}, dataset_start_index=0)
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
@@ -659,6 +660,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         # __new__ skips __init__ (requires GPU + model)
         trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer._dropped_groups = set()
+        trainer._trained_groups = set()
         trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
         trainer.rollout_worker._loop_kwargs = {}
         trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
@@ -687,6 +690,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             json.dump({"prompt_index": 5}, f)
 
         trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
+        trainer._dropped_groups = set()
+        trainer._trained_groups = set()
         trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
         trainer.rollout_worker._loop_kwargs = {}
         trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
