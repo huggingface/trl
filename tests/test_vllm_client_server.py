@@ -127,6 +127,22 @@ class TestExtractLogprobs(TrlTestCase):
         assert all_token_ids is None
 
 
+class TestResetPrefixCache(TrlTestCase):
+    @pytest.mark.parametrize("content", [b"", b"{}"])
+    def test_reset_prefix_cache_accepts_empty_and_json_responses(self, content):
+        import requests
+
+        response = requests.Response()
+        response.status_code = 200
+        response._content = content
+
+        client = object.__new__(VLLMClient)
+        client.base_url = "http://127.0.0.1:8000"
+        client.session = SimpleNamespace(post=lambda url, **kwargs: response)
+
+        client.reset_prefix_cache()
+
+
 @pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
