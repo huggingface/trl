@@ -1,7 +1,6 @@
 # `terminal_notes` harness
 
-A richer shell harness: **6 shell tools** (including background processes) plus a **4-tool persistent
-note toolkit**. Implemented by `TerminalNotesEnv` in [`env.py`](env.py).
+A richer shell harness: **6 shell tools** (including background processes) plus a **4-tool persistent note toolkit**. Implemented by `TerminalNotesEnv` in [`env.py`](env.py).
 
 ## Tools
 
@@ -25,8 +24,7 @@ note toolkit**. Implemented by `TerminalNotesEnv` in [`env.py`](env.py).
 | `read_note` | `read_note(title: str) -> str` | Read a note's content. |
 | `list_note` | `list_note() -> str` | List note titles + sizes. |
 
-> Unlike the original SETA agent, notes are **not** auto-injected into the prompt each turn (TRL owns the
-> prompt under `environment_factory`); recall them on demand with `read_note` / `list_note`.
+> Unlike the original SETA agent, notes are **not** auto-injected into the prompt each turn (TRL owns the prompt under `environment_factory`); recall them on demand with `read_note` / `list_note`.
 
 ## Submission
 
