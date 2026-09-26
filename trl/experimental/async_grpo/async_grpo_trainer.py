@@ -56,7 +56,7 @@ from ...trainer.utils import (
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
-from .weight_transfer import WeightTransferClient
+from .weight_transfer import WeightTransferClient, _send_full_tensors_lockstep
 
 
 logger = get_logger(__name__)
@@ -1721,12 +1721,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_peft_model(model):
             model.merge_adapter()
         try:
-            if self.accelerator.is_main_process and self.weight_transfer:
-                self.weight_transfer.send_weights(self._streaming_iter())
-            else:
-                # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
-                for _ in self._streaming_iter():
-                    pass
+            _send_full_tensors_lockstep(self.accelerator, self.weight_transfer, self._streaming_iter())
         finally:
             if is_peft_model(model):
                 model.unmerge_adapter()
