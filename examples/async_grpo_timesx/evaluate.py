@@ -89,8 +89,9 @@ class TimesXEvalArguments:
     )
     n: int = field(default=1, metadata={"help": "Forecasts sampled per window; MASE is averaged over all of them."})
     temperature: float = field(default=1.0, metadata={"help": "Sampling temperature."})
-    max_tokens: int = field(default=512, metadata={"help": "Maximum tokens to generate per completion."})
-    max_model_len: int = field(default=8192, metadata={"help": "vLLM max model length."})
+    # Match the training script's budget -- 512/8192 truncated every completion.
+    max_tokens: int = field(default=4096, metadata={"help": "Maximum tokens to generate per completion."})
+    max_model_len: int = field(default=14336, metadata={"help": "vLLM max model length."})
     gpu_memory_utilization: float = field(default=0.9, metadata={"help": "vLLM GPU memory ratio."})
     tensor_parallel_size: int = field(default=1, metadata={"help": "vLLM tensor parallel size."})
     dtype: str = field(default="bfloat16", metadata={"help": "vLLM model dtype."})

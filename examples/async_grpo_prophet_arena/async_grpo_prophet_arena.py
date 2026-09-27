@@ -55,11 +55,9 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 def format_reward(completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
     """1.0 if the completion parses to a probability in [0, 1], else 0.0.
 
-    Not passed to `reward_funcs` below -- `brier_reward` already scores a malformed completion 0.0, so adding this
-    as a second, equally-weighted reward source (AsyncGRPOTrainer has no `reward_weights`) would let the model farm
-    a free +1.0 with any parseable probability regardless of calibration (`examples/async_grpo_timesx` hit exactly
-    this: the model collapsed to a constant answer once its own format reward saturated). Kept here only as a
-    metric you can call by hand on saved completions to check the format-valid rate separately from calibration.
+    Not in `reward_funcs` below -- `brier_reward` already scores malformed completions 0.0, and adding this as a
+    second equal-weight reward caused the same collapse it did in `examples/async_grpo_timesx`. Kept for manual
+    inspection.
     """
     return [1.0 if parse_probability(completion[0]["content"]) is not None else 0.0 for completion in completions]
 

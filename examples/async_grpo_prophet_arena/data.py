@@ -189,7 +189,8 @@ def parse_probability(text: str) -> float | None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return None
-    last = lines[-1].strip("*_. ")
+    # lstrip excludes "." so a leading-decimal answer like ".75" doesn't get mangled into "75".
+    last = lines[-1].lstrip("*_ ").rstrip("*_. ")
     if ":" in last:
         last = last.rsplit(":", 1)[-1].strip()
     is_percent = last.endswith("%")
