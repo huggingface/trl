@@ -86,30 +86,31 @@ def main() -> None:
     dataset = build_dataset()
 
     # RL loop hyperparameters mirror tinker-cookbook's recipe: 32 forecasts per question (`num_generations`) and
-    # temperature 1.0. `num_train_epochs` counts distinct prompts actually trained on, independent of batch
-    # composition, so it holds regardless of how rows are packed for the forward pass. There's no exact "16
-    # questions per optimizer step" here the way tinker-cookbook has: by default `token_budget` is set to the vLLM
-    # server's `max_model_len` and rows are packed by token count (`TokenBudgetBatcher`), not by
-    # `per_device_train_batch_size` samples -- see `AsyncGRPOConfig`'s docstring. `gradient_accumulation_steps`
-    # still means what it always does (accumulate over that many packed micro-batches before stepping) regardless
-    # of how those micro-batches were packed, so it's set the same as `examples/async_grpo_math` rather than left
-    # at `1`, to avoid an effective-batch-size regression.
+    # temperature 1.0. There's no exact "16 questions per optimizer step" here the way tinker-cookbook has: by
+    # default `token_budget` is set to the vLLM server's `max_model_len` and rows are packed by token count
+    # (`TokenBudgetBatcher`), not by `per_device_train_batch_size` samples -- see `AsyncGRPOConfig`'s docstring.
+    # `gradient_accumulation_steps` still means what it always does (accumulate over that many packed micro-batches
+    # before stepping) regardless of how those micro-batches were packed, so it's set the same as
+    # `examples/async_grpo_math` rather than left at `1`, to avoid an effective-batch-size regression.
     # Their `learning_rate=1e-4` and `num_train_epochs=2` (matching their `max_steps=128`) are tuned for LoRA rank
-    # 32; AsyncGRPOTrainer has no `peft_config` yet, so this is full fine-tuning, which doesn't have LoRA's implicit
-    # regularization. At `1e-4` it collapsed into repeating-token garbage within a handful of steps; at `1e-5` it
-    # got further (~100 steps) but still collapsed into repeating a single answer forever. 1 epoch at a lower rate
-    # keeps total gradient exposure on this small, twice-seen dataset down enough to stay stable.
-    # `max_completion_length` is capped well under their 24,576 (tuned for a 27B reasoning model at high effort);
-    # Qwen3-0.6B needs nowhere near that, so raise it (and `--max-model-len` in the vLLM command above) only if you
-    # switch to a larger or more reasoning-heavy model.
+    # 32; AsyncGRPOTrainer has no `peft_config` yet, so this is full fine-tuning, which has none of LoRA's implicit
+    # regularization, and no KL penalty or entropy bonus either -- so nothing here stops the policy drifting into a
+    # repeating-token loop given enough gradient steps. Verified directly (real generation against the live
+    # server): it happened at 1e-4 within ~6 steps, at 1e-5 within ~100, and even at 5e-6 with `num_train_epochs=1`
+    # by step ~580 (packing made "one epoch" much longer than tinker-cookbook's 64-step equivalent). Since lower LR
+    # only pushed the same collapse further out rather than avoiding it, `max_steps` caps total exposure directly,
+    # comfortably under where it broke down at 5e-6.
     config = AsyncGRPOConfig(
         output_dir="async_grpo_prophet_arena",
         save_strategy="no",
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
         num_generations=32,
+        # Capped well under their 24,576 (tuned for a 27B reasoning model at high effort); Qwen3-0.6B needs nowhere
+        # near that, so raise it (and `--max-model-len` in the vLLM command above) only for a larger/more
+        # reasoning-heavy model.
         max_completion_length=2048,
-        num_train_epochs=1,
+        max_steps=150,
         learning_rate=5e-6,
         temperature=1.0,
         # Default port 8000 collides with other jobs on shared Slurm nodes.
