@@ -78,6 +78,15 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 > [!TIP]
 > As shown in [Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221), calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
 
+> [!TIP]
+> **`num_generations` and sparse rewards.** When using binary reward functions (e.g., `+1` for correct, `0` for
+> incorrect), small values of `num_generations` (the \\( G \\) in the formula above) produce very coarse advantage
+> estimates. For example, with `num_generations=4` and a binary reward, the group mean can only take 5 discrete
+> values (0, 0.25, 0.5, 0.75, 1.0), causing the reward curve to oscillate heavily rather than showing a smooth
+> learning trend. This high variance can mask the true learning signal. Consider using `num_generations=8` or
+> higher when rewards are sparse or binary. If GPU memory is a constraint, combining LoRA with a larger
+> `num_generations` is an effective trade-off.
+
 ### Estimating the KL divergence
 
 KL divergence is estimated using the approximator introduced by [Schulman et al. (2020)](http://joschu.net/blog/kl-approx.html). The approximator is defined as follows:
