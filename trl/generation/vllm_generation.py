@@ -445,6 +445,16 @@ class VLLMGeneration:
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with self._dist.gather_params(list(model.parameters())):
+                from peft.tuners.tuners_utils import BaseTunerLayer
+
+                # Unmerging subtracts a rounded delta and cannot recover the original training weights.
+                # Keep exact CPU copies of adapted base parameters to avoid a second model copy on the GPU.
+                base_parameters = {
+                    param: param.detach().to(device="cpu", copy=True)
+                    for module in model.modules()
+                    if isinstance(module, BaseTunerLayer)
+                    for param in module.get_base_layer().parameters()
+                }
                 model.merge_adapter()
 
                 # Read the vLLM weights while parameters are gathered
@@ -467,6 +477,8 @@ class VLLMGeneration:
                         yield name, param.data
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
+                for param, original in base_parameters.items():
+                    param.data.copy_(original)
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and read each parameter individually.

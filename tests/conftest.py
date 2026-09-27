@@ -300,3 +300,31 @@ def undo_liger_kernel_patching(monkeypatch):
     yield
     for module, snapshot in snapshots.values():
         vars(module).update(snapshot)
+
+
+@pytest.fixture
+def generation(monkeypatch):
+    from accelerate import Accelerator
+
+    from trl.generation.vllm_generation import VLLMGeneration
+
+    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)
+    engine = VLLMGeneration(
+        torch.nn.Linear(2, 2, bias=False),
+        Accelerator(cpu=True),
+        None,
+        enable_sleep_mode=True,
+        temperature=0.0,
+        top_k=-1,
+        max_completion_length=2,
+        logprobs=None,
+    )
+    engine._llm_weights_sleeping = True
+    engine._kv_cache_sleeping = True
+    engine.llm = Mock()
+    engine.llm.generate.return_value = [
+        SimpleNamespace(prompt_token_ids=[1], outputs=[SimpleNamespace(token_ids=[2], logprobs=None)])
+    ]
+    monkeypatch.setattr("trl.generation.vllm_generation.SamplingParams", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr("trl.generation.vllm_generation.empty_cache", lambda: None)
+    return engine
