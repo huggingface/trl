@@ -40,6 +40,7 @@ https://github.com/haoxin1998/TimesX-project (see that dataset's card for licens
 `data.load_timesx_split(...).test` is there if you want to score a checkpoint afterwards.
 
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-8B \
+    --port 8317 \
     --max-model-len 14336 \
     --dtype bfloat16 \
     --logprobs-mode processed_logprobs \
@@ -150,6 +151,8 @@ def main() -> None:
         # are packed by token count by default, so a step count wouldn't map to a known number of epochs anyway.
         num_train_epochs=2,
         learning_rate=1e-5,
+        # Default port 8000 collides with other jobs on shared Slurm nodes.
+        vllm_server_base_url="http://localhost:8317",
         report_to="trackio",
         trackio_space_id="async-grpo-timesx",
         project="async-grpo-timesx",

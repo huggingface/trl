@@ -37,6 +37,7 @@ Data is loaded via `datasets.load_dataset` from https://huggingface.co/datasets/
 (MIT-licensed). See `data.py` for the chronological, event-level train/validation split.
 
 CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+    --port 8317 \
     --max-model-len 8192 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}'
@@ -110,6 +111,8 @@ def main() -> None:
         num_train_epochs=2,
         learning_rate=1e-4,
         temperature=1.0,
+        # Default port 8000 collides with other jobs on shared Slurm nodes.
+        vllm_server_base_url="http://localhost:8317",
         report_to="trackio",
         trackio_space_id="async-grpo-prophet-arena",
         project="async-grpo-prophet-arena",
