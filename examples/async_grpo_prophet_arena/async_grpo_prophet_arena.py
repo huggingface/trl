@@ -96,8 +96,9 @@ def main() -> None:
     # `gradient_accumulation_steps` still means what it always does (accumulate over that many packed micro-batches
     # before stepping) regardless of how those micro-batches were packed, so it's set the same as
     # `examples/async_grpo_math` rather than left at `1`, to avoid an effective-batch-size regression.
-    # `learning_rate=1e-4` is also theirs, but paired there with LoRA rank 32; AsyncGRPOTrainer has no `peft_config`
-    # yet, so this trains the full 0.6B model at that rate -- lower it if training is unstable.
+    # Their `learning_rate=1e-4` is paired with LoRA rank 32; AsyncGRPOTrainer has no `peft_config` yet, and at that
+    # rate full fine-tuning collapsed into repeating-token garbage within a handful of steps. 1e-5 (same as the
+    # other full-parameter recipes here) trains stably.
     # `max_completion_length` is capped well under their 24,576 (tuned for a 27B reasoning model at high effort);
     # Qwen3-0.6B needs nowhere near that, so raise it (and `--max-model-len` in the vLLM command above) only if you
     # switch to a larger or more reasoning-heavy model.
@@ -109,7 +110,7 @@ def main() -> None:
         num_generations=32,
         max_completion_length=2048,
         num_train_epochs=2,
-        learning_rate=1e-4,
+        learning_rate=1e-5,
         temperature=1.0,
         # Default port 8000 collides with other jobs on shared Slurm nodes.
         vllm_server_base_url="http://localhost:8317",
