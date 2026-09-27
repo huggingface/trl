@@ -5,8 +5,13 @@ on:
   schedule:
     - cron: "0 0 * * *"
     
+permissions: {}
+
 jobs:
   cleanup:
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Check out code

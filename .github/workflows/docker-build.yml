@@ -16,8 +16,12 @@ concurrency:
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
 
+permissions: {}
+
 jobs:
   trl:
+    permissions:
+      contents: read
     name: "Build and push TRL Docker image"
     runs-on:
       group: aws-general-8-plus
