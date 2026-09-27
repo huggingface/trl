@@ -34,7 +34,8 @@ from datasets import load_dataset
 
 
 DATASET_REPOSITORY = "prophetarena/Prophet-Arena-Subset-1200"
-DEFAULT_REVISION = "main"
+# Same commit tinker-cookbook pins, so this doesn't silently drift if the dataset gets updated.
+DEFAULT_REVISION = "c94b6f450d7fe3b03688799cce1c8b29838b5d96"
 # Events that closed before this date form the training set; events first observed on or after it form validation.
 # Every market of an event is kept on the same side, and events already open at the boundary are excluded, so no
 # question's future is visible in another question's training example.
