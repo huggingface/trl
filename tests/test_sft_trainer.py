@@ -678,6 +678,25 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_dense_with_peft_config_lora(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -2347,6 +2366,23 @@ class TestSFTTrainer(TrlTestCase):
         pad_token_id = trainer.processing_class.pad_token_id
         assert pad_token_id is not None
         assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
+
+    @require_vision
+    def test_pad_token_id_synced_with_model_config_vision(self):
+        # A vision dataset takes the other collator branch, which used to skip the pad token handling entirely.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=None, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.tokenizer.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.get_text_config().pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
     @pytest.mark.parametrize(

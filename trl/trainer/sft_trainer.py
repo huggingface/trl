@@ -42,6 +42,7 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     TrainingArguments,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
@@ -969,6 +970,9 @@ class SFTTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -1215,7 +1219,7 @@ class SFTTrainer(_BaseTrainer):
         else:
             self.completion_only_loss = args.completion_only_loss
 
-        if data_collator is None and not self._is_vision_dataset:
+        if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
@@ -1230,19 +1234,20 @@ class SFTTrainer(_BaseTrainer):
             # configs.
             model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
             model.generation_config.pad_token_id = self._tokenizer.pad_token_id
-            data_collator = DataCollatorForLanguageModeling(
-                pad_token_id=self._tokenizer.pad_token_id,
-                padding_free=self.padding_free,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
-        elif data_collator is None and self._is_vision_dataset:
-            data_collator = DataCollatorForVisionLanguageModeling(
-                processor=processing_class,
-                max_length=args.max_length,
-                completion_only_loss=self.completion_only_loss,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-                dataset_text_field=args.dataset_text_field,
-            )
+            if self._is_vision_dataset:
+                data_collator = DataCollatorForVisionLanguageModeling(
+                    processor=processing_class,
+                    max_length=args.max_length,
+                    completion_only_loss=self.completion_only_loss,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                    dataset_text_field=args.dataset_text_field,
+                )
+            else:
+                data_collator = DataCollatorForLanguageModeling(
+                    pad_token_id=self._tokenizer.pad_token_id,
+                    padding_free=self.padding_free,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
 
         if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
             logger.warning(
