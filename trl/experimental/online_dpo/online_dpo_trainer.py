@@ -821,14 +821,14 @@ class OnlineDPOTrainer(_BaseTrainer):
             with gather_if_zero3(list(self.model.parameters())):
                 from peft.tuners.tuners_utils import BaseTunerLayer
 
-                # Unmerging subtracts a rounded delta and cannot recover the original training weights.
-                # Keep exact CPU copies of adapted base parameters to avoid a second model copy on the GPU.
-                base_parameters = {
-                    param: param.detach().to(device="cpu", copy=True)
+                # Unmerging subtracts a rounded delta and cannot recover the original weights, so keep exact CPU copies
+                # of the adapted base parameters. Under ZeRO-3 the shards never see the merge and need no copies.
+                originals = [
+                    (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
                     for module in self.model.modules()
-                    if isinstance(module, BaseTunerLayer)
-                    for param in module.get_base_layer().parameters()
-                }
+                    if isinstance(module, BaseTunerLayer) and not zero_stage_3
+                    for name, param in module.get_base_layer().named_parameters(recurse=False)
+                ]
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -863,8 +863,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
-                for param, original in base_parameters.items():
-                    param.data.copy_(original)
+                # bitsandbytes merges replace the parameter instead of updating it, so restore the object too
+                for base_layer, name, param, data in originals:
+                    param.data.copy_(data)
+                    base_layer.register_parameter(name, param)
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.

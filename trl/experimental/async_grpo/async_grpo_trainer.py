@@ -1719,21 +1719,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         t_barrier = time.time()
 
         logger.info(f"Weight sync: transferring weights... (barrier took {t_barrier - t_pause:.1f}s)")
-        base_parameters = {}
-        if is_peft_model(model):
-            from peft.tuners.tuners_utils import BaseTunerLayer
-
-            # Unmerging subtracts a rounded delta and cannot recover the original training weights.
-            # Keep exact CPU copies of adapted base parameters to avoid a second model copy on the GPU.
-            base_parameters = {
-                param: param.detach().to(device="cpu", copy=True)
-                for module in model.modules()
-                if isinstance(module, BaseTunerLayer)
-                for param in module.get_base_layer().parameters()
-            }
         # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
         # `finally` is not optional: leaving it merged would train merged weights from the next step on.
         if is_peft_model(model):
+            from peft.tuners.tuners_utils import BaseTunerLayer
+
+            # Unmerging subtracts a rounded delta and cannot recover the original weights, so keep exact CPU copies
+            # of the adapted base parameters.
+            originals = [
+                (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
+                for module in model.modules()
+                if isinstance(module, BaseTunerLayer)
+                for name, param in module.get_base_layer().named_parameters(recurse=False)
+            ]
             model.merge_adapter()
         try:
             if self.accelerator.is_main_process and self.weight_transfer:
@@ -1744,11 +1742,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     pass
         finally:
             if is_peft_model(model):
-                try:
-                    model.unmerge_adapter()
-                finally:
-                    for param, original in base_parameters.items():
-                        param.data.copy_(original)
+                model.unmerge_adapter()
+                # bitsandbytes merges replace the parameter instead of updating it, so restore the object too
+                for base_layer, name, param, data in originals:
+                    param.data.copy_(data)
+                    base_layer.register_parameter(name, param)
         t_transfer = time.time()
 
         self.accelerator.wait_for_everyone()
