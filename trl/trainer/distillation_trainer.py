@@ -1574,6 +1574,8 @@ class DistillationTrainer(_BaseTrainer):
             ]
 
         prompt_ids_list, completion_ids_list, tool_mask_list, images, tool_images = self._generate(prompts)
+        if self.use_vllm:
+            self.vllm_generation.sleep()
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids) for ids in prompt_ids_list]
