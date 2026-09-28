@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,7 +42,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase
 
 
 @pytest.fixture(scope="module")
@@ -854,7 +855,6 @@ def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypa
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
-        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -1149,6 +1149,7 @@ def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer,
         packing_strategy="bfd",
         use_liger_kernel=False,
         use_extended_uld=False,
+        xtoken_loss_type="none",
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
@@ -1233,6 +1234,7 @@ def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(gemma4_t
         packing_strategy="bfd",
         use_liger_kernel=False,
         use_extended_uld=False,
+        xtoken_loss_type="none",
     )
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
@@ -2076,7 +2078,6 @@ def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
-        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2408,7 +2409,6 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
-        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2499,7 +2499,6 @@ def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
         use_liger_kernel=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
-        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2606,7 +2605,6 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
-        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -2701,7 +2699,6 @@ def _make_vlm_trainer_args(use_vllm=False):
         trust_remote_code=False,
         teacher_model_init_kwargs=None,
         use_uld_loss=False,
-        xtoken_loss_type="none",
         teacher_tokenizer_name_or_path=None,
         teacher_model_revision=None,
         disable_dropout=False,
@@ -3466,7 +3463,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     monkeypatch.setattr(
         gold_trainer_module,
         "unwrap_model_for_generation",
-        lambda *args, **kwargs: gold_trainer_module.nullcontext(args[0]),
+        lambda *args, **kwargs: nullcontext(args[0]),
     )
     monkeypatch.setattr(
         gold_trainer_module,
@@ -3836,111 +3833,6 @@ def test_xtoken_train_step_smoke(tmp_path, loss_type):
 
     train_output = trainer.train()
 
-    assert torch.isfinite(torch.tensor(train_output.training_loss))
-
-
-@pytest.mark.slow
-@require_liger_kernel
-def test_jsd_liger_text_train_step_smoke(tmp_path):
-    """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused Liger loss.
-
-    Exercises the `LigerFusedLinearJSDLoss` path end-to-end (`_liger_backbone` student + teacher forwards, fused
-    lm_head matmul) and asserts the resulting training loss is finite.
-    """
-    from datasets import load_dataset
-
-    try:
-        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
-        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
-        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]")
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    args = GOLDConfig(
-        output_dir=str(tmp_path),
-        report_to="none",
-        bf16=True,
-        max_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_completion_length=8,
-        max_length=512,
-        lmbda=0.0,
-        beta=0.5,
-        temperature=1.0,
-        num_generations=1,
-        use_vllm=False,
-        use_uld_loss=False,
-        use_liger_kernel=True,
-        log_completions=False,
-        save_strategy="no",
-        eval_strategy="no",
-        logging_strategy="no",
-        dataloader_drop_last=True,
-    )
-
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=dataset,
-        processing_class=tokenizer,
-    )
-    train_output = trainer.train()
-    assert torch.isfinite(torch.tensor(train_output.training_loss))
-
-
-@pytest.mark.slow
-@require_liger_kernel
-def test_vlm_jsd_liger_same_family_train_step_smoke(tmp_path, vlm_dataset):
-    """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with the fused Liger loss.
-
-    Proves the VLM Liger path: `_liger_backbone` routes through `base_model` (so image features are injected) for both
-    student and teacher, image kwargs reach the backbone forwards, and the fused JSD loss is finite.
-    """
-    try:
-        student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Qwen3-VL assets unavailable: {exc}")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    args = GOLDConfig(
-        output_dir=str(tmp_path),
-        report_to="none",
-        bf16=True,
-        max_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_completion_length=8,
-        max_length=_VLM_SMOKE_MAX_LENGTH,
-        lmbda=0.0,
-        beta=0.5,
-        temperature=1.0,
-        num_generations=1,
-        use_vllm=False,
-        use_uld_loss=False,
-        use_liger_kernel=True,
-        log_completions=False,
-        save_strategy="no",
-        eval_strategy="no",
-        logging_strategy="no",
-        dataloader_drop_last=True,
-    )
-
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=vlm_dataset,
-        processing_class=processor,
-    )
-    train_output = trainer.train()
     assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 

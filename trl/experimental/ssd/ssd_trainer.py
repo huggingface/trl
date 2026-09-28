@@ -32,7 +32,7 @@ from typing import Any
 import datasets
 import torch
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.utils.data import DataLoader, Sampler
@@ -118,6 +118,9 @@ class SSDTrainer(_BaseTrainer):
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = SSDConfig(f"{model_name}-SSD")
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
@@ -178,7 +181,7 @@ class SSDTrainer(_BaseTrainer):
             self._tokenizer.pad_token = self._tokenizer.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         self.max_prompt_length = args.max_prompt_length

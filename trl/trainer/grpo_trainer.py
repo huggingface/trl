@@ -69,29 +69,27 @@ from ..data_utils import apply_chat_template, is_conversational, prepare_multimo
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
-from ..import_utils import is_jmespath_available, is_liger_kernel_available
-from ..losses import FusedLinearGRPOLoss
+from ..import_utils import is_jmespath_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
+from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
-    maybe_gather_lm_head_ctx,
+    is_async_callable,
     nanmax,
     nanmin,
     nanstd,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
-    selective_log_softmax,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -104,7 +102,7 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -117,6 +115,7 @@ if is_wandb_available():
 
 
 logger = get_logger(__name__)
+
 
 # A reward function can be a string, interpreted as a model ID and loaded as a pretrained model, a pretrained model, or
 # a callable that returns a list of floats (the rewards). The callable receives prompts, completions, and additional
@@ -326,6 +325,9 @@ class GRPOTrainer(_BaseTrainer):
             args = GRPOConfig(f"{model_name}-GRPO")
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -355,14 +357,6 @@ class GRPOTrainer(_BaseTrainer):
                 )
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-
-        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
-        # Inspect the forward method before we wrap the model with PEFT
-        self.model_kwarg_keys = (
-            inspect.signature(model.forward).parameters.keys()
-            if not hasattr(model, "get_base_model")
-            else inspect.signature(model.get_base_model().forward).parameters.keys()
-        )
 
         # Processing class
         if processing_class is None:
@@ -394,7 +388,7 @@ class GRPOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
@@ -568,7 +562,7 @@ class GRPOTrainer(_BaseTrainer):
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -714,7 +708,7 @@ class GRPOTrainer(_BaseTrainer):
         self.environments = None
 
         # Check for async functions to start an event loop on a daemon thread
-        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs + self.tools)
+        self._has_async_funcs = any(is_async_callable(func) for func in self.reward_funcs + self.tools)
 
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
@@ -783,56 +777,33 @@ class GRPOTrainer(_BaseTrainer):
         self.vllm_importance_sampling_mode = args.vllm_importance_sampling_mode
         self.vllm_importance_sampling_clip_max = args.vllm_importance_sampling_clip_max
         self.vllm_importance_sampling_clip_min = args.vllm_importance_sampling_clip_min
-        self.use_liger_kernel = args.use_liger_kernel
         self.loss_type = args.loss_type
         self.multi_objective_aggregation = args.multi_objective_aggregation
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.off_policy_mask_threshold = args.off_policy_mask_threshold
-        if self.use_liger_kernel and self.off_policy_mask_threshold is not None:
-            raise ValueError("Liger kernel does not support off-policy sequence masking yet.")
-        if self.use_liger_kernel and is_peft_model(model):
-            # The Liger fused GRPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head is
-            # targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base weight
-            # and the trainable adapter parameters live in separate submodules that Liger never sees. The head adapter
-            # would silently receive no gradient, so the model trains as if `lm_head` were frozen. Fail loudly rather
-            # than train a silently-frozen head.
-            output_embeddings = model.get_output_embeddings()
-            if isinstance(output_embeddings, BaseTunerLayer):
-                raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
-                    "fused GRPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and never "
-                    "trained. Either remove `'lm_head'` from your `target_modules`, or set `use_liger_kernel=False`."
-                )
-            # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-            # `PeftModel.forward()`. The Liger GRPO loss bypasses `PeftModel.forward()` by calling the backbone
-            # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
-            # Fail loudly rather than train on a silently corrupted input.
-            if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
-                raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                    "PrefixTuning, P-Tuning). The Liger GRPO loss bypasses `PeftModel.forward()` by calling the "
-                    "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
-                    "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                    "`use_liger_kernel=False`."
-                )
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_kernel and self.top_entropy_quantile < 1.0:
-            raise NotImplementedError(
-                "Liger Kernels don't currently support masking token positions based on entropy."
-            )
-        if self.use_liger_kernel and self.importance_sampling_level not in ("token", "sequence"):
-            raise ValueError(
-                f"Unknown importance sampling level: {self.importance_sampling_level}. "
-                "Possible values are 'token' and 'sequence'."
-            )
         self.entropy_coef = args.entropy_coef
         self.use_adaptive_entropy = args.use_adaptive_entropy
         # Whether the entropy bonus is active. Constant for the run: entropy_coef only mutates in adaptive
@@ -845,8 +816,6 @@ class GRPOTrainer(_BaseTrainer):
         # accumulation window, so the adaptive controller sees the exact window-global entropy (not just the
         # last micro-batch). Reset to None at each optimizer step.
         self._entropy_window_stats = None
-        if self.use_liger_kernel and self._entropy_bonus_enabled:
-            raise NotImplementedError("Entropy bonus is not supported with Liger kernel.")
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1031,33 +1000,32 @@ class GRPOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 _cast_lm_head_to_fp32(self.ref_model)
 
-        # Liger loss
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the GRPO loss. Run `pip install liger-kernel`."
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
                 )
-            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
-            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
-            self._forward_redirection = _ForwardRedirection()
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
-            self.liger_loss = FusedLinearGRPOLoss(
-                beta=self.beta,
-                epsilon_low=self.epsilon_low,
-                epsilon_high=self.epsilon_high,
-                temperature=self.temperature,
-                use_ref_model=self.beta != 0.0,
-                loss_type=self.loss_type,
-                max_completion_length=self.max_completion_length,
-                importance_sampling_level=self.importance_sampling_level,
-                delta=args.delta,
-                use_bias_correction_kl=args.use_bias_correction_kl,
-                sapo_temperature_pos=args.sapo_temperature_pos,
-                sapo_temperature_neg=args.sapo_temperature_neg,
-                vespo_k_pos=args.vespo_k_pos,
-                vespo_lambda_pos=args.vespo_lambda_pos,
-                vespo_k_neg=args.vespo_k_neg,
-                vespo_lambda_neg=args.vespo_lambda_neg,
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        add_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            temperature=self.temperature,
+            cast_lm_head_to_fp32=args.cast_lm_head_to_fp32,
+        )
+        if self.ref_model is not None:
+            add_fused_lm_head(
+                self.ref_model, temperature=self.temperature, cast_lm_head_to_fp32=args.cast_lm_head_to_fp32
             )
 
         # Initialize the metrics
@@ -1349,67 +1317,6 @@ class GRPOTrainer(_BaseTrainer):
             if isinstance(eval_dataset, IterableDataset):
                 self.args.dataloader_num_workers = num_workers
 
-    @profiling_decorator
-    def _get_last_hidden_state(
-        self,
-        unwrapped_model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        pixel_values=None,
-        image_grid_thw=None,
-        pixel_attention_mask=None,
-        spatial_shapes=None,
-        image_sizes=None,
-        image_position_ids=None,
-    ):
-        if is_peft_model(unwrapped_model):
-            unwrapped_model = unwrapped_model.base_model.model
-
-        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        # For Qwen models:
-        if image_grid_thw is not None and pixel_values is not None:
-            model_inputs["image_grid_thw"] = image_grid_thw
-        # For Gemma, SmolVLM2, LLaVa-Next etc.:
-        if pixel_values is not None:
-            model_inputs["pixel_values"] = pixel_values
-        # For SmolVLM2
-        if pixel_attention_mask is not None:
-            model_inputs["pixel_attention_mask"] = pixel_attention_mask
-        # For LFM2-VL
-        if spatial_shapes is not None:
-            model_inputs["spatial_shapes"] = spatial_shapes
-        # For LLaVa-Next
-        if image_sizes is not None:
-            model_inputs["image_sizes"] = image_sizes
-        if image_position_ids is not None:
-            model_inputs["image_position_ids"] = image_position_ids
-
-        # Only add logits_to_keep if the model supports it
-        if "logits_to_keep" in self.model_kwarg_keys:
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
-        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
-        # returns just the text stack and feeds image-placeholder IDs through it.
-        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
-        # Fall back to `.model` there.
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone = unwrapped_model.model
-        else:
-            backbone = unwrapped_model.base_model
-        last_hidden_state = backbone(**model_inputs).last_hidden_state
-        # Exclude the last value: it corresponds to the next token pred
-        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
-        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-        return last_hidden_state
-
     def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
         """
         Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
@@ -1520,42 +1427,18 @@ class GRPOTrainer(_BaseTrainer):
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
-            # Only add logits_to_keep if the model supports it
-            if "logits_to_keep" in self.model_kwarg_keys:
-                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-                model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-            model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
-            # as a forward kwarg (not from the model config), so it must be passed here.
+            # MoE models: request router logits so the model returns the load-balancing loss
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
-            outputs = model(**model_inputs)
-            logits = outputs.logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-            completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            # Only the completion tokens are scored
+            labels = input_ids_batch.masked_fill(attention_mask_batch == 0, -100)
+            labels[:, :-logits_to_keep] = -100
+            with self.accelerator.autocast():
+                outputs = model(**model_inputs, labels=labels, fused_lm_head=True)
+            all_logps.append(outputs.log_probs[:, -logits_to_keep:])
             if compute_entropy:
-                # The entropy bonus is a differentiable loss term, so entropies must carry grad when it is
-                # active. Otherwise they only feed logging and the top_entropy_quantile mask (neither
-                # differentiable), so we skip grad to avoid retaining the memory-heavy full-vocab softmax.
-                if self._entropy_bonus_enabled:
-                    entropies = entropy_from_logits(logits)
-                else:
-                    with torch.no_grad():
-                        entropies = entropy_from_logits(logits)
-                all_entropies.append(entropies)
-
+                all_entropies.append(outputs.entropy[:, -logits_to_keep:])
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
 
@@ -1675,7 +1558,7 @@ class GRPOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif is_async_callable(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
@@ -1817,9 +1700,8 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         return prompt_ids, images, multimodal_fields
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, has_tool_images=False):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, num_generations, has_tool_images=False):
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1830,7 +1712,6 @@ class GRPOTrainer(_BaseTrainer):
                 self._last_loaded_step = self.state.global_step
 
             # Generate using vLLM with raw token IDs
-            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
             _, completion_ids, logprobs, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
@@ -2165,6 +2046,7 @@ class GRPOTrainer(_BaseTrainer):
                 prompt_completion_tool_ids,
                 loop_images,
                 loop_multimodal_fields,
+                num_generations=1,  # each sample has its own history, so generate one completion per sample
                 has_tool_images=any(imgs for imgs in tool_images),
             )
 
@@ -2250,7 +2132,10 @@ class GRPOTrainer(_BaseTrainer):
             multimodal_fields = {}
         else:
             prompt_ids, images, multimodal_fields = self._tokenize_prompts(prompts)
-            completion_ids, logprobs = self._generate_single_turn(prompt_ids, images, multimodal_fields)
+            num_generations = self.num_generations if mode == "train" else self.num_generations_eval
+            completion_ids, logprobs = self._generate_single_turn(
+                prompt_ids, images, multimodal_fields, num_generations
+            )
             extra_fields = {}
 
         # Decode completions. It's important to use `parse_response` when possible, because it handles tool calls.
@@ -2670,7 +2555,7 @@ class GRPOTrainer(_BaseTrainer):
                     prompt_completion_ids,
                     attention_mask,
                     logits_to_keep,
-                    batch_size,
+                    batch_size=batch_size,
                     num_images=num_images,
                     num_tiles=num_tiles,
                     **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
@@ -2865,18 +2750,19 @@ class GRPOTrainer(_BaseTrainer):
         # Flush user-logged extra columns (from log_extra), gathering across processes.
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
+        for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
+            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.
         # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
         # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
+        for name in sorted(set(gather_object(list(self._pending_metrics)))):
+            values = self._pending_metrics.get(name, [])
+            local_stats = torch.tensor([sum(values), len(values)], dtype=torch.float32, device=device)
+            total, count = self.accelerator.gather(local_stats).view(-1, 2).sum(dim=0).tolist()
+            self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()
 
         if images is not None and self.log_multimodal:
@@ -2960,78 +2846,10 @@ class GRPOTrainer(_BaseTrainer):
             output["tool_mask"] = tool_mask
         return output
 
-    def compute_liger_loss(self, unwrapped_model, inputs):
-        # Compute the per-token log probabilities for the model
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        # Get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(
-            unwrapped_model,
-            input_ids,
-            attention_mask,
-            logits_to_keep,
-            inputs.get("pixel_values"),
-            inputs.get("image_grid_thw"),
-            inputs.get("pixel_attention_mask"),
-            inputs.get("spatial_shapes"),
-            inputs.get("image_sizes"),
-            inputs.get("image_position_ids"),
-        )
-
-        # Apply tool_mask (from env_mask) for loss computation in multi-turn training scenarios
-        loss_mask = completion_mask if "tool_mask" not in inputs else completion_mask * inputs["tool_mask"]
-        lm_head_weight = unwrapped_model.lm_head.weight
-        lm_head_bias = unwrapped_model.lm_head.bias
-        # Liger reads `lm_head` directly instead of through `model.forward()`, so its ZeRO-3 gather hook never fires and
-        # the fused matmul gets an empty shard. Gather the weight/bias ourselves for the call (the weight grad is
-        # computed during this forward, so it isn't needed in the backward).
-        with maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            loss, metrics = self.liger_loss(
-                _input=last_hidden_state,
-                lin_weight=lm_head_weight,
-                selected_token_ids=completion_ids,
-                # The attention_mask parameter in liger loss is actually used as a loss mask (not model attention)
-                attention_mask=loss_mask,
-                advantages=inputs["advantages"],
-                bias=lm_head_bias,
-                old_per_token_logps=inputs.get("old_per_token_logps"),
-                ref_per_token_logps=inputs.get("ref_per_token_logps"),
-                vllm_is_ratio=inputs.get("importance_sampling_ratio"),
-                num_items_in_batch=inputs.get("num_items_in_batch"),
-            )
-        # Extract metrics from the liger_grpo_loss output
-        # KL divergence is the first metric when beta is non-zero
-        mean_kl = metrics[0] if self.beta != 0.0 else None
-        clip_ratio = metrics[-1]
-
-        mode = "train" if self.model.training else "eval"
-        if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        # DAPO/CISPO/VESPO normalize by num_items_in_batch / num_processes (applied internally by
-        # the Liger loss), then need a `current_gradient_accumulation_steps / steps_per_generation`
-        # rescale to land on the per-window token-mean — matching the non-Liger path
-        # (see `_compute_loss`).
-        if self.loss_type in ["cispo", "dapo", "vespo"]:
-            normalizer = (
-                self.current_gradient_accumulation_steps / self.args.steps_per_generation if mode == "train" else 1.0
-            )
-        else:
-            normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval
-        return loss / normalizer
-
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.use_liger_kernel:
-            # Compute the loss using the liger grpo loss
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
         return self._compute_loss(model, inputs)
 
     @staticmethod
