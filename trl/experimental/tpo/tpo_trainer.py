@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from transformers import AutoProcessor, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
@@ -318,6 +318,9 @@ class TPOTrainer(_BaseTrainer):
             args.accelerator_config.dispatch_batches = False
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
