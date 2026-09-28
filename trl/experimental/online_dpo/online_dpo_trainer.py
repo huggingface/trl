@@ -820,8 +820,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with gather_if_zero3(list(self.model.parameters())):
-                # Unmerging subtracts a rounded delta and cannot recover the original weights, so keep exact CPU copies
-                # of the adapted base parameters. Under ZeRO-3 the shards never see the merge and need no copies.
+                # Unmerging is lossy, so keep exact copies to restore (ZeRO-3 shards never see the merge)
                 originals = [
                     (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
                     for module in self.model.modules()
@@ -862,7 +861,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
-                # bitsandbytes merges replace the parameter instead of updating it, so restore the object too
+                # bitsandbytes merges replace the parameter, so re-register the original
                 for base_layer, name, param, data in originals:
                     param.data.copy_(data)
                     base_layer.register_parameter(name, param)

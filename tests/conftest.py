@@ -309,7 +309,7 @@ def vllm_generation(monkeypatch):
 
     from trl.generation.vllm_generation import VLLMGeneration
 
-    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)  # No vLLM engine; `llm` is mocked instead
+    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)
     generation = VLLMGeneration(torch.nn.Linear(1, 1), Accelerator(cpu=True), None)
     generation.llm = Mock()
     return generation

@@ -32,7 +32,7 @@ def test_merged_export_restores_exact_base_weights(vllm_generation):
     )
     layer = vllm_generation.model.base_model.model[0]
     with torch.no_grad():
-        layer.base_layer.weight.fill_(0.1)  # 0.1 + 0.04 - 0.04 rounds away from 0.1 in float32
+        layer.base_layer.weight.fill_(0.1)  # 0.1 + 0.04 - 0.04 != 0.1 in float32
         layer.lora_A["default"].weight.fill_(0.2)
         layer.lora_B["default"].weight.fill_(0.2)
     before = layer.base_layer.weight.detach().clone()
@@ -47,14 +47,12 @@ def test_merged_export_restores_exact_base_weights(vllm_generation):
 def test_merged_export_restores_exact_quantized_base_weights(vllm_generation):
     torch.manual_seed(0)
     model = torch.nn.Sequential(bnb.nn.Linear4bit(64, 64, bias=False, compute_dtype=torch.float32).to("cpu"))
-    model.is_loaded_in_4bit = True  # Makes PEFT wrap the layer with its bitsandbytes LoRA layer
+    model.is_loaded_in_4bit = True  # Use PEFT's bitsandbytes LoRA layer
     vllm_generation.model = get_peft_model(model, LoraConfig(r=1, target_modules=["0"], init_lora_weights=False))
     layer = vllm_generation.model.base_model.model[0]
     weight = layer.base_layer.weight
     before = weight.detach().clone()
 
     vllm_generation.sync_weights()
-
-    # bitsandbytes merges replace the weight with a requantized one, so check the object as well as its values
     assert layer.base_layer.weight is weight
     torch.testing.assert_close(layer.base_layer.weight, before, rtol=0, atol=0)
