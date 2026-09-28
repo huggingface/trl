@@ -449,7 +449,7 @@ class VLLMGeneration:
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with self._dist.gather_params(list(model.parameters())):
-                # Unmerging is lossy, so keep exact copies to restore (ZeRO-3 shards never see the merge)
+                # Unmerging is lossy, so keep exact copies to restore
                 originals = [
                     (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
                     for module in model.modules()

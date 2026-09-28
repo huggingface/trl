@@ -820,7 +820,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with gather_if_zero3(list(self.model.parameters())):
-                # Unmerging is lossy, so keep exact copies to restore (ZeRO-3 shards never see the merge)
+                # Unmerging is lossy, so keep exact copies to restore
                 originals = [
                     (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
                     for module in self.model.modules()
