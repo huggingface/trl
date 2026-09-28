@@ -4809,3 +4809,55 @@ class TestGRPOTrainerSlow(TrlTestCase):
                 raise
 
         release_memory(trainer.model, trainer)
+
+
+def test_cast_lm_head_to_fp32_projects_in_fp32_under_autocast(tiny_llama, tmp_path):
+    model, tokenizer = tiny_llama
+    trainer = GRPOTrainer(
+        model=model.to(torch.bfloat16),
+        processing_class=tokenizer,
+        reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+        args=GRPOConfig(
+            output_dir=str(tmp_path),
+            use_cpu=True,
+            report_to="none",
+            cast_lm_head_to_fp32=True,
+            per_device_train_batch_size=2,
+            num_generations=2,
+        ),
+        train_dataset=Dataset.from_dict({"prompt": ["a", "a"]}),
+    )
+    head = trainer.model.lm_head
+    hidden = torch.randn(3, 16, dtype=torch.bfloat16)
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        logits = head(hidden)
+
+    assert logits.dtype == torch.float32
+    torch.testing.assert_close(logits, torch.nn.functional.linear(hidden.float(), head.weight), rtol=0, atol=0)
+
+
+def test_cast_lm_head_to_fp32_sets_vllm_head_dtype(tiny_llama, tmp_path):
+    model, tokenizer = tiny_llama
+    with (
+        patch("trl.generation.vllm_generation.is_vllm_available", return_value=True),
+        patch("trl.generation.vllm_generation.LLM", create=True) as llm,
+    ):
+        GRPOTrainer(
+            model=model,
+            processing_class=tokenizer,
+            reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+            args=GRPOConfig(
+                output_dir=str(tmp_path),
+                use_cpu=True,
+                report_to="none",
+                cast_lm_head_to_fp32=True,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                use_vllm=True,
+                vllm_mode="colocate",
+            ),
+            train_dataset=Dataset.from_dict({"prompt": ["a", "a"]}),
+        )
+
+    assert llm.call_args.kwargs["hf_overrides"] == {"head_dtype": "float32"}
