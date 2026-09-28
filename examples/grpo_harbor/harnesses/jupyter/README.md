@@ -1,7 +1,6 @@
 # `jupyter` harness
 
-A **stateful Python kernel** harness. Variables, imports, and side-effects persist across cells, so the
-model builds up state like a notebook. Implemented by `JupyterEnv` in [`env.py`](env.py).
+A **stateful Python kernel** harness. Variables, imports, and side-effects persist across cells, so the model builds up state like a notebook. Implemented by `JupyterEnv` in [`env.py`](env.py).
 
 ## How it works
 

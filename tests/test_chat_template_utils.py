@@ -38,8 +38,8 @@ from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 class TestCloneChatTemplate(TrlTestCase):
     def test_clone(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         _, modified_tokenizer, _ = clone_chat_template(model, tokenizer, source)
@@ -49,8 +49,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_resize(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         modified_model, modified_tokenizer, _ = clone_chat_template(
@@ -64,8 +64,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         # This will add <extra_id_0>, <extra_id_1>, ... to the tokenizer
@@ -84,8 +84,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_apply_new_chat_template(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         _, modified_tokenizer, _ = clone_chat_template(model, tokenizer, source)
@@ -103,9 +103,9 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_sequence_classification_model(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptNeoXForSequenceClassification")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPTNeoXForSequenceClassification")
         model = AutoModelForSequenceClassification.from_pretrained(
-            "trl-internal-testing/tiny-GptNeoXForSequenceClassification"
+            "trl-internal-testing/tiny-GPTNeoXForSequenceClassification"
         )
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
@@ -398,10 +398,9 @@ class TestSupportsToolCalling:
         [
             # No chat template
             pytest.param("trl-internal-testing/tiny-BartModel", id="bart"),
-            pytest.param("trl-internal-testing/tiny-BloomForCausalLM", id="bloom"),
             pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
             pytest.param("trl-internal-testing/tiny-GPTNeoXForCausalLM", id="gptneox"),
-            pytest.param("trl-internal-testing/tiny-GptNeoXForSequenceClassification", id="gptneox-seq"),
+            pytest.param("trl-internal-testing/tiny-GPTNeoXForSequenceClassification", id="gptneox-seq"),
             pytest.param("trl-internal-testing/tiny-OPTForCausalLM", id="opt"),
             pytest.param("trl-internal-testing/tiny-T5ForConditionalGeneration", id="t5"),
             # TemplateError: rejects tool role sequence
@@ -1040,7 +1039,9 @@ class TestGetTrainingChatTemplate:
         assert before == after
 
     def test_assistant_masks(self, tokenizer_name, request):
-        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1070,7 +1071,9 @@ class TestGetTrainingChatTemplate:
         assert masks[-1] == 1
 
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
-        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "

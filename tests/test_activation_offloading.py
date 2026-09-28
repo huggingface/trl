@@ -283,3 +283,32 @@ class TestActivationOffloading(TrlTestCase):
 
         param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
         assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"
+
+    @require_torch_accelerator
+    def test_tensor_deduplication_only_happens_in_streams_mode(self):
+        """Two saved views of the same storage are deduplicated (one re-offload skipped) only when use_streams=True."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        def offload_two_views(use_streams: bool) -> list[bool]:
+            base = torch.randn(64, 64, device=torch_device, requires_grad=True)
+            view1 = base.view(-1)
+            view2 = base.transpose(0, 1)
+            offload_ctx = OffloadActivations(use_streams=use_streams, min_offload_size=1)
+            with offload_ctx:
+                loss = SaveTensor.apply(view1) + SaveTensor.apply(view2)
+            modified_flags = [modified for _, modified, _, _, _ in offload_ctx.tracker.values()]
+            loss.backward()
+            return modified_flags
+
+        assert offload_two_views(use_streams=False) == [True, True]
+        assert offload_two_views(use_streams=True) == [True, False]
