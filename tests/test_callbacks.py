@@ -14,12 +14,24 @@
 
 import json
 import os
-from unittest.mock import call, patch
+import types
+from contextlib import contextmanager, nullcontext
+from unittest.mock import Mock, call, patch
 
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
+import pytest
+import torch
+from datasets import Dataset, load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+    GenerationConfig,
+    Trainer,
+    TrainingArguments,
+)
 
-from trl import BEMACallback, LogCompletionsCallback
+from trl import BEMACallback, LogCompletionsCallback, WeaveCallback
+from trl.trainer.callbacks import _generate_completions
 
 from .testing_utils import TrlTestCase, require_comet, require_wandb
 
@@ -116,6 +128,124 @@ class TestLogCompletionsCallback(TrlTestCase):
         assert tables is not None
         assert len(tables) == tables_logged
         assert all(table["fileName"] == "completions.csv" for table in tables)
+
+    def test_padding_side_restored(self):
+        # Same repro as https://github.com/huggingface/trl/issues/6663
+        tokenizer = Mock()
+        tokenizer.padding_side = "right"
+        trainer = types.SimpleNamespace(
+            eval_dataset={"prompt": ["prompt"]},
+            accelerator=types.SimpleNamespace(
+                is_main_process=False,
+                split_between_processes=lambda prompts: nullcontext(prompts),
+            ),
+            model_wrapped=Mock(),
+        )
+        args = types.SimpleNamespace(per_device_eval_batch_size=1, report_to=[])
+        state = types.SimpleNamespace(global_step=1, eval_steps=1)
+        callback = LogCompletionsCallback(trainer, freq=1)
+
+        with patch("trl.trainer.callbacks._generate_completions", return_value=["completion"]):
+            callback.on_step_end(args, state, None, processing_class=tokenizer)
+        assert tokenizer.padding_side == "right"
+
+        state.global_step = 2
+        with patch("trl.trainer.callbacks._generate_completions", side_effect=RuntimeError("generation failed")):
+            with pytest.raises(RuntimeError, match="generation failed"):
+                callback.on_step_end(args, state, None, processing_class=tokenizer)
+        assert tokenizer.padding_side == "right"
+
+        weave_callback = WeaveCallback(trainer)
+        weave_callback._weave_initialized = True
+        state.global_step = 3
+        with patch("trl.trainer.callbacks._generate_completions", return_value=["completion"]):
+            weave_callback.on_evaluate(args, state, None, processing_class=tokenizer)
+        assert tokenizer.padding_side == "right"
+
+    def test_generate_completions_restores_padding_side(self):
+        sides = []
+
+        class Batch(dict):
+            def to(self, device):
+                return self
+
+        def tokenize(texts, return_tensors="pt", padding=True, truncation=True):
+            sides.append(tokenizer.padding_side)
+            batch = Batch(input_ids=torch.tensor([[1, 2, 3], [4, 5, 0]]))
+            batch.input_ids = batch["input_ids"]
+            return batch
+
+        tokenizer = Mock(side_effect=tokenize)
+        tokenizer.padding_side = "right"
+        tokenizer.decode.return_value = "ok"
+        model = Mock()
+        model.generate.return_value = torch.tensor([[1, 2, 3, 7], [4, 5, 0, 8]])
+
+        @contextmanager
+        def unwrap(model, accelerator, *args, **kwargs):
+            yield model
+
+        with patch("trl.trainer.callbacks.unwrap_model_for_generation", unwrap):
+            completions = _generate_completions(
+                ["a", "bb"], model, tokenizer, accelerator=Mock(), generation_config=None, batch_size=2
+            )
+        assert completions == ["ok", "ok"]
+        assert sides == ["left"]
+        assert tokenizer.padding_side == "right"
+
+        model.generate.side_effect = RuntimeError("generation failed")
+        with patch("trl.trainer.callbacks.unwrap_model_for_generation", unwrap):
+            with pytest.raises(RuntimeError, match="generation failed"):
+                _generate_completions(["a"], model, tokenizer, accelerator=Mock(), generation_config=None)
+        assert tokenizer.padding_side == "right"
+
+    def test_train_batches_stay_right_padded_after_callback(self):
+        # Uneven lengths, so DataCollatorForLanguageModeling actually pads via tokenizer.padding_side.
+        self.tokenizer.padding_side = "right"
+        token_id = self.tokenizer.eos_token_id
+        lengths = [1, 2, 3, 4]
+        train_dataset = Dataset.from_dict(
+            {
+                "input_ids": [[token_id] * length for length in lengths],
+                "attention_mask": [[1] * length for length in lengths],
+            }
+        )
+        eval_dataset = Dataset.from_dict({"prompt": ["Say hi.", "Say bye."]})
+        masks = []
+
+        class RecordingCollator(DataCollatorForLanguageModeling):
+            def __call__(self, features):
+                batch = super().__call__(features)
+                masks.append(batch["attention_mask"].detach().cpu().clone())
+                return batch
+
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            max_steps=2,
+            learning_rate=1e-5,
+            save_strategy="no",
+            report_to="none",
+            seed=0,
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=self.tokenizer,
+            data_collator=RecordingCollator(self.tokenizer, mlm=False),
+        )
+        trainer.add_callback(LogCompletionsCallback(trainer, self.generation_config, freq=1))
+        trainer.train()
+
+        assert self.tokenizer.padding_side == "right"
+        # One batch is collated after on_step_end. Left padding would put a 0 in column 0.
+        assert len(masks) >= 2
+        for mask in masks:
+            assert (mask == 0).any()
+            assert torch.all(mask[:, 0] == 1)
 
 
 class TestBEMACallback(TrlTestCase):
