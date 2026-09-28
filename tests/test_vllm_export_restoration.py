@@ -13,13 +13,16 @@
 # limitations under the License.
 
 import torch
-from transformers.utils import is_peft_available
+from transformers.utils import is_bitsandbytes_available, is_peft_available
 
-from .testing_utils import require_peft
+from .testing_utils import require_bitsandbytes, require_peft
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
+
+if is_bitsandbytes_available():
+    import bitsandbytes as bnb
 
 
 @require_peft
@@ -36,4 +39,22 @@ def test_merged_export_restores_exact_base_weights(generation):
 
     generation.sync_weights()
 
+    torch.testing.assert_close(layer.base_layer.weight, before, rtol=0, atol=0)
+
+
+@require_peft
+@require_bitsandbytes
+def test_merged_export_restores_exact_quantized_base_weights(generation):
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(bnb.nn.Linear4bit(64, 64, bias=False, compute_dtype=torch.float32).to("cpu"))
+    model.is_loaded_in_4bit = True  # Makes PEFT wrap the layer with its bitsandbytes LoRA layer
+    generation.model = get_peft_model(model, LoraConfig(r=1, target_modules=["0"], init_lora_weights=False))
+    layer = generation.model.base_model.model[0]
+    weight = layer.base_layer.weight
+    before = weight.detach().clone()
+
+    generation.sync_weights()
+
+    # bitsandbytes merges replace the weight with a requantized one, so check the object as well as its values
+    assert layer.base_layer.weight is weight
     torch.testing.assert_close(layer.base_layer.weight, before, rtol=0, atol=0)
