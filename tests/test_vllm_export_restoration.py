@@ -47,7 +47,7 @@ def test_merged_export_restores_exact_base_weights(vllm_generation):
 def test_merged_export_restores_exact_quantized_base_weights(vllm_generation):
     torch.manual_seed(0)
     model = torch.nn.Sequential(bnb.nn.Linear4bit(64, 64, bias=False, compute_dtype=torch.float32).to("cpu"))
-    model.is_loaded_in_4bit = True  # Use PEFT's bitsandbytes LoRA layer
+    model.is_loaded_in_4bit = True
     vllm_generation.model = get_peft_model(model, LoraConfig(r=1, target_modules=["0"], init_lora_weights=False))
     layer = vllm_generation.model.base_model.model[0]
     weight = layer.base_layer.weight
