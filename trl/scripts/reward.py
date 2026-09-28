@@ -32,12 +32,15 @@ def main(script_args, training_args, model_args, dataset_args):
 
     logger = get_logger(__name__)
 
-    training_args.model_init_kwargs = dict(
+    model_init_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=training_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
+    if training_args.model_init_kwargs is not None:
+        model_init_kwargs.update(training_args.model_init_kwargs)
+    training_args.model_init_kwargs = model_init_kwargs
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:

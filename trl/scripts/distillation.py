@@ -67,12 +67,15 @@ def main(script_args, training_args, model_args, dataset_args):
     quantization_config = get_quantization_config(model_args)
     # The student's quantization is passed via the trainer's `quantization_config` argument (below), so it must NOT
     # also be set in `model_init_kwargs` — the trainer rejects that combination.
-    training_args.model_init_kwargs = dict(
+    model_init_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=training_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
+    if training_args.model_init_kwargs is not None:
+        model_init_kwargs.update(training_args.model_init_kwargs)
+    training_args.model_init_kwargs = model_init_kwargs
 
     # The teacher is deliberately left unquantized: quantizing it degrades the reference distribution the student is
     # trained to match. To quantize it anyway, override the default below with
