@@ -26,6 +26,7 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_mps_available,
     is_torch_npu_available,
@@ -106,6 +107,9 @@ if TYPE_CHECKING:
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
+
+if is_peft_available():
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 class VLLMGeneration:
@@ -445,8 +449,6 @@ class VLLMGeneration:
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with self._dist.gather_params(list(model.parameters())):
-                from peft.tuners.tuners_utils import BaseTunerLayer
-
                 # Unmerging subtracts a rounded delta and cannot recover the original weights, so keep exact CPU copies
                 # of the adapted base parameters. Under ZeRO-3 the shards never see the merge and need no copies.
                 originals = [

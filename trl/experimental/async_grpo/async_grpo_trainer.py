@@ -63,6 +63,7 @@ logger = get_logger(__name__)
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 if is_trackio_available():
     import trackio
@@ -1722,8 +1723,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # vLLM only knows the base checkpoint's parameters, so the adapter is folded into them for the send. The
         # `finally` is not optional: leaving it merged would train merged weights from the next step on.
         if is_peft_model(model):
-            from peft.tuners.tuners_utils import BaseTunerLayer
-
             # Unmerging subtracts a rounded delta and cannot recover the original weights, so keep exact CPU copies
             # of the adapted base parameters.
             originals = [

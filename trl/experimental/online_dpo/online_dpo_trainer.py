@@ -74,6 +74,7 @@ if is_bitsandbytes_available():
 
 if is_peft_available():
     from peft import PeftConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 if is_sagemaker_mp_enabled():
@@ -819,8 +820,6 @@ class OnlineDPOTrainer(_BaseTrainer):
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with gather_if_zero3(list(self.model.parameters())):
-                from peft.tuners.tuners_utils import BaseTunerLayer
-
                 # Unmerging subtracts a rounded delta and cannot recover the original weights, so keep exact CPU copies
                 # of the adapted base parameters. Under ZeRO-3 the shards never see the merge and need no copies.
                 originals = [
