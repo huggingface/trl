@@ -18,6 +18,7 @@ import os
 import sys
 import traceback
 from functools import wraps
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -303,28 +304,12 @@ def undo_liger_kernel_patching(monkeypatch):
 
 
 @pytest.fixture
-def generation(monkeypatch):
+def vllm_generation(monkeypatch):
     from accelerate import Accelerator
 
     from trl.generation.vllm_generation import VLLMGeneration
 
-    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)
-    engine = VLLMGeneration(
-        torch.nn.Linear(2, 2, bias=False),
-        Accelerator(cpu=True),
-        None,
-        enable_sleep_mode=True,
-        temperature=0.0,
-        top_k=-1,
-        max_completion_length=2,
-        logprobs=None,
-    )
-    engine._llm_weights_sleeping = True
-    engine._kv_cache_sleeping = True
-    engine.llm = Mock()
-    engine.llm.generate.return_value = [
-        SimpleNamespace(prompt_token_ids=[1], outputs=[SimpleNamespace(token_ids=[2], logprobs=None)])
-    ]
-    monkeypatch.setattr("trl.generation.vllm_generation.SamplingParams", lambda **kwargs: kwargs, raising=False)
-    monkeypatch.setattr("trl.generation.vllm_generation.empty_cache", lambda: None)
-    return engine
+    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)  # No vLLM engine; `llm` is mocked instead
+    generation = VLLMGeneration(torch.nn.Linear(1, 1), Accelerator(cpu=True), None)
+    generation.llm = Mock()
+    return generation
