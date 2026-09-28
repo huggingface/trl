@@ -58,7 +58,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci-check-6555-stale: run tests_dev only
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -142,6 +142,11 @@ jobs:
             "transformers @ git+https://github.com/huggingface/transformers.git" \
             "peft @ git+https://github.com/huggingface/peft.git"
 
+      - name: Show resolved kernel-related versions
+        run: |
+          source .venv/bin/activate
+          uv pip list | grep -iE "^(torch|transformers|kernels|mamba|causal)" || true
+
       - name: Test with pytest
         run: |
           source .venv/bin/activate
@@ -167,7 +172,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci-check-6555-stale: run tests_dev only
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -219,7 +224,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci-check-6555-stale: run tests_dev only
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -275,7 +280,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci-check-6555-stale: run tests_dev only
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:

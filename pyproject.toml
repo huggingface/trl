@@ -209,7 +209,7 @@ filterwarnings = [
     # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast
     # Tracking issue: https://github.com/huggingface/trl/issues/6555
     # Remove once: the resolved Hub kernel build no longer calls it
-    "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
+    "error:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",  # ci-check-6555-stale: fail if still reached
 
     # bitsandbytes warns, on every forward of a 4-bit layer whose inner dimension is not a multiple of the quantization
     # blocksize, that it falls back to the slower dequantize + linear path (upstream, not actionable in TRL)
