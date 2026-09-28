@@ -32,6 +32,7 @@ import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
+    add_fused_lm_head,
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
@@ -44,7 +45,6 @@ from trl.trainer.utils import (
     is_async_callable,
     nanstd,
     pad,
-    patch_fused_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     selective_log_softmax,
@@ -1361,11 +1361,11 @@ _FUSED_LM_HEAD_MODEL_IDS = [
 
 
 @require_torch_accelerator
-class TestPatchFusedLMHead:
+class TestAddFusedLMHead:
     def test_masked_labels(self):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_fused_lm_head(model)
+        add_fused_lm_head(model)
         input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
         labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
@@ -1381,7 +1381,7 @@ class TestPatchFusedLMHead:
     def test_shift_labels(self):
         """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_fused_lm_head(model)
+        add_fused_lm_head(model)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
 
@@ -1394,7 +1394,7 @@ class TestPatchFusedLMHead:
 
     def test_all_masked_labels_backward(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        patch_fused_lm_head(model)
+        add_fused_lm_head(model)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
 
         out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
@@ -1409,7 +1409,7 @@ class TestPatchFusedLMHead:
         input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device=torch_device)
         expected = model.generate(input_ids, max_new_tokens=8, do_sample=False)
 
-        patch_fused_lm_head(model)
+        add_fused_lm_head(model)
 
         torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
 
@@ -1421,7 +1421,7 @@ class TestPatchFusedLMHead:
         logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
         expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
 
-        patch_fused_lm_head(model)
+        add_fused_lm_head(model)
         out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
 
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
@@ -1430,7 +1430,7 @@ class TestPatchFusedLMHead:
         """Under bf16 autocast, the projection runs in fp32 and matches an fp32 projection of the same hidden states."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
         model = model.to(torch_device)
-        patch_fused_lm_head(model, cast_lm_head_to_fp32=True)
+        add_fused_lm_head(model, cast_lm_head_to_fp32=True)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
 
         with torch.autocast(torch_device, dtype=torch.bfloat16):
@@ -1451,7 +1451,7 @@ class TestPatchFusedLMHead:
         attention_mask[1, 8:] = 0
         expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
 
-        patch_fused_lm_head(model)
+        add_fused_lm_head(model)
         out = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1483,7 +1483,7 @@ class TestPatchFusedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        patch_fused_lm_head(model, temperature)
+        add_fused_lm_head(model, temperature)
         with torch.no_grad():
             out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
@@ -1516,7 +1516,7 @@ class TestPatchFusedLMHead:
         ref_grad = model_ref.lm_head.weight.grad.clone()
 
         # Chunked backward
-        patch_fused_lm_head(model_chunked, temperature)
+        add_fused_lm_head(model_chunked, temperature)
         out = model_chunked(input_ids=input_ids, labels=labels, fused_lm_head=True)
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
@@ -1624,13 +1624,13 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
 
 
 @require_torch_accelerator
-class TestPatchFusedLMHeadLoss:
+class TestAddFusedLMHeadLoss:
     """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
 
     def _setup(self, model_id):
         ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
-        patch_fused_lm_head(chunked_model)
+        add_fused_lm_head(chunked_model)
 
         B, S = 2, 16
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
@@ -1642,7 +1642,7 @@ class TestPatchFusedLMHeadLoss:
     def _setup_vlm(self, model_id):
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
-        patch_fused_lm_head(chunked_model)
+        add_fused_lm_head(chunked_model)
 
         B, S = 2, 16
         vocab_size = ref_model.config.text_config.vocab_size
@@ -1676,7 +1676,7 @@ class TestPatchFusedLMHeadLoss:
             model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
         )
         chunked_model = copy.deepcopy(ref_model)
-        patch_fused_lm_head(chunked_model)
+        add_fused_lm_head(chunked_model)
 
         B, S = 2, 16
         input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
@@ -1740,7 +1740,7 @@ class TestPatchFusedLMHeadLoss:
     def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
         ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
         chunked_model = copy.deepcopy(ref_model)
-        patch_fused_lm_head(chunked_model)
+        add_fused_lm_head(chunked_model)
 
         # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
         # removes the attribute), so we have to pass it at call time on both paths.
@@ -1831,7 +1831,7 @@ class TestPatchFusedLMHeadLoss:
         )
         ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
         chunked_model = copy.deepcopy(ref_model)
-        patch_fused_lm_head(chunked_model.get_base_model())
+        add_fused_lm_head(chunked_model.get_base_model())
 
         B, S = 2, 16
         input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
@@ -1869,7 +1869,7 @@ class TestPatchFusedLMHeadLoss:
         )
         peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
         chunked_model = get_peft_model(base, peft_config)
-        patch_fused_lm_head(chunked_model.get_base_model())
+        add_fused_lm_head(chunked_model.get_base_model())
 
         B, S = 2, 16
         input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)

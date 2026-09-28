@@ -77,6 +77,7 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
     get_callable_name,
@@ -87,7 +88,6 @@ from .utils import (
     nanmin,
     nanstd,
     pad,
-    patch_fused_lm_head,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
     shuffle_sequence_dict,
@@ -1018,13 +1018,13 @@ class GRPOTrainer(_BaseTrainer):
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
-        patch_fused_lm_head(
+        add_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             temperature=self.temperature,
             cast_lm_head_to_fp32=args.cast_lm_head_to_fp32,
         )
         if self.ref_model is not None:
-            patch_fused_lm_head(
+            add_fused_lm_head(
                 self.ref_model, temperature=self.temperature, cast_lm_head_to_fp32=args.cast_lm_head_to_fp32
             )
 
