@@ -93,6 +93,8 @@ def main():
     trainer.save_model(training_args.output_dir)
     trainer.push_to_hub(dataset_name="AI-MO/NuminaMath-TIR")
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()
