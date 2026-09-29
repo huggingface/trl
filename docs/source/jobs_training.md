@@ -506,4 +506,4 @@ run_uv_job(
 </hfoptions>
 
 > [!NOTE]
-> [TRL Jobs](https://github.com/huggingface/trl-jobs) is a small wrapper that launches the TRL scripts on Jobs with preset configurations for some models, for example `trl-jobs sft --model_name Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara`.
+> The [TRL Jobs](https://github.com/huggingface/trl-jobs) wrapper launches the TRL scripts on Jobs with preset configurations for some models, for example `trl-jobs sft --model_name Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara`.
