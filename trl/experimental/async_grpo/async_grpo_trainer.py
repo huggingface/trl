@@ -32,7 +32,7 @@ from typing import Any, Protocol
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import broadcast_object_list, is_peft_model
+from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
@@ -43,6 +43,7 @@ from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
+    add_fused_lm_head,
     compute_flops_per_token,
     compute_mfu,
     create_model_from_path,
@@ -51,7 +52,6 @@ from ...trainer.utils import (
     nanmax,
     nanmin,
     pad,
-    patch_chunked_lm_head,
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
@@ -628,8 +628,8 @@ class DataCollatorForRollout(DataCollatorMixin):
         input_ids = pad([row.input_ids for row in rows], padding_value=self.pad_token_id)
         attention_mask = pad([torch.ones_like(row.input_ids) for row in rows], padding_value=0)
         position_ids = pad([row.position_ids for row in rows], padding_value=0)
-        pred_index = pad([row.pred_index for row in rows], padding_value=-1)
-        target_id = pad([row.target_id for row in rows], padding_value=0)
+        shift_labels = pad([row.shift_labels for row in rows], padding_value=-100)
+        token_index = pad([row.token_index for row in rows], padding_value=-1)
         old_log_probs = pad([row.old_log_probs for row in rows], padding_value=0.0)
         advantages = pad([row.advantages for row in rows], padding_value=0.0)
         segment_id = pad([row.segment_id for row in rows], padding_value=0)
@@ -638,7 +638,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.groups_trained.update(example["group_id"] for example in all_examples)
 
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        n_trained_tokens = sum(row.pred_index.numel() for row in rows)
+        n_trained_tokens = sum(row.token_index.numel() for row in rows)
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
         n_forward_tokens = sum(row.input_ids.numel() for row in rows)
@@ -652,8 +652,8 @@ class DataCollatorForRollout(DataCollatorMixin):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "position_ids": position_ids,
-            "pred_index": pred_index,
-            "target_id": target_id,
+            "shift_labels": shift_labels,
+            "token_index": token_index,
             "old_log_probs": old_log_probs,
             "advantages": advantages,
             "segment_id": segment_id,
@@ -1128,6 +1128,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self.packing = SequencePacking()
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
@@ -1167,9 +1170,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        patch_chunked_lm_head(
-            model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
-        )
+        add_fused_lm_head(model, temperature=self.temperature)
 
         # Processing class
         if processing_class is None:
@@ -1183,7 +1184,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
-        # PEFT. Placed after `patch_chunked_lm_head`, which patches the bare `lm_head` and would otherwise have to
+        # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
         if peft_config is not None:
             if not is_peft_available():
@@ -1206,7 +1207,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
 
-        # `patch_chunked_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
+        # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
@@ -1499,8 +1500,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "input_ids",
                 "attention_mask",
                 "position_ids",
-                "pred_index",
-                "target_id",
+                "shift_labels",
+                "token_index",
                 "old_log_probs",
                 "advantages",
                 "segment_id",
@@ -1513,25 +1514,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mask_bool = inputs["attention_mask"].bool()
-        selected = inputs["pred_index"] >= 0
+        selected = inputs["token_index"] >= 0
         input_ids = inputs["input_ids"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
-        pred_index = inputs["pred_index"][selected]
-        target_id = inputs["target_id"][selected]
+        shift_labels = inputs["shift_labels"][mask_bool].unsqueeze(0)
+        token_index = inputs["token_index"][selected]
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
 
         forward_start = time.time()
+        # MoE models: request router logits so the forward returns the load-balancing loss
+        router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
-            pred_index=pred_index,
-            target_id=target_id,
-            use_cache=False,
+            shift_labels=shift_labels,
+            fused_lm_head=True,
+            **router_kwargs,
             **self.packing.forward_kwargs(inputs, mask_bool),
         )
-        log_probs, entropy = outputs["log_probs"], outputs["entropy"]
+        log_probs = outputs.log_probs.flatten()[token_index]
+        entropy = outputs.entropy.flatten()[token_index]
         self._last_forward_time_s = time.time() - forward_start
 
         log_ratio = log_probs - old_log_probs
@@ -1555,7 +1559,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
+            aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():

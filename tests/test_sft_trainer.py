@@ -581,10 +581,17 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
@@ -676,6 +683,25 @@ class TestSFTTrainer(TrlTestCase):
             # Check the torch dtype
             assert new_param.dtype == torch.float16
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @require_peft
     def test_train_dense_with_peft_config_lora(self):
@@ -1998,10 +2024,17 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
@@ -3077,10 +3110,17 @@ class TestPatchChunkedCELMHead:
         [
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )

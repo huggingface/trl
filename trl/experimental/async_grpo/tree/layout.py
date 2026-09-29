@@ -52,6 +52,11 @@ class TreeLayout:
         )
 
 
+def _keys(input_ids: list[int]) -> list[tuple[int, int | None]]:
+    """Trie key of each token: the token and the one after it, so that every node predicts exactly one next token."""
+    return list(zip(input_ids, [*input_ids[1:], None], strict=True))
+
+
 class PrefixForest:
     """
     One prefix trie per `group_id`: rows of different groups never share a token.
@@ -59,13 +64,17 @@ class PrefixForest:
     Grown one row at a time so the planner can price a candidate before committing it ([`~PrefixForest.probe`]), which
     is what lets the token budget bound *unique* tokens rather than raw ones. Restricting sharing to a single group is
     what keeps that price additive across groups, so the planner stays a greedy bin-packer.
+
+    A node is keyed on its token *and* the next one, so rows share a token only when they also agree on what follows
+    it. The trie therefore forks one token before the rows diverge, and every node has a single next-token label: a
+    branch point costs one extra token per extra branch, and the loss can go through plain per-position labels.
     """
 
     def __init__(self):
         self.tokens: list[int] = []  # node -> its token
-        self.children: list[dict[int, int]] = []  # node -> {token: child node}
+        self.children: list[dict[tuple[int, int | None], int]] = []  # node -> {(token, next token): child node}
         self.terminal: list[bool] = []  # node -> some row ended exactly here
-        self.roots: dict[Any, dict[int, int]] = {}  # group_id -> {token: node}
+        self.roots: dict[Any, dict[tuple[int, int | None], int]] = {}  # group_id -> {(token, next token): node}
 
     def probe(self, input_ids: list[int], group_id: Any) -> tuple[int, int]:
         """
@@ -78,10 +87,11 @@ class PrefixForest:
                 - Attention cost of those tokens, `Σ (depth + 1)`: a packed token attends to its ancestors plus itself,
                   so the sum is the number of score pairs the row would add.
         """
+        keys = _keys(input_ids)
         children = self.roots.get(group_id, {})
         depth = 0
-        while depth < len(input_ids):
-            node = children.get(input_ids[depth])
+        while depth < len(keys):
+            node = children.get(keys[depth])
             if node is None:
                 break
             children = self.children[node]
@@ -90,12 +100,12 @@ class PrefixForest:
 
     def insert(self, input_ids: list[int], group_id: Any) -> None:
         children = self.roots.setdefault(group_id, {})
-        for token in input_ids:
-            node = children.get(token)
+        for key in _keys(input_ids):
+            node = children.get(key)
             if node is None:
                 node = len(self.tokens)
-                children[token] = node
-                self.tokens.append(token)
+                children[key] = node
+                self.tokens.append(key[0])
                 self.children.append({})
                 self.terminal.append(False)
             children = self.children[node]
@@ -105,8 +115,8 @@ class PrefixForest:
         """Trie node of every token of a row that was already inserted."""
         nodes = []
         children = self.roots[group_id]
-        for token in input_ids:
-            node = children[token]
+        for key in _keys(input_ids):
+            node = children[key]
             nodes.append(node)
             children = self.children[node]
         return nodes

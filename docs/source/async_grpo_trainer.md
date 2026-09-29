@@ -126,7 +126,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
     --max-loras 6
 ```
 
-`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Add `VLLM_WORKER_MULTIPROC_METHOD=spawn` if you serve tensor-parallel, and keep `--weight-transfer-config` either way: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
+`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Keep `--weight-transfer-config` even with `--enable-lora`: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
 
 `--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
 
@@ -226,7 +226,7 @@ How it works:
 - **Sharing is per prompt**: one trie per `group_id`, so a group's cost does not depend on what else is in the row and the planner stays a greedy bin-packer.
 - **The planner places by affinity**: a sample goes to the row holding its group, where it costs only its novel tokens. `token_budget` bounds a row's unique tokens and its loss terms. A group is split only when a rank would otherwise forward nothing.
 - **The collator linearizes the forest** depth-first. A token's `position_id` is its depth, and two DFS stamps define the mask — `k` is visible to `q` iff `enter[k] <= enter[q] < leave[k]` — which FlexAttention evaluates as a block mask.
-- **The loss gathers**: a packed position predicts the first trained token of every row sharing its prefix, so loss terms are explicit `(position, target)` pairs, not a mask over the sequence.
+- **Every position predicts one token**: the trie shares a token only between rows that agree on the next one, so it forks one token before they diverge (one extra token per extra branch). The fused head then scores the row through plain `shift_labels`, and a `token_index` from the packer maps the per-position log-probs back to each rollout token.
 
 When it pays: `speed-up ≈ packing ratio ÷ overhead`, where the overhead of FlexAttention over FlashAttention and of the longer ancestries is about 1.3–1.6 on 4–8B models and shrinks with model size. Below a `batch/packing_ratio` of ~1.5 tree packing is a loss. The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 

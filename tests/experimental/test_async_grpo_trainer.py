@@ -66,7 +66,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
 from trl.experimental.async_grpo.packing import SequencePacking, TreePacking
 from trl.experimental.async_grpo.tree import TREE_ATTENTION, build_tree_block_mask, register_tree_attention
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import get_callable_name, patch_chunked_lm_head
+from trl.trainer.utils import add_fused_lm_head, get_callable_name
 
 from ..testing_utils import (
     TrlTestCase,
@@ -922,8 +922,8 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["input_ids"].tolist() == [[0, 1, 2], [0, 1, 0]]  # row b right-padded with pad_token_id
         assert batch["attention_mask"].tolist() == [[1, 1, 1], [1, 1, 0]]
         assert batch["position_ids"].tolist() == [[0, 1, 2], [0, 1, 0]]  # resets per sequence, 0-padded
-        assert batch["pred_index"].tolist() == [[0, 1], [0, -1]]  # -1 marks inter-rank padding
-        assert batch["target_id"].tolist() == [[1, 2], [1, 0]]
+        assert batch["shift_labels"].tolist() == [[1, 2, -100], [1, -100, -100]]
+        assert batch["token_index"].tolist() == [[0, 1], [0, -1]]  # -1 marks inter-rank padding
         assert batch["advantages"].tolist() == [[1.0, 1.0], [-1.0, 0.0]]
         assert batch["segment_id"].tolist() == [[0, 0], [0, 0]]  # one sample per row
         assert batch["global_n_tokens"].tolist() == [3.0, 3.0]  # a: 2 + b: 1 completion tokens
@@ -944,8 +944,8 @@ class TestPackingAwareBatching(TrlTestCase):
 
         assert batch["input_ids"].tolist() == [[0, 1, 2, 0, 1], [0, 1, 0, 1, 2]]
         assert batch["position_ids"].tolist() == [[0, 1, 2, 0, 1], [0, 1, 0, 1, 2]]  # resets at each sequence start
-        assert batch["pred_index"].tolist() == [[0, 1, 3], [0, 2, 3]]
-        assert batch["target_id"].tolist() == [[1, 2, 1], [1, 1, 2]]
+        assert batch["shift_labels"].tolist() == [[1, 2, -100, 1, -100], [1, -100, 1, 2, -100]]
+        assert batch["token_index"].tolist() == [[0, 1, 3], [0, 2, 3]]
         assert batch["advantages"].tolist() == [[1.0, 1.0, 2.0], [-1.0, -2.0, -2.0]]
         assert batch["segment_id"].tolist() == [[0, 0, 1], [0, 1, 1]]
         assert batch["global_n_tokens"].tolist() == [6.0, 6.0]  # a:2 + c:1 + b:1 + d:2 completion tokens
@@ -992,14 +992,14 @@ class TestTreePacking(TrlTestCase):
     def test_shared_prefixes_are_forwarded_once(self):
         row = TreePacking().pack(self.ROWS)
 
-        assert row.input_ids.tolist() == [101, 102, 103, 201, 202, 401, 301, 302]
-        assert row.position_ids.tolist() == [0, 1, 2, 3, 4, 5, 3, 4]
+        assert row.input_ids.tolist() == [101, 102, 103, 201, 202, 202, 401, 103, 301, 302]
+        assert row.position_ids.tolist() == [0, 1, 2, 3, 4, 4, 5, 2, 3, 4]
 
     def test_one_packed_position_feeds_several_loss_terms(self):
         row = TreePacking().pack(self.ROWS)
 
-        assert row.pred_index.tolist() == [2, 3, 2, 6, 2, 3, 4]
-        assert row.target_id.tolist() == [201, 202, 301, 302, 201, 202, 401]
+        assert row.shift_labels.tolist() == [-100, -100, 201, 202, -100, 401, -100, 301, 302, -100]
+        assert row.token_index.tolist() == [2, 3, 7, 8, 2, 3, 5]
         assert row.advantages.tolist() == [1.0, 1.0, -1.0, -1.0, 0.5, 0.5, 0.5]
         assert row.segment_id.tolist() == [0, 0, 1, 1, 2, 2, 2]
 
@@ -1011,7 +1011,7 @@ class TestTreePacking(TrlTestCase):
         seen = sorted(tuple(row.input_ids[visible[q]].tolist()) for q in range(len(row.input_ids)))
         prefixes = {tuple(s["input_ids"][: i + 1]) for s in self.ROWS for i in range(len(s["input_ids"]))}
 
-        assert seen == sorted(prefixes)
+        assert set(seen) == prefixes
 
     def test_collator_pads_tree_rows_and_keeps_the_stamps_aligned(self):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2, packing=TreePacking())
@@ -1021,25 +1021,27 @@ class TestTreePacking(TrlTestCase):
         mask = batch["attention_mask"].bool()
 
         assert batch["input_ids"].tolist() == [
-            [101, 102, 103, 201, 202, 401, 301, 302],
-            [101, 102, 103, 201, 202, 0, 0, 0],
+            [101, 102, 103, 201, 202, 202, 401, 103, 301, 302],
+            [101, 102, 103, 201, 202, 0, 0, 0, 0, 0],
         ]
-        assert batch["attention_mask"].tolist() == [[1] * 8, [1] * 5 + [0] * 3]
-        assert batch["tree_enter"][1].tolist() == [0, 1, 2, 3, 4, 0, 0, 0]  # padded stamps, dropped by the mask
-        assert batch["tree_leave"][1].tolist() == [5, 5, 5, 5, 5, 0, 0, 0]
-        assert batch["tree_enter"][0][mask[0]].tolist() == [0, 1, 2, 3, 4, 5, 6, 7]
-        assert batch["tree_leave"][0][mask[0]].tolist() == [8, 8, 8, 6, 6, 6, 8, 8]
-        assert collator.metrics["batch/packing_ratio"] == [(21, 13)]  # 21 raw tokens forwarded as 13
+        assert batch["attention_mask"].tolist() == [[1] * 10, [1] * 5 + [0] * 5]
+        assert batch["tree_enter"][1].tolist() == [0, 1, 2, 3, 4, 0, 0, 0, 0, 0]  # padded stamps, dropped by the mask
+        assert batch["tree_leave"][1].tolist() == [5, 5, 5, 5, 5, 0, 0, 0, 0, 0]
+        assert batch["tree_enter"][0][mask[0]].tolist() == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert batch["tree_leave"][0][mask[0]].tolist() == [10, 10, 7, 7, 5, 7, 7, 10, 10, 10]
+        assert batch["shift_labels"][1].tolist() == [-100, -100, 201, 202] + [-100] * 6
+        assert collator.metrics["batch/packing_ratio"] == [(21, 15)]  # 21 raw tokens forwarded as 15
 
     def test_loss_terms_match_sequence_packing_one_for_one(self):
         tree = TreePacking().pack(self.ROWS)
         sequence = SequencePacking().pack(self.ROWS)
 
-        for field in ("target_id", "advantages", "segment_id", "old_log_probs"):
+        assert tree.shift_labels[tree.token_index].tolist() == sequence.shift_labels[sequence.token_index].tolist()
+        for field in ("advantages", "segment_id", "old_log_probs"):
             assert getattr(tree, field).tolist() == getattr(sequence, field).tolist(), field
 
     def test_cost_counts_unique_tokens_and_surviving_score_pairs(self):
-        assert TreePacking().cost(self.ROWS) == (8, 15 + 9 + 6)  # depths 1..5, then 4+5 and 6 for the branches
+        assert TreePacking().cost(self.ROWS) == (10, 15 + 12 + 11)  # depths 1..5, then 3..5 and 5..6 for the branches
         assert SequencePacking().cost(self.ROWS) == (16, 25 + 25 + 36)
 
     def test_groups_never_share_a_prefix(self):
@@ -1049,17 +1051,17 @@ class TestTreePacking(TrlTestCase):
         assert packed.input_ids.tolist() == [1, 2, 3, 1, 2, 3]
 
     def _stream(self, n_groups, rows_per_group=2):
-        """Groups of rows over a shared 6-token prompt: 8 raw tokens each, but only 2 novel after the first."""
+        """Groups of rows over a shared 6-token prompt: 8 raw tokens each, but only 3 novel after the first."""
         for g in range(n_groups):
             for i in range(rows_per_group):
                 yield _tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=g)
 
     def test_budget_bounds_unique_tokens_so_more_rows_fit(self):
-        tree = next(iter(TokenBudgetBatcher(self._stream(50), 2, 20, defaultdict(list), TreePacking())))
-        sequence = next(iter(TokenBudgetBatcher(self._stream(50), 2, 20, defaultdict(list), SequencePacking())))
+        tree = next(iter(TokenBudgetBatcher(self._stream(50), 2, 22, defaultdict(list), TreePacking())))
+        sequence = next(iter(TokenBudgetBatcher(self._stream(50), 2, 22, defaultdict(list), SequencePacking())))
 
-        assert sum(len(group) for group in sequence) == 4  # 20 // 8 -> two 8-token samples per row
-        assert sum(len(group) for group in tree) == 8  # two 10-unique-token groups per row, of two rows each
+        assert sum(len(group) for group in sequence) == 4  # 22 // 8 -> two 8-token samples per row
+        assert sum(len(group) for group in tree) == 8  # two 11-unique-token groups per row, of two rows each
 
     def test_planner_reads_one_sample_of_lookahead(self):
         reads = 0
@@ -1141,7 +1143,7 @@ class TestTreeAttention(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(
             self.MODEL_ID, dtype=torch.float32, attn_implementation=attn_implementation
         ).to(torch_device)
-        patch_chunked_lm_head(model, chunk_size=256, temperature=1.0)
+        add_fused_lm_head(model)
         row = packing.pack(rows)
         kwargs = {}
         if row.tree_enter is not None:
@@ -1151,31 +1153,30 @@ class TestTreeAttention(TrlTestCase):
         out = model(
             input_ids=row.input_ids.to(torch_device).unsqueeze(0),
             position_ids=row.position_ids.to(torch_device).unsqueeze(0),
-            pred_index=row.pred_index.to(torch_device),
-            target_id=row.target_id.to(torch_device),
-            use_cache=False,
+            shift_labels=row.shift_labels.to(torch_device).unsqueeze(0),
+            fused_lm_head=True,
             **kwargs,
         )
-        out["log_probs"].sum().backward()
-        key = list(zip(row.segment_id.tolist(), row.target_id.tolist(), strict=True))
-        return out["log_probs"].float().detach(), self._grads(model), key
+        log_probs = out.log_probs.flatten()[row.token_index.to(torch_device)]
+        log_probs.sum().backward()
+        key = list(zip(row.segment_id.tolist(), row.shift_labels[row.token_index].tolist(), strict=True))
+        return log_probs.float().detach(), self._grads(model), key
 
     def _reference(self, rows):
         """Every row forwarded on its own under ordinary causal attention: what packing has to reproduce."""
         model = AutoModelForCausalLM.from_pretrained(self.MODEL_ID, dtype=torch.float32).to(torch_device)
-        patch_chunked_lm_head(model, chunk_size=256, temperature=1.0)
+        add_fused_lm_head(model)
         log_probs, key = [], []
         for i, sample in enumerate(rows):
             one = SequencePacking().pack([sample])
             out = model(
                 input_ids=one.input_ids.to(torch_device).unsqueeze(0),
                 position_ids=one.position_ids.to(torch_device).unsqueeze(0),
-                pred_index=one.pred_index.to(torch_device),
-                target_id=one.target_id.to(torch_device),
-                use_cache=False,
+                shift_labels=one.shift_labels.to(torch_device).unsqueeze(0),
+                fused_lm_head=True,
             )
-            log_probs.append(out["log_probs"])
-            key += [(i, target) for target in one.target_id.tolist()]
+            log_probs.append(out.log_probs.flatten()[one.token_index.to(torch_device)])
+            key += [(i, target) for target in one.shift_labels[one.token_index].tolist()]
         log_probs = torch.cat(log_probs)
         log_probs.sum().backward()
         return log_probs.float().detach(), self._grads(model), key

@@ -26,20 +26,19 @@ class TrainingRow:
     """
     One DP rank's forward, and the flat list of loss terms taken over it.
 
-    The selection is explicit — a list of `(packed position, target token)` pairs rather than a boolean mask — because
-    under tree packing one packed position predicts the first trained token of *every* row that shares its prefix, each
-    with its own target and advantage. A mask cannot say that; a gather can, and it expresses ordinary next-token
-    shifting just as well.
+    The forward is scored per position, through `shift_labels`: position `t` predicts the token `shift_labels[t]`, or
+    nothing where it is `-100`. The loss terms are per rollout token, and `token_index` says which position scored each
+    one — under tree packing a shared position serves every row that shares it, so the two lists differ in length.
 
     Args:
         input_ids (`torch.Tensor`):
             Tokens the decoder forwards, shape `(N,)`.
         position_ids (`torch.Tensor`):
             RoPE position of each forwarded token, shape `(N,)`.
-        pred_index (`torch.Tensor`):
-            Position in `input_ids` whose hidden state predicts each trained token, shape `(M,)`.
-        target_id (`torch.Tensor`):
-            Token each entry of `pred_index` must predict, shape `(M,)`.
+        shift_labels (`torch.Tensor`):
+            Next token each forwarded position predicts, `-100` where it is not trained, shape `(N,)`.
+        token_index (`torch.Tensor`):
+            Position in `input_ids` whose prediction is each trained token, shape `(M,)`.
         old_log_probs (`torch.Tensor`):
             Generator log-probability of each target, shape `(M,)`.
         advantages (`torch.Tensor`):
@@ -56,8 +55,8 @@ class TrainingRow:
 
     input_ids: torch.Tensor
     position_ids: torch.Tensor
-    pred_index: torch.Tensor
-    target_id: torch.Tensor
+    shift_labels: torch.Tensor
+    token_index: torch.Tensor
     old_log_probs: torch.Tensor
     advantages: torch.Tensor
     segment_id: torch.Tensor
@@ -99,36 +98,41 @@ class PackingProtocol(Protocol):
         ...
 
 
-def _loss_terms(samples: list[dict[str, Any]], packed: list[list[int]]) -> dict[str, torch.Tensor]:
+def _loss_terms(samples: list[dict[str, Any]], packed: list[list[int]], num_tokens: int) -> dict[str, torch.Tensor]:
     """
     The flat loss terms of a row, given where each sample's tokens landed in it.
 
     This is the whole of the selection contract, and it is the same for every packing: a trained token is scored off
     its predecessor's hidden state, so all a strategy has to say is where that predecessor ended up. Sequence packing
-    answers with a running offset, tree packing with the packed position of a trie node.
+    answers with a running offset, tree packing with the packed position of a trie node. A position shared by several
+    rows gets the same label from each of them, since [`PrefixForest`] only shares a token between rows that agree on
+    the next one.
 
     Args:
         samples (`list[dict]`):
             The rollout rows of one DP rank's row, in placement order.
         packed (`list[list[int]]`):
             For each sample, the packed position of each of its tokens.
+        num_tokens (`int`):
+            Number of forwarded tokens in the row.
 
     Returns:
-        `dict[str, torch.Tensor]`: the `pred_index`, `target_id`, `old_log_probs`, `advantages` and `segment_id` fields
-        of a [`TrainingRow`], each of length `M`.
+        `dict[str, torch.Tensor]`: the `shift_labels` field of a [`TrainingRow`], of length `N`, and its `token_index`,
+        `old_log_probs`, `advantages` and `segment_id` fields, each of length `M`.
     """
-    pred_index, target_id, old_log_probs, advantages, segment_id = [], [], [], [], []
+    shift_labels = [-100] * num_tokens
+    token_index, old_log_probs, advantages, segment_id = [], [], [], []
     for i, (sample, positions) in enumerate(zip(samples, packed, strict=True)):
         for p in range(1, len(sample["input_ids"])):
             if sample["completion_mask"][p]:
-                pred_index.append(positions[p - 1])
-                target_id.append(sample["input_ids"][p])
+                shift_labels[positions[p - 1]] = sample["input_ids"][p]
+                token_index.append(positions[p - 1])
                 old_log_probs.append(sample["old_log_probs"][p])
                 advantages.append(sample["advantage"])
                 segment_id.append(i)
     return {
-        "pred_index": torch.tensor(pred_index, dtype=torch.long),
-        "target_id": torch.tensor(target_id, dtype=torch.long),
+        "shift_labels": torch.tensor(shift_labels, dtype=torch.long),
+        "token_index": torch.tensor(token_index, dtype=torch.long),
         "old_log_probs": torch.tensor(old_log_probs, dtype=torch.float32),
         "advantages": torch.tensor(advantages, dtype=torch.float32),
         "segment_id": torch.tensor(segment_id, dtype=torch.long),
@@ -226,7 +230,9 @@ class SequencePacking:
         return TrainingRow(
             input_ids=torch.tensor([token for sample in samples for token in sample["input_ids"]], dtype=torch.long),
             position_ids=torch.cat([torch.arange(n) for n in lengths]),
-            **_loss_terms(samples, [list(range(o, o + n)) for o, n in zip(offsets, lengths, strict=False)]),
+            **_loss_terms(
+                samples, [list(range(o, o + n)) for o, n in zip(offsets, lengths, strict=False)], offsets[-1]
+            ),
         )
 
 
@@ -286,10 +292,7 @@ class TreePacking:
             [node_to_packed[node] for node in forest.walk(sample["input_ids"], sample["group_id"])]
             for sample in samples
         ]
-        loss_terms = _loss_terms(
-            samples,
-            packed_samples,
-        )
+        loss_terms = _loss_terms(samples, packed_samples, len(tokens))
         return TrainingRow(
             input_ids=torch.tensor(tokens, dtype=torch.long),
             position_ids=layout.position_ids,
