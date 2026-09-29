@@ -83,7 +83,7 @@ hf jobs cancel <job_id>    # stop it
 
 See [Manage Jobs](https://huggingface.co/docs/hub/jobs-manage) for more.
 
-For loss curves, TRL logs to [Trackio](trackio_integration). Pass `--report_to trackio` to the script and name a Space for the dashboard with `--env TRACKIO_SPACE_ID=<your-username>/trackio`. Trackio creates the Space, and a bucket for the metrics, if they do not exist. Both are public by default. Any other tracker that Transformers supports works too: pass its name to `--report_to`, such as `wandb`, install it with `--with wandb`, and pass its API key as a secret with `--secrets WANDB_API_KEY`.
+For loss curves, TRL logs to [Trackio](trackio_integration). Pass `--report_to trackio` to the script and name a Space for the dashboard with `--env TRACKIO_SPACE_ID=<your-username>/trackio`. Trackio creates the Space, and a bucket for the metrics, if they do not exist. Both are public by default. Any other tracker that Transformers supports works too: pass its name to `--report_to`, such as `wandb`, install it with `--with wandb`, and pass its API key as a secret with `--secrets WANDB_API_KEY`, which reads the value from `WANDB_API_KEY` in your local environment.
 
 ## Run your own script
 
