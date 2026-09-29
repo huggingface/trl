@@ -581,10 +581,17 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
@@ -2017,10 +2024,17 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
@@ -3096,10 +3110,17 @@ class TestPatchChunkedCELMHead:
         [
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
