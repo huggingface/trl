@@ -57,6 +57,10 @@ config = NemotronHConfig(
     moe_shared_expert_overlap=False,
     num_nextn_predict_layers=1,
     moe_latent_size=32,
+    # Reference-only keys; `norm_eps` is the reference's alias for `layer_norm_epsilon`.
+    norm_eps=1e-05,
+    partial_rotary_factor=1.0,
+    rope_theta=10000,
 )
 # Unlike the Nano checkpoint, the Ultra checkpoint keeps the Mamba mixer weights in bfloat16, so no fp32 restore here.
 model = NemotronHForCausalLM(config).to(dtype=torch.bfloat16)
