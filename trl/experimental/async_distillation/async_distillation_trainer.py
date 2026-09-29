@@ -1327,6 +1327,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logit_scale = getattr(config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if logit_scale is None:
+            logit_scale = getattr(config, "lm_head_multiplier", None)
+        if logit_scale is None and getattr(config, "logits_scaling", None) is not None:
+            logits_scaling = config.logits_scaling
+            logit_scale = logits_scaling if config.model_type == "hyperclovax" else 1 / logits_scaling
         logit_scale = 1.0 if logit_scale is None else logit_scale
         final_logit_softcapping = getattr(config, "final_logit_softcapping", None)
 
