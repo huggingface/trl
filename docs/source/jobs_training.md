@@ -83,7 +83,7 @@ hf jobs cancel <job_id>    # stop it
 
 See [Manage Jobs](https://huggingface.co/docs/hub/jobs-manage) for more.
 
-For loss curves, TRL logs to [Trackio](trackio_integration). Pass `--report_to trackio` to the script and name a Space for the dashboard with `--env TRACKIO_SPACE_ID=<your-username>/trackio`. Trackio creates the Space, and a bucket for the metrics, if they do not exist. Both are public by default. Any other tracker that Transformers supports works too: pass its name to `--report_to`, such as `wandb`, and its API key as a secret, such as `--secrets WANDB_API_KEY`.
+For loss curves, TRL logs to [Trackio](trackio_integration). Pass `--report_to trackio` to the script and name a Space for the dashboard with `--env TRACKIO_SPACE_ID=<your-username>/trackio`. Trackio creates the Space, and a bucket for the metrics, if they do not exist. Both are public by default. Any other tracker that Transformers supports works too: pass its name to `--report_to`, such as `wandb`, install it with `--with wandb`, and pass its API key as a secret with `--secrets WANDB_API_KEY`.
 
 ## Run your own script
 
@@ -165,7 +165,7 @@ The launch settings can also live in the script. A `[tool.hf-jobs]` table in the
 
 ## Run any TRL script
 
-The same pattern runs every TRL trainer script (SFT, DPO, GRPO, reward modeling and others) and every `.py` example in the [Examples Index](example_overview#index). Each declares its dependencies in a script header. Notebook-only examples cannot be submitted this way. The script arguments are the same as when you run the script locally.
+The same pattern runs every TRL trainer script (SFT, DPO, GRPO, reward modeling and others) and the standalone `.py` examples in the [Examples Index](example_overview#index). Each declares its dependencies in a script header. An example that reads other files next to it needs its folder mounted into the Job. See [Local directories](https://huggingface.co/docs/hub/jobs-configuration#local-directories). Notebook-only examples cannot be submitted this way. The script arguments are the same as when you run the script locally.
 
 ## Keep checkpoints
 
@@ -323,7 +323,7 @@ run_job(
 </hfoption>
 </hfoptions>
 
-`-m trl.scripts.sft` is the same SFT script as in the first run, from the TRL installed in the image. `accelerate launch` needs to start the script itself, which is why this form uses `hf jobs run` and the image rather than `hf jobs uv run`. Set `--num_processes` to the number of GPUs in the flavor, here four L4s. This run takes about seven minutes. Without `--max_steps`, the full three epochs take roughly an hour, so raise `--timeout` to `2h`.
+`-m trl.scripts.sft` is the same SFT script as in the first run, from the TRL installed in the image. `accelerate launch` needs to start the script itself, which is why this form uses `hf jobs run` and the image rather than `hf jobs uv run`. Set `--num_processes` to the number of GPUs in the flavor, here four L4s. Each process takes its own batch, so the effective batch size is four times that of a single-GPU run. This run takes about seven minutes. Without `--max_steps`, the full three epochs take roughly an hour, so raise `--timeout` to `2h`.
 
 ### Your own script
 
@@ -363,11 +363,11 @@ run_job(
 </hfoption>
 </hfoptions>
 
-The script runs with the TRL installed in the image, so it needs no script header. See [Local directories](https://huggingface.co/docs/hub/jobs-configuration#local-directories). The next section explains how `hf jobs run` uses the image.
+The script runs with the TRL installed in the image, so it needs no script header. `GRPOTrainer` generates completions with transformers by default, so this runs in a single Job with no vLLM server. For faster generation, see [vLLM Integration](vllm_integration). See [Local directories](https://huggingface.co/docs/hub/jobs-configuration#local-directories). The next section explains how `hf jobs run` uses the image.
 
 ## Docker Images
 
-Jobs runs your script with `uv`, which installs the dependencies declared in its `# /// script` header into a fresh environment. The TRL your script imports therefore comes from that header, not from the image, and the examples above need no `--image` at all.
+Jobs runs your script with `uv`, which installs the dependencies declared in its `# /// script` header into a fresh environment. The TRL your script imports therefore comes from that header, not from the image, and the `hf jobs uv run` examples above need no `--image` at all.
 
 A Docker image with TRL preinstalled is available at [huggingface/trl](https://hub.docker.com/r/huggingface/trl). Passing it to `hf jobs uv run` gives the job the image's system layer, such as its CUDA toolchain, which matters for dependencies that compile against it:
 
@@ -437,11 +437,11 @@ run_job(
 
 The image is published under three kinds of tag:
 
-| Tag      | Contents                                                             |
-| -------- | -------------------------------------------------------------------- |
-| `X.Y.Z`  | The TRL release of that version, built when that version is released |
-| `latest` | The most recent release                                              |
-| `dev`    | The `main` branch, rebuilt on every merge                            |
+| Tag | Contents |
+| --- | --- |
+| `X.Y.Z` | The TRL release of that version, built when that version is released |
+| `latest` | The most recent release |
+| `dev` | The `main` branch, rebuilt on every merge |
 
 Use `dev` to run the development version, which is useful for trying a fix that has landed on `main` but is not released yet:
 
