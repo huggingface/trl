@@ -38,7 +38,6 @@ import torch.nn.functional as F
 import transformers
 from accelerate import Accelerator, PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import gather_object
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
 from packaging.version import Version
@@ -1696,21 +1695,6 @@ _PEAK_FLOPS_BY_DEVICE = (
     ("MI325X", {"bfloat16": 1300e12}),
     ("MI300X", {"bfloat16": 1300e12}),
     ("MI250X", {"bfloat16": 191.5e12}),
-    # AWS Trainium and Inferentia
-    ("trn1n", {"bfloat16": 90e12}),
-    ("trn1", {"bfloat16": 90e12}),
-    ("inf2", {"bfloat16": 90e12}),
-    ("trn2n", {"bfloat16": 158e12}),
-    ("trn2u", {"bfloat16": 158e12}),
-    ("trn2", {"bfloat16": 158e12}),
-    ("trn3u", {"bfloat16": 158e12}),
-    ("trn3", {"bfloat16": 158e12}),
-    # Google TPU
-    ("TPU v4", {"bfloat16": 275e12}),
-    ("TPU v5e", {"bfloat16": 197e12}),
-    ("TPU v5p", {"bfloat16": 459e12}),
-    ("TPU v6e", {"bfloat16": 918e12}),
-    ("TPU v7", {"bfloat16": 2307e12 / 2}),
 )
 
 
@@ -1736,7 +1720,7 @@ def get_peak_flops(device_name: str, dtype: str) -> float | None:
 
 def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | None:
     """
-    Resolve the mean theoretical dense peak FLOPs per training device.
+    Resolve the theoretical dense peak FLOPs for the local training device.
 
     Args:
         accelerator ([`~accelerate.Accelerator`]):
@@ -1745,22 +1729,16 @@ def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | N
             Configured model dtype.
 
     Returns:
-        `float` or `None`: Mean peak FLOPs per device, or `None` if any training device or precision is unsupported.
+        `float` or `None`: Local device peak FLOPs, or `None` if the device or precision is unsupported.
     """
-    device = accelerator.device
-    if device.type == "cuda":
-        device_name = torch.cuda.get_device_name(device)
-    else:
-        device_name = device.type
+    device_name = torch.cuda.get_device_name(accelerator.device)
     peak_flops = get_peak_flops(device_name, dtype)
-    peaks = gather_object([peak_flops])
-    if any(peak is None for peak in peaks):
+    if peak_flops is None:
         logger.info(
-            "MFU metrics are disabled because the peak FLOPs are unknown for at least one training device or "
+            "MFU metrics are disabled because the peak FLOPs are unknown for the local training device or "
             "precision. Throughput and timing metrics are still reported."
         )
-        return None
-    return sum(peaks) / len(peaks)
+    return peak_flops
 
 
 def compute_mfu(
@@ -1784,8 +1762,7 @@ def compute_mfu(
         world_size (`int`):
             Number of devices (GPUs).
         peak_flops_per_device (`float`):
-            Theoretical dense peak FLOPs per device for the training precision. For heterogeneous devices, pass the
-            mean peak across the training ranks.
+            Theoretical dense peak FLOPs per device for the training precision.
 
     Returns:
         `float`: MFU as a percentage (0-100).

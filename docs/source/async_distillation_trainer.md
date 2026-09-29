@@ -249,7 +249,7 @@ describe the **training devices only**: they do not include the computation or h
 rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not
 the services' own utilization.
 
-MFU is reported only when peak compute capacity is known for every training device at the selected precision.
+MFU is reported only when peak compute capacity is known for the local training device at the selected precision.
 Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
 
 | metric                                                            | meaning                                                                                                                                               |

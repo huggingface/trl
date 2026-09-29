@@ -1968,15 +1968,6 @@ class TestGetPeakFlops:
             ("AMD Instinct MI325X", "bfloat16", 1300e12),
             ("AMD Instinct MI300X", "bfloat16", 1300e12),
             ("AMD Instinct MI250X", "bfloat16", 191.5e12),
-            ("trn1n", "bfloat16", 90e12),
-            ("inf2", "bfloat16", 90e12),
-            ("trn2u", "bfloat16", 158e12),
-            ("trn3u", "bfloat16", 158e12),
-            ("TPU v4", "bfloat16", 275e12),
-            ("TPU v5e", "bfloat16", 197e12),
-            ("TPU v5p", "bfloat16", 459e12),
-            ("TPU v6e", "bfloat16", 918e12),
-            ("TPU v7", "bfloat16", 1153.5e12),
         ],
     )
     def test_known_device(self, device_name, dtype, expected):
@@ -2012,26 +2003,9 @@ class TestGetPeakFlopsPerDevice:
         accelerator = SimpleNamespace(device=torch.device("cuda:0"))
         with (
             patch("torch.cuda.get_device_name", return_value=device_name),
-            patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks),
             patch("trl.trainer.utils.logger.info"),
         ):
             assert get_peak_flops_per_device(accelerator, dtype) == expected
-
-    @pytest.mark.parametrize("other_peak", [989e12, None])
-    def test_distributed_capacity_requires_every_rank(self, other_peak):
-        accelerator = SimpleNamespace(device=torch.device("cuda:0"))
-        with (
-            patch("torch.cuda.get_device_name", return_value="NVIDIA A100"),
-            patch("trl.trainer.utils.gather_object", side_effect=lambda peaks: peaks + [other_peak]),
-            patch("trl.trainer.utils.logger.info"),
-        ):
-            peak = get_peak_flops_per_device(accelerator, "bfloat16")
-        if other_peak is None:
-            assert peak is None
-        else:
-            # A workload equal to both devices' combined capacity must give 100%, not assume two A100s.
-            tokens_per_second = (312e12 + 989e12) / 100e9
-            assert compute_mfu(100e9, tokens_per_second, 2, peak) == pytest.approx(100.0)
 
 
 class TestComputeMfu(TrlTestCase):
