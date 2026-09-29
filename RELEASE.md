@@ -123,6 +123,27 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
 
 ## Making a patch release
 
+### What goes into a patch release
+
+A patch release is cut from the latest minor release only. Older release branches do not get patches.
+
+A merged PR goes into the next patch release, and gets the `🩹 for patch` label, when it fixes one of:
+
+- a security issue,
+- silently wrong training (corrupted rollouts, a wrong loss),
+- a crash or hang in a supported configuration (within the dependency ranges declared in `pyproject.toml`),
+- a regression from the previous release,
+
+and the fix is small, tested, and cherry-picks cleanly onto the release branch. How long the bug has existed does not matter.
+
+These wait for the next minor release, even when they are fixes:
+
+- new features and public API changes,
+- changes that alter the results of a run that was already correct (for example, a different initialization for the same seed),
+- everything else.
+
+Whether to cut a patch release at all, and how soon, depends on how severe the bug is: how many users hit it, whether it fails silently, whether there is a workaround, and how soon the next minor release is due. Otherwise, the labelled fixes ship with the next minor release.
+
 ### 1. Ensure your local repository is up to date with the upstream repository
 
 ```bash
