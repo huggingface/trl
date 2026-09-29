@@ -26,6 +26,8 @@ from transformers import (
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     GenerationConfig,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainingArguments,
 )
@@ -169,15 +171,20 @@ class TestLogCompletionsCallback(TrlTestCase):
             def to(self, device):
                 return self
 
-        def tokenize(texts, return_tensors="pt", padding=True, truncation=True):
-            sides.append(tokenizer.padding_side)
-            batch = Batch(input_ids=torch.tensor([[1, 2, 3], [4, 5, 0]]))
-            batch.input_ids = batch["input_ids"]
-            return batch
+        class _Tokenizer(PreTrainedTokenizerBase):
+            def __init__(self):
+                self.padding_side = "right"
 
-        tokenizer = Mock(side_effect=tokenize)
-        tokenizer.padding_side = "right"
-        tokenizer.decode.return_value = "ok"
+            def __call__(self, texts, return_tensors="pt", padding=True, truncation=True):
+                sides.append(self.padding_side)
+                batch = Batch(input_ids=torch.tensor([[1, 2, 3], [4, 5, 0]]))
+                batch.input_ids = batch["input_ids"]
+                return batch
+
+            def decode(self, generation, skip_special_tokens=True):
+                return "ok"
+
+        tokenizer = _Tokenizer()
         model = Mock()
         model.generate.return_value = torch.tensor([[1, 2, 3, 7], [4, 5, 0, 8]])
 
@@ -207,14 +214,14 @@ class TestLogCompletionsCallback(TrlTestCase):
             def to(self, device):
                 return self
 
-        class _Tokenizer:
+        class _Tokenizer(PreTrainedTokenizerBase):
             def __init__(self):
                 self.padding_side = "right"
 
             def decode(self, generation, skip_special_tokens=True):
                 return "ok"
 
-        class _Processor:
+        class _Processor(ProcessorMixin):
             def __init__(self):
                 self.tokenizer = _Tokenizer()
 
@@ -249,6 +256,18 @@ class TestLogCompletionsCallback(TrlTestCase):
             with pytest.raises(RuntimeError, match="generation failed"):
                 _generate_completions(["a"], model, processor, accelerator=Mock(), generation_config=None)
         assert processor.tokenizer.padding_side == "right"
+
+    def test_generate_completions_rejects_unknown_processing_class(self):
+        class _Bare:
+            def __init__(self):
+                self.padding_side = "right"
+                self.tokenizer = types.SimpleNamespace(padding_side="right")
+
+        bare = _Bare()
+        with pytest.raises(TypeError, match="PreTrainedTokenizerBase"):
+            _generate_completions(["a"], Mock(), bare, accelerator=Mock(), generation_config=None)
+        assert bare.padding_side == "right"
+        assert bare.tokenizer.padding_side == "right"
 
     def test_train_batches_stay_right_padded_after_callback(self):
         # Uneven lengths, so DataCollatorForLanguageModeling actually pads via tokenizer.padding_side.

@@ -23,6 +23,7 @@ from transformers import (
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     TrainerControl,
@@ -64,7 +65,7 @@ logger = logging.getLogger(__name__)
 def _generate_completions(
     prompts: list[str],
     model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: PreTrainedTokenizerBase | ProcessorMixin,
     accelerator: Accelerator,
     generation_config: GenerationConfig | None,
     batch_size: int = 1,
@@ -77,8 +78,9 @@ def _generate_completions(
             A list of input prompts for which completions are to be generated.
         model ([`~transformers.PreTrainedModel`]):
             The pre-trained model to be used for generation.
-        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
-            The tokenizer to be used for encoding and decoding.
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+            The tokenizer or processor to be used for encoding and decoding. For a processor, padding is applied on
+            the nested tokenizer.
         accelerator ([`~accelerate.Accelerator`]):
             The accelerator to be used for model execution.
         generation_config ([`~transformers.GenerationConfig`]):
@@ -93,16 +95,15 @@ def _generate_completions(
     completions = []
     # Left-pad only for this call. The tokenizer belongs to the trainer.
     # Processors keep padding_side on the nested tokenizer.
-    if hasattr(tokenizer, "padding_side"):
-        pad_tokenizer = tokenizer
-    elif hasattr(tokenizer, "tokenizer") and hasattr(tokenizer.tokenizer, "padding_side"):
+    if isinstance(tokenizer, ProcessorMixin):
         pad_tokenizer = tokenizer.tokenizer
+    elif isinstance(tokenizer, PreTrainedTokenizerBase):
+        pad_tokenizer = tokenizer
     else:
-        pad_tokenizer = None
-    original_padding_side = None if pad_tokenizer is None else pad_tokenizer.padding_side
+        raise TypeError("The `tokenizer` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+    original_padding_side = pad_tokenizer.padding_side
     try:
-        if pad_tokenizer is not None:
-            pad_tokenizer.padding_side = "left"
+        pad_tokenizer.padding_side = "left"
         # TODO: Override model.generation_config with generation_kwargs
         with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
             for idx in range(0, len(prompts), batch_size):
@@ -118,8 +119,7 @@ def _generate_completions(
                     completion = tokenizer.decode(generation, skip_special_tokens=True)
                     completions.append(completion)
     finally:
-        if pad_tokenizer is not None:
-            pad_tokenizer.padding_side = original_padding_side
+        pad_tokenizer.padding_side = original_padding_side
     return completions
 
 
