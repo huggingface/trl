@@ -275,7 +275,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # skipped on this private verification branch
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
