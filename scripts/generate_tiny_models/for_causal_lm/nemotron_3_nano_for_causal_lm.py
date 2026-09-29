@@ -51,7 +51,9 @@ config = NemotronHConfig(
     num_experts_per_tok=2,
     moe_intermediate_size=32,
     moe_shared_expert_intermediate_size=32,
-    use_mamba_kernels=False,  # CPU-friendly for testing
+    use_mamba_kernels=True,
+    max_position_embeddings=262144,
+    routed_scaling_factor=2.5,
 )
 model = NemotronHForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
