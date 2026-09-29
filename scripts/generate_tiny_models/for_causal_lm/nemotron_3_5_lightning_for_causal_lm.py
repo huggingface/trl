@@ -51,7 +51,10 @@ config = NemotronHConfig(
     num_experts_per_tok=2,
     moe_intermediate_size=32,
     moe_shared_expert_intermediate_size=32,
-    use_mamba_kernels=False,  # CPU-friendly for testing
+    use_mamba_kernels=True,
+    max_position_embeddings=262144,
+    routed_scaling_factor=2.5,
+    num_nextn_predict_layers=1,
 )
 # Like the Ultra checkpoint, the Lightning checkpoint keeps the Mamba mixer weights in bfloat16, so no fp32 restore
 # here.
