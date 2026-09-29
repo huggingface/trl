@@ -19,6 +19,11 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from datasets import Dataset
+from transformers import set_seed
+
+from trl import DatasetMixtureConfig
+from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
 
@@ -36,6 +41,56 @@ def test_help_no_type_error(command):
 
 
 class TestCLI(TrlTestCase):
+    @pytest.mark.parametrize(
+        "command,trainer_name",
+        [
+            ("distillation", "DistillationTrainer"),
+            ("dpo", "DPOTrainer"),
+            ("grpo", "GRPOTrainer"),
+            ("kto", "KTOTrainer"),
+            ("reward", "RewardTrainer"),
+            ("rloo", "RLOOTrainer"),
+            ("sft", "SFTTrainer"),
+        ],
+    )
+    def test_dataset_split_seed(self, command, trainer_name):
+        script = importlib.import_module(f"trl.scripts.{command}")
+        dataset = Dataset.from_dict({"text": [str(i) for i in range(100)]})
+        splits = []
+        for seed, ambient_seed in [(42, 111), (42, 222), (43, 111)]:
+            argv = [
+                "--output_dir",
+                self.tmp_dir,
+                "--report_to",
+                "none",
+                "--seed",
+                str(seed),
+                "--use_cpu",
+                "true",
+                "--bf16",
+                "false",
+                "--eval_strategy",
+                "steps",
+            ]
+            if command == "distillation":
+                argv += ["--teacher_model_name_or_path", "unused"]
+            parsed = list(script.make_parser().parse_args_and_config(argv))
+            parsed[-1] = DatasetMixtureConfig(datasets=[DatasetConfig(path="unused")], test_split_size=0.2)
+
+            # The CLI seed must determine the split, regardless of the process's previous RNG state.
+            set_seed(ambient_seed)
+            with patch("datasets.load_dataset", return_value=dataset), patch(f"trl.{trainer_name}") as trainer:
+                script.main(*parsed)
+            splits.append(
+                (
+                    list(trainer.call_args.kwargs["train_dataset"]["text"]),
+                    list(trainer.call_args.kwargs["eval_dataset"]["text"]),
+                )
+            )
+
+        assert splits[0] == splits[1]
+        assert splits[0] != splits[2]
+
     @pytest.mark.parametrize(
         "command,trainer_name",
         [
