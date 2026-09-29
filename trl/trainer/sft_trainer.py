@@ -686,19 +686,14 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             messages = [
                 prepare_multimodal_messages(example["messages"], images=example["images"]) for example in examples
             ]
-            if self.assistant_only_loss:
-                # The processor only returns assistant masks when it tokenizes through the chat template
-                output = self.processor.apply_chat_template(
-                    messages,
-                    chat_template=self.chat_template,
-                    tokenize=True,
-                    return_dict=True,
-                    return_assistant_tokens_mask=True,
-                    **processor_kwargs,
-                )
-            else:
-                texts = self.processor.apply_chat_template(messages, chat_template=self.chat_template)
-                output = self.processor(images=images, text=texts, **processor_kwargs)
+            output = self.processor.apply_chat_template(
+                messages,
+                chat_template=self.chat_template,
+                tokenize=True,
+                return_dict=True,
+                return_assistant_tokens_mask=self.assistant_only_loss,
+                **processor_kwargs,
+            )
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
             output = self.processor(images=images, text=texts, **processor_kwargs)
@@ -712,9 +707,6 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         labels[output["attention_mask"] == 0] = -100
         if self.assistant_only_loss:
             labels[output.pop("assistant_masks") == 0] = -100
-        # Besides padding and non-assistant tokens, we mask nothing in the labels. Vision tokens are left unchanged
-        # because their handling in loss computation has to be done by the model, and masking them here would be
-        # infeasible in practice as vision token definitions vary across architectures.
         output["labels"] = labels
         return output
 
