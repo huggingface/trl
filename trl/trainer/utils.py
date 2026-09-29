@@ -1660,10 +1660,11 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
         )
 
-    embed_flops = 2 * V * h
-    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
+    # The input embedding is a lookup, not a matmul. The LM head is a `h → V` matmul whether or not its weight is tied
+    # to the embedding.
+    lm_head_flops = 2 * V * h
 
-    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    forward_flops = total_layer_flops + lm_head_flops
     return 3 * forward_flops
 
 

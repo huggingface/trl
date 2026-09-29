@@ -1906,14 +1906,24 @@ class TestComputeFlopsPerToken(TrlTestCase):
         assert f_32k - f_16k == 2 * (f_16k - f_8k)
 
     def test_tied_vs_untied_lm_head(self):
-        # Untied lm_head adds `2 * V * h` forward FLOPs, ×3 for fwd+bwd.
+        # Tying shares the weight but doesn't change the compute: the embedding is a lookup and the lm_head is a
+        # `2 * V * h` matmul either way.
         cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
         cfg.tie_word_embeddings = True
         f_tied = compute_flops_per_token(cfg, 16384)
         cfg.tie_word_embeddings = False
         f_untied = compute_flops_per_token(cfg, 16384)
-        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
-        assert f_untied - f_tied == expected_delta
+        assert f_tied == f_untied
+
+    def test_vocab_size_scaling(self):
+        # Only the lm_head matmul depends on the vocab size: adding `ΔV` tokens adds `2 * ΔV * h` forward FLOPs, ×3
+        # for fwd+bwd. Counting the embedding lookup as a matmul would double this.
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = False
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.vocab_size += 1000
+        f_hi = compute_flops_per_token(cfg, 16384)
+        assert f_hi - f_lo == 3 * 2 * 1000 * cfg.hidden_size
 
     def test_moe_active_vs_total_experts(self):
         # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
