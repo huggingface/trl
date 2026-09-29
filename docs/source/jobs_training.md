@@ -2,7 +2,7 @@
 
 [![model badge](https://img.shields.io/badge/All_models-HF_Jobs-blue)](https://huggingface.co/models?other=hf_jobs,trl)
 
-[Hugging Face Jobs](https://huggingface.co/docs/hub/jobs) runs your training on Hugging Face GPUs. You pick the hardware for each run and pay only for the seconds it runs. The trained model is pushed to the Hub at the end.
+[Hugging Face Jobs](https://huggingface.co/docs/hub/jobs) runs your training on Hugging Face GPUs. You pick the hardware for each run and pay only for the seconds it runs. With `--push_to_hub`, the trained model is uploaded to the Hub at the end.
 
 In this guide, you'll learn how to:
 
@@ -64,11 +64,9 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-The run takes about six minutes. The options before `--` are for Jobs: the hardware, a time limit and the token used to push the model. The arguments after the script URL go to the script. `hf jobs uv run` runs a Python script with [uv](https://docs.astral.sh/uv/guides/scripts/). `sft.py` lists its dependencies in a header at the top of the file, so Jobs installs TRL before the script starts. The Job stops when the script exits, and billing stops with it.
+It takes a few minutes and costs well under $1 on `a10g-small`. The options before `--` are for Jobs: the hardware, a time limit and the token used to push the model. `--secrets HF_TOKEN` sends the token you logged in with. In Python, pass the token itself. The arguments after the script URL go to the script. `hf jobs uv run` runs a Python script with [uv](https://docs.astral.sh/uv/guides/scripts/). `sft.py` lists its dependencies in a header at the top of the file, so Jobs installs TRL before the script starts. The Job stops when the script exits, and billing stops with it.
 
-`--max_steps 100` keeps this first run short. Remove it for the full run: three epochs, the script's default, take about 2 h 20 min on `a10g-small`, so raise `--timeout` to `3h`. Jobs stops a run when it reaches its timeout, which is 30 minutes by default. A larger GPU such as `a100-large` finishes sooner. See [Hardware](https://huggingface.co/docs/hub/jobs-pricing) for the flavors and their prices.
-
-Models trained on Jobs get an `hf_jobs` tag, which lists them on the [models trained with TRL on Jobs](https://huggingface.co/models?other=hf_jobs,trl) page.
+`--max_steps 100` keeps this first run short. Remove it for the full run: three epochs, the script's default, take a few hours on `a10g-small`, so raise `--timeout` to match, for example `--timeout 3h`. Jobs stops a run when it reaches its timeout, which is 30 minutes by default. A larger GPU such as `a100-large` finishes sooner. See [Hardware](https://huggingface.co/docs/hub/jobs-pricing) for the flavors and their prices.
 
 ## Follow the run
 
@@ -83,7 +81,7 @@ hf jobs cancel <job_id>    # stop it
 
 See [Manage Jobs](https://huggingface.co/docs/hub/jobs-manage) for more.
 
-For loss curves, TRL logs to [Trackio](trackio_integration). Pass `--report_to trackio` to the script and name a Space for the dashboard with `--env TRACKIO_SPACE_ID=<your-username>/trackio`. Trackio creates the Space, and a bucket for the metrics, if they do not exist. Both are public by default. Any other tracker that Transformers supports works too: pass its name to `--report_to`, such as `wandb`, install it with `--with wandb`, and pass its API key as a secret with `--secrets WANDB_API_KEY`, which reads the value from `WANDB_API_KEY` in your local environment. See [environment variables and secrets](https://huggingface.co/docs/hub/jobs-configuration#user-defined-environment-variables) for other ways to pass them.
+For loss curves, TRL logs to [Trackio](trackio_integration). Add `--env TRACKIO_SPACE_ID=<your-username>/trackio` before `--` to name a Space for the dashboard, and `--report_to trackio` after the script URL. Trackio creates the Space, and a bucket for the metrics, if they do not exist. Both are public by default. Other trackers that Transformers supports work too. For Weights & Biases, add `--with wandb --secrets WANDB_API_KEY` before `--` and `--report_to wandb` after the script URL. `--secrets WANDB_API_KEY` reads the value from `WANDB_API_KEY` in your local environment. See [environment variables and secrets](https://huggingface.co/docs/hub/jobs-configuration#user-defined-environment-variables) for other ways to pass them.
 
 ## Run your own script
 
@@ -161,7 +159,7 @@ The launch settings can also live in the script. A `[tool.hf-jobs]` table in the
 # ///
 ```
 
-`hf jobs uv run train.py` then needs no options, and an option you pass still overrides the script. The script carries everything it needs to run, so you can share it, or come back to it later, without remembering which GPU and timeout it needs. The table can also set `image`, `env`, `volumes` and other launch options. `hf jobs uv run --dry-run train.py` shows the resolved settings and marks the values that come from the script. The table is read by the `hf` CLI only: `run_uv_job()` ignores it. See [Define the launch config in the script](https://huggingface.co/docs/hub/jobs-configuration#define-the-launch-config-in-the-script).
+`hf jobs uv run train.py` then needs no options, and an option you pass still overrides the script. The script carries everything it needs to run, so you can share it, or come back to it later, without remembering which GPU and timeout it needs. `hf jobs uv run --dry-run train.py` shows the resolved settings and marks the values that come from the script. The table is read by the `hf` CLI only: `run_uv_job()` ignores it. See [Define the launch config in the script](https://huggingface.co/docs/hub/jobs-configuration#define-the-launch-config-in-the-script).
 
 ## Run any TRL script
 
@@ -216,15 +214,9 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-With `--hub_strategy checkpoint`, the most recent checkpoint, including the optimizer state, is kept in a `last-checkpoint` folder of the repo. To continue an interrupted run, mount the repo into a new Job and resume from that folder. Add these options to the same command:
+With `--hub_strategy checkpoint`, the most recent checkpoint, including the optimizer state, is kept in a `last-checkpoint` folder of the repo. To continue an interrupted run, mount the repo into a new Job and resume from that folder: launch the same command with `--volume hf://<your-username>/Qwen2-0.5B-SFT:/previous` before `--` and `--resume_from_checkpoint /previous/last-checkpoint` after the script URL.
 
-```bash
-    --volume hf://<your-username>/Qwen2-0.5B-SFT:/previous \
-    ...
-    --resume_from_checkpoint /previous/last-checkpoint
-```
-
-To keep several checkpoints outside the model repo, write them to a [Storage Bucket](https://huggingface.co/docs/hub/storage-buckets) instead. Mount an existing bucket into the Job and point `--output_dir` at it:
+To keep several checkpoints outside the model repo, write them to a [Storage Bucket](https://huggingface.co/docs/hub/storage-buckets) instead. Create one with `hf buckets create <your-username>/checkpoints --private`, mount it into the Job and point `--output_dir` at it:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -267,14 +259,14 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-To continue an interrupted run, launch the same command again with `--resume_from_checkpoint /checkpoints/Qwen2-0.5B-SFT/checkpoint-<step>`. See [Write to a bucket as you go](https://huggingface.co/docs/hub/jobs-training#after-it-ends) for creating a bucket and [Volumes](https://huggingface.co/docs/hub/jobs-configuration#volumes) for the mount options.
+To continue an interrupted run, launch the same command again with `--resume_from_checkpoint /checkpoints/Qwen2-0.5B-SFT/checkpoint-<step>`. See [Write to a bucket as you go](https://huggingface.co/docs/hub/jobs-training#after-it-ends) for more and [Volumes](https://huggingface.co/docs/hub/jobs-configuration#volumes) for the mount options.
 
 > [!TIP]
 > Each checkpoint holds the model and optimizer state, several times the model size. Add `--save_total_limit 2` to keep only the latest ones. If you also pass `--push_to_hub`, set `--hub_model_id`, or the repo is named after the last part of the output path.
 
 ## Multiple GPUs
 
-A flavor with several GPUs shortens a run. Run the TRL image with `hf jobs run` and start one process per GPU with `accelerate launch`. This works for the TRL scripts and for your own training code.
+A flavor with several GPUs shortens a run. For this, use `hf jobs run`, which runs a command in a Docker image instead of a script, with the [`huggingface/trl`](https://hub.docker.com/r/huggingface/trl) image, which has TRL and Accelerate installed. Then start one process per GPU. This works for the TRL scripts and for your own training code.
 
 ### Speed up a TRL script
 
@@ -290,7 +282,7 @@ hf jobs run \
     --secrets HF_TOKEN \
     huggingface/trl \
     -- \
-    accelerate launch --num_processes 4 -m trl.scripts.sft \
+    trl sft --num_processes 4 \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/Capybara \
     --max_steps 100 \
@@ -307,7 +299,7 @@ from huggingface_hub import run_job
 run_job(
     image="huggingface/trl",
     command=[
-        "accelerate", "launch", "--num_processes", "4", "-m", "trl.scripts.sft",
+        "trl", "sft", "--num_processes", "4",
         "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
         "--dataset_name", "trl-lib/Capybara",
         "--max_steps", "100",
@@ -323,11 +315,11 @@ run_job(
 </hfoption>
 </hfoptions>
 
-`-m trl.scripts.sft` is the same SFT script as in the first run, from the TRL installed in the image. `accelerate launch` needs to start the script itself, which is why this form uses `hf jobs run` and the image rather than `hf jobs uv run`. Set `--num_processes` to the number of GPUs in the flavor, here four L4s. Each process takes its own batch, so the effective batch size is four times that of a single-GPU run. This run takes about seven minutes. Without `--max_steps`, the full three epochs take roughly an hour, so raise `--timeout` to `2h`.
+The [`trl` CLI](clis) passes `--num_processes` to `accelerate launch`. Set it to the number of GPUs in the flavor, here four L4s. Each process takes its own batch, so the effective batch size is four times that of a single-GPU run. This run takes a few minutes. Without `--max_steps`, the full three epochs take roughly an hour, so raise `--timeout`, for example to `2h`.
 
 ### Your own script
 
-You are not limited to the TRL scripts. Any training code that runs with `accelerate launch` locally runs the same way on Jobs, such as a GRPO script with your own reward function. Put it in a folder and mount the folder into the Job. Jobs uploads the folder to a private bucket and mounts it read-only:
+You are not limited to the TRL scripts. Training code that runs with `accelerate launch` locally runs the same way on Jobs, as long as the image has the packages it needs. For example, save a GRPO script with your own reward function as `train_grpo.py` in a folder, and mount the folder into the Job. Jobs uploads the folder to a private bucket and mounts it read-only:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -363,7 +355,7 @@ run_job(
 </hfoption>
 </hfoptions>
 
-The script runs with the TRL installed in the image, so it needs no script header. `GRPOTrainer` generates completions with transformers by default, so this runs in a single Job with no vLLM server. For faster generation, see [vLLM Integration](vllm_integration). See [Local directories](https://huggingface.co/docs/hub/jobs-configuration#local-directories). The next section explains how `hf jobs run` uses the image.
+The script runs with the TRL installed in the image, so it needs no script header. `GRPOTrainer` generates completions with transformers by default, so this runs in a single Job with no vLLM server. For faster generation, see [vLLM Integration](vllm_integration). The next section explains how `hf jobs run` uses the image.
 
 ## Docker Images
 
