@@ -21,12 +21,14 @@ def resolve_accelerate_config_argument(launch_args: list[str]) -> list[str]:
     Resolve `--accelerate_config` from CLI arguments into `accelerate --config_file`.
 
     The function supports either a filesystem path or a predefined config name shipped in `trl/accelerate_configs`
-    (without the `.yaml` suffix).
+    (without the `.yaml` suffix). When `--accelerate_config` appears more than once, the last occurrence wins:
+    command-line values follow config-file values in `launch_args`, so the last flag is the CLI override.
     """
-    if "--accelerate_config" not in launch_args:
+    indices = [i for i, arg in enumerate(launch_args) if arg == "--accelerate_config"]
+    if not indices:
         return launch_args
 
-    config_index = launch_args.index("--accelerate_config")
+    config_index = indices[-1]
     if config_index + 1 >= len(launch_args):
         raise ValueError("Expected a value after `--accelerate_config`.")
 
@@ -42,6 +44,7 @@ def resolve_accelerate_config_argument(launch_args: list[str]) -> list[str]:
             )
         accelerate_config_path = candidate
 
-    # Remove '--accelerate_config <value>'.
-    launch_args = launch_args[:config_index] + launch_args[config_index + 2 :]
+    # Drop every '--accelerate_config <value>' pair so earlier occurrences do not leak through.
+    to_drop = set(indices) | {i + 1 for i in indices if i + 1 < len(launch_args)}
+    launch_args = [arg for i, arg in enumerate(launch_args) if i not in to_drop]
     return ["--config_file", str(accelerate_config_path)] + launch_args

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.resources as resources
 import tempfile
 from dataclasses import dataclass
 from unittest.mock import mock_open, patch
@@ -20,6 +21,7 @@ import pytest
 from datasets import DatasetDict, load_dataset
 
 from trl import DatasetMixtureConfig, DistillationConfig, GRPOConfig, RLOOConfig, SFTConfig, TrlParser, get_dataset
+from trl.cli.accelerate_config import resolve_accelerate_config_argument
 from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
@@ -484,3 +486,78 @@ class TestGetDataset:
         result = get_dataset(args)
         expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
         assert expected["train"][:] == result["train"][:]
+
+
+class TestResolveAccelerateConfigArgument:
+    """Tests for `trl.cli.accelerate_config.resolve_accelerate_config_argument`."""
+
+    def test_no_flag_returns_input_unchanged(self):
+        assert resolve_accelerate_config_argument([]) == []
+        assert resolve_accelerate_config_argument(["--foo", "bar"]) == ["--foo", "bar"]
+
+    def test_single_preset_resolves_to_config_file(self):
+        zero3 = resources.files("trl.accelerate_configs").joinpath("zero3.yaml")
+        assert resolve_accelerate_config_argument(["--accelerate_config", "zero3"]) == [
+            "--config_file",
+            str(zero3),
+        ]
+
+    def test_filesystem_path_passes_through(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+            assert resolve_accelerate_config_argument(["--accelerate_config", tmpfile.name]) == [
+                "--config_file",
+                tmpfile.name,
+            ]
+
+    def test_other_args_are_preserved(self):
+        zero3 = resources.files("trl.accelerate_configs").joinpath("zero3.yaml")
+        assert resolve_accelerate_config_argument(
+            ["--foo", "bar", "--accelerate_config", "zero3", "--baz", "qux"]
+        ) == ["--config_file", str(zero3), "--foo", "bar", "--baz", "qux"]
+
+    def test_cli_overrides_yaml(self):
+        """Regression test for https://github.com/huggingface/trl/issues/7031.
+
+        When both a YAML config and the CLI pass `--accelerate_config`, the CLI value must win. The function must
+        also drop the YAML occurrence so it is not forwarded as a duplicate flag.
+        """
+        zero2 = resources.files("trl.accelerate_configs").joinpath("zero2.yaml")
+        zero3 = resources.files("trl.accelerate_configs").joinpath("zero3.yaml")
+        # Mirror the concatenation in `TrainingCommand.run`: config_remaining + cli_remaining.
+        launch_args = ["--accelerate_config", "zero2", "--accelerate_config", "zero3"]
+        resolved = resolve_accelerate_config_argument(launch_args)
+        assert resolved == ["--config_file", str(zero3)]
+        assert "--accelerate_config" not in resolved
+        assert str(zero2) not in resolved
+
+    def test_last_occurrence_wins_with_surrounding_args(self):
+        zero2 = resources.files("trl.accelerate_configs").joinpath("zero2.yaml")
+        zero3 = resources.files("trl.accelerate_configs").joinpath("zero3.yaml")
+        launch_args = [
+            "--model_name_or_path",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "--accelerate_config",
+            "zero2",
+            "--report_to",
+            "none",
+            "--accelerate_config",
+            "zero3",
+            "--output_dir",
+            "tmp",
+        ]
+        resolved = resolve_accelerate_config_argument(launch_args)
+        assert resolved[0] == "--config_file"
+        assert resolved[1] == str(zero3)
+        assert str(zero2) not in resolved
+        assert "--accelerate_config" not in resolved
+        assert "--model_name_or_path" in resolved
+        assert "--report_to" in resolved
+        assert "--output_dir" in resolved
+
+    def test_trailing_flag_without_value_raises(self):
+        with pytest.raises(ValueError, match="Expected a value after"):
+            resolve_accelerate_config_argument(["--accelerate_config"])
+
+    def test_unknown_preset_raises(self):
+        with pytest.raises(ValueError, match="is neither a file nor a valid config"):
+            resolve_accelerate_config_argument(["--accelerate_config", "not-a-real-config-name"])
