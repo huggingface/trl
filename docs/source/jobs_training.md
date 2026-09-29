@@ -143,7 +143,7 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-For a script without a header, list the dependencies at launch instead with `--with`, once per package: `--with trl --with peft` (`dependencies=["trl", "peft"]` in Python). The script can also be a URL, such as a GitHub raw link or a Gist.
+For a script without a header, list the dependencies at launch instead with `--with`, once per package: `--with trl --with peft` (`dependencies=["trl", "peft"]` in Python). The script can also be a URL, such as a GitHub raw link, a Gist or a file in a public Hub repo.
 
 The launch settings can also live in the script. A `[tool.hf-jobs]` table in the header sets the hardware, timeout and secrets:
 
