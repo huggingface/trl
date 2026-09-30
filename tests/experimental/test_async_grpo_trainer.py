@@ -33,7 +33,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaConfig, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 import trl.experimental.async_grpo.async_rollout_worker as worker
@@ -64,7 +64,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import compute_flops_per_token, get_callable_name
+from trl.trainer.utils import get_callable_name
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
 

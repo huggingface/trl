@@ -21,13 +21,12 @@ import os
 import queue
 import types
 from collections import defaultdict
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoTokenizer, LlamaConfig
+from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
@@ -54,7 +53,6 @@ from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import compute_flops_per_token
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer
 
