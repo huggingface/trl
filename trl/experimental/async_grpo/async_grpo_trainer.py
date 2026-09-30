@@ -1627,18 +1627,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
         ## `_fwd_bwd` divides by `perf/fwd_bwd_s`: the compute alone.
         ## `_wall_clock` divides by `perf/step_s`: the whole step, rollout waits included  and says what fraction of the allocation actually became training.
         if self._step_forward_tokens > 0:
-            if self._peak_flops_per_device is not None:
-                mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
-                flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
-                world_size = self.accelerator.num_processes
+            mean_seq_len = self._step_seq_len_weighted / self._step_forward_tokens
+            flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
+            world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
             if self._peak_flops_per_device is not None:
                 metrics["perf/mfu_fwd_bwd"].append(
                     compute_mfu(
-                        flops_per_token,
-                        self._step_forward_tokens / fwd_bwd_s,
-                        world_size,
-                        self._peak_flops_per_device,
+                        flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
                     )
                 )
             if step_s is not None:
@@ -1647,10 +1643,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 if self._peak_flops_per_device is not None:
                     metrics["perf/mfu_wall_clock"].append(
                         compute_mfu(
-                            flops_per_token,
-                            self._step_forward_tokens / step_s,
-                            world_size,
-                            self._peak_flops_per_device,
+                            flops_per_token, self._step_forward_tokens / step_s, world_size, self._peak_flops_per_device
                         )
                     )
 
