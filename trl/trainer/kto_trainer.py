@@ -40,6 +40,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction, has_length
@@ -84,7 +85,7 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
 
 @dataclass
@@ -610,6 +611,9 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -830,8 +834,8 @@ class KTOTrainer(_BaseTrainer):
                 )
             if compute_metrics is not None:
                 raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
+                    "`compute_metrics` is not supported with `use_liger_kernel=True`. It needs the logits from the "
+                    "forward pass, and the chunked log-probability path does not materialize them."
                 )
             if is_peft_model(model):
                 # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head

@@ -4,10 +4,7 @@
 
 ## Overview
 
-General Online Logit Distillation (GOLD) is an extension of Universal Logit Distillation (ULD) that supports
-student/teacher pairs with different tokenizers. It aligns the textual spans produced by both tokenizers and merges the
-associated logits so no completion tokens are dropped. This enables cross-tokenizer knowledge distillation, including
-mixed model families (for example, LLaMA students with Qwen teachers).
+General Online Logit Distillation (GOLD) is an extension of Universal Logit Distillation (ULD) that supports student/teacher pairs with different tokenizers. It aligns the textual spans produced by both tokenizers and merges the associated logits so no completion tokens are dropped. This enables cross-tokenizer knowledge distillation, including mixed model families (for example, LLaMA students with Qwen teachers).
 
 Key capabilities:
 
@@ -20,15 +17,12 @@ Key capabilities:
 
 ## Usage tips
 
-The [`experimental.gold.GOLDTrainer`] subclasses [`SFTTrainer`] and accepts the same datasets as other TRL trainers (lists of ChatML style
-messages). Important configuration flags on [`experimental.gold.GOLDConfig`] include:
+The [`experimental.gold.GOLDTrainer`] subclasses [`SFTTrainer`] and accepts the same datasets as other TRL trainers (lists of ChatML style messages). Important configuration flags on [`experimental.gold.GOLDConfig`] include:
 
 * `use_uld_loss` – toggles Universal Logit Distillation. Set this to `True` for cross-tokenizer setups.
 * `teacher_tokenizer_name_or_path` – required when `use_uld_loss=True`; GOLD uses the teacher tokenizer to align tokens.
-* `uld_use_hybrid_loss`, `uld_hybrid_matched_weight`, `uld_hybrid_unmatched_weight` – enables and weights the hybrid
-  matched/unmatched loss.
-* `beta`, `lmbda`, `seq_kd` – inherited from [`experimental.gkd.GKDConfig`], controlling the generalized JSD interpolation and on-policy
-  sampling ratio.
+* `uld_use_hybrid_loss`, `uld_hybrid_matched_weight`, `uld_hybrid_unmatched_weight` – enables and weights the hybrid matched/unmatched loss.
+* `beta`, `lmbda`, `seq_kd` – inherited from [`experimental.gkd.GKDConfig`], controlling the generalized JSD interpolation and on-policy sampling ratio.
 * `num_generations`, `generation_batch_size` – control buffered rollout generation across gradient accumulation windows.
   `generation_batch_size` is the number of unique prompts per worker per optimizer step.
 
@@ -98,9 +92,7 @@ trainer.train()
 ```
 
 > [!NOTE]
-> GOLD buffers one full optimizer-window generation batch (`per_device_train_batch_size * gradient_accumulation_steps`)
-> and reuses it across accumulation steps. If the final batch is undersized, GOLD warns and drops that last batch
-> (`Dropping last batch due to unexpected batch size`). Set `dataloader_drop_last=True` to avoid this warning.
+> GOLD buffers one full optimizer-window generation batch (`per_device_train_batch_size * gradient_accumulation_steps`) and reuses it across accumulation steps. If the final batch is undersized, GOLD warns and drops that last batch (`Dropping last batch due to unexpected batch size`). Set `dataloader_drop_last=True` to avoid this warning.
 
 ### Expected dataset type
 
@@ -111,8 +103,7 @@ GOLD requires a [conversational](dataset_formats#conversational) [language model
               {"role": "assistant", "content": "It is blue."}]}
 ```
 
-`GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct
-boundaries.
+`GOLDTrainer` keeps the raw messages so the ChatML collator can construct prompts and completions with the correct boundaries.
 
 ## How Token Merging Works
 
