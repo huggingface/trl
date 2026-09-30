@@ -16,12 +16,121 @@ import json
 import os
 from unittest.mock import call, patch
 
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
+import pytest
+from accelerate import Accelerator
+from datasets import Dataset, load_dataset
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    GPT2Config,
+    GPT2LMHeadModel,
+    PreTrainedTokenizerFast,
+    Trainer,
+    TrainingArguments,
+)
 
 from trl import BEMACallback, LogCompletionsCallback
+from trl.trainer.callbacks import _generate_completions
 
 from .testing_utils import TrlTestCase, require_comet, require_wandb
+
+
+class TestCompletionGenerationMode(TrlTestCase):
+    def setup_method(self):
+        vocab = {"[PAD]": 0, "[UNK]": 1, "[EOS]": 2, "hello": 3, "world": 4}
+        tokenizer = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
+        tokenizer.pre_tokenizer = Whitespace()
+        self.tokenizer = PreTrainedTokenizerFast(
+            tokenizer_object=tokenizer, pad_token="[PAD]", unk_token="[UNK]", eos_token="[EOS]", padding_side="left"
+        )
+        self.model = GPT2LMHeadModel(
+            GPT2Config(
+                vocab_size=len(vocab),
+                n_positions=16,
+                n_embd=16,
+                n_layer=1,
+                n_head=2,
+                resid_pdrop=0.8,
+                embd_pdrop=0.8,
+                attn_pdrop=0.8,
+                pad_token_id=0,
+                eos_token_id=2,
+                bos_token_id=3,
+            )
+        )
+        self.generation_config = GenerationConfig(max_new_tokens=2, do_sample=False, pad_token_id=0, eos_token_id=2)
+
+    @pytest.mark.parametrize("training", [True, False])
+    @pytest.mark.parametrize("batch_size", [1, 2])
+    def test_generation_disables_dropout_and_restores_mode(self, training, batch_size):
+        self.model.train(training)
+        dropout_modes = []
+        with self.model.transformer.h[0].mlp.dropout.register_forward_pre_hook(
+            lambda layer, inputs: dropout_modes.append(layer.training)
+        ):
+            completions = _generate_completions(
+                ["hello world", "hello"],
+                self.model,
+                self.tokenizer,
+                Accelerator(cpu=True),
+                self.generation_config,
+                batch_size=batch_size,
+            )
+        assert len(completions) == 2
+        assert dropout_modes and not any(dropout_modes)
+        assert self.model.training == training
+
+    @pytest.mark.parametrize("training", [True, False])
+    def test_generation_error_restores_mode(self, training):
+        self.model.train(training)
+
+        def fail_generation(*args, **kwargs):
+            assert not self.model.training
+            raise RuntimeError("generation failed")
+
+        with patch.object(self.model, "generate", side_effect=fail_generation):
+            with pytest.raises(RuntimeError, match="generation failed"):
+                _generate_completions(
+                    ["hello world"], self.model, self.tokenizer, Accelerator(cpu=True), self.generation_config
+                )
+        assert self.model.training == training
+
+    def test_logging_after_training_step_uses_eval_mode(self):
+        train_dataset = Dataset.from_dict(
+            {"input_ids": [[3, 4, 3]], "attention_mask": [[1, 1, 1]], "labels": [[3, 4, 3]]}
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=TrainingArguments(
+                output_dir=self.tmp_dir,
+                use_cpu=True,
+                bf16=False,
+                max_steps=1,
+                report_to="none",
+                save_strategy="no",
+                disable_tqdm=True,
+            ),
+            train_dataset=train_dataset,
+            eval_dataset=Dataset.from_dict({"prompt": ["hello world"]}),
+            processing_class=self.tokenizer,
+        )
+        callback = LogCompletionsCallback(trainer, self.generation_config, freq=1)
+        trainer.add_callback(callback)
+        dropout_modes = []
+        with self.model.transformer.h[0].mlp.dropout.register_forward_pre_hook(
+            lambda layer, inputs: dropout_modes.append(layer.training)
+        ):
+            trainer.train()
+        # The training forward uses dropout, but completion generation must not.
+        assert len(dropout_modes) > 1
+        assert dropout_modes[0]
+        assert not any(dropout_modes[1:])
+        assert self.model.training
+        assert len(callback.table) == 1
 
 
 class TestLogCompletionsCallback(TrlTestCase):
