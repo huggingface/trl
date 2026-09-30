@@ -205,7 +205,7 @@ def supervise_tunnel(args: argparse.Namespace, log: pathlib.Path, interval_s: fl
             continue
         print("[launcher] the published proxy is not reachable; restarting the Harbor server", flush=True)
         for proc in list(_children):
-            if "harbor" in proc.args:
+            if proc.args[:3] == ["openenv", "harbor", "serve"]:
                 _stop_process(proc)
                 _children.remove(proc)
         if _stopping.is_set():
