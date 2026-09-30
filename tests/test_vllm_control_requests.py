@@ -65,7 +65,8 @@ def test_async_weight_update_pause_keeps_requests_and_clears_old_cache(server, c
         client.pause()
 
 
-def test_reset_cache_accepts_empty_success_but_propagates_errors(server):
+def test_reset_cache_accepts_empty_success_but_propagates_errors(server, monkeypatch):
+    monkeypatch.setattr("trl.generation.vllm_client._HAS_RESET_PREFIX_CACHE_SUCCESS", False)
     url, state = server
     # The control endpoint needs no GPU communicator or readiness probing.
     client = VLLMClient.__new__(VLLMClient)

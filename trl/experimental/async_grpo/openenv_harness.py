@@ -204,6 +204,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
                 tool_failure_count = sum(1 for entry in result.tool_trace if entry.result.error is not None)
             else:
+                if not isinstance(session, TrainableSession):
+                    raise CaptureContractError("loop-owning training requires OpenEnv fetch_training_trace()")
                 loop_session = cast(TrainableSession, session)
                 try:
                     loop_session.wait_for_completion()

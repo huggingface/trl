@@ -448,3 +448,19 @@ def test_shared_prefix_is_supervised_once_across_both_branches():
         token for row in rows for token, mask in zip(row.input_ids, row.completion_mask, strict=True) if mask
     ]
     assert supervised == [2, 3, 4]
+
+
+def test_legacy_session_fails_before_starting_agent(make_loop):
+    session = SimpleNamespace(wait_for_completion=MagicMock(), fetch_proxy_trace=MagicMock(), close=MagicMock())
+
+    # Sessions must be hashable because the worker tracks them for shutdown.
+    class LegacySession:
+        wait_for_completion = session.wait_for_completion
+        fetch_proxy_trace = session.fetch_proxy_trace
+        close = session.close
+
+    loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: LegacySession()))
+    with pytest.raises(openenv_harness.CaptureContractError, match="fetch_training_trace"):
+        loop._run_session([])
+    session.wait_for_completion.assert_not_called()
+    session.close.assert_called_once()

@@ -17,7 +17,7 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
-#     "openenv @ git+https://github.com/huggingface/OpenEnv.git@34825a772ae54760fb6bf7a8b2073a4a85714004",
+#     "openenv @ git+https://github.com/adithya-s-k/OpenEnv.git@8c20d68c95789b672369a67873bf397336a3f4cf",
 # ]
 # ///
 

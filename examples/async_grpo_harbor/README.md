@@ -5,12 +5,12 @@ logprobs, and loss masks, then updates the same vLLM instance.
 
 ## Local setup
 
-Use Python 3.12 and this TRL checkout. Pin OpenEnv to the merge of
-[OpenEnv #1036](https://github.com/huggingface/OpenEnv/pull/1036):
+Use Python 3.12 and this TRL checkout. The typed capture API depends on
+[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install its pinned revision:
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git OpenEnv
-git -C OpenEnv checkout --detach 34825a772ae54760fb6bf7a8b2073a4a85714004
+git clone https://github.com/adithya-s-k/OpenEnv.git OpenEnv
+git -C OpenEnv checkout --detach 8c20d68c95789b672369a67873bf397336a3f4cf
 pip install -e . trackio datasets ./OpenEnv
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
@@ -39,11 +39,12 @@ subsequent sessions receive the new proxy URL.
 
 ## Capture contract
 
-- Prompt and completion IDs come from the inference engine; TRL does not re-tokenize captured prompts.
+- OpenEnv supplies a validated `TrainingTrace` with required masks. Prompt and completion IDs come
+  from the inference engine; TRL does not re-tokenize captured prompts or select agent turns.
 - `loss_mask` covers prompt plus completion. Prompt positions are zero; completion positions may mix
   zeros and ones. TRL maps the completion span to its generic `TurnRecord.output_mask`.
 - For example, prompt `[10, 11]`, completion `[12, 13, 14]`, and mask `[0, 0, 1, 0, 1]` train on tokens
-  `12` and `14`, while retaining `13` as context. A whole-turn filter cannot express this selection.
+  `12` and `14`, while retaining `13` as context.
 - The worker constructs the session factory with its sampling policy. Pass a callable such as
   `partial(HarborSessionFactory, server_url, ...)`; do not configure sampling separately on the factory.
   OpenEnv applies the policy to captured requests.
