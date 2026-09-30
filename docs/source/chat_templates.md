@@ -137,7 +137,8 @@ Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endge
 
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
-Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+- Keeps the space that follows `</s>` outside the generation block. The tokenizer merges it into the next turn's first token (`▁[`), which would otherwise be masked as assistant output and hide the `</s>` stop token from the end of the masked span.
 
 ### `muse_glimmer_training.jinja`
 
