@@ -66,7 +66,7 @@ from ..data_utils import (
     pack_dataset,
     prepare_multimodal_messages,
 )
-from ..models import get_act_offloading_ctx_manager
+from ..models import enable_selective_activation_checkpointing, get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -1146,6 +1146,12 @@ class SFTTrainer(_BaseTrainer):
             and args.deepspeed_plugin.zero_stage == 3
             and args.gradient_checkpointing
         ):
+            if (args.gradient_checkpointing_kwargs or {}).get("selective"):
+                raise ValueError(
+                    "`gradient_checkpointing_kwargs={'selective': True}` is not supported with PEFT + DeepSpeed "
+                    "ZeRO-3, which requires reentrant gradient checkpointing while SAC requires non-reentrant "
+                    "checkpointing."
+                )
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
             if use_reentrant is False:
@@ -1377,6 +1383,23 @@ class SFTTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
+        # `selective` is a TRL-only key: when set, the SAC wrapper strips it before it reaches
+        # `torch.utils.checkpoint`, otherwise it is dropped here (a missing key already means SAC is off)
+        if (args.gradient_checkpointing_kwargs or {}).get("selective"):
+            if not args.gradient_checkpointing:
+                raise ValueError(
+                    "`gradient_checkpointing_kwargs={'selective': True}` requires `gradient_checkpointing=True`."
+                )
+            if (args.gradient_checkpointing_kwargs or {}).get("use_reentrant"):
+                raise ValueError(
+                    "`gradient_checkpointing_kwargs={'selective': True}` requires non-reentrant gradient "
+                    "checkpointing. Set `use_reentrant` to `False`, or leave it unset."
+                )
+            # Wrap before `super().__init__()` so the context function is set when the Trainer enables checkpointing.
+            enable_selective_activation_checkpointing(model)
+        elif args.gradient_checkpointing_kwargs:
+            args.gradient_checkpointing_kwargs.pop("selective", None)
+
         super().__init__(
             model=model,
             args=args,
@@ -1525,16 +1548,20 @@ class SFTTrainer(_BaseTrainer):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
-                    def add_eos(example, eos_token):
-                        if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                            example["text"] = example["text"] + eos_token
+                    def add_eos(example, eos_token, dataset_text_field):
+                        # language modeling case
+                        if dataset_text_field in example and not example[dataset_text_field].endswith(eos_token):
+                            example[dataset_text_field] = example[dataset_text_field] + eos_token
                         elif "completion" in example and not example["completion"].endswith(eos_token):
                             example["completion"] = example["completion"] + eos_token
                         return example
 
                     dataset = dataset.map(
                         add_eos,
-                        fn_kwargs={"eos_token": self._tokenizer.eos_token},
+                        fn_kwargs={
+                            "eos_token": self._tokenizer.eos_token,
+                            "dataset_text_field": args.dataset_text_field,
+                        },
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )

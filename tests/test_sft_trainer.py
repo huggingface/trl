@@ -1425,6 +1425,23 @@ class TestSFTTrainer(TrlTestCase):
             assert len(example["input_ids"]) <= 4
             assert len(example["labels"]) <= 4
 
+    @pytest.mark.parametrize("dataset_text_field", ["text", "my_column"])
+    def test_dataset_preparation_adds_eos_to_dataset_text_field(self, dataset_text_field):
+        """Dataset preparation must append EOS to the text column named by `dataset_text_field`, not only `"text"`."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        if dataset_text_field != "text":
+            dataset = dataset.rename_column("text", dataset_text_field)
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, dataset_text_field=dataset_text_field, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        eos_token_id = trainer.processing_class.eos_token_id
+        for example in trainer.train_dataset:
+            assert example["input_ids"][-1] == eos_token_id
+            assert example["labels"][-1] == eos_token_id  # EOS is trained on
+
     def test_dataset_preparation_builds_labels_for_completion_only(self):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
         resolves to True (the default for prompt-completion datasets)."""
@@ -1925,14 +1942,22 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("use_reentrant", [True, False])
-    def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs",
+        [
+            {"use_reentrant": True},
+            {"use_reentrant": False},
+            {"selective": True},
+            {"selective": False},
+        ],
+    )
+    def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             report_to="none",
         )
         trainer = SFTTrainer(
