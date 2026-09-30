@@ -24,12 +24,21 @@ from transformers import (
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    BitsAndBytesConfig,
 )
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
+from .testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_peft_target_parameters,
+    require_vision,
+    require_vllm,
+)
 
 
 if is_peft_available():
@@ -102,6 +111,78 @@ class TestRLOOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    def test_train_with_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
+            trainer = RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
+        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_logps_match_plain_forward(self):
+        # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            bf16=False,  # compare in full precision
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            temperature=0.7,
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 16), device=trainer.accelerator.device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[0, :3] = 0  # left padding
+        attention_mask[1, -2:] = 0  # padding after the end of the completion
+
+        logps, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, input_ids, attention_mask, logits_to_keep=10, compute_entropy=True
+        )
+        with torch.no_grad():
+            logits = trainer.model(input_ids=input_ids, attention_mask=attention_mask).logits[:, -11:-1] / 0.7
+        ref_logps = logits.log_softmax(-1)
+        completion_mask = attention_mask[:, -10:].bool()
+
+        expected_logps = ref_logps.gather(-1, input_ids[:, -10:, None]).squeeze(-1)
+        expected_entropies = -(ref_logps.exp() * ref_logps).sum(-1)
+        torch.testing.assert_close(logps[completion_mask], expected_logps[completion_mask], atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(
+            entropies[completion_mask], expected_entropies[completion_mask], atol=1e-4, rtol=1e-4
+        )
+        assert (logps[~completion_mask] == 0).all()
 
     def test_reward_func_wrong_number_of_rewards(self):
         # A reward function that returns the wrong number of rewards should raise a clear error instead of silently
@@ -486,6 +567,26 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=RLOOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_peft_config(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -520,6 +621,77 @@ class TestRLOOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    @require_bitsandbytes
+    def test_train_peft_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_lm_head_raises(self):
+        # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+        # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
+        # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
+        # modules were found, so it must only be set on the affected range.
+        # - Introduced in PEFT 0.19.0 (peft#2879); fixed on main, unreleased as of 0.19.2.dev0 (peft#3171)
+        needs_ensure_weight_tying = Version("0.19.0") <= Version(peft.__version__) < Version("0.19.2.dev0")
+        lora_config = LoraConfig(
+            target_modules=["q_proj", "v_proj", "lm_head"],
+            **({"ensure_weight_tying": True} if needs_ensure_weight_tying else {}),
+        )
+        with pytest.raises(ValueError, match="lm_head"):
+            RLOOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
 
     @require_peft
     def test_train_peft_model(self):
@@ -558,7 +730,7 @@ class TestRLOOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -790,7 +962,8 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_sync_and_async_reward_funcs(self):
-        # Test that RLOOTrainer can be instantiated with multiple reward functions one of which is async
+        # Test that RLOOTrainer can be instantiated with multiple reward functions, one of which is async, in both the
+        # function and the callable class form.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def sync_reward_func1(completions, **kwargs):
@@ -804,6 +977,12 @@ class TestRLOOTrainer(TrlTestCase):
             """Async Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
+        class AsyncCallableReward:
+            """Async reward function written as a callable class."""
+
+            async def __call__(self, completions, **kwargs):
+                return [float(completion.count(" ")) for completion in completions]
+
         training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -814,7 +993,7 @@ class TestRLOOTrainer(TrlTestCase):
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func],
+            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func, AsyncCallableReward()],
             args=training_args,
             train_dataset=dataset,
         )
@@ -1422,7 +1601,7 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
-        # Check that the params have changed
+        # Check that the params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
@@ -1799,6 +1978,51 @@ class TestRLOOTrainer(TrlTestCase):
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
 
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [0.0] * len(completions)
+
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
+
+    def test_reward_model_pad_token_id_synced_with_text_config(self):
+        # A composite reward model resolves the pad token through its text config, not the top-level one.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", num_labels=1
+        )
+        reward_processing_class = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        )
+        reward_processing_class.pad_token = reward_processing_class.eos_token
+
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_model,
+            reward_processing_classes=reward_processing_class,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.reward_processing_classes[0].pad_token_id
+        assert pad_token_id is not None
+        assert reward_model.config.get_text_config().pad_token_id == pad_token_id
+
 
 @require_vision
 class TestRLOOTrainerVLM(TrlTestCase):
@@ -1826,10 +2050,17 @@ class TestRLOOTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
@@ -2000,6 +2231,63 @@ class TestRLOOTrainerVLM(TrlTestCase):
             if n in base_param_names:  # We expect the base model params to be the same
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
+    @require_peft
+    @require_bitsandbytes
+    def test_train_vlm_peft_and_quantization(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = RLOOTrainer(
+            model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.parametrize(

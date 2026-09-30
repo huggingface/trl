@@ -23,11 +23,15 @@ jobs:
 
       - name: Determine PR title
         id: pr_title
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
-            echo "title=Sync TRL Skill (${{ github.ref_name }})" >> $GITHUB_OUTPUT
+          if [[ "$EVENT_NAME" == "push" && "$REF_TYPE" == "tag" ]]; then
+            echo "title=Sync TRL Skill ($REF_NAME)" >> "$GITHUB_OUTPUT"
           else
-            echo "title=Sync TRL Skill (manual trigger)" >> $GITHUB_OUTPUT
+            echo "title=Sync TRL Skill (manual trigger)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create GitHub App token
@@ -47,17 +51,19 @@ jobs:
           path: skills-repo
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Copy generated files
-        run: cp trl/skills/trl-training/SKILL.md skills-repo/skills/trl-training/
+        run: |
+          mkdir -p skills-repo/skills/trl-training
+          cp skills/trl-training/SKILL.md skills-repo/skills/trl-training/
 
       - name: Check for TRL skill changes
         id: check_changes
         working-directory: skills-repo
-        # git diff returns zero if there is no diff
+        # git status --porcelain prints nothing if there is no change
         run: |
-          if git diff --quiet -- skills/trl-training/SKILL.md; then
+          if [ -z "$(git status --porcelain -- skills/trl-training/)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No trl skill changes; skipping PR"
           else
@@ -82,7 +88,7 @@ jobs:
           body: |
             Auto-generated from [trl@${{ github.sha }}](https://github.com/huggingface/trl/commit/${{ github.sha }})
 
-            Triggered by changes to `trl/skills/trl-training`
+            Triggered by changes to `skills/trl-training`
 
             ---
             This PR was created automatically by the [sync-huggingface-skills](https://github.com/huggingface/trl/blob/main/.github/workflows/sync-huggingface-skills.yml) workflow.

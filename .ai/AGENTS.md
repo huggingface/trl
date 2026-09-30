@@ -34,6 +34,21 @@ This is intentional: each trainer must be readable, modifiable, and evolvable in
 
 **When modifying duplicated code**: if you change a pattern that exists in multiple trainers (e.g., the vLLM generation path in `_generate_single_turn`), apply the same change to all other trainers. A fix in GRPO often implies the same fix in RLOO, and vice versa. Not propagating a change is a bug.
 
+Find every copy by grepping a distinctive line of the block:
+
+```sh
+grep -rn "self._last_loaded_step" trl/trainer/ trl/experimental/
+```
+
+After propagating, diff the corresponding regions to confirm they stayed aligned:
+
+```sh
+diff <(sed -n '/def _generate_single_turn/,/def /p' trl/trainer/grpo_trainer.py) \
+     <(sed -n '/def _generate_single_turn/,/def /p' trl/trainer/rloo_trainer.py)
+```
+
+Remaining diffs must all be semantic divergences, not drift.
+
 **When reviewing**: if a PR touches duplicated logic, verify that all copies are updated consistently. A common mistake is fixing one trainer and forgetting the others.
 
 ### Simplicity

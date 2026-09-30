@@ -14,6 +14,7 @@
 
 import asyncio
 import enum
+import functools
 import inspect
 import multiprocessing as mp
 import os
@@ -26,6 +27,7 @@ import uuid
 import warnings
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
@@ -46,7 +48,7 @@ from ...chat_template_utils import (
     parse_response,
 )
 from ...import_utils import is_vllm_available
-from ...trainer.utils import get_callable_name, print_prompt_completions_sample
+from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
 
 
 logger = get_logger(__name__)
@@ -313,6 +315,7 @@ class _AsyncRolloutLoop:
         queue_maxsize: int = 0,
         score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
+        lora_name: str | None = None,
         max_tokens: int = 32,
         temperature: float = 1.0,
         top_p: float = 1.0,
@@ -328,6 +331,7 @@ class _AsyncRolloutLoop:
         dataset_start_index: int = 0,
     ):
         self.model_name = model_name
+        self.lora_name = lora_name
         self.dataset = dataset
         if dataset_start_index > 0:
             start = dataset_start_index % len(dataset)
@@ -441,10 +445,8 @@ class _AsyncRolloutLoop:
                 "defines a `get_reward` method."
             )
 
-        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
-        for tool in self.tools:
-            if inspect.iscoroutinefunction(tool):
-                raise ValueError("Asynchronous tools are not supported yet.")
+        # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
+        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_inflight_tasks), thread_name_prefix="grpo-tool")
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -466,6 +468,15 @@ class _AsyncRolloutLoop:
     def model_version(self) -> int:
         return int(self._model_version_value.value)
 
+    @property
+    def _request_model(self) -> str:
+        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
+        # serves the base model, so the published version has to be part of the request. `model_version` reads the
+        # shared `mp.Value`, so a sync is picked up without extra IPC.
+        if self.lora_name is None:
+            return self.model_name
+        return f"{self.lora_name}-v{self.model_version}"
+
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
         try:
@@ -482,6 +493,7 @@ class _AsyncRolloutLoop:
             logger.exception(f"Worker process failed: {e}")
             raise
         finally:
+            self._tool_pool.shutdown(wait=True, cancel_futures=True)
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
@@ -889,7 +901,7 @@ class _AsyncRolloutLoop:
                 # it had finished, so this is a silent truncation — hence the metric.
                 loop_exhausted = True
                 break
-            tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
+            tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
@@ -907,9 +919,10 @@ class _AsyncRolloutLoop:
         )
         return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 
-    def _execute_tool_calls(
+    async def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
     ) -> tuple[list[dict[str, str]], int, int]:
+        loop = asyncio.get_running_loop()
         tool_messages = []
         n_calls = 0
         n_failures = 0
@@ -927,12 +940,13 @@ class _AsyncRolloutLoop:
                 self._counters[f"tools/{name}_failure_total"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
-            # Tools run SYNCHRONOUSLY inside the asyncio loop, so a slow one stalls every concurrent rollout, not just
-            # this one. That failure mode is otherwise only visible as an unattributed drop in generation throughput.
             t0 = time.monotonic()
             try:
                 arguments = function.get("arguments", {})
-                result = tool(**arguments)
+                if inspect.iscoroutinefunction(tool):
+                    result = await tool(**arguments)
+                else:
+                    result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
                 self._counters[f"tools/{name}_failure_total"] += 1
@@ -949,7 +963,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
         payload = {
-            "model": self.model_name,
+            "model": self._request_model,
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -979,9 +993,7 @@ class _AsyncRolloutLoop:
         )
         all_rewards = await asyncio.gather(
             *[
-                reward_func(**kwargs)
-                if inspect.iscoroutinefunction(reward_func)
-                else asyncio.to_thread(reward_func, **kwargs)
+                reward_func(**kwargs) if is_async_callable(reward_func) else asyncio.to_thread(reward_func, **kwargs)
                 for reward_func in self.reward_funcs
             ]
         )
@@ -1159,7 +1171,8 @@ class AsyncRolloutWorker:
             raise TypeError(
                 "AsyncRolloutWorker forwards reward_funcs / tools / environment_factory to a spawned "
                 "child process, so they must be picklable. Lambdas and closures are not: use a "
-                "module-level function, functools.partial, or a callable class instance instead."
+                "module-level function, functools.partial, or a callable class instance instead "
+                "(tools are registered under their __name__, so they must be module-level functions)."
             ) from e
         self._process = self._mp_ctx.Process(
             target=_child_main,

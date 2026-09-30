@@ -52,6 +52,7 @@ from .testing_utils import (
     require_kernels,
     require_liger_kernel,
     require_peft,
+    require_peft_target_parameters,
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
@@ -291,6 +292,21 @@ class TestSFTTrainer(TrlTestCase):
         args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         SFTTrainer(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=args, train_dataset=dataset)
 
+    def test_init_auto_processing_class_uses_model_revision(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SFTConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                model_init_kwargs={"revision": "8913f5819566"},
+            ),
+            train_dataset=dataset,
+        )
+        # This revision's chat template is 2558 chars; the one on `main` is 2507. Comparing the length is enough to
+        # catch the tokenizer being loaded from the default branch instead of the pinned revision.
+        assert len(trainer.processing_class.chat_template) == 2558
+
     @pytest.mark.parametrize(
         "model_id",
         [
@@ -305,6 +321,7 @@ class TestSFTTrainer(TrlTestCase):
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
@@ -564,10 +581,17 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
@@ -661,6 +685,25 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_dense_with_peft_config_lora(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -752,7 +795,7 @@ class TestSFTTrainer(TrlTestCase):
             else:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -782,6 +825,46 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id, expect_coef, expect_aux_loss",
+        [
+            # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
+            # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
+            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            # Dense model: no coefficient to inherit
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
+        ],
+    )
+    def test_router_aux_loss_coef_defaults_to_the_architecture(self, model_id, expect_coef, expect_aux_loss):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert trainer.router_aux_loss_coef == expect_coef
+        assert trainer.aux_loss_enabled == expect_aux_loss
+
+    def test_router_aux_loss_coef_fails_without_router_logits(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
+
+        # Dense model: no `output_router_logits` on its config, so there is nothing to compute the term from
+        with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+    def test_router_aux_loss_coef_explicit_value_overrides_the_architecture(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.5, report_to="none")
+
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        assert trainer.router_aux_loss_coef == 0.5
+        assert trainer.aux_loss_enabled
 
     @require_peft
     def test_train_peft_model(self):
@@ -1073,6 +1156,26 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
+    @pytest.mark.parametrize(
+        "attn_implementation, expect_warning",
+        [
+            ("kernels-community/flash-attn2", False),
+            ("kernels-community/flash-attn2@v2", False),
+            ("eager", True),
+        ],
+    )
+    def test_padding_free_warns_only_for_unsupported_attention(self, attn_implementation, expect_warning, caplog):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # Only the config value matters here: the warning is emitted at init, so no attention kernel is ever loaded.
+        model.config._attn_implementation = attn_implementation
+        training_args = SFTConfig(output_dir=self.tmp_dir, padding_free=True, max_length=None, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert ("supported Flash Attention variant" in caplog.text) == expect_warning
+
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
@@ -1096,11 +1199,6 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.skipif(
         not is_ampere_or_newer() and torch_device != "xpu",
         reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
-    )
-    @pytest.mark.xfail(
-        reason="kernels-community/flash-attn2 is currently unusable for training: no build variant for torch 2.13 "
-        "(https://github.com/huggingface/kernels-community/issues/1082), and the v3 stable-ABI build raises in the "
-        "backward pass for GQA models (https://github.com/huggingface/kernels-community/issues/1085)",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1926,10 +2024,17 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )
@@ -2197,26 +2302,26 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_peft
     @require_bitsandbytes
-    def test_peft_with_quantization(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    def test_train_peft_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
+        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_compute_dtype=torch.bfloat16,
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype="float32",
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            args=training_args,
+            train_dataset=dataset,
             quantization_config=quantization_config,
+            peft_config=LoraConfig(),
         )
 
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer with the already configured PeftModel
-        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
-        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset, peft_config=LoraConfig())
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -2225,38 +2330,14 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
 
-        # In bitsandbytes, a Linear4bit's bias is cast in-place to the input dtype during the forward pass if its
-        # dtype doesn't match, which changes these specific bias parameters unexpectedly during the first forward
-        # pass of training. Before bitsandbytes 0.50.0, this only affected the biases below; from 0.50.0 on
-        # (https://github.com/bitsandbytes-foundation/bitsandbytes/pull/1904), the cast happens after the input is
-        # cast to the compute dtype, so it now affects every layer's biases instead of only some.
-        import bitsandbytes as bnb
-
-        bnb_bias_params_that_change = [
-            "base_model.model.model.layers.1.self_attn.k_proj.bias",
-            "base_model.model.model.layers.1.self_attn.q_proj.base_layer.bias",
-            "base_model.model.model.layers.1.self_attn.v_proj.base_layer.bias",
-        ]
-        if Version(bnb.__version__) >= Version("0.50.0"):
-            bnb_bias_params_that_change += [
-                "base_model.model.model.layers.0.self_attn.k_proj.bias",
-                "base_model.model.model.layers.0.self_attn.q_proj.base_layer.bias",
-                "base_model.model.model.layers.0.self_attn.v_proj.base_layer.bias",
-            ]
-
-        # Check that the peft params have changed and the base model params have not changed
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in bnb_bias_params_that_change:
-                param = param.float()
-                new_param = new_param.float()
-
-            if "lora" not in n:  # We expect the base model params to be the same (up to the bnb bias dtype cast above)
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "lora" in n:  # We expect the peft params to be different
+            if "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-            else:
-                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
     @require_peft
     def test_prompt_tuning_peft_model(self):
@@ -2285,6 +2366,65 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2", args=training_args, train_dataset=dataset
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
+
+    @require_vision
+    def test_pad_token_id_synced_with_model_config_vision(self):
+        # A vision dataset takes the other collator branch, which used to skip the pad token handling entirely.
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=None, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.tokenizer.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.get_text_config().pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
+
+    @pytest.mark.parametrize(
+        "generation_eos_token_id, expected_eos_token_ids",
+        [
+            ([151645, 151643], [151644, 151645, 151643]),  # a list of ids, as Qwen and Llama ship
+            (151645, [151644, 151645]),  # a single id, as Mistral and GPT-2 ship
+            (None, [151644]),  # no id at all
+            ([151644, 151645], [151644, 151645]),  # a list that already holds the requested token
+        ],
+    )
+    def test_eos_token_id_synced_with_model_config(self, generation_eos_token_id, expected_eos_token_ids):
+        # The trainer sets the requested eos token on the tokenizer. The model configs must follow: otherwise
+        # `Trainer` realigns them at train time and reports it as a change the user did not make. The generation
+        # config holds the eos token as a list, as a single id, or not at all, so cover the three shapes.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
+        model.generation_config.eos_token_id = generation_eos_token_id
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, eos_token="<|im_start|>", report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        eos_token_id = trainer.processing_class.eos_token_id
+        assert eos_token_id == 151644  # <|im_start|>
+        assert trainer.model.config.eos_token_id == eos_token_id
+        # The model's own eos tokens are kept, since any of them halts generation
+        assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
 
 
 @pytest.mark.slow
@@ -2629,7 +2769,8 @@ _CHUNKED_CE_MODEL_IDS = [
             reason="Nemotron 3 was introduced in transformers>=5.3.0",
         ),
     ),
-    "trl-internal-testing/tiny-Phi3ForCausalLM",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -2742,6 +2883,13 @@ class TestChunkedCrossEntropyLoss:
         torch.testing.assert_close(correct_c / n_valid_c, acc_r, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(ent_sum_c / n_valid_c, ent_r, atol=1e-5, rtol=1e-5)
         assert n_valid_c.item() == expected_n_valid.item()
+
+    def test_bf16_hidden_fp32_weight(self):
+        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
+        hidden, weight, labels = self._inputs()
+        loss_c, *_ = _chunked_cross_entropy_loss(hidden.bfloat16(), weight, self.CHUNK_SIZE, labels)
+        loss_r, *_ = self._reference(hidden.bfloat16().float(), weight, labels)
+        torch.testing.assert_close(loss_c, loss_r, atol=2e-2, rtol=2e-2)
 
     def test_num_items_in_batch_reduction(self):
         """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
@@ -2962,10 +3110,17 @@ class TestPatchChunkedCELMHead:
         [
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
         ],
     )

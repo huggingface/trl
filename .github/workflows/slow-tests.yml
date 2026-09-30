@@ -12,8 +12,12 @@ env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   TRL_EXPERIMENTAL_SILENCE: 1
 
+permissions: {}
+
 jobs:
   run_all_tests_single_gpu:
+    permissions:
+      contents: read
     runs-on:
       group: aws-g6e-4xlarge
     env:
@@ -39,7 +43,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -67,11 +71,12 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of the slow tests on a single GPU
-          status: ${{ job.status }}
+          title: Slow tests on a single GPU
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   run_all_tests_multi_gpu:
+    permissions:
+      contents: read
     runs-on:
       group: aws-g5-12xlarge-cache
     env:
@@ -97,7 +102,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -125,6 +130,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of the slow tests on multiple GPUs
-          status: ${{ job.status }}
+          title: Slow tests on multiple GPUs
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

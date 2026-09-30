@@ -23,7 +23,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SDPOConfig(_BaseConfig):
     r"""
-    Configuration class for the [`SDPOTrainer`].
+    Configuration class for the [`experimental.sdpo.SDPOTrainer`].
 
     Parameters:
         > Parameters that control the online policy objective
@@ -118,7 +118,8 @@ class SDPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument
-            of the `SDPOTrainer` is provided as a string.
+            of the `SDPOTrainer` is provided as a string. The `revision` value is also used when loading processing
+            classes.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
@@ -191,9 +192,9 @@ class SDPOConfig(_BaseConfig):
         vllm_mode (`str`, *optional*, defaults to `"colocate"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or
             `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a
-            TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same process
-            and share the training GPUs. This avoids the need for a separate server but may cause resource contention
-            with training.
+            vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same process and share
+            the training GPUs. This avoids the need for a separate server but may cause resource contention with
+            training.
         vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
             Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: Use the
             `transformers` backend for model implementation. `vllm`: Use the `vllm` library for model implementation.
@@ -257,7 +258,9 @@ class SDPOConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the `SDPOTrainer` is provided as a string."
+            "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
+            "argument of the `SDPOTrainer` is provided as a string. The `revision` value is also used when loading "
+            "processing classes."
         },
     )
     trust_remote_code: bool = field(
@@ -383,7 +386,7 @@ class SDPOConfig(_BaseConfig):
     vllm_mode: str = field(
         default="colocate",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same process and share the training GPUs. This avoids the need for a separate server but may cause resource contention with training."
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or `'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same process and share the training GPUs. This avoids the need for a separate server but may cause resource contention with training."
         },
     )
     vllm_model_impl: str = field(

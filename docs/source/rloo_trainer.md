@@ -4,8 +4,7 @@
 
 ## Overview
 
-TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style
-Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by  [Arash Ahmadian](https://huggingface.co/ArashAhmadian), Chris Cremer, [Matthias Gallé](https://huggingface.co/mgalle), [Marzieh Fadaee](https://huggingface.co/MarziehFadaee), [Julia Kreutzer](https://huggingface.co/JuliaKreutzerCohere), [Ahmet Üstün](https://huggingface.co/ahmetu) and [Sara Hooker](https://huggingface.co/sarahooker).
+TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by  [Arash Ahmadian](https://huggingface.co/ArashAhmadian), Chris Cremer, [Matthias Gallé](https://huggingface.co/mgalle), [Marzieh Fadaee](https://huggingface.co/MarziehFadaee), [Julia Kreutzer](https://huggingface.co/JuliaKreutzerCohere), [Ahmet Üstün](https://huggingface.co/ahmetu) and [Sara Hooker](https://huggingface.co/sarahooker).
 
 The abstract from the paper is the following:
 
@@ -120,9 +119,9 @@ $$
 In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1 \\) and this reduces to standard REINFORCE.
 
 > [!NOTE]
-> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\). 
+> Unlike GRPO, RLOO does not backpropagate gradients through the KL term. Here the KL is purely used for reward shaping: it is computed under `no_grad` and folded into the scalar reward  \\( r_i \\), which becomes the detached advantage  \\( \hat{A}_i \\).
 >
-> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy. 
+> In other words, the only path the gradient takes into the policy is the importance-ratio term  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \\), and the KL term does not backpropagate into the policy.
 >
 > In contrast, [GRPO](grpo_trainer) adds an explicit, differentiable KL term to its objective, computed on the fly with the current policy  \\( \pi_\theta \\), so its gradient flows through both the ratio term and the KL penalty.
 
@@ -185,7 +184,10 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 1. **Start the vLLM server**:
 
    ```bash
-   trl vllm-serve --model <model_name>
+   VLLM_SERVER_DEV_MODE=1 vllm serve <model_name> \
+       --weight-transfer-config '{"backend": "nccl"}' \
+       --logprobs-mode processed_logprobs \
+       --max-logprobs -1
    ```
 
 2. **Enable server mode in your training script**:
@@ -253,7 +255,10 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
-srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" env VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-72B --tensor-parallel-size 8 \
+    --weight-transfer-config '{"backend": "nccl"}' \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1 &
 
 wait
 ```
@@ -304,8 +309,8 @@ Reward functions can be either synchronous Python callables or asynchronous `asy
      - `completions` (contains the generated completions),
      - `completion_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
-     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6. In distributed training, it's important that all processes log the same set of keys.
-     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6. In distributed training, it's important that all processes log the same set of keys.
+     - `log_extra`: a callable `log_extra(column: str, values: list)` to add extra columns to the completions table. See Example 6.
+     - `log_metric`: a callable `log_metric(name: str, value: float)` to log scalar metrics as plots alongside `kl`, `entropy`, etc. See Example 6.
      - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -538,7 +543,7 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
-## Vision-Language Model (VLM) Training
+## Training Vision Language Models
 
 RLOO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
 
@@ -551,7 +556,7 @@ Tested with:
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
+
 > [!TIP]
 > Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
 

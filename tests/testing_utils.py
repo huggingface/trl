@@ -20,7 +20,8 @@ from collections.abc import Callable
 import psutil
 import pytest
 import torch
-from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
+from packaging.version import Version
+from transformers import is_bitsandbytes_available, is_comet_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
     is_kernels_available,
@@ -36,13 +37,16 @@ from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.import_utils import (
     is_harbor_available,
     is_jmespath_available,
-    is_joblib_available,
     is_liger_kernel_available,
     is_math_verify_available,
     is_mergekit_available,
     is_openreward_available,
     is_vllm_available,
 )
+
+
+if is_peft_available():
+    import peft
 
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
@@ -54,6 +58,11 @@ require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
 require_openreward = pytest.mark.skipif(not is_openreward_available(), reason="test requires openreward")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
+# `LoraConfig.target_parameters` was added in peft 0.17.0; on older versions the field doesn't exist at all.
+require_peft_target_parameters = pytest.mark.skipif(
+    not is_peft_available() or Version(peft.__version__) < Version("0.17.0"),
+    reason="test requires peft>=0.17.0 for `LoraConfig.target_parameters`",
+)
 # Response parsing needs jmespath only on transformers < 5.13, which ships the legacy `response_schema` parser; the
 # new-style `response_template` parser doesn't use it. See `_SUPPORTS_RESPONSE_TEMPLATE`.
 require_response_parsing = pytest.mark.skipif(
@@ -61,9 +70,6 @@ require_response_parsing = pytest.mark.skipif(
     reason="test requires jmespath for response parsing on transformers below 5.13.0",
 )
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
-require_sklearn = pytest.mark.skipif(
-    not (is_sklearn_available() and is_joblib_available()), reason="test requires sklearn"
-)
 require_torch_accelerator = pytest.mark.skipif(
     torch_device is None or torch_device == "cpu", reason="test requires accelerator"
 )
@@ -84,21 +90,6 @@ require_3_accelerators = pytest.mark.skipif(
 xfail_data_parallel = pytest.mark.xfail(
     is_torch_available() and backend_device_count(torch_device) > 1,
     reason="TRL trainers do not support nn.DataParallel (https://github.com/huggingface/trl/issues/6836)",
-)
-
-
-def is_bitsandbytes_multi_backend_available() -> bool:
-    if is_bitsandbytes_available():
-        import bitsandbytes as bnb
-
-        return "multi_backend" in getattr(bnb, "features", set())
-    return False
-
-
-# Function ported from transformers.testing_utils before transformers#41283
-require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
-    not is_bitsandbytes_multi_backend_available() and not torch_device == "cuda",
-    reason="test requires bitsandbytes multi-backend enabled or 'cuda' torch device",
 )
 
 
