@@ -57,6 +57,10 @@ elif is_vllm_available():
 # ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
 _HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
 
+# vLLM 0.26.0 (vllm-project/vllm#46893) made `/reset_prefix_cache` return `{"success": bool}`. Before that, it answered
+# with an empty body.
+_HAS_RESET_PREFIX_CACHE_SUCCESS = is_vllm_available(min_version="0.26.0")
+
 _DEFAULT_GENERATION_CONCURRENCY = 64
 
 
@@ -848,7 +852,12 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        self._post(f"{self.base_url}/reset_prefix_cache")
+        if _HAS_RESET_PREFIX_CACHE_SUCCESS:
+            self._post(f"{self.base_url}/reset_prefix_cache")
+        else:
+            response = self.session.post(f"{self.base_url}/reset_prefix_cache")
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
         """

@@ -50,6 +50,7 @@ from .testing_utils import (
     require_torch_accelerator,
     require_vision,
     require_vllm,
+    xfail_data_parallel,
 )
 
 
@@ -3106,6 +3107,66 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_vllm_server(self):
+        # Regression test for #7416. In server mode, vLLM generates `num_generations` completions for every
+        # `num_generations`-th prompt. After a tool call, each sample has its own history, so each must be continued
+        # from its own history.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            vllm_mode="server",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        # fmt: off
+        first_turn_ids = [
+            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+            # an invalid tool call with wrong argument name, so that the two tool histories differ
+            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+            # "I don't know any tool<|im_end|>"
+            [40, 1513, 944, 1414, 894, 5392, 151645],
+        ]
+        # fmt: on
+
+        def fake_server_generate(prompts, images, num_generations, profiler):
+            # Mimic the server: only every `num_generations`-th prompt is sent, and it is sampled `num_generations` times
+            used_prompts = [prompt for prompt in prompts[::num_generations] for _ in range(num_generations)]
+            assert used_prompts == prompts, "A sample was continued from another sample's history"
+            if len(prompts) == 3:  # first call
+                completion_ids = first_turn_ids
+            else:  # second call only has the two examples with a tool call
+                completion_ids = [[17453, 0, 151645]] * len(prompts)  # 'Done!<|im_end|>'
+            logprobs = [[[-0.1]] * len(ids) for ids in completion_ids]
+            return prompts, completion_ids, logprobs, None
+
+        trainer.use_vllm = True
+        trainer._last_loaded_step = trainer.state.global_step
+        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock(), generate=fake_server_generate)
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
+
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.13.0.dev0"),
         reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
@@ -3966,10 +4027,17 @@ class TestGRPOTrainerVLM(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
+                marks=[
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.2.0"),
+                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                    ),
+                    pytest.mark.xfail(
+                        Version(transformers.__version__).is_devrelease,
+                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
+                        strict=True,
+                    ),
+                ],
             ),
             # "trl-internal-testing/tiny-SmolVLMForConditionalGeneration", seems not to support bf16 properly
         ],
@@ -4562,6 +4630,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
+    @xfail_data_parallel
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
         if not Version(transformers.__version__) >= Version("5.8.0"):
