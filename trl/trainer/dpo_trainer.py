@@ -1750,11 +1750,12 @@ class DPOTrainer(_BaseTrainer):
             if self.use_liger_kernel:
                 # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
                 # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
-                # coordinator's gather/reduce hooks.
+                # coordinator's gather/reduce hooks. Under plain DDP the same routing is required so that
+                # `DistributedDataParallel.forward()` registers the autograd hooks that trigger the reducer.
                 deepspeed_plugin = self.accelerator.state.deepspeed_plugin
                 is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
                 unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
+                if is_zero3 or self.is_fsdp_enabled or model is not unwrapped_model:
                     return self._forward_redirection(
                         model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
                     )
