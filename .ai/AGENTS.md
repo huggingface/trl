@@ -65,11 +65,7 @@ Concretely:
 
 ### Tests
 
-Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, a real dataset, the real trainer or function under test.
-
-- Do not use `SimpleNamespace` to stand in for configs, args, outputs, or collaborators. Build the real object (e.g. a `GRPOConfig`, a tokenizer loaded with `AutoTokenizer.from_pretrained`). A `SimpleNamespace` only has the attributes the test author thought of, so the test keeps passing when the real object changes.
-- The same applies to `MagicMock` and to monkeypatching internals (e.g. replacing a class's `__init__`): a test that swaps out the code it is supposed to check only tests the mock.
-- Mock only what cannot run in the test environment (e.g. a remote server), and prefer a small fake with real behavior over a mock.
+Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
 
 ## Documentation
 
