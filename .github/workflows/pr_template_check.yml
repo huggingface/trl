@@ -19,7 +19,7 @@ permissions: {}
 jobs:
   check-pr-template:
     permissions:
-      issues: write
+      issues: read
       pull-requests: write
     runs-on: ubuntu-latest
     if: >
