@@ -109,7 +109,7 @@
         {%- else %}
             {%- set content = message.content | default('', true) %}
             {%- if content is string -%}
-                {# Allow downstream logic to to take care of broken thought, only handle coherent reasoning here. #}
+                {# Allow downstream logic to take care of broken thought, only handle coherent reasoning here. #}
                 {%- if '<think>' not in content and '</think>' not in content -%}
                     {%- set content = "<think></think>" ~ content -%}
                 {%- endif -%}
