@@ -435,7 +435,7 @@ class RewardTrainer(_BaseTrainer):
             processing_class.eos_token = args.eos_token
             # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
             # config (a sequence classification model has no generation config).
-            model.config.eos_token_id = processing_class.eos_token_id
+            model.config.get_text_config().eos_token_id = processing_class.eos_token_id
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -553,7 +553,7 @@ class RewardTrainer(_BaseTrainer):
             )
         processing_class.pad_token = pad_token
         # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
 
         # Data collator
         if data_collator is None:

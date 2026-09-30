@@ -14,6 +14,7 @@
 
 import gc
 import logging
+import os
 import sys
 import traceback
 from functools import wraps
@@ -199,6 +200,26 @@ def force_use_cpu_without_accelerator(monkeypatch):
         original_post_init(self)
 
     monkeypatch.setattr(_BaseConfig, "__post_init__", patched_post_init)
+
+
+@pytest.fixture(autouse=True)
+def restore_mixed_precision_env(monkeypatch):
+    """
+    Restore the mixed precision that `transformers.TrainingArguments` publishes process-wide.
+
+    On transformers < 5, `TrainingArguments.__post_init__` writes the mixed precision to `ACCELERATE_MIXED_PRECISION`
+    and reads that same variable back as the default for the next instantiation, where a `bf16=False` flag is
+    indistinguishable from an unset one. TRL configs default `bf16` to `True`, so the first trainer built in a worker
+    sets the variable to `bf16` for the whole process, and no config built later can clear it. transformers < 5 also
+    builds the `Accelerator` without passing the mixed precision, so accelerate falls back to the leaked variable and a
+    test that asks for `bf16=False` silently runs in bf16: with `test_chunked_logps_match_full_logits`, the streamed
+    projection enters autocast and the full-logits path does not, and the two no longer match. Setting the variable to
+    its current value arms monkeypatch's restore, so each test sees the value the session started with.
+
+    Only the minimum-versions CI job is affected: transformers >= 5 passes the mixed precision to the `Accelerator`
+    explicitly and never writes the variable.
+    """
+    monkeypatch.setenv("ACCELERATE_MIXED_PRECISION", os.environ.get("ACCELERATE_MIXED_PRECISION", "no"))
 
 
 @pytest.fixture(autouse=True)

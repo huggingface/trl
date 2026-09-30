@@ -229,43 +229,37 @@ Wrap the whole assistant branch — every ATEM channel of the turn — with `{% 
 
 Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_super_training.jinja`
 
 Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_5_lightning_training.jinja`
 
 Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `phi3_training.jinja`
 
 Patched Phi-3 template. Diff vs `phi3.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `phi3_5_training.jinja`
 
 Patched Phi-3.5 template. Diff vs `phi3.5.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `qwen2_5_training.jinja`
 

@@ -132,11 +132,11 @@ While training and evaluating, we record the following metrics:
 - `loss`: The average DPO loss over the current logging interval.
 - `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
 - `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
-- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
+- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
 - `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 - `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
-- `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
-- `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
+- `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
+- `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
 - `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
 - `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
 - `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\).
@@ -152,9 +152,10 @@ Some argument combinations are intentionally restricted in the current [`DPOTrai
 
 - `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
 - With `use_liger_kernel=True`:
-  - only a single `loss_type` is supported,
+  - `use_weighting=True` is not supported,
   - `compute_metrics` is not supported,
-  - `precompute_ref_log_probs=True` is not supported.
+  - PEFT adapters targeting `lm_head` and prompt-learning PEFT methods are not supported,
+  - the MoE load-balancing auxiliary loss is not supported.
 - `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 - `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 - `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).

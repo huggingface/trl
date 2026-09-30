@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from transformers import AutoProcessor, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
@@ -38,11 +38,10 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_config_model_id,
     global_then_local_main_first,
     pad,
-    selective_log_softmax,
+    selective_log_softmax_and_entropy,
 )
 from .tpo_config import TPOConfig
 
@@ -319,6 +318,9 @@ class TPOTrainer(_BaseTrainer):
             args.accelerator_config.dispatch_batches = False
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
@@ -351,7 +353,7 @@ class TPOTrainer(_BaseTrainer):
             self._tokenizer.pad_token = self._tokenizer.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
@@ -651,8 +653,9 @@ class TPOTrainer(_BaseTrainer):
         shift_logits = outputs.logits[..., :-1, :]
         shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+        per_token_logps, per_token_entropy = selective_log_softmax_and_entropy(
+            shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
+        )
 
         # Length-normalized for IPO and TPO-L (matches the SimPO-style implicit reward used by the TPO paper);
         # summed otherwise.
@@ -711,7 +714,6 @@ class TPOTrainer(_BaseTrainer):
 
         # Log the metrics
         # Entropy
-        per_token_entropy = entropy_from_logits(shift_logits.detach())
         entropy = per_token_entropy[shift_completion_mask.bool()].mean()
         entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
         self._metrics[mode]["entropy"].append(entropy)

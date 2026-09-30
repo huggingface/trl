@@ -45,6 +45,7 @@ config = Qwen2Config(
     max_window_layers=21,
     bos_token_id=151643,
     eos_token_id=151643,
+    use_mrope=False,
 )
 model = Qwen2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
