@@ -63,6 +63,14 @@ Concretely:
 - Avoid `hasattr` and `getattr`. Their use is almost always a symptom of overly defensive programming or a disguised version check (e.g., "this attribute was added in version X"). Instead, either drop the conditional entirely or express the version check explicitly with a version comparison. There is nearly always a cleaner alternative.
 - When in doubt, prefer less code. Every new function, parameter, or branch is maintenance burden. The best abstraction is often no abstraction.
 
+### Tests
+
+Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, a real dataset, the real trainer or function under test.
+
+- Do not use `SimpleNamespace` to stand in for configs, args, outputs, or collaborators. Build the real object (e.g. a `GRPOConfig`, a tokenizer loaded with `AutoTokenizer.from_pretrained`). A `SimpleNamespace` only has the attributes the test author thought of, so the test keeps passing when the real object changes.
+- The same applies to `MagicMock` and to monkeypatching internals (e.g. replacing a class's `__init__`): a test that swaps out the code it is supposed to check only tests the mock.
+- Mock only what cannot run in the test environment (e.g. a remote server), and prefer a small fake with real behavior over a mock.
+
 ## Documentation
 
 ### Docstrings
