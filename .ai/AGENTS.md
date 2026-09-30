@@ -65,7 +65,7 @@ Concretely:
 
 ### Tests
 
-Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
+Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, `object.__new__` (building an instance without its `__init__`), or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
 
 ## Documentation
 
