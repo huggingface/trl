@@ -47,6 +47,7 @@ from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    _common_prefix_length,
     _tokenize,
     apply_chat_template,
     extract_prompt,
@@ -1088,16 +1089,13 @@ class KTOTrainer(_BaseTrainer):
                         "input_ids"
                     ]
 
-                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
-                    )
+                # The completion starts where the tokenized prompt and prompt+completion diverge, which is not always
+                # after the prompt (see `_common_prefix_length`)
+                prompt_len = _common_prefix_length(prompt_ids, prompt_completion_ids)
 
                 return {
-                    "prompt_ids": prompt_ids,
-                    "completion_ids": prompt_completion_ids[len(prompt_ids) :],
+                    "prompt_ids": prompt_ids[:prompt_len],
+                    "completion_ids": prompt_completion_ids[prompt_len:],
                 }
 
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)

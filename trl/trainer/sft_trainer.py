@@ -57,6 +57,7 @@ from ..chat_template_utils import (
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
+    _common_prefix_length,
     _tokenize,
     apply_chat_template,
     get_dataset_column_names,
@@ -1606,16 +1607,12 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template=chat_template,
                             )["input_ids"]
 
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            logger.warning(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
-                            )
+                        # The completion starts where the tokenized prompt and prompt+completion diverge, which is not
+                        # always after the prompt (see `_common_prefix_length`)
+                        prompt_len = _common_prefix_length(prompt_ids, prompt_completion_ids)
 
                         # Create completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        completion_mask = [0] * prompt_len + [1] * (len(prompt_completion_ids) - prompt_len)
                         output["input_ids"] = prompt_completion_ids
                         output["completion_mask"] = completion_mask
 
