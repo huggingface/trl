@@ -306,23 +306,16 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 
 ### Performance
 
-Throughput measures how many tokens the trainer processes per second. **Model FLOPs Utilization (MFU)** estimates
-the percentage of the training devices' theoretical compute capacity used for model forward and backward passes.
-The capacity used for this estimate depends on the hardware and training precision.
+Throughput measures how many tokens the trainer processes per second. **Model FLOPs Utilization (MFU)** estimates the percentage of the training devices' theoretical compute capacity used for model forward and backward passes. The capacity used for this estimate depends on the hardware and training precision.
 
 Throughput and MFU are reported on two time bases:
 
 - **`_fwd_bwd`** measures performance during the forward and backward passes.
-- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight
-  synchronization, and time spent waiting for rollouts.
+- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
 
-The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics
-describe the **training devices only**: they do not include the computation or hardware capacity of external
-rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not
-the services' own utilization.
+The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
 
-MFU is reported only when peak compute capacity is known for the local training device at the selected precision.
-Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
+MFU is reported only when peak compute capacity is known for the local training device at the selected precision. Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
