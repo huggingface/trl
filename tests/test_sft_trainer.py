@@ -1923,8 +1923,8 @@ class TestSFTTrainer(TrlTestCase):
         [
             {"use_reentrant": True},
             {"use_reentrant": False},
-            {"selective_activation_checkpointing": True},
-            {"selective_activation_checkpointing": False},
+            {"selective": True},
+            {"selective": False},
         ],
     )
     def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
