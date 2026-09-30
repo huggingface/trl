@@ -16,7 +16,6 @@ import copy
 import functools
 import textwrap
 from io import StringIO
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -42,7 +41,6 @@ from trl.trainer.utils import (
     generate_model_card,
     get_callable_name,
     get_peak_flops,
-    get_peak_flops_per_device,
     get_peft_config,
     hash_module,
     is_async_callable,
@@ -1986,26 +1984,6 @@ class TestGetPeakFlops:
     )
     def test_unsupported_device_or_dtype(self, device_name, dtype):
         assert get_peak_flops(device_name, dtype) is None
-
-
-class TestGetPeakFlopsPerDevice:
-    @pytest.mark.parametrize(
-        ("device_name", "dtype", "expected"),
-        [
-            ("NVIDIA A100", "bfloat16", 312e12),
-            ("Tesla T4", "float16", 65e12),
-            ("NVIDIA A100", "float32", None),
-            ("Tesla T4", "bfloat16", None),
-            ("NVIDIA A100", "auto", None),
-        ],
-    )
-    def test_configured_dtype(self, device_name, dtype, expected):
-        accelerator = SimpleNamespace(device=torch.device("cuda:0"))
-        with (
-            patch("torch.cuda.get_device_name", return_value=device_name),
-            patch("trl.trainer.utils.logger.info"),
-        ):
-            assert get_peak_flops_per_device(accelerator, dtype) == expected
 
 
 class TestComputeMfu(TrlTestCase):
