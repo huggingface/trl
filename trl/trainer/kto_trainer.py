@@ -1098,8 +1098,8 @@ class KTOTrainer(_BaseTrainer):
                         "prompt+completion, so the completion starts where they diverge and this end of the prompt is"
                         " left out of the training sequence: "
                         f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
-                        ". This is expected for templates that prefill the assistant turn in the generation prompt "
-                        "(e.g. an empty thinking block)."
+                        ". The model is trained on a context that differs from the one it sees at inference. To avoid"
+                        " it, use a chat template that renders the prompt the same way in both cases."
                     )
 
                 return {
