@@ -29,12 +29,17 @@ from .testing_utils import TrlTestCase, require_torch_accelerator
 
 
 class _SDPACounter(TorchDispatchMode):
+    """Counts dispatcher calls the SAC policy would save, not just anything named `scaled_dot_product` - e.g. the
+    `_scaled_dot_product_attention_math` fallback (older transformers, explicit causal mask) still has that name but
+    isn't in the policy's save list, so it must not count as "the policy has something to save"."""
+
     def __init__(self):
         super().__init__()
         self.count = 0
+        self._policy_fn = _build_policy_fn(_aten_attention_ops())
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        if "scaled_dot_product" in str(func):
+        if self._policy_fn(None, func) == CheckpointPolicy.MUST_SAVE:
             self.count += 1
         return func(*args, **(kwargs or {}))
 
