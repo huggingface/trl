@@ -36,6 +36,7 @@ from trl.trainer.utils import (
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -261,6 +262,29 @@ class TestHashModule(TrlTestCase):
             model.lm_head.weight.add_(0.01)
         h2 = hash_module(model)
         assert h1 != h2
+
+
+class TestCreateModelFromPath(TrlTestCase):
+    @pytest.mark.parametrize(("device_type", "expected_device_map"), [("cpu", None), ("mps", None), ("cuda", "auto")])
+    def test_default_device_map(self, device_type, expected_device_map):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = device_type
+            create_model_from_path("trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM)
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == expected_device_map
+
+    def test_explicit_device_map_is_kept(self):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = "mps"
+            create_model_from_path(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
+            )
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
 
 @require_peft
