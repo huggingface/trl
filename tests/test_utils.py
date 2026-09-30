@@ -40,6 +40,7 @@ from trl.trainer.utils import (
     flush_left,
     generate_model_card,
     get_callable_name,
+    get_peak_flops,
     get_peft_config,
     hash_module,
     is_async_callable,
@@ -1938,6 +1939,52 @@ class TestComputeFlopsPerToken(TrlTestCase):
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
 
 
 class TestComputeMfu(TrlTestCase):
