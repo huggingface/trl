@@ -1010,7 +1010,7 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             # The DoRA magnitude vector is the exception: it must stay in float32, since its optimizer updates can be
-            # smaller than bfloat16 can represent, which would otherwise silently freeze it see #7268
+            # smaller than bfloat16 can represent, which would otherwise silently freeze it, see #7268
             if "lora_magnitude_vector" in n:
                 assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
@@ -4349,7 +4349,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             # The DoRA magnitude vector is the exception: it must stay in float32, since its optimizer updates can be
-            # smaller than bfloat16 can represent, which would otherwise silently freeze it see #7268
+            # smaller than bfloat16 can represent, which would otherwise silently freeze it, see #7268
             if "lora_magnitude_vector" in n:
                 assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
