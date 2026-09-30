@@ -47,6 +47,9 @@ VLLM_SERVE_TRL_ARGS = [
     "--max-logprobs",
     "-1",
 ]
+# From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
+if is_vllm_available(min_version="0.30.0"):
+    VLLM_SERVE_TRL_ARGS.append("--enable-scale-out")
 
 
 class TestConnectionPoolSize(TrlTestCase):
