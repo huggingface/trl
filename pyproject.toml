@@ -210,7 +210,7 @@ filterwarnings = [
     # transformers 5.3 to 5.5, which load the Hub kernel ignoring `use_mamba_kernels=False` (fixed upstream in 5.6)
     # Tracking issue: https://github.com/huggingface/trl/issues/6555
     # Upstream fix: https://github.com/huggingface/transformers/pull/44853
-    # Remove once: transformers >= 5.6 is required
+    # Remove once: transformers >= 5.6 is required (kernels-community#1187 won't reach the v1 build 5.3-5.5 pin)
     "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
 
     # bitsandbytes warns, on every forward of a 4-bit layer whose inner dimension is not a multiple of the quantization
