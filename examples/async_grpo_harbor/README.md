@@ -51,6 +51,10 @@ subsequent sessions receive the new proxy URL.
 - Invalid captures stop the worker. Transport failures remain unscorable; an agent timeout retains
   valid captured turns and the verifier's score.
 
+Execution status and structured tool outcomes are follow-up OpenEnv API work. Today, TRL recognizes
+timeouts through `TimeoutError` and reconstructs conversation and tool diagnostics from captures.
+Set agent turn and time budgets on the session factory; the worker only forwards sampling.
+
 Rewritten histories can produce multiple training rows. Token retention does not guarantee equal
 rollout weighting or a suitable memory budget for every harness.
 

@@ -27,7 +27,7 @@ import pytest
 from accelerate import PartialState
 
 
-pytest.importorskip("openenv.core.harness.capture.validate")
+pytest.importorskip("openenv.core.harness.training")
 
 from openenv.core.harness import TrainingTrace
 
@@ -376,7 +376,7 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
 
 @pytest.mark.parametrize("reward", [None, 0.0, 1.0])
 def test_harbor_session_to_worker_preserves_masks_and_outcome(make_loop, reward):
-    from harbor_env.harness import HarborSession
+    HarborSession = pytest.importorskip("harbor_env.harness").HarborSession
     from openenv.harbor.models import HarborRolloutResult, HarborTurn
 
     turns = [

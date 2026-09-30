@@ -544,6 +544,8 @@ def main() -> None:
     args = p.parse_args()
 
     sandbox_root = args.sandbox_root or tempfile.mkdtemp(prefix="trl_opencode_")
+    LocalSubprocessSandboxBackend(sandbox_root).warmup()
+
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     rows, tests_by_id = build_dataset(n_prompts=args.n_prompts, seed=args.seed)
     dataset = Dataset.from_list(rows)
