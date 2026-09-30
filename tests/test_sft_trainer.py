@@ -1425,7 +1425,7 @@ class TestSFTTrainer(TrlTestCase):
             assert len(example["input_ids"]) <= 4
             assert len(example["labels"]) <= 4
 
-    @pytest.mark.parametrize("dataset_text_field", ["text", "content"])
+    @pytest.mark.parametrize("dataset_text_field", ["text", "my_column"])
     def test_dataset_preparation_adds_eos_to_dataset_text_field(self, dataset_text_field):
         """Dataset preparation must append EOS to the text column named by `dataset_text_field`, not only `"text"`."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
