@@ -1554,12 +1554,14 @@ class SFTTrainer(_BaseTrainer):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
-                            prompt_ids = _tokenize(
+                            prompt_processed = _tokenize(
                                 processing_class,
                                 example["prompt"],
                                 add_generation_prompt=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 **apply_chat_template_kwargs,
-                            )["input_ids"]
+                            )
+                            prompt_ids = prompt_processed["input_ids"]
                             prompt_completion_processed = _tokenize(
                                 processing_class,
                                 example["prompt"] + example["completion"],
@@ -1569,6 +1571,40 @@ class SFTTrainer(_BaseTrainer):
                             prompt_completion_ids = prompt_completion_processed["input_ids"]
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
+
+                            # Some chat templates render the generation prompt differently from the start of the
+                            # assistant turn in the full conversation (e.g. Gemma 4 12B/26B/31B add an empty thought
+                            # block `<|channel>thought\n<channel|>` to the generation prompt only), or the tokens merge
+                            # across the prompt/completion boundary. In that case, train on the prompt as it is seen
+                            # at inference, followed by the text the full conversation adds after the longest common
+                            # prefix of both renders.
+                            if prompt_completion_ids[: len(prompt_ids)] != prompt_ids:
+                                prompt = example["prompt"]
+                                prompt_completion = example["prompt"] + example["completion"]
+                                if isinstance(processing_class, ProcessorMixin):
+                                    prompt = prepare_multimodal_messages(prompt)
+                                    prompt_completion = prepare_multimodal_messages(prompt_completion)
+                                prompt_text = processing_class.apply_chat_template(
+                                    prompt, tokenize=False, add_generation_prompt=True, **apply_chat_template_kwargs
+                                )
+                                prompt_completion_text = processing_class.apply_chat_template(
+                                    prompt_completion, tokenize=False, **apply_chat_template_kwargs
+                                )
+                                completion_text = prompt_completion_text[
+                                    len(os.path.commonprefix([prompt_text, prompt_completion_text])) :
+                                ]
+                                # Pass a batch of one so that tokenizers and processors both return a list of lists
+                                completion_ids = processing_class(text=[completion_text], add_special_tokens=False)[
+                                    "input_ids"
+                                ][0]
+                                prompt_completion_ids = prompt_ids + completion_ids
+                                if "assistant_masks" in output:
+                                    # The completion text is the end of the full render, so align its mask from the end
+                                    assistant_masks = output["assistant_masks"]
+                                    output["assistant_masks"] = (
+                                        prompt_processed["assistant_masks"]
+                                        + assistant_masks[len(assistant_masks) - len(completion_ids) :]
+                                    )
                         else:
                             prompt_ids = _tokenize(processing_class, example["prompt"], chat_template=chat_template)[
                                 "input_ids"
@@ -1579,13 +1615,13 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template=chat_template,
                             )["input_ids"]
 
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            logger.warning(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
-                            )
+                            # Check if the tokenized prompt starts with the tokenized prompt+completion
+                            if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                                logger.warning(
+                                    "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                                    "token handling. Verify that the tokenizer is processing text consistently."
+                                )
 
                         # Create completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))

@@ -29,6 +29,7 @@ from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
@@ -1543,6 +1544,83 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.5.0"),
+        reason="Gemma4 models were introduced in transformers-5.5.0",
+    )
+    @pytest.mark.parametrize("use_processor", [False, True])
+    def test_prompt_completion_generation_prompt_not_prefix(self, use_processor):
+        # Mimics the Gemma 4 12B/26B/31B chat template: the generation prompt ends with an empty thought block that the
+        # rendered assistant turn doesn't have, so the tokenized prompt is not a prefix of the tokenized prompt+completion
+        chat_template = (
+            "{{ bos_token }}{% for message in messages %}"
+            "{{ '<|turn>' + ('model' if message['role'] == 'assistant' else message['role']) + '\\n' }}"
+            "{% if message['content'] is string %}{{ message['content'] }}{% else %}{{ message['content'][0]['text'] }}"
+            "{% endif %}{{ '<turn|>\\n' }}{% endfor %}"
+            "{% if add_generation_prompt %}{{ '<|turn>model\\n<|channel>thought\\n<channel|>' }}{% endif %}"
+        )
+        model_id = "trl-internal-testing/tiny-Gemma4ForConditionalGeneration"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.chat_template = chat_template
+        if use_processor:
+            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class.chat_template = chat_template
+        else:
+            processing_class = tokenizer
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model=model_id, args=training_args, train_dataset=dataset, processing_class=processing_class
+        )
+
+        # No example is left fully masked (and dropped)
+        assert len(trainer.train_dataset) == len(dataset)
+        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
+            input_ids, labels = processed["input_ids"], processed["labels"]
+            # The model is trained on the prompt as seen at inference, followed by the completion
+            prompt_text = tokenizer.apply_chat_template(example["prompt"], tokenize=False, add_generation_prompt=True)
+            completion_text = example["completion"][0]["content"] + "<turn|>\n"
+            assert tokenizer.decode(input_ids) == prompt_text + completion_text
+            # All completion tokens contribute to the loss, and no prompt token does
+            num_completion_tokens = len(tokenizer(completion_text, add_special_tokens=False)["input_ids"])
+            num_prompt_tokens = len(input_ids) - num_completion_tokens
+            assert labels == [-100] * num_prompt_tokens + input_ids[num_prompt_tokens:]
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+    )
+    def test_prompt_completion_generation_prompt_not_prefix_assistant_only(self):
+        # The Qwen3.5 generation prompt ends with "<think>\n", while the full render continues with "\n</think>", so
+        # the tokenizer merges both newlines into a single "\n\n" token and the tokenized prompt is not a prefix of the
+        # tokenized prompt+completion
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        assert len(trainer.train_dataset) == len(dataset)
+        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
+            input_ids, labels = processed["input_ids"], processed["labels"]
+            prompt_ids = tokenizer.apply_chat_template(
+                example["prompt"],
+                chat_template=trainer.chat_template,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+            )["input_ids"]
+            prompt_completion_text = tokenizer.apply_chat_template(
+                example["prompt"] + example["completion"], chat_template=trainer.chat_template, tokenize=False
+            )
+            # The model is trained on the prompt as seen at inference, followed by the completion
+            assert input_ids[: len(prompt_ids)] == prompt_ids
+            assert tokenizer.decode(input_ids) == prompt_completion_text
+            # All completion tokens are assistant tokens and contribute to the loss, and no prompt token does
+            assert labels == [-100] * len(prompt_ids) + input_ids[len(prompt_ids) :]
 
     def test_train_assistant_only_and_completion_only(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
