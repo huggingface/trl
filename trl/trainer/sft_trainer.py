@@ -1610,6 +1610,15 @@ class SFTTrainer(_BaseTrainer):
                         # The completion starts where the tokenized prompt and prompt+completion diverge, which is not
                         # always after the prompt (see `_common_prefix_length`)
                         prompt_len = _common_prefix_length(prompt_ids, prompt_completion_ids)
+                        if prompt_len < len(prompt_ids):
+                            logger.warning_once(
+                                "The chat template renders the prompt alone differently from the start of the "
+                                "prompt+completion, so the completion starts where they diverge and this end of the "
+                                "prompt is left out of the training sequence: "
+                                f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
+                                ". This is expected for templates that prefill the assistant turn in the generation "
+                                "prompt (e.g. an empty thinking block)."
+                            )
 
                         # Create completion mask
                         completion_mask = [0] * prompt_len + [1] * (len(prompt_completion_ids) - prompt_len)
