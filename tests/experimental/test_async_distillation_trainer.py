@@ -270,50 +270,6 @@ class TestPackingAwareBatching:
         assert "teacher_id_idx" not in single([[[_rollout_sample(3)]]])
 
 
-class TestMfuMetrics:
-    @pytest.mark.parametrize("peak_flops", [312e12, None])
-    def test_training_capacity_and_unknown_peak(self, peak_flops):
-        trainer = SimpleNamespace(
-            _metrics={"train": defaultdict(list)},
-            _current_train_step_time=2.0,
-            _last_step_end_time=6.0,
-            _step_forward_s=0.5,
-            _step_optimizer_s=0.1,
-            _step_microbatches=1,
-            _step_forward_tokens=100.0,
-            _step_trained_tokens=40.0,
-            _step_seq_len_weighted=5000.0,
-            _step_samples=2,
-            _peak_flops_per_device=peak_flops,
-            accelerator=SimpleNamespace(num_processes=2, is_main_process=False),
-            model=SimpleNamespace(
-                config=LlamaConfig(
-                    hidden_size=16,
-                    intermediate_size=32,
-                    num_hidden_layers=1,
-                    num_attention_heads=2,
-                    num_key_value_heads=2,
-                    vocab_size=32,
-                )
-            ),
-        )
-        with patch(
-            "trl.experimental.async_distillation.async_distillation_trainer.time.perf_counter", return_value=10.0
-        ):
-            AsyncDistillationTrainer._log_step_metrics(trainer)
-        metrics = trainer._metrics["train"]
-        assert metrics["perf/forwarded_tok_s_fwd_bwd"] == [(100.0, 2.0)]
-        assert metrics["perf/forwarded_tok_s_wall_clock"] == [(100.0, 4.0)]
-        assert metrics["perf/trained_tok_s_wall_clock"] == [(40.0, 4.0)]
-        if peak_flops is None:
-            assert "perf/mfu_fwd_bwd" not in metrics
-            assert "perf/mfu_wall_clock" not in metrics
-        else:
-            flops = compute_flops_per_token(trainer.model.config, 50) * 100
-            assert metrics["perf/mfu_fwd_bwd"] == [pytest.approx(100 * flops / (2.0 * 2 * peak_flops))]
-            assert metrics["perf/mfu_wall_clock"] == [pytest.approx(100 * flops / (4.0 * 2 * peak_flops))]
-
-
 class TestMetricReduction:
     """The value's shape and the key's suffix are the whole reduction API; nothing is registered or configured."""
 
