@@ -18,8 +18,8 @@
 #     "trackio",
 #     "datasets",
 #     "huggingface_hub>=1.22",
-#     "openenv @ git+https://github.com/adithya-s-k/OpenEnv.git@b1f5ebdee142b82bc7399ae28d44ece0e401592d",
-#     "openenv-opencode-env @ git+https://github.com/adithya-s-k/OpenEnv.git@b1f5ebdee142b82bc7399ae28d44ece0e401592d#subdirectory=envs/opencode_env",
+#     "openenv @ git+https://github.com/adithya-s-k/OpenEnv.git@906c9ae271c9acc7efa1833dfb218d45f84c8f67",
+#     "openenv-opencode-env @ git+https://github.com/adithya-s-k/OpenEnv.git@906c9ae271c9acc7efa1833dfb218d45f84c8f67#subdirectory=envs/opencode_env",
 # ]
 # ///
 
