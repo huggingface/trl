@@ -1586,6 +1586,12 @@ class SFTTrainer(_BaseTrainer):
                                 "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                                 "token handling. Verify that the tokenizer is processing text consistently."
                             )
+                            common_len = 0
+                            for p, pc in zip(prompt_ids, prompt_completion_ids):
+                                if p != pc:
+                                    break
+                                common_len += 1
+                            prompt_completion_ids = prompt_ids + prompt_completion_ids[common_len:]
 
                         # Create completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
