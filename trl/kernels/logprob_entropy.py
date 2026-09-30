@@ -255,31 +255,4 @@ def selective_log_softmax_and_entropy(
     row_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute selected log-probabilities and Shannon entropy in one pass over logits."""
-    if logits.device.type not in ("cuda", "xpu"):
-        raise ValueError("logits must be on a CUDA, ROCm, or XPU device")
-    if logits.dtype not in (torch.float16, torch.bfloat16, torch.float32):
-        raise TypeError("logits must have dtype float16, bfloat16, or float32")
-    if not 1 <= logits.ndim <= 3:
-        raise ValueError("logits must have shape [vocab], [tokens, vocab], or [batch, tokens, vocab]")
-    if index.shape != logits.shape[:-1]:
-        raise ValueError(
-            f"index shape {tuple(index.shape)} must match logits leading shape {tuple(logits.shape[:-1])}"
-        )
-    if index.dtype not in (torch.int32, torch.int64):
-        raise TypeError("index must have dtype int32 or int64")
-    if index.device != logits.device:
-        raise ValueError("logits and index must be on the same device")
-    if temperature <= 0:
-        raise ValueError("temperature must be positive")
-    if row_mask is not None:
-        if row_mask.shape != index.shape:
-            raise ValueError("row_mask and index must have the same shape")
-        if row_mask.device != logits.device:
-            raise ValueError("logits and row_mask must be on the same device")
-        if row_mask.dtype not in (torch.bool, torch.int32, torch.int64):
-            raise TypeError("row_mask must have dtype bool, int32, or int64")
-    if logits.stride(-1) != 1:
-        raise ValueError("the logits vocabulary dimension must be contiguous")
-    if logits.shape[-1] == 0:
-        raise ValueError("the logits vocabulary dimension must be non-empty")
     return _LogProbEntropyFunction.apply(logits, index, temperature, row_mask)
