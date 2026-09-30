@@ -258,6 +258,15 @@ class RLOOTrainer(_BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = RLOOConfig(f"{model_name}-RLOO")
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
@@ -657,15 +666,6 @@ class RLOOTrainer(_BaseTrainer):
                     "model's forward, which this trainer patches with a fused LM head."
                 )
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
-
-        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
-        # replicas would run the fused LM head bound to the original model
-        if args.n_gpu > 1:
-            raise ValueError(
-                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
-                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
-                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
-            )
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
         add_fused_lm_head(
