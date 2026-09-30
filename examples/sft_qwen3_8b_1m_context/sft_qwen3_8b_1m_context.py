@@ -113,6 +113,8 @@ def main():
     trainer.train()
     trainer.save_model(training_args.output_dir)
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()
