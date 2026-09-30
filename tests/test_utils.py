@@ -1906,8 +1906,7 @@ class TestComputeFlopsPerToken(TrlTestCase):
         assert f_32k - f_16k == 2 * (f_16k - f_8k)
 
     def test_tied_vs_untied_lm_head(self):
-        # Tying shares the weight but doesn't change the compute: the embedding is a lookup and the lm_head is a
-        # `2 * V * h` matmul either way.
+        # Tying shares weights, not compute: lm_head is still a 2*V*h matmul.
         cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
         cfg.tie_word_embeddings = True
         f_tied = compute_flops_per_token(cfg, 16384)
@@ -1916,8 +1915,7 @@ class TestComputeFlopsPerToken(TrlTestCase):
         assert f_tied == f_untied
 
     def test_vocab_size_scaling(self):
-        # Only the lm_head matmul depends on the vocab size: adding `ΔV` tokens adds `2 * ΔV * h` forward FLOPs, ×3
-        # for fwd+bwd. Counting the embedding lookup as a matmul would double this.
+        # Only the lm_head scales with vocab: 3 * 2 * ΔV * h (fwd + bwd).
         cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
         cfg.tie_word_embeddings = False
         f_lo = compute_flops_per_token(cfg, 16384)
