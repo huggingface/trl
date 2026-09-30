@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import math
 from typing import Any
 
 import torch
 import torch.nn.functional as F
+from accelerate.utils import is_peft_model
 
 from ...trainer.grpo_trainer import GRPOTrainer
 from ...trainer.utils import get_config_model_id, selective_log_softmax
@@ -86,6 +88,12 @@ class KLPOTrainer(GRPOTrainer):
         self.mc_samples = args.mc_samples
         self.kl_top_k = args.kl_top_k
 
+        # KLPO needs the raw logits (to sample MC draws, take the top-K head, or gather at auxiliary token IDs), so
+        # its forwards bypass GRPO's fused LM head. `logits_to_keep` restricts the materialized logits to the
+        # completion positions; some models (SmolVLM/Idefics3) don't accept it and error out if it is passed.
+        base_model = self.model.get_base_model() if is_peft_model(self.model) else self.model
+        self._supports_logits_to_keep = "logits_to_keep" in inspect.signature(base_model.forward).parameters
+
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         rewards_per_func = super()._calculate_rewards(inputs, prompts, completions, completion_ids_list)
         # KLPO consumes the raw terminal reward, not the group-relative advantage. Stash the (gathered) per-function
@@ -119,7 +127,7 @@ class KLPOTrainer(GRPOTrainer):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch, "use_cache": False}
-            if "logits_to_keep" in self.model_kwarg_keys:
+            if self._supports_logits_to_keep:
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 model_inputs["logits_to_keep"] = logits_to_keep + 1
             logits = self.model(**model_inputs).logits
@@ -222,7 +230,7 @@ class KLPOTrainer(GRPOTrainer):
         # Single forward pass: gather the current policy's log-probabilities at the generated (action) tokens and at
         # the estimator's record token IDs in one go.
         model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask, "use_cache": False}
-        if "logits_to_keep" in self.model_kwarg_keys:
+        if self._supports_logits_to_keep:
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             model_inputs["logits_to_keep"] = logits_to_keep + 1
         logits = model(**model_inputs).logits
