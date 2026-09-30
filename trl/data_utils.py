@@ -437,7 +437,7 @@ def _tokenize(
     return result
 
 
-def _common_prefix_length(ids: list[int], other_ids: list[int]) -> int:
+def common_prefix_length(ids: list[int], other_ids: list[int]) -> int:
     """
     Number of leading tokens `ids` and `other_ids` have in common.
 

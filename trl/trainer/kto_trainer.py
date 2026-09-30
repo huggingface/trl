@@ -47,9 +47,9 @@ from transformers.trainer_utils import EvalPrediction, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
-    _common_prefix_length,
     _tokenize,
     apply_chat_template,
+    common_prefix_length,
     extract_prompt,
     is_conversational,
     prepare_multimodal_messages,
@@ -1090,8 +1090,8 @@ class KTOTrainer(_BaseTrainer):
                     ]
 
                 # The completion starts where the tokenized prompt and prompt+completion diverge, which is not always
-                # after the prompt (see `_common_prefix_length`)
-                prompt_len = _common_prefix_length(prompt_ids, prompt_completion_ids)
+                # after the prompt (see `common_prefix_length`)
+                prompt_len = common_prefix_length(prompt_ids, prompt_completion_ids)
                 if prompt_len < len(prompt_ids):
                     logger.warning_once(
                         "The chat template renders the prompt alone differently from the start of the "

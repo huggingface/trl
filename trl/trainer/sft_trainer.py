@@ -57,9 +57,9 @@ from ..chat_template_utils import (
     is_chat_template_stop_token_trained,
 )
 from ..data_utils import (
-    _common_prefix_length,
     _tokenize,
     apply_chat_template,
+    common_prefix_length,
     get_dataset_column_names,
     is_conversational,
     is_conversational_from_value,
@@ -1608,8 +1608,8 @@ class SFTTrainer(_BaseTrainer):
                             )["input_ids"]
 
                         # The completion starts where the tokenized prompt and prompt+completion diverge, which is not
-                        # always after the prompt (see `_common_prefix_length`)
-                        prompt_len = _common_prefix_length(prompt_ids, prompt_completion_ids)
+                        # always after the prompt (see `common_prefix_length`)
+                        prompt_len = common_prefix_length(prompt_ids, prompt_completion_ids)
                         if prompt_len < len(prompt_ids):
                             logger.warning_once(
                                 "The chat template renders the prompt alone differently from the start of the "

@@ -33,7 +33,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...data_utils import _common_prefix_length, extract_prompt, is_conversational
+from ...data_utils import common_prefix_length, extract_prompt, is_conversational
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
@@ -599,11 +599,11 @@ class TPOTrainer(_BaseTrainer):
                     ]
 
                 # The completion starts where the tokenized prompt and prompt+completion diverge, which is not always
-                # after the prompt (see `_common_prefix_length`)
+                # after the prompt (see `common_prefix_length`)
                 prompt_len = min(
-                    _common_prefix_length(prompt_ids, prompt_chosen_ids),
-                    _common_prefix_length(prompt_ids, prompt_rejected_ids),
-                    _common_prefix_length(prompt_ids, prompt_reference_ids),
+                    common_prefix_length(prompt_ids, prompt_chosen_ids),
+                    common_prefix_length(prompt_ids, prompt_rejected_ids),
+                    common_prefix_length(prompt_ids, prompt_reference_ids),
                 )
                 if prompt_len < len(prompt_ids):
                     logger.warning_once(
