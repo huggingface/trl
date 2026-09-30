@@ -17,8 +17,8 @@
 #     "trl",
 #     "trackio",
 #     "datasets",
-#     "openenv @ git+https://github.com/adithya-s-k/OpenEnv.git@8c20d68c95789b672369a67873bf397336a3f4cf",
-#     "openenv-opencode-env @ git+https://github.com/adithya-s-k/OpenEnv.git@8c20d68c95789b672369a67873bf397336a3f4cf#subdirectory=envs/opencode_env",
+#     "openenv @ git+https://github.com/adithya-s-k/OpenEnv.git@58e48a95a34c0d279cfcb01c95b8688de23c79f1",
+#     "openenv-opencode-env @ git+https://github.com/adithya-s-k/OpenEnv.git@58e48a95a34c0d279cfcb01c95b8688de23c79f1#subdirectory=envs/opencode_env",
 # ]
 # ///
 

@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: adithya-s-k/OpenEnv
-          ref: 8c20d68c95789b672369a67873bf397336a3f4cf
+          ref: 58e48a95a34c0d279cfcb01c95b8688de23c79f1
           path: temp/openenv
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:

@@ -10,7 +10,7 @@ Use Python 3.12 and this TRL checkout. The typed capture API depends on
 
 ```sh
 git clone https://github.com/adithya-s-k/OpenEnv.git OpenEnv
-git -C OpenEnv checkout --detach 8c20d68c95789b672369a67873bf397336a3f4cf
+git -C OpenEnv checkout --detach 58e48a95a34c0d279cfcb01c95b8688de23c79f1
 pip install -e . trackio datasets ./OpenEnv
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
