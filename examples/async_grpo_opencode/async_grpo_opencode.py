@@ -88,8 +88,6 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.openenv_harness import (
     HarnessRolloutOutcome,
     HarnessRolloutWorker,
-    TraceEntry,
-    has_tool_call,
 )
 
 
@@ -432,11 +430,16 @@ class FreePortOpenCodeSessionFactory(OpenCodeSessionFactory):
             sandbox.write_text("/home/user/proxy/interception.py", oc_harness._PROXY_SOURCE_PATH.read_text())
             sandbox.write_text("/home/user/proxy/__init__.py", "")
 
+        if self.sampling is not None:
+            sandbox.write_text("/home/user/proxy/interception.py", oc_harness._PROXY_SOURCE_PATH.read_text())
+
         proxy_args = [
             "python", "interception.py", "--upstream-url", self._config.base_url,
             "--trace", trace_path, "--port", str(port),
             "--top-logprobs", str(self._config.proxy_top_logprobs),
         ]  # fmt: skip
+        if self.sampling is not None:
+            proxy_args += ["--sampling", json.dumps(self.sampling)]
         if self._config.proxy_max_tokens_cap is not None:
             proxy_args += ["--max-tokens-cap", str(self._config.proxy_max_tokens_cap)]
         if self._config.proxy_disable_thinking:
@@ -482,14 +485,15 @@ def build_factory(
     inner = FreePortOpenCodeSessionFactory(
         config=config,
         sandbox_backend=backend,
-        mode="transparent_proxy",  # in-sandbox proxy captures completion_token_ids + per_token_logps
+        mode="transparent_proxy",
+        sampling=sampling,
         verifier=DeepCoderStdinVerifier(tests_by_id),
     )
     return OpencodeTaskFactory(inner)
 
 
 # ============================================================================================================
-# Reward + turn-selection policy (application-owned; passed to the worker as hooks)
+# Rollout reward
 # ============================================================================================================
 
 
@@ -511,30 +515,6 @@ def opencode_reward(outcome: HarnessRolloutOutcome) -> float | None:
     base = 0.0 if outcome.timed_out else (1.0 if frac >= 1.0 - 1e-9 else 0.0)
     over = max(0, outcome.tool_call_count - step_budget)
     return base - min(step_penalty_cap, step_penalty * over)
-
-
-def opencode_agent_turns(trace: list[TraceEntry]) -> list[TraceEntry]:
-    """`agent_turn_fn`: keep only the REAL agent turns. opencode fires extra LLM calls for its own bookkeeping (a
-    title generator, a context summarizer) either without tools or with a different system prompt; those are a
-    different task and must not be trained/scored. The agent loop reuses ONE tool-enabled system prompt, so anchor
-    on the first tool-enabled turn's system prompt and keep only matching entries."""
-
-    def system_of(messages):
-        return next((m.get("content") for m in messages if m.get("role") == "system"), None)
-
-    primary = None
-    for entry in trace:
-        request = entry.get("request") or {}
-        if request.get("messages") and request.get("tools"):
-            primary = system_of(request["messages"])
-            break
-    return [
-        entry
-        for entry in trace
-        if (request := entry.get("request") or {}).get("messages")
-        and request.get("tools")
-        and system_of(request["messages"]) == primary
-    ]
 
 
 # ============================================================================================================
@@ -589,8 +569,6 @@ def main() -> None:
         harness_session_factory=partial(build_factory, sandbox_root, args.vllm_url, args.model, tests_by_id),
         harness_adapter=None,  # loop-owning: opencode runs its own loop; TRL reads the proxy trace
         rollout_reward_fn=opencode_reward,  # reward policy (binary verifier + degeneracy penalties)
-        train_turn_fn=has_tool_call,  # coding agent: reinforce only action turns, not prose
-        agent_turn_fn=opencode_agent_turns,  # drop opencode's title/summarizer aux calls from the trace
         model_name=args.model,
         dataset=dataset,
         reward_funcs=[],  # reward comes from the harness verifier via rollout_reward_fn, not reward_funcs

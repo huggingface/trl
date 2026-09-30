@@ -28,13 +28,13 @@ from accelerate.logging import get_logger
 from openenv.core.harness import (
     HarnessAdapter,
     HarnessRunLimits,
-    LoopOwningSession,
     ModelStepResult,
     ResourceSessionFactory,
     TraceEntry,
+    TrainableSession,
+    TrainingTrace,
 )
 from openenv.core.harness.capture.upstream import training_sampling
-from openenv.core.harness.capture.validate import validate_training_turn
 from openenv.core.llm_client import LLMResponse, ToolCall
 
 from ...chat_template_utils import parse_response
@@ -64,16 +64,6 @@ class HarnessRolloutOutcome:
     tool_failure_count: int
     tool_calls_by_name: dict[str, int]
     timed_out: bool
-
-
-@dataclass
-class HarnessTurn:
-    """One agent turn from the trace, passed to `train_turn_fn` to decide whether it is trained."""
-
-    messages: list[Message]  # the conversation sent to the model this turn (the prompt)
-    tools: list[dict] | None  # tools available to the model this turn
-    content: str  # the assistant's text content this turn
-    tool_calls: list[dict]  # the tool calls the assistant emitted (empty for a pure-text turn)
 
 
 def _tools_to_schema(tools: list) -> list[dict] | None:
@@ -118,10 +108,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         harness_session_factory: Callable[..., ResourceSessionFactory],
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
-        # FIXME: These hooks temporarily fill gaps in the OpenEnv contract. OpenEnv should return
-        # training objects with prefilled masks that TRL can consume directly.
-        train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
-        agent_turn_fn: Callable[[list[TraceEntry]], list[TraceEntry]] | None = None,
         lossless_capture: bool = True,
         **loop_kwargs,
     ):
@@ -148,8 +134,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             sampling={"temperature": self.temperature, "max_tokens": self.max_tokens},
         )
         self._rollout_reward_fn = rollout_reward_fn
-        self._train_turn_fn = train_turn_fn
-        self._agent_turn_fn = agent_turn_fn or _default_agent_entries
         self.reward_func_names.append("harness_reward")
 
         self._session_pool = ThreadPoolExecutor(
@@ -220,16 +204,17 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
                 tool_failure_count = sum(1 for entry in result.tool_trace if entry.result.error is not None)
             else:
-                loop_session = cast(LoopOwningSession, session)
+                loop_session = cast(TrainableSession, session)
                 try:
                     loop_session.wait_for_completion()
                 except TimeoutError:
                     logger.warning("harness agent timed out; training captured turns, timed_out flagged")
                     timed_out = True
                 try:
-                    trace = loop_session.fetch_proxy_trace()
-                    entries = self._agent_turn_fn(trace)
-                    turns = _turns_from_trace(entries, self._train_turn_fn)
+                    captured = loop_session.fetch_training_trace()
+                    turns = _turns_from_training_trace(captured)
+                    entries = captured.to_trace_entries()
+                    trace = entries
                 except (ValueError, TypeError, KeyError) as exc:
                     raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
@@ -296,70 +281,17 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         )
 
 
-def _trace_output_ids(entry: TraceEntry) -> list[int]:
-    """Generated token ids for one proxy-trace turn.
-
-    Prefer `completion_token_ids`; if empty, recover them from `completion_tokens`, which vLLM renders as
-    `"token_id:{id}"` when launched with `--return-tokens-as-token-ids`, avoiding a re-encode of the decoded text.
-    """
-    ids = entry.get("completion_token_ids") or []
-    if ids:
-        return list(ids)
+def _turns_from_training_trace(trace: TrainingTrace) -> list[TurnRecord]:
+    """Map OpenEnv's validated full masks to TRL's completion masks."""
     return [
-        int(t[len("token_id:") :]) for t in (entry.get("completion_tokens") or []) if str(t).startswith("token_id:")
+        TurnRecord(
+            list(turn.prompt_token_ids),
+            list(turn.completion_token_ids),
+            list(turn.per_token_logps),
+            list(turn.loss_mask[len(turn.prompt_token_ids) :]),
+        )
+        for turn in trace.turns
     ]
-
-
-def _default_agent_entries(trace: list[TraceEntry]) -> list[TraceEntry]:
-    """Select captures with messages and a response. Producers or `agent_turn_fn` must exclude auxiliary calls."""
-    return [entry for entry in trace if (entry.get("request") or {}).get("messages") and entry.get("response")]
-
-
-def has_tool_call(turn: HarnessTurn) -> bool:
-    """Select turns that emitted a tool call."""
-    return bool(turn.tool_calls)
-
-
-def _entry_to_turn(entry: TraceEntry) -> HarnessTurn:
-    """View one proxy-trace entry as the `HarnessTurn` handed to `train_turn_fn`."""
-    request = entry.get("request") or {}
-    message = (entry.get("response", {}).get("choices") or [{}])[0].get("message") or {}
-    return HarnessTurn(
-        messages=request.get("messages") or [],
-        tools=request.get("tools"),
-        content=message.get("content") or "",
-        tool_calls=message.get("tool_calls") or [],
-    )
-
-
-def _turns_from_trace(
-    entries: list[TraceEntry],
-    train_turn_fn: Callable[[HarnessTurn], bool] | None = None,
-) -> list[TurnRecord]:
-    """Convert captured engine tokens into TRL turns without re-tokenizing.
-
-    OpenEnv's `loss_mask` covers prompt plus completion; `TurnRecord.output_mask` covers only completion. Partial
-    completion masks are preserved. `train_turn_fn` optionally excludes whole turns and cannot replace token masks.
-    """
-    if train_turn_fn is not None:
-        entries = [entry for entry in entries if train_turn_fn(_entry_to_turn(entry))]
-    turns = []
-    for entry in entries:
-        prompt_ids = entry.get("prompt_token_ids")
-        if not prompt_ids:
-            raise ValueError(
-                "a captured turn carried no `prompt_token_ids`. Serve the engine with "
-                "`--return-tokens-as-token-ids --logprobs-mode processed_logprobs`."
-            )
-        output_ids = _trace_output_ids(entry)
-        # Convert the producer's full-sequence mask at the OpenEnv boundary.
-        mask = entry.get("loss_mask")
-        if mask is None:
-            mask = [0] * len(prompt_ids) + [1] * len(output_ids)
-        validate_training_turn(prompt_ids, output_ids, entry.get("per_token_logps") or [], mask)
-        output_mask = list(mask[len(prompt_ids) :])
-        turns.append(TurnRecord(list(prompt_ids), output_ids, entry.get("per_token_logps") or [], output_mask))
-    return turns
 
 
 def _tool_call_counts_by_name(entries: list[TraceEntry]) -> dict[str, int]:

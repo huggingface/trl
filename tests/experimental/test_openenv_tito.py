@@ -29,6 +29,8 @@ from accelerate import PartialState
 
 pytest.importorskip("openenv.core.harness.capture.validate")
 
+from openenv.core.harness import TrainingTrace
+
 from trl.experimental.async_grpo import openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
 
@@ -38,8 +40,14 @@ def entry(prompt, completion, logprobs, mask=None):
         "prompt_token_ids": prompt,
         "completion_token_ids": completion,
         "per_token_logps": logprobs,
-        "loss_mask": mask,
+        "loss_mask": mask if mask is not None else [0] * len(prompt) + [1] * len(completion),
     }
+
+
+def convert(entries):
+    for index, row in enumerate(entries):
+        row.setdefault("metadata", {})["node_id"] = str(index)
+    return openenv_harness._turns_from_training_trace(TrainingTrace.from_entries(entries))
 
 
 def test_lossless_capture_preserves_rewritten_tail_and_partial_mask():
@@ -47,7 +55,7 @@ def test_lossless_capture_preserves_rewritten_tail_and_partial_mask():
         entry([1, 2], [3, 4, 5], [-0.1, -0.2, -0.3], [0, 0, 1, 0, 1]),
         entry([1, 2, 3, 4, 99, 6], [7], [-0.4], [0, 0, 0, 0, 0, 0, 1]),
     ]
-    turns = openenv_harness._turns_from_trace(entries)
+    turns = convert(entries)
     rows, tally = _chain_to_sequences(turns, "rollout", 0)
     assert len(rows) == 2 and tally["realign"] == 0
     assert rows[0].input_ids == [1, 2, 3, 4, 5]
@@ -61,7 +69,7 @@ def test_lossless_capture_preserves_rewritten_tail_and_partial_mask():
 @pytest.mark.parametrize("logprobs", [[], None, [float("nan")], [float("inf")], [0.1], [True]])
 def test_missing_or_invalid_sample_logprobs_cannot_be_filled_with_zeros(logprobs):
     with pytest.raises(ValueError):
-        openenv_harness._turns_from_trace([entry([1], [2], logprobs)])
+        convert([entry([1], [2], logprobs)])
 
 
 @pytest.mark.parametrize("mask,logprobs", [(1, None), (1, []), ([1, 0], [-0.1]), (0, [])])
@@ -75,7 +83,7 @@ def test_builder_rejects_misaligned_arrays_before_mutation(mask, logprobs):
 @pytest.mark.parametrize("mask", [[1, 1], [0], [0, 2], [0, True]])
 def test_consumer_rejects_invalid_full_masks(mask):
     with pytest.raises(ValueError):
-        openenv_harness._turns_from_trace([entry([1], [2], [-0.1], mask)])
+        convert([entry([1], [2], [-0.1], mask)])
 
 
 @pytest.mark.parametrize(
@@ -146,7 +154,7 @@ def captured_entry():
     row.update(
         request={"messages": [{"role": "user", "content": "task"}]},
         response={"choices": [{"message": {"role": "assistant", "content": "answer"}}]},
-        metadata={"sampling_params": openenv_harness.training_sampling({"temperature": 0.8})},
+        metadata={"node_id": "0", "sampling_params": openenv_harness.training_sampling({"temperature": 0.8})},
     )
     return row
 
@@ -159,8 +167,9 @@ class Session:
     def wait_for_completion(self):
         return 0
 
-    def fetch_proxy_trace(self):
-        return [self.row]
+    def fetch_training_trace(self):
+        row = {**self.row, "metadata": {**self.row.get("metadata", {}), "node_id": "0"}}
+        return TrainingTrace.from_entries([row])
 
     def verify(self, completion):
         return SimpleNamespace(env_reward=0.25)
@@ -201,14 +210,14 @@ def test_invalid_capture_reaches_worker_failure_channel(make_loop, field, value)
         loop.run()
     assert loop._failed_event.is_set()
     name, message, traceback = loop._exception_info_queue.get_nowait()
-    assert name == "CaptureContractError" and message and "_turns_from_trace" in traceback
+    assert name == "CaptureContractError" and message and "fetch_training_trace" in traceback
     assert session.closed.is_set()
     assert loop.rollout_buffer.empty()
 
 
 def test_producer_validation_error_is_fatal(make_loop):
     session = Session(captured_entry())
-    session.fetch_proxy_trace = MagicMock(
+    session.fetch_training_trace = MagicMock(
         side_effect=ValueError("cannot train a capture with fatal validation findings")
     )
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
@@ -217,7 +226,7 @@ def test_producer_validation_error_is_fatal(make_loop):
     assert session.closed.is_set()
 
 
-@pytest.mark.parametrize("phase", ["create", "wait_for_completion", "fetch_proxy_trace", "verify"])
+@pytest.mark.parametrize("phase", ["create", "wait_for_completion", "fetch_training_trace", "verify"])
 def test_transport_failures_remain_unscorable(make_loop, phase):
     session = Session(captured_entry())
     factory = SimpleNamespace(create=lambda *args, **kwargs: session)
@@ -322,7 +331,7 @@ def test_harness_worker_produces_scored_training_samples(make_loop):
 
 def test_harbor_producer_defaults_and_partial_masks_round_trip():
     harness = pytest.importorskip("harbor_env.harness")
-    from openenv.harbor.contract import to_trace_entries
+    from openenv.harbor.contract import to_training_trace
     from openenv.harbor.models import HarborRolloutResult, HarborTurn
 
     factory = harness.HarborSessionFactory("http://unused", sampling={"temperature": 0.8, "top_p": 1.0, "top_k": -1})
@@ -330,6 +339,7 @@ def test_harbor_producer_defaults_and_partial_masks_round_trip():
         turns=[
             HarborTurn(
                 turn=0,
+                node_id="call-0",
                 prompt_token_ids=[10, 11],
                 completion_token_ids=[12, 13, 14],
                 per_token_logps=[-0.1, -0.2, -0.3],
@@ -342,9 +352,9 @@ def test_harbor_producer_defaults_and_partial_masks_round_trip():
     policy = openenv_harness.training_sampling(
         {"temperature": 0.8, "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0}
     )
-    trace = to_trace_entries(result)
+    trace = to_training_trace(result)
     assert factory.sampling == policy
-    turns = openenv_harness._turns_from_trace(trace)
+    turns = openenv_harness._turns_from_training_trace(trace)
     rows, _ = _chain_to_sequences(turns, "test", 0)
     assert rows[0].input_ids == [10, 11, 12, 13, 14]
     assert rows[0].completion_mask == [0, 0, 1, 0, 1]
@@ -362,3 +372,79 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
     assert loop._failed_event.is_set()
     assert session.closed.is_set()
     assert loop.rollout_buffer.empty()
+
+
+@pytest.mark.parametrize("reward", [None, 0.0, 1.0])
+def test_harbor_session_to_worker_preserves_masks_and_outcome(make_loop, reward):
+    from harbor_env.harness import HarborSession
+    from openenv.harbor.models import HarborRolloutResult, HarborTurn
+
+    turns = [
+        HarborTurn(
+            turn=0,
+            node_id="a",
+            prompt_token_ids=[10],
+            completion_token_ids=[11, 12],
+            per_token_logps=[-0.1, -0.2],
+            loss_mask=[0, 1, 0],
+            request_messages=[{"role": "user", "content": "task"}],
+            tool_calls=[{"name": "bash", "arguments": "{}"}],
+        ),
+        HarborTurn(
+            turn=1,
+            node_id="b",
+            prompt_token_ids=[20],
+            completion_token_ids=[21],
+            per_token_logps=[-0.3],
+            loss_mask=[0, 0],
+            trainable=False,
+            request_messages=[{"role": "user", "content": "task"}],
+            tool_calls=[{"name": "bash", "arguments": "{}"}],
+        ),
+        HarborTurn(turn=2, node_id="title", role="auxiliary"),
+        HarborTurn(turn=3, node_id="retry", discarded=True),
+    ]
+    result = HarborRolloutResult.model_validate_json(HarborRolloutResult(turns=turns, reward=reward).model_dump_json())
+    env = MagicMock()
+    env.run_rollout.return_value = result
+    session = HarborSession(
+        env=env,
+        split="tasks",
+        task_index=0,
+        instruction="task",
+        harness="opencode",
+        sandbox="docker",
+        llm_url="http://unused",
+        model="test",
+        owns_env=True,
+    )
+    loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
+    actual, _ = loop._run_session([])
+    assert actual[-1] == reward
+    assert actual[3] == 2  # Usage includes the zero-masked agent call.
+    assert len(actual[2]) == 1
+    assert actual[2][0].input_ids == [10, 11, 12]
+    assert actual[2][0].completion_mask == [0, 1, 0]
+    assert actual[2][0].old_log_probs == [0.0, -0.1, -0.2]
+    env.close.assert_called_once()
+
+
+def test_shared_prefix_is_supervised_once_across_both_branches():
+    from openenv.core.harness.capture.contract import to_training_trace
+    from openenv.core.harness.capture.graph import RolloutGraph, TurnNode
+
+    graph = RolloutGraph()
+    for node_id, prompt, output in [("root", [1], [2]), ("left", [1, 2], [3]), ("right", [1, 2], [4])]:
+        graph.add_turn(TurnNode(node_id=node_id, prompt_ids=prompt, sampled_ids=output, sampled_logprobs=[-0.1]))
+    document = {
+        "sequences": [
+            {"role": "agent", "node_ids": ["root", "left"], "loss_mask": [0, 1, 1]},
+            {"role": "agent", "node_ids": ["root", "right"], "loss_mask": [0, 1, 1]},
+        ]
+    }
+    turns = openenv_harness._turns_from_training_trace(to_training_trace(graph, document))
+    rows, _ = _chain_to_sequences(turns, "rollout", 0)
+    supervised = [
+        token for row in rows for token, mask in zip(row.input_ids, row.completion_mask, strict=True) if mask
+    ]
+    assert supervised == [2, 3, 4]
