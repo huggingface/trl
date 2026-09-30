@@ -55,6 +55,7 @@ from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
     flush_left,
@@ -62,7 +63,6 @@ from .utils import (
     global_then_local_main_first,
     hash_module,
     pad,
-    patch_fused_lm_head,
     use_adapter,
 )
 
@@ -911,9 +911,9 @@ class DPOTrainer(_BaseTrainer):
         outputs = ("log_probs", "entropy", "mean_logits", "is_top1")
         if self.use_weighting:
             outputs += ("log_sum_sq_probs",)
-        patch_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model, outputs=outputs)
+        add_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model, outputs=outputs)
         if self.ref_model is not None:
-            patch_fused_lm_head(self.ref_model)
+            add_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

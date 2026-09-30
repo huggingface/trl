@@ -52,8 +52,10 @@ import argparse
 
 
 def main(script_args, training_args, model_args, dataset_args):
+    import transformers
     from accelerate.logging import get_logger
     from datasets import load_dataset
+    from packaging.version import Version
 
     from trl import DistillationTrainer, get_dataset, get_peft_config, get_quantization_config
 
@@ -67,12 +69,15 @@ def main(script_args, training_args, model_args, dataset_args):
     quantization_config = get_quantization_config(model_args)
     # The student's quantization is passed via the trainer's `quantization_config` argument (below), so it must NOT
     # also be set in `model_init_kwargs` — the trainer rejects that combination.
-    training_args.model_init_kwargs = dict(
+    model_init_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=training_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
     )
+    if training_args.model_init_kwargs is not None:
+        model_init_kwargs.update(training_args.model_init_kwargs)
+    training_args.model_init_kwargs = model_init_kwargs
 
     # The teacher is deliberately left unquantized: quantizing it degrades the reference distribution the student is
     # trained to match. To quantize it anyway, override the default below with
@@ -115,7 +120,7 @@ def main(script_args, training_args, model_args, dataset_args):
     )
 
     # Train the model
-    trainer.train()
+    trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
     # Log training complete
     trainer.accelerator.print("✅ Training completed.")
@@ -127,6 +132,10 @@ def main(script_args, training_args, model_args, dataset_args):
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
+
+    # Finish the trackers and destroy the process group
+    if Version(transformers.__version__) >= Version("5.18.0"):
+        trainer.end()
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):
