@@ -1643,7 +1643,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 if self._peak_flops_per_device is not None:
                     metrics["perf/mfu_wall_clock"].append(
                         compute_mfu(
-                            flops_per_token, self._step_forward_tokens / step_s, world_size, self._peak_flops_per_device
+                            flops_per_token,
+                            self._step_forward_tokens / step_s,
+                            world_size,
+                            self._peak_flops_per_device,
                         )
                     )
 
