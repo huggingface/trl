@@ -16,7 +16,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "openenv[harbor] @ git+https://github.com/adithya-s-k/OpenEnv.git@906c9ae271c9acc7efa1833dfb218d45f84c8f67",
+#     "openenv[harbor] @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
@@ -88,7 +88,7 @@ TRAIN_SCRIPT_URL = (
     "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py"
 )
 DATA_ROOT = pathlib.Path(os.environ.get("DATA_ROOT", "/data"))
-OPENENV_REVISION = "906c9ae271c9acc7efa1833dfb218d45f84c8f67"
+OPENENV_REVISION = "86a180ede21e044f7929b9a7783ad83aa67d83a3"
 
 _children: list[subprocess.Popen] = []
 _stopping = threading.Event()
@@ -337,7 +337,7 @@ def main() -> None:
             str(source),
             "fetch",
             "--depth=1",
-            "https://github.com/adithya-s-k/OpenEnv.git",
+            "https://github.com/huggingface/OpenEnv.git",
             OPENENV_REVISION,
         ],
         check=True,

@@ -612,6 +612,8 @@ Some agents cannot be driven this way because they own their own loop. A product
 
 For this, TRL provides an experimental **black box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` specific for OpenEnv that drives an [OpenEnv `ResourceSessionFactory`](https://huggingface.co/docs/openenv). See [`examples/async_grpo_opencode/async_grpo_opencode.py`](https://github.com/huggingface/trl/blob/main/examples/async_grpo_opencode/async_grpo_opencode.py) for a complete, self-contained example. To scale rollouts beyond a single node, [`examples/async_grpo_opencode/opencode_hf_sandbox.py`](https://github.com/huggingface/trl/blob/main/examples/async_grpo_opencode/opencode_hf_sandbox.py) runs each rollout in its own remote Hugging Face sandbox instead of a local subprocess.
 
+The [Harbor example](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) uses the same worker with OpenEnv's Harbor integration. Harbor runs tasks through coding-agent harnesses such as OpenCode, Codex and Claude Code. It includes local setup and a Hugging Face Jobs launcher.
+
 ### How it works
 
 TRL does not sample each turn here. The agent runs to completion on its own, and TRL reads back what it did:

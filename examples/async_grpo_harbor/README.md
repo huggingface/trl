@@ -5,12 +5,12 @@ logprobs, and loss masks, then updates the same vLLM instance.
 
 ## Local setup
 
-Use Python 3.12 and this TRL checkout. The typed capture API depends on
-[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install its pinned revision:
+Use Python 3.12 and this TRL checkout. The typed capture API was merged in
+[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install the pinned upstream revision:
 
 ```sh
-git clone https://github.com/adithya-s-k/OpenEnv.git OpenEnv
-git -C OpenEnv checkout --detach 906c9ae271c9acc7efa1833dfb218d45f84c8f67
+git clone https://github.com/huggingface/OpenEnv.git OpenEnv
+git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
 pip install -e . trackio datasets ./OpenEnv
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
@@ -54,9 +54,9 @@ subsequent sessions receive the new proxy URL.
 Rewritten histories can produce multiple training rows. Token retention does not guarantee equal
 rollout weighting or a suitable memory budget for every harness.
 
-Run the CPU contract and launcher checks with the pinned checkout on `PYTHONPATH`:
+Run the packaged contract and reconciliation tests with this checkout on `PYTHONPATH`:
 
 ```sh
-python -m pytest tests/experimental/test_openenv_tito.py tests/experimental/test_harbor_example.py \
-    tests/experimental/test_async_grpo_trainer.py::TestReconciler tests/test_vllm_control_requests.py -q
+python -m pytest tests/experimental/test_openenv_tito.py \
+    tests/experimental/test_async_grpo_trainer.py::TestReconciler -q
 ```
