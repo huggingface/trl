@@ -44,7 +44,9 @@ Message = dict[str, Any]
 
 # TODO(@openenv): this is OpenEnv's proxy-trace record shape; it should be defined and exported by OpenEnv, not here.
 class TraceEntry(TypedDict, total=False):
-    request: dict[str, Any]  # forwarded chat body, e.g. {"messages": [...], "tools": [...] | None}
+    request: dict[
+        str, Any
+    ]  # forwarded chat body, e.g. {"messages": [...], "tools": [...] | None, "chat_template_kwargs": {...}}
     response: dict[str, Any]  # upstream reply, e.g. {"choices": [{"message": {"content", "tool_calls"}}]}
     completion_token_ids: list[int]  # generated token ids for this turn
     completion_tokens: list[str]  # fallback token strings ("token_id:{id}") when ids are absent
@@ -334,8 +336,8 @@ def _turns_from_trace(
     entries: list[TraceEntry], tokenizer, train_turn_fn: Callable[[HarnessTurn], bool] | None = None
 ) -> list[TurnRecord]:
     """Loop-owning path: rebuild per-turn `TurnRecord`s from the real agent turns (`entries`, already selected by the
-    loop's `agent_turn_fn`). Re-tokenize each request's messages (passing its `tools` so the prompt matches what the
-    upstream rendered); ids + logprobs come from the capture.
+    loop's `agent_turn_fn`). Re-tokenize each request's messages (passing its `tools` and `chat_template_kwargs` so the
+    prompt matches what the upstream rendered); ids + logprobs come from the capture.
 
     By default every agent turn is trained. Which turns to reinforce beyond that is the CALLER's policy: pass
     `train_turn_fn(turn: HarnessTurn) -> bool` to narrow it, e.g. `has_tool_call` to train only turns that took an
@@ -353,6 +355,7 @@ def _turns_from_trace(
             add_generation_prompt=True,
             tokenize=True,
             return_dict=False,
+            **(request.get("chat_template_kwargs") or {}),
         )
         turns.append(TurnRecord(prompt_ids, _trace_output_ids(entry), entry.get("per_token_logps") or []))
     return turns
