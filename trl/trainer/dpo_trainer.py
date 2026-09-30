@@ -1096,7 +1096,8 @@ class DPOTrainer(_BaseTrainer):
                         " left out of the training sequence: "
                         f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
                         ". The model is trained on a context that differs from the one it sees at inference. To avoid"
-                        " it, use a chat template that renders the prompt the same way in both cases."
+                        " it, use a chat template that renders the prompt the same way in both cases. This warning is"
+                        " shown once, but it likely applies to every example in the dataset."
                     )
 
                 output["prompt_ids"] = prompt_ids[:prompt_len]
