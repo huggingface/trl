@@ -74,7 +74,7 @@ def _send_full_tensors_lockstep(
     send_thread: threading.Thread | None = None
     send_error: list[BaseException] = []
     send_failed = threading.Event()
-    do_send = accelerator.is_main_process and weight_transfer is not None
+    do_send = accelerator.is_main_process
 
     if do_send:
         send_queue = queue.Queue(maxsize=_WEIGHT_SEND_QUEUE_MAXSIZE)
