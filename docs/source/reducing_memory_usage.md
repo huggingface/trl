@@ -130,6 +130,12 @@ PEFT can be combined with other memory reduction techniques such as quantization
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
+<Tip warning={true}>
+
+`use_liger_kernel=True` is deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0. These trainers compute the log-probabilities with a fused LM head, so only Liger's layer kernels (`RMSNorm`, `RoPE`, `SwiGLU`) apply. Use the Hub kernels instead, with `model_init_kwargs={"use_kernels": True}`.
+
+</Tip>
+
 To use Liger for reducing peak memory usage, use the following code snippet:
 
 <hfoptions id="liger">
@@ -171,21 +177,11 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 </hfoption>
 </hfoptions>
 
-## Chunked cross-entropy for reducing peak memory usage
+## Chunked log-probabilities
 
-At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. `loss_type="chunked_nll"` in [`SFTTrainer`] avoids materializing it all at once: positions with `labels == -100` are dropped *before* the `lm_head` matmul, and the cross-entropy is computed in chunks of tokens using gradient checkpointing, so peak activation memory scales with `chunk_size × vocab_size` instead of `(batch × seq_len) × vocab_size`.
+At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`] never materialize it: positions with `labels == -100` are dropped before the `lm_head` matmul, and the log-probabilities are computed on `[4096 tokens × 32768 vocab]` tiles by a Triton kernel, so peak memory scales with the tile instead of `(batch × seq_len) × vocab_size`.
 
-Same math as the standard `"nll"` loss — this is a memory optimization, not a new loss. It is the **default** in [`SFTTrainer`]; to opt out, set `loss_type="nll"`:
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., loss_type="nll")  # opt out of the default chunked path
-```
-
-Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (measured on `Qwen3-1.7B`, vocab ≈ 151k — ~30 % on single-GPU, up to ~50 % under FSDP2 × 4 GPUs) with wall time typically neutral or slightly faster. See the [PR #5575](https://github.com/huggingface/trl/pull/5575) for the full benchmark across single-GPU, DDP, FSDP2, packing, long-context, and fp32 configurations.
-
-Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
+This is always on and needs no configuration. On `Qwen3-8B` (vocab ≈ 152k) with 16k tokens, the head's forward and backward take +2.6 GiB instead of +45 GiB with full logits.
 
 ## Padding-free
 

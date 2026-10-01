@@ -156,6 +156,12 @@ training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "flash_
 
 Liger Kernel is a collection of Triton kernels designed for LLM training that can increase throughput by 20% and reduce memory usage by 60%.
 
+<Tip warning={true}>
+
+`use_liger_kernel=True` is deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0. These trainers compute the log-probabilities with a fused LM head, so only Liger's layer kernels (`RMSNorm`, `RoPE`, `SwiGLU`) apply. Use the Hub kernels instead, with `model_init_kwargs={"use_kernels": True}`.
+
+</Tip>
+
 <hfoptions id="liger">
 <hfoption id="SFT">
 
