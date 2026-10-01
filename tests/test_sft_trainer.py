@@ -95,6 +95,17 @@ class TestDFTLoss(TrlTestCase):
         # dft scales the ce_loss per token by 0.5. So the dft_loss should be ce_loss/2
         torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
 
+    @pytest.mark.parametrize("num_items_in_batch", [None, 0])
+    def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
+        logits = torch.randn(2, 3, 2, requires_grad=True)
+        outputs = MagicMock()
+        outputs.logits = logits
+        labels = torch.full((2, 3), -100)
+        loss = dft_loss(outputs, labels, num_items_in_batch)
+        loss.backward()
+        assert loss.item() == 0.0
+        assert torch.isfinite(logits.grad).all()
+
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
