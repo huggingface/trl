@@ -342,6 +342,8 @@ def main():
             server_process.terminate()
             server_process.wait()
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()

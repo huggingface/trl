@@ -29,7 +29,6 @@ import accelerate
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
@@ -54,7 +53,13 @@ from ..data_utils import _tokenize, get_dataset_column_names, is_conversational
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
-from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad
+from .utils import (
+    create_model_from_path,
+    disable_dropout_in_model,
+    get_config_model_id,
+    global_then_local_main_first,
+    pad,
+)
 
 
 if is_peft_available():
@@ -430,7 +435,7 @@ class RewardTrainer(_BaseTrainer):
             processing_class.eos_token = args.eos_token
             # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
             # config (a sequence classification model has no generation config).
-            model.config.eos_token_id = processing_class.eos_token_id
+            model.config.get_text_config().eos_token_id = processing_class.eos_token_id
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -548,7 +553,7 @@ class RewardTrainer(_BaseTrainer):
             )
         processing_class.pad_token = pad_token
         # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
 
         # Data collator
         if data_collator is None:
@@ -647,7 +652,7 @@ class RewardTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             if not is_processed:
                 # Add EOS token if needed: non-conversational only
                 first_example = next(iter(dataset))
