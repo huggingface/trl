@@ -647,11 +647,17 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
 def strip_images_from_messages(messages):
     """
-    Return messages with PIL Image objects removed from VLM content blocks.
+    Drop the image objects from a conversation, keeping its structure.
 
-    Replaces ``{"type": "image", "image": <PIL.Image>}`` with ``{"type": "image"}`` so that the message structure is
-    preserved but the non-serializable PIL object is dropped. Non-multimodal messages (string content) are returned
-    unchanged.
+    Each `{"type": "image", "image": <PIL.Image>}` content block becomes `{"type": "image"}`, so the conversation can
+    be logged or serialized. Messages with string content are returned unchanged.
+
+    Args:
+        messages (`list[dict]` or `str`):
+            Conversation to strip. Anything other than a list is returned as is.
+
+    Returns:
+        `list[dict]` or `str`: The conversation without the image objects.
     """
     if not isinstance(messages, list):
         return messages
