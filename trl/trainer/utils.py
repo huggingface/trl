@@ -807,7 +807,9 @@ def print_prompt_completions_sample(
                     elif isinstance(content, str):
                         t.append(content)
                 if "tool_calls" in msg:
-                    for tc in msg["tool_calls"]:
+                    for k, tc in enumerate(msg["tool_calls"]):
+                        if k > 0:
+                            t.append("\n")
                         fn = tc.get("function", {})
                         raw = fn.get("arguments", {})
                         args = raw if isinstance(raw, dict) else json.loads(raw)
