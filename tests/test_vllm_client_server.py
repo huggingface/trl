@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 import requests
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from transformers.testing_utils import torch_device
+from transformers.testing_utils import backend_device_count, torch_device
 
 from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
@@ -181,9 +181,7 @@ class TestVLLMClientServer(TrlTestCase):
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
 
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        cls.server_process = subprocess.Popen(["trl", "vllm-serve", "--model", cls.model_id], env=env)
 
         # Initialize the client
         cls.client = VLLMClient(connection_timeout=240, host="localhost")
@@ -426,9 +424,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
 
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        cls.server_process = subprocess.Popen(["trl", "vllm-serve", "--model", cls.model_id], env=env)
 
         # Initialize the client
         cls.client = VLLMClient(base_url="http://localhost:8000", connection_timeout=240)
@@ -591,8 +587,6 @@ class TestVLLMClientServerTP(TrlTestCase):
         # Start the server process
         cls.server_process = subprocess.Popen(
             ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             env=env,
         )
 
@@ -757,9 +751,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
 
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        cls.server_process = subprocess.Popen(["trl", "vllm-serve", "--model", cls.model_id], env=env)
 
     def test_init_communicator_with_device_int(self):
         """Test init_communicator with integer device parameter."""
@@ -822,10 +814,13 @@ class TestVLLMClientServerVLM(TrlTestCase):
 
     @classmethod
     def setup_class(cls):
+        # Run the server on the last visible accelerator, since the test process may hold memory on the first one
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = str(backend_device_count(torch_device) - 1)
+
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        cls.server_process = subprocess.Popen(["trl", "vllm-serve", "--model", cls.model_id], env=env)
 
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")
