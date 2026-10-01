@@ -645,7 +645,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     return entropies.reshape(original_shape)
 
 
-def _strip_images_from_messages(messages):
+def strip_images_from_messages(messages):
     """
     Return messages with PIL Image objects removed from VLM content blocks.
 

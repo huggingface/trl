@@ -77,7 +77,6 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
-    _strip_images_from_messages,
     add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
@@ -96,6 +95,7 @@ from .utils import (
     split_pixel_values_by_grid,
     split_tensor_dict,
     start_event_loop_in_daemon,
+    strip_images_from_messages,
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
@@ -3248,8 +3248,8 @@ class GRPOTrainer(_BaseTrainer):
 
             table = {
                 "step": [self.state.global_step] * len(self._logs["prompt"]),
-                "prompt": [_strip_images_from_messages(messages) for messages in self._logs["prompt"]],
-                "completion": [_strip_images_from_messages(messages) for messages in self._logs["completion"]],
+                "prompt": [strip_images_from_messages(messages) for messages in self._logs["prompt"]],
+                "completion": [strip_images_from_messages(messages) for messages in self._logs["completion"]],
                 **self._logs["rewards"],
                 **self._logs["extra"],
                 "advantage": self._logs["advantages"],
