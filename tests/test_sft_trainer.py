@@ -33,9 +33,7 @@ from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import (
-    DataCollatorForLanguageModeling,
-)
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from .testing_utils import (
     TrlTestCase,
