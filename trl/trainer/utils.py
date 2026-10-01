@@ -1731,8 +1731,11 @@ def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | N
     Returns:
         `float` or `None`: Local device peak FLOPs, or `None` if the device or precision is unsupported.
     """
-    device_name = torch.cuda.get_device_name(accelerator.device)
-    peak_flops = get_peak_flops(device_name, dtype)
+    if accelerator.device.type == "cuda":
+        device_name = torch.cuda.get_device_name(accelerator.device)
+        peak_flops = get_peak_flops(device_name, dtype)
+    else:
+        peak_flops = None
     if peak_flops is None:
         logger.info(
             "MFU metrics are disabled because the peak FLOPs are unknown for the local training device or "

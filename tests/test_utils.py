@@ -22,6 +22,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate import Accelerator
+from accelerate.state import AcceleratorState, PartialState
 from datasets import IterableDataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
@@ -41,6 +43,7 @@ from trl.trainer.utils import (
     generate_model_card,
     get_callable_name,
     get_peak_flops,
+    get_peak_flops_per_device,
     get_peft_config,
     hash_module,
     is_async_callable,
@@ -1985,6 +1988,18 @@ class TestGetPeakFlops:
     )
     def test_unsupported_device_or_dtype(self, device_name, dtype):
         assert get_peak_flops(device_name, dtype) is None
+
+
+class TestGetPeakFlopsPerDevice(TrlTestCase):
+    def test_cpu_device(self):
+        # Isolate Accelerate's process-wide state from other trainer tests.
+        with (
+            patch.dict(AcceleratorState._shared_state, clear=True),
+            patch.dict(PartialState._shared_state, clear=True),
+        ):
+            accelerator = Accelerator(cpu=True)
+            assert accelerator.device.type == "cpu"
+            assert get_peak_flops_per_device(accelerator, "bfloat16") is None
 
 
 class TestComputeMfu(TrlTestCase):
