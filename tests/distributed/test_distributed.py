@@ -20,6 +20,9 @@ import pytest
 import torch
 import transformers
 from packaging.version import Version
+from transformers import AutoModelForCausalLM
+
+from trl.trainer.utils import add_fused_lm_head
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
@@ -489,3 +492,33 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+
+@require_torch_multi_accelerator
+class TestModelParallel:
+    def test_fused_lm_head(self):
+        """With the model split across two devices, the fused LM head matches the model on a single device."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, device_map={"": 0})
+        model_split = AutoModelForCausalLM.from_pretrained(model_id, device_map=device_map)
+        add_fused_lm_head(model)
+        add_fused_lm_head(model_split)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=model.device)
+        labels = input_ids.masked_fill(torch.arange(16, device=model.device) < 4, -100)
+
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+        out_split = model_split(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out_split["log_probs"], out["log_probs"])
+        torch.testing.assert_close(out_split["entropy"], out["entropy"])
+        out_split["loss"].backward()
+        assert all(param.grad is not None for param in model_split.parameters())
