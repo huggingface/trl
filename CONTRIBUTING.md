@@ -51,6 +51,8 @@ The TRL library is robust and reliable thanks to users who report the problems t
 
 Before you report an issue, we would really appreciate it if you could **make sure the bug was not already reported** (use the search bar on GitHub under Issues). Your issue should also be related to bugs in the library itself, and not your code.
 
+We also need to know that the bug matters in practice. Tell us how you hit it: what you were training, with which configuration, and what it cost you. A report showing only that a function can be made to fail, with no plausible path by which a user would get there, is not something we will act on, however clean the reproduction.
+
 Once you've confirmed the bug hasn't already been reported, please include the following information in your issue so we can quickly resolve it:
 
 * Your **OS type and version**, **Python**, **PyTorch**, **TRL** and **Transformers** versions.
