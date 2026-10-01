@@ -102,7 +102,7 @@ def clone_chat_template(
 
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
-    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.get_text_config().eos_token_id = tokenizer.eos_token_id
     if model.can_generate():  # Non-generative models (e.g. SequenceClassification) may not have a generation_config
         model.generation_config.eos_token_id = tokenizer.eos_token_id
 

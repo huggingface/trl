@@ -19,7 +19,9 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import time
 from collections import OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -62,6 +64,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.trainer.base_trainer import _BaseTrainer
+from trl.trainer.utils import get_callable_name
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
 
@@ -1020,7 +1023,91 @@ class TestWorkerMetricPush(TrlTestCase):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
 
+class TestToolExecution(TrlTestCase):
+    def _loop(self):
+        loop = object.__new__(_AsyncRolloutLoop)
+        loop._counters = defaultdict(float)
+        loop._rates = defaultdict(lambda: [0.0, 0.0])
+        loop._tool_pool = ThreadPoolExecutor(max_workers=4)
+        return loop
+
+    @staticmethod
+    def _call(name, **arguments):
+        return {"type": "function", "function": {"name": name, "arguments": arguments}}
+
+    def test_every_tool_shape_runs_and_calls_keep_their_order(self):
+        def sync_tool(value: int) -> str:
+            return f"sync:{value}"
+
+        async def async_tool(value: int) -> str:
+            await asyncio.sleep(0)
+            return f"async:{value}"
+
+        async def failing_tool(value: int) -> str:
+            raise RuntimeError(f"boom:{value}")
+
+        loop = self._loop()
+        tool_dict = {
+            "sync_tool": sync_tool,
+            "async_tool": async_tool,
+            "failing_tool": failing_tool,
+        }
+        calls = [
+            self._call("sync_tool", value=1),
+            self._call("async_tool", value=2),
+            self._call("failing_tool", value=3),
+            self._call("missing_tool", value=4),
+        ]
+        messages, n_calls, n_failures = asyncio.run(loop._execute_tool_calls(calls, tool_dict))
+
+        assert n_calls == 4
+        assert n_failures == 2
+        assert [m["name"] for m in messages] == ["sync_tool", "async_tool", "failing_tool", "missing_tool"]
+        assert messages[0]["content"] == "sync:1"
+        assert messages[1]["content"] == "async:2"
+        assert "boom:3" in messages[2]["content"]
+        assert "unknown tool" in messages[3]["content"]
+        assert loop._counters["tools/failing_tool_failure_total"] == 1
+        assert loop._counters["tools/unknown_name_total"] == 1
+        assert loop._rates["tools/latency_s"][1] == 3
+
+    def test_slow_sync_tool_does_not_block_the_event_loop(self):
+        def slow_tool() -> str:
+            time.sleep(0.5)
+            return "done"
+
+        loop = self._loop()
+
+        async def scenario():
+            ticks = 0
+
+            async def ticker():
+                nonlocal ticks
+                while True:
+                    ticks += 1
+                    await asyncio.sleep(0.01)
+
+            task = asyncio.create_task(ticker())
+            messages, _, _ = await loop._execute_tool_calls([self._call("slow_tool")], {"slow_tool": slow_tool})
+            task.cancel()
+            return messages, ticks
+
+        messages, ticks = asyncio.run(scenario())
+        assert messages[0]["content"] == "done"
+        assert ticks > 2  # inline, the ticker would have advanced once at most
+
+
 class TestReconciler(TrlTestCase):
+    @pytest.mark.parametrize("mask", [None, [1, 0, 1], [0, 0, 0]])
+    def test_completion_masks_are_generic(self, mask):
+        rows = _finalize([TurnRecord([1, 2], [3, 4, 5], [-0.1, -0.2, -0.3], mask)])
+        if mask == [0, 0, 0]:
+            assert rows == []
+        else:
+            assert rows[0].completion_mask == [0, 0] + (mask if mask is not None else [1, 1, 1])
+            assert rows[0].input_ids == [1, 2, 3, 4, 5]
+            assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
+
     def test_common_prefix_len(self):
         assert _common_prefix_len([1, 2, 3], [1, 2, 3]) == 3  # identical
         assert _common_prefix_len([1, 2], [1, 2, 3, 4]) == 2  # old is a prefix of new
@@ -1050,8 +1137,8 @@ class TestReconciler(TrlTestCase):
     def test_rewrite_forks_into_two_rows(self):
         # Divergence inside turn 1's answer + a turn >= fork_threshold -> FORK. Every generated token is
         # trained in exactly one row (turn 1's tokens are context in row 2).
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
-        turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32])
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
+        turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32], [-0.2] * 3)
         rows = _finalize([turn1, turn2], fork_threshold=2)
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
@@ -1062,16 +1149,18 @@ class TestReconciler(TrlTestCase):
     def test_fork_when_divergence_precedes_last_response(self):
         # matched < last_response_start_idx -> FORK regardless of threshold (distinct from the length trigger).
         builder = _SampleBuilder(fork_threshold=1024)
-        builder.append_turn(TurnRecord([1, 2, 3], [10, 11]), DriftKind.CLEAN)  # last_response_start_idx == 3
+        builder.append_turn(
+            TurnRecord([1, 2, 3], [10, 11], [-0.2] * 2), DriftKind.CLEAN
+        )  # last_response_start_idx == 3
         # 5 held tokens, only the first matches -> 4 tokens of drift, reported alongside the kind.
-        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30])) == (DriftKind.FORK, 4)
+        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30], [-0.2] * 1)) == (DriftKind.FORK, 4)
 
     def test_drift_tally_counts_transitions(self):
         # The tally is what makes `fork_threshold_tokens` tunable: it reports the drift the threshold is compared
         # against. It counts turn TRANSITIONS, so a single-turn rollout has none.
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
-        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20])
-        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30])
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
+        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20], [-0.2] * 1)
+        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30], [-0.2] * 1)
 
         _rows, tally = _chain_to_sequences([turn1], "r0", 2)
         assert tally == {"clean": 0, "realign": 0, "fork": 0, "transitions": 0, "drift_tokens": 0, "drift_max": 0}
@@ -1096,8 +1185,8 @@ class TestReconciler(TrlTestCase):
         # the prompt diverges at the answer start (large drift) while turn 2's own answer is tiny. The decision must
         # key on the drift (6 tokens invalidated), not the incoming turn's length (1) -> FORK, so turn 1 keeps its
         # training signal. (fork_threshold sits between the two: gating on output length would wrongly REALIGN.)
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15])  # long trained answer
-        turn2 = TurnRecord([1, 2, 3, 99, 88], [30])  # answer dropped by the template; short next turn
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15], [-0.2] * 6)  # long trained answer
+        turn2 = TurnRecord([1, 2, 3, 99, 88], [30], [-0.2] * 1)  # answer dropped by the template; short next turn
         rows = _finalize([turn1, turn2], fork_threshold=3)
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13, 14, 15]
@@ -1149,8 +1238,11 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
     async def _generate_one_turn(prompt_ids):
         return tq.pop(0)
 
+    async def _execute_tool_calls(tool_calls, tool_dict):
+        return [{"role": "tool", "name": "t", "content": "ok"}], 1, 0
+
     loop._generate_one_turn = _generate_one_turn
-    loop._execute_tool_calls = lambda tool_calls, tool_dict: ([{"role": "tool", "name": "t", "content": "ok"}], 1, 0)
+    loop._execute_tool_calls = _execute_tool_calls
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
     return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
@@ -1224,12 +1316,19 @@ def two_reward(completions, **kwargs):
     return [1.0, 3.0]
 
 
+class AsyncTwoReward:
+    # Same reward as `two_reward`, as an async callable class: the picklable form the docs recommend, and the one
+    # `inspect.iscoroutinefunction` does not see as asynchronous on its own.
+    async def __call__(self, completions, **kwargs):
+        return [1.0, 3.0]
+
+
 def _bare_loop(reward_funcs):
     # _score_group only reads reward_funcs / reward_func_names / _env_reward_types off self, so we skip the heavy
     # __init__ (tokenizer, asyncio loop, environments) and set just those.
     loop = object.__new__(_AsyncRolloutLoop)
     loop.reward_funcs = reward_funcs
-    loop.reward_func_names = [f.__name__ for f in reward_funcs]
+    loop.reward_func_names = [get_callable_name(f) for f in reward_funcs]
     loop._env_reward_types = []  # no environment owns a reward in these tests
     return loop
 
@@ -1284,6 +1383,19 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[2].input_ids == seq_b2.input_ids
 
         assert all(s.model_version == 7 for s in samples)
+
+    def test_async_callable_class_reward_func_is_awaited(self):
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+        group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+
+        samples = asyncio.run(_bare_loop([AsyncTwoReward()])._score_group(group))
+
+        # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
+        assert samples[0].metrics["rewards/AsyncTwoReward"] == 1.0
+        assert samples[1].metrics["rewards/AsyncTwoReward"] == 3.0
+        assert samples[0].advantage == pytest.approx(-1.0)
+        assert samples[1].advantage == pytest.approx(1.0)
 
     def test_metrics_are_per_conversation_and_independent(self):
         seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")

@@ -14,13 +14,14 @@
 
 import gc
 import logging
+import os
 import sys
 import traceback
 from functools import wraps
 
 import pytest
 import torch
-from transformers.utils import is_liger_kernel_available, is_torch_xpu_available
+from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
 
 
 # ============================================================================
@@ -128,6 +129,15 @@ def apply_model_revisions(monkeypatch):
         # Re-wrap as classmethod
         return classmethod(wrapper)
 
+    def create_method_wrapper(original_method):
+        @wraps(original_method)
+        def wrapper(self, model_id, *args, **kwargs):
+            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+                kwargs["revision"] = MODEL_REVISIONS[model_id]
+            return original_method(self, model_id, *args, **kwargs)
+
+        return wrapper
+
     # Patch the transformers Auto* classes and the base classes they dispatch to
     for cls in [
         AutoConfig,
@@ -139,6 +149,31 @@ def apply_model_revisions(monkeypatch):
         ProcessorMixin,
     ]:
         monkeypatch.setattr(cls, "from_pretrained", create_classmethod_wrapper(cls.from_pretrained))
+
+    def create_peft_classmethod_wrapper(original_classmethod):
+        original_func = original_classmethod.__func__
+
+        @wraps(original_func)
+        def wrapper(cls, model, model_id, *args, **kwargs):
+            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+                kwargs["revision"] = MODEL_REVISIONS[model_id]
+            return original_func(cls, model, model_id, *args, **kwargs)
+
+        return classmethod(wrapper)
+
+    # PEFT adapters never reach the loaders above.
+    if is_peft_available():
+        from peft import AutoPeftModelForCausalLM, PeftModel
+
+        monkeypatch.setattr(
+            AutoPeftModelForCausalLM,
+            "from_pretrained",
+            create_classmethod_wrapper(AutoPeftModelForCausalLM.from_pretrained),
+        )
+        # `PeftModel.from_pretrained` takes the base model first and the adapter id second.
+        monkeypatch.setattr(PeftModel, "from_pretrained", create_peft_classmethod_wrapper(PeftModel.from_pretrained))
+        # `load_adapter` is an instance method, not a classmethod.
+        monkeypatch.setattr(PeftModel, "load_adapter", create_method_wrapper(PeftModel.load_adapter))
 
 
 @pytest.fixture(autouse=True)
@@ -165,6 +200,26 @@ def force_use_cpu_without_accelerator(monkeypatch):
         original_post_init(self)
 
     monkeypatch.setattr(_BaseConfig, "__post_init__", patched_post_init)
+
+
+@pytest.fixture(autouse=True)
+def restore_mixed_precision_env(monkeypatch):
+    """
+    Restore the mixed precision that `transformers.TrainingArguments` publishes process-wide.
+
+    On transformers < 5, `TrainingArguments.__post_init__` writes the mixed precision to `ACCELERATE_MIXED_PRECISION`
+    and reads that same variable back as the default for the next instantiation, where a `bf16=False` flag is
+    indistinguishable from an unset one. TRL configs default `bf16` to `True`, so the first trainer built in a worker
+    sets the variable to `bf16` for the whole process, and no config built later can clear it. transformers < 5 also
+    builds the `Accelerator` without passing the mixed precision, so accelerate falls back to the leaked variable and a
+    test that asks for `bf16=False` silently runs in bf16: with `test_chunked_logps_match_full_logits`, the streamed
+    projection enters autocast and the full-logits path does not, and the two no longer match. Setting the variable to
+    its current value arms monkeypatch's restore, so each test sees the value the session started with.
+
+    Only the minimum-versions CI job is affected: transformers >= 5 passes the mixed precision to the `Accelerator`
+    explicitly and never writes the variable.
+    """
+    monkeypatch.setenv("ACCELERATE_MIXED_PRECISION", os.environ.get("ACCELERATE_MIXED_PRECISION", "no"))
 
 
 @pytest.fixture(autouse=True)

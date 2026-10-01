@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+from contextlib import nullcontext
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,7 +23,7 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -39,7 +40,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_response_parsing
+from ..testing_utils import TrlTestCase, require_response_parsing
 
 
 @pytest.fixture(scope="module")
@@ -3470,7 +3471,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     monkeypatch.setattr(
         gold_trainer_module,
         "unwrap_model_for_generation",
-        lambda *args, **kwargs: gold_trainer_module.nullcontext(args[0]),
+        lambda *args, **kwargs: nullcontext(args[0]),
     )
     monkeypatch.setattr(
         gold_trainer_module,
@@ -3600,111 +3601,6 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 
 
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-
-
-@pytest.mark.slow
-@require_liger_kernel
-def test_jsd_liger_text_train_step_smoke(tmp_path):
-    """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused Liger loss.
-
-    Exercises the `LigerFusedLinearJSDLoss` path end-to-end (`_liger_backbone` student + teacher forwards, fused
-    lm_head matmul) and asserts the resulting training loss is finite.
-    """
-    from datasets import load_dataset
-
-    try:
-        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
-        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
-        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]")
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    args = GOLDConfig(
-        output_dir=str(tmp_path),
-        report_to="none",
-        bf16=True,
-        max_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_completion_length=8,
-        max_length=512,
-        lmbda=0.0,
-        beta=0.5,
-        temperature=1.0,
-        num_generations=1,
-        use_vllm=False,
-        use_uld_loss=False,
-        use_liger_kernel=True,
-        log_completions=False,
-        save_strategy="no",
-        eval_strategy="no",
-        logging_strategy="no",
-        dataloader_drop_last=True,
-    )
-
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=dataset,
-        processing_class=tokenizer,
-    )
-    train_output = trainer.train()
-    assert torch.isfinite(torch.tensor(train_output.training_loss))
-
-
-@pytest.mark.slow
-@require_liger_kernel
-def test_vlm_jsd_liger_same_family_train_step_smoke(tmp_path, vlm_dataset):
-    """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with the fused Liger loss.
-
-    Proves the VLM Liger path: `_liger_backbone` routes through `base_model` (so image features are injected) for both
-    student and teacher, image kwargs reach the backbone forwards, and the fused JSD loss is finite.
-    """
-    try:
-        student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Qwen3-VL assets unavailable: {exc}")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    args = GOLDConfig(
-        output_dir=str(tmp_path),
-        report_to="none",
-        bf16=True,
-        max_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_completion_length=8,
-        max_length=_VLM_SMOKE_MAX_LENGTH,
-        lmbda=0.0,
-        beta=0.5,
-        temperature=1.0,
-        num_generations=1,
-        use_vllm=False,
-        use_uld_loss=False,
-        use_liger_kernel=True,
-        log_completions=False,
-        save_strategy="no",
-        eval_strategy="no",
-        logging_strategy="no",
-        dataloader_drop_last=True,
-    )
-
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=vlm_dataset,
-        processing_class=processor,
-    )
-    train_output = trainer.train()
-    assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 
 @pytest.mark.slow
@@ -4520,11 +4416,9 @@ def test_gold_tools_reject_multimodal_tool_response(tmp_path):
             trainer.train()
 
 
-def test_prepare_dataset_liger_with_tools_keeps_all_columns():
-    # The liger prep branch narrows the dataset to a fixed column whitelist. With tools, the collator re-renders the
-    # prompt from the raw `messages`/`tools` columns and forwards the full example dicts to
-    # `environment.reset(**kwargs)`, so the narrowing must be skipped entirely (custom columns included) — matching
-    # the non-liger path. Without tools, the whitelist still applies.
+def test_prepare_dataset_with_tools_keeps_all_columns():
+    # With tools, the collator re-renders the prompt from the raw `messages`/`tools` columns and forwards the full
+    # example dicts to `environment.reset(**kwargs)`, so dataset prep must keep every column, custom ones included.
     from trl.chat_template_utils import get_training_chat_template
 
     tokenizer = _tool_tokenizer()
@@ -4544,7 +4438,7 @@ def test_prepare_dataset_liger_with_tools_keeps_all_columns():
         dataset_text_field="text",
         max_length=1024,
         packing_strategy="bfd",
-        use_liger_kernel=True,
+        use_liger_kernel=False,
         use_extended_uld=True,
     )
 
@@ -4554,16 +4448,6 @@ def test_prepare_dataset_liger_with_tools_keeps_all_columns():
     prepared = trainer._prepare_dataset_with_original_text(
         dataset, tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
     )
-    # No narrowing: the raw conversational columns, the tool mask, and the custom column all survive.
+    # The raw conversational columns, the tool mask, and the custom column all survive.
     for column in ("messages", "tools", "tool_mask", "input_ids", "difficulty"):
-        assert column in prepared.column_names, f"{column} dropped by liger column selection"
-
-    # Control: without tools the liger whitelist still narrows (custom column dropped, tool_mask kept).
-    trainer_no_tools = GOLDTrainer.__new__(GOLDTrainer)
-    trainer_no_tools.tools = []
-    trainer_no_tools._tool_chat_template = None
-    prepared = trainer_no_tools._prepare_dataset_with_original_text(
-        dataset, tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
-    )
-    assert "difficulty" not in prepared.column_names
-    assert "tool_mask" in prepared.column_names
+        assert column in prepared.column_names, f"{column} dropped by dataset preparation"
