@@ -37,6 +37,11 @@ mkdir -p "$RUNS_DIR/logs"
 
 for domains in $DOMAIN_SETS; do
     name=${domains//,/-}
+    # Exported into the environment rather than listed in `--export`: that option parses its argument as a
+    # comma-separated list of assignments, so a `DOMAINS=general,cyber` written there arrives as `DOMAINS=general`
+    # and the job trains on one domain without saying so. `--export=ALL` passes this environment through whole.
+    export EXAMPLE_DIR="$PWD" LORA_RANK PACKING MODEL VLLM_GPUS TRAIN_GPUS PROJECT TRAIN_ARGS
+    export DOMAINS="$domains" OUTPUT_DIR="$RUNS_DIR/$name" RUN_NAME="$RUN_TAG-$name"
     # Untyped `--gres=gpu:N`: `gpu:h100:N` matches nothing on hopper-atl or hopper-extra and pends forever.
     sbatch \
         --job-name="mimo-$name" \
@@ -46,7 +51,7 @@ for domains in $DOMAIN_SETS; do
         --time="$TIME" \
         --qos=low \
         --output="$RUNS_DIR/logs/%x-%j.out" \
-        --export=ALL,EXAMPLE_DIR="$PWD",LORA_RANK="$LORA_RANK",PACKING="$PACKING",MODEL="$MODEL",DOMAINS="$domains",VLLM_GPUS="$VLLM_GPUS",TRAIN_GPUS="$TRAIN_GPUS",OUTPUT_DIR="$RUNS_DIR/$name",PROJECT="$PROJECT",RUN_NAME="$RUN_TAG-$name",TRAIN_ARGS="$TRAIN_ARGS" \
+        --export=ALL \
         slurm_job.sh
 done
 
