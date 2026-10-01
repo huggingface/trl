@@ -1463,8 +1463,8 @@ _CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 @dataclass
 class FusedCausalLMOutput(ModelOutput):
     """
-    Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
-    is zero where the label is `-100`. Per-token fields not listed in the patch's `outputs` are `None`.
+    Output of a model given a fused LM head with [`add_fused_lm_head`] and called with `fused_lm_head=True`. Every
+    per-token field is zero where the label is `-100`. Per-token fields not listed in `outputs` are `None`.
 
     Args:
         loss (`torch.Tensor`):
@@ -1499,20 +1499,20 @@ class FusedCausalLMOutput(ModelOutput):
     aux_loss: torch.Tensor | None = None
 
 
-def patch_fused_lm_head(
+def add_fused_lm_head(
     model: PreTrainedModel,
     temperature: float = 1.0,
     cast_lm_head_to_fp32: bool = False,
-    outputs: tuple[str, ...] = ("log_probs", "entropy"),
+    outputs: tuple[str, ...] = ("log_probs",),
 ) -> None:
     """
     Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
     instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
 
-    With `fused_lm_head=True`, the patched forward runs the backbone and projects through the LM head, in tiles, only
-    the positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted
-    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Without it, the
-    forward is the original one, so generation is unchanged. Patch the model before wrapping it with PEFT.
+    With `fused_lm_head=True`, the forward runs the backbone and projects through the LM head, in tiles, only the
+    positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted `shift_labels`,
+    as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
+    original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
@@ -1521,7 +1521,7 @@ def patch_fused_lm_head(
             Temperature the logits are divided by.
         cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
             Whether to run the LM head projection in float32, outside autocast.
-        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs", "entropy")`):
+        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs",)`):
             Per-token fields of [`FusedCausalLMOutput`] the kernel computes, among `"log_probs"`, `"entropy"`,
             `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
             is always computed; each extra field costs a little on every call.
@@ -1690,10 +1690,10 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
         )
 
-    embed_flops = 2 * V * h
-    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
+    # Embedding is a lookup (no FLOPs); lm_head is a 2*V*h matmul, tied or not.
+    lm_head_flops = 2 * V * h
 
-    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    forward_flops = total_layer_flops + lm_head_flops
     return 3 * forward_flops
 
 

@@ -543,8 +543,7 @@ training_args = GRPOConfig(
 
 DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement:
 
-- The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
-ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
+- The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
 
 $$
 \mathrm{D}_{\mathrm{KL}}\!\left(\pi_\theta(o_{i,t}) \,\|\, \pi_{\text{ref}}(o_{i,t})\right) =
@@ -1337,6 +1336,21 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --gradient_checkpointing \
     --model_prediction_type mean_loo \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
+```
+
+### Reducing Activation Recomputation in Large Transformer Models
+
+**📜 Paper**: https://huggingface.co/papers/2205.05198
+
+Full activation checkpointing recomputes every op in a checkpointed region during backward, including attention, even though only a few ops (attention among them) account for most of the recomputation cost relative to the memory they'd cost to keep. The paper's selective activation recomputation checkpoints only those expensive ops instead of the whole region. TRL implements this as selective activation checkpointing (SAC) for [`SFTTrainer`], saving the attention output during the forward pass so backward does not recompute it:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective": True},
+)
 ```
 
 ## Parameter-Efficient Fine-Tuning (PEFT)

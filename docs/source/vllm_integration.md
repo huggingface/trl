@@ -112,19 +112,13 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 
 ## Why using vLLM?
 
-Online methods generate completions during training, and generating them with the model's own `generate` is the
-bottleneck. vLLM serves those completions far faster, thanks to techniques like
-[PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html).
+Online methods generate completions during training, and generating them with the model's own `generate` is the bottleneck. vLLM serves those completions far faster, thanks to techniques like [PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html).
 
 ## How TRL uses the server 🔍
 
-The trainer asks for completions on the OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs.
-Multimodal prompts take a different route: the server processes the images on their own, and the resulting features
-are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs
-and images at once.
+The trainer asks for completions on the OpenAI-compatible `/v1/completions` endpoint, sending the prompt token IDs. Multimodal prompts take a different route: the server processes the images on their own, and the resulting features are paired with the same token IDs on `/inference/v1/generate`, since no OpenAI-compatible endpoint takes token IDs and images at once.
 
-The server only generates. After each optimizer step the trainer streams the updated weights into it over NCCL,
-announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
+The server only generates. After each optimizer step the trainer streams the updated weights into it over NCCL, announcing them with `/start_weight_update` and `/update_weights` and committing them with `/finish_weight_update`.
 
 ## Advanced usage
 
@@ -147,9 +141,7 @@ Only the following are required by TRL:
 
 ### 💆🏻‍♀️ What's the best distributed setup?
 
-Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since
-[vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel
-scaling for non-MoE models is not supported.
+Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since [vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel scaling for non-MoE models is not supported.
 
 ### vLLM with Transformers Backend
 

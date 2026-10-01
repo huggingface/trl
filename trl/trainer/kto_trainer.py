@@ -61,6 +61,7 @@ from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .kto_config import KTOConfig
 from .utils import (
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
     flush_left,
@@ -68,7 +69,6 @@ from .utils import (
     global_then_local_main_first,
     hash_module,
     pad,
-    patch_fused_lm_head,
     use_adapter,
 )
 
@@ -924,12 +924,12 @@ class KTOTrainer(_BaseTrainer):
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
         # `mean_logits` feeds the `logits/*` metrics
-        patch_fused_lm_head(
+        add_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             outputs=("log_probs", "entropy", "mean_logits"),
         )
         if self.ref_model is not None:
-            patch_fused_lm_head(self.ref_model, outputs=("log_probs",))
+            add_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
