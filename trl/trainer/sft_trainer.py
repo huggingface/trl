@@ -1017,6 +1017,14 @@ class SFTTrainer(_BaseTrainer):
                 FutureWarning,
                 stacklevel=2,
             )
+        if args.label_smoothing_factor > 0 and args.loss_type == "nll":
+            warnings.warn(
+                "`label_smoothing_factor` is deprecated in `SFTTrainer` and will be removed in v2.0.0. Label smoothing "
+                "needs the full logits, so the loss is computed from a forward pass that does not use the fused LM "
+                "head.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
             # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
             # adapter on the LM head would be ignored and never trained.
@@ -1486,7 +1494,9 @@ class SFTTrainer(_BaseTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
         try:
-            parallelism_config = self.accelerator.parallelism_config
+            parallelism_config = (
+                self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
+            )
             if (
                 parallelism_config is not None
                 and parallelism_config.sp_backend == "deepspeed"
@@ -1506,6 +1516,13 @@ class SFTTrainer(_BaseTrainer):
                     # the metrics
                     loss = self.compute_loss_func(
                         model(**inputs), inputs.get("labels"), num_items_in_batch=num_items_in_batch
+                    )
+                    with torch.no_grad():
+                        outputs = model(**inputs, fused_lm_head=True)
+                elif self.label_smoother is not None and self.args.loss_type == "nll":
+                    # Label smoothing needs the full logits; the fused outputs only feed the metrics
+                    loss = self.label_smoother(
+                        model(**inputs), inputs["labels"], shift_labels=True, num_items_in_batch=num_items_in_batch
                     )
                     with torch.no_grad():
                         outputs = model(**inputs, fused_lm_head=True)

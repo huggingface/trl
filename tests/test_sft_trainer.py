@@ -29,6 +29,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
+from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -1709,6 +1710,22 @@ class TestSFTTrainer(TrlTestCase):
         with pytest.warns(FutureWarning, match="`loss_type='chunked_nll'` is deprecated"):
             training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
         assert training_args.loss_type == "nll"
+
+    def test_label_smoothing(self):
+        # Label smoothing goes through `Trainer`'s label smoother, on the full logits
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, label_smoothing_factor=0.1, report_to="none")
+        with pytest.warns(FutureWarning, match="`label_smoothing_factor` is deprecated"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+        trainer.model.eval()  # no dropout, so the two forward passes match
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+
+        loss = trainer.compute_loss(trainer.model, inputs)
+
+        expected = LabelSmoother(epsilon=0.1)(trainer.model(**inputs), inputs["labels"], shift_labels=True)
+        torch.testing.assert_close(loss, expected)
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
