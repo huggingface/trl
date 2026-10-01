@@ -253,6 +253,18 @@ You can specify a smaller set of tests to test only the feature you're working o
 
     Do not enable new features or improvements (e.g., novel loss functions) by default. Users should explicitly opt-in to use these.
 
+### Input validation guidelines
+
+Not every invalid value deserves a check. Before adding one, answer two questions.
+
+1. **Would a real user reach this state?** Describe the training run that produces it. A value nobody would choose on purpose, or a report from an automated code-analysis pass rather than a real run, is not a case we handle.
+
+2. **How does it fail today?** If it fails loudly at the point of use, with a traceback on the line responsible, a guard only rewords an error the user already gets. If it fails silently, produces wrong training, or raises far from the setting that caused it, that is worth a guard.
+
+Avoid guards that encode what merely looks reasonable today. A plausible bound on a hyperparameter can rule out a configuration that later turns out to be useful, and TRL is used for research. Guard states that are definitely wrong, such as mismatched shapes or incompatible features, not values that merely look unusual.
+
+Trainers in TRL are self-contained, so a guard added to one trainer must be added to every trainer sharing that logic, each with its own test. Validation costs more here than in a library built on a shared base class.
+
 ### Writing documentation
 
 High-quality documentation is crucial for maintaining a project that is easy to use, understand, and extend. When adding new features, ensure they are thoroughly documented to maintain consistency and clarity throughout the project.
