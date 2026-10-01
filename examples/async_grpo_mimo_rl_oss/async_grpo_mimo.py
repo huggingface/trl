@@ -86,6 +86,7 @@ from transformers import AutoTokenizer
 from transformers.trainer_utils import get_last_checkpoint
 
 import trl.experimental.async_grpo.async_grpo_trainer as async_grpo_trainer
+from trl.chat_template_utils import qwen3_5_template
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker, TraceEntry
 
@@ -320,6 +321,11 @@ def main() -> None:
     logging.getLogger("mimoagent").setLevel(logging.WARNING)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    # MiMo renders an assistant turn exactly as Qwen3.5 does -- `<think>` for the reasoning, then
+    # `<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`, then `<|im_end|>` -- but its
+    # chat template is not byte-identical to one TRL recognizes, so the rollout worker cannot look the parser up by
+    # template and refuses to start. Name it instead.
+    tokenizer.response_template = qwen3_5_template
     instance_ids = json.load(open(args.instances_file)) if args.instances_file else {}
     transcripts_dir = Path(args.output_dir) / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
