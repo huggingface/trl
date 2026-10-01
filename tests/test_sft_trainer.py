@@ -1720,7 +1720,8 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
         trainer.model.eval()  # no dropout, so the two forward passes match
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(4)])
+        inputs = {k: v.to(trainer.model.device) for k, v in batch.items()}
 
         loss = trainer.compute_loss(trainer.model, inputs)
 
