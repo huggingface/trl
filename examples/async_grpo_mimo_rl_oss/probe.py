@@ -150,15 +150,20 @@ def summarize(results: list[dict], tasks: list[dict]) -> None:
         f"pass rate: {sum(passed)}/{len(scored)} = {statistics.mean(passed):.3f}; weighted score mean {statistics.mean(rewards):.3f}, histogram {hist}"
     )
 
-    by_method: dict[str, list[float]] = defaultdict(list)
-    methods = {}
-    for task in tasks:
-        for item in json.loads((task["task_dir"] / "verifier_meta.json").read_text())["items"]:
-            methods[(task["instance_id"], item["id"])] = item.get("method", "?")
-    for r in scored:
-        for item_id, score in r["items"].items():
-            by_method[methods.get((r["instance_id"], item_id), "gate")].append(score)
-    print("rubric items by method:", {m: f"{statistics.mean(v):.2f} ({len(v)})" for m, v in sorted(by_method.items())})
+    # Only General grades per rubric item; the other domains return one verdict and no `verifier_meta.json`.
+    if all("task_dir" in task for task in tasks):
+        by_method: dict[str, list[float]] = defaultdict(list)
+        methods = {}
+        for task in tasks:
+            for item in json.loads((task["task_dir"] / "verifier_meta.json").read_text())["items"]:
+                methods[(task["instance_id"], item["id"])] = item.get("method", "?")
+        for r in scored:
+            for item_id, score in r["items"].items():
+                by_method[methods.get((r["instance_id"], item_id), "gate")].append(score)
+        print(
+            "rubric items by method:",
+            {m: f"{statistics.mean(v):.2f} ({len(v)})" for m, v in sorted(by_method.items())},
+        )
 
     by_category: dict[str, list[float]] = defaultdict(list)
     for r in scored:
