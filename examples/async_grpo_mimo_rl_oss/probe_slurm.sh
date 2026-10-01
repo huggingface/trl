@@ -41,6 +41,8 @@ RUN_DIR=${RUN_DIR:-/fsx/$USER/runs/mimo-probe/$SLURM_JOB_ID}
 
 export HF_HUB_CACHE=$HF_HUB
 export PYTHONUNBUFFERED=1
+# Node-local: concurrent jobs race on the cache and /fsx does not give Triton the atomic renames it relies on.
+export TRITON_CACHE_DIR=/tmp/triton-$SLURM_JOB_ID
 mkdir -p "$RUN_DIR"
 PORT=$((8000 + (SLURM_JOB_ID % 90) * 10))
 VLLM_LOG=$RUN_DIR/vllm.log
