@@ -1,5 +1,6 @@
-FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+FROM vllm/vllm-openai:v0.30.0
+ENTRYPOINT []
 ARG VERSION
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip uv
 RUN uv pip install --system trl[liger,peft,vlm]==${VERSION} kernels trackio
