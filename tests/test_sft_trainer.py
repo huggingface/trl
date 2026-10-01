@@ -2780,11 +2780,6 @@ class TestSFTTrainerSlow(TrlTestCase):
         ],
     )
     @require_torch_accelerator
-    @pytest.mark.skipif(
-        backend_device_count(torch_device) > 1,
-        reason="segfaults in accelerate's get_max_memory when more than one accelerator is visible, taking the whole "
-        "pytest process down; cause not yet diagnosed (https://github.com/huggingface/trl/issues/6836)",
-    )
     def test_train_offloading(self, model_name, packing):
         """Test that activation offloading works with SFTTrainer."""
         training_args = SFTConfig(

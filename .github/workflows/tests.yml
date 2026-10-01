@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - ci-*
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"

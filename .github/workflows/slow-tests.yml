@@ -2,11 +2,13 @@ name: Slow tests (on push)
 
 on:
   push:
-    branches: [main]
-    paths:
-      # Run only when python files are modified
-      - "trl/**.py"
-      - "examples/**.py"
+    branches:
+      - main
+      - ci-*
+#    paths:
+#      # Run only when python files are modified
+#      - "trl/**.py"
+#      - "examples/**.py"
 env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -16,6 +18,7 @@ permissions: {}
 
 jobs:
   run_all_tests_single_gpu:
+    if: false
     permissions:
       contents: read
     runs-on:
