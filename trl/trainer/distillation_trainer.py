@@ -55,7 +55,7 @@ from ..chat_template_utils import (
     parse_response,
     supports_tool_calling,
 )
-from ..data_utils import apply_chat_template, get_dataset_column_names, is_conversational, prepare_multimodal_messages
+from ..data_utils import _has_vision_data, apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
@@ -695,8 +695,7 @@ class DistillationTrainer(_BaseTrainer):
             args.dataloader_num_workers = 0
 
         if train_dataset is not None:
-            dataset_columns = get_dataset_column_names(train_dataset)
-            has_vision_data = not {"image", "images"}.isdisjoint(dataset_columns)
+            has_vision_data = _has_vision_data(train_dataset)
             if self._is_vlm and not has_vision_data and not self.tools:
                 freeze_non_language_model_parameters(model)
 
