@@ -3283,7 +3283,7 @@ class GRPOTrainer(_BaseTrainer):
                     df = df_base
 
                 if self.log_unique_prompts:
-                    # Prompts are conversations (lists of dicts), which `drop_duplicates` cannot hash
+                    # Prompts are conversations (lists of dicts), so compare them by their text
                     df = df[~df["prompt"].astype(str).duplicated()]
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
