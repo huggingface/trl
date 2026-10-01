@@ -17,7 +17,6 @@ import base64
 import copy
 import logging
 import math
-import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -244,7 +243,7 @@ class VLLMClient:
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
-            self.host = socket.gethostbyname(parsed_url.hostname)
+            self.host = parsed_url.hostname
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
