@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version("5.3.0")
+
+set_seed()
 
 MODEL_ID = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
 
@@ -48,7 +51,13 @@ config = NemotronHConfig(
     num_experts_per_tok=2,
     moe_intermediate_size=32,
     moe_shared_expert_intermediate_size=32,
-    use_mamba_kernels=False,  # CPU-friendly for testing
+    use_mamba_kernels=True,
+    max_position_embeddings=262144,
+    routed_scaling_factor=2.5,
+    # Reference-only keys; `norm_eps` is the reference's alias for `layer_norm_epsilon`.
+    norm_eps=1e-05,
+    partial_rotary_factor=1.0,
+    rope_theta=10000,
 )
 model = NemotronHForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
