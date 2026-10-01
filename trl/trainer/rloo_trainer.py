@@ -1854,7 +1854,11 @@ class RLOOTrainer(_BaseTrainer):
                     images = []
                     for image_list in self._logs["images"]:
                         images.append([logging_backend.Image(image) for image in image_list])
-                    df = pd.concat([df_base, pd.Series(images, name="image")], axis=1, copy=False)
+                    df = pd.concat(
+                        [df_base, pd.Series(images, name="image")],
+                        axis=1,
+                        copy=False,
+                    )
                 else:
                     df = df_base
 
