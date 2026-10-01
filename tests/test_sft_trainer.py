@@ -581,17 +581,10 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.2.0"),
-                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                    ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__).is_devrelease,
-                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )
@@ -1395,6 +1388,80 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        reason="Processors return correct assistant masks for images since transformers 5.18.0",
+    )
+    @require_vision
+    def test_train_vlm_assistant_only(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            assistant_only_loss=True,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        reason="Processors return correct assistant masks for images since transformers 5.18.0",
+    )
+    @require_vision
+    def test_data_collator_builds_labels_for_vlm_assistant_only_loss(self):
+        """The vision data collator must mask the non-assistant tokens in the labels."""
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        batch = trainer.data_collator([dataset[0], dataset[1]])
+        for labels, input_ids, attention_mask in zip(
+            batch["labels"], batch["input_ids"], batch["attention_mask"], strict=True
+        ):
+            labels, input_ids = labels[attention_mask == 1], input_ids[attention_mask == 1]
+            # Labels are input_ids with non-assistant tokens masked to -100.
+            assert all(label == -100 or label == token_id for label, token_id in zip(labels, input_ids, strict=True))
+            assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
+            assert any(label == -100 for label in labels)  # non-assistant tokens are masked
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
+    )
+    @require_vision
+    def test_vlm_assistant_only_loss_requires_transformers_5_18(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        with pytest.raises(ValueError, match="requires transformers>=5.18.0"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
     def test_fully_masked_examples_dropped_after_truncation(self):
         # Example 0's assistant tokens all lie beyond `max_length=3`, so keep_start truncation leaves it fully masked;
         # example 1 keeps a trainable token and survives.
@@ -1424,6 +1491,23 @@ class TestSFTTrainer(TrlTestCase):
         for example in trainer.train_dataset:
             assert len(example["input_ids"]) <= 4
             assert len(example["labels"]) <= 4
+
+    @pytest.mark.parametrize("dataset_text_field", ["text", "my_column"])
+    def test_dataset_preparation_adds_eos_to_dataset_text_field(self, dataset_text_field):
+        """Dataset preparation must append EOS to the text column named by `dataset_text_field`, not only `"text"`."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        if dataset_text_field != "text":
+            dataset = dataset.rename_column("text", dataset_text_field)
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, dataset_text_field=dataset_text_field, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        eos_token_id = trainer.processing_class.eos_token_id
+        for example in trainer.train_dataset:
+            assert example["input_ids"][-1] == eos_token_id
+            assert example["labels"][-1] == eos_token_id  # EOS is trained on
 
     def test_dataset_preparation_builds_labels_for_completion_only(self):
         """Dataset preparation must bake the completion mask into a labels column when completion_only_loss
@@ -1925,14 +2009,22 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("use_reentrant", [True, False])
-    def test_train_with_gradient_checkpointing_reentrant(self, use_reentrant):
+    @pytest.mark.parametrize(
+        "gradient_checkpointing_kwargs",
+        [
+            {"use_reentrant": True},
+            {"use_reentrant": False},
+            {"selective": True},
+            {"selective": False},
+        ],
+    )
+    def test_train_with_gradient_checkpointing_kwargs(self, gradient_checkpointing_kwargs):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             gradient_checkpointing=True,
-            gradient_checkpointing_kwargs={"use_reentrant": use_reentrant},
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             report_to="none",
         )
         trainer = SFTTrainer(
@@ -2024,17 +2116,10 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.2.0"),
-                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                    ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__).is_devrelease,
-                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )
@@ -3110,17 +3195,10 @@ class TestPatchChunkedCELMHead:
         [
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.2.0"),
-                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                    ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__).is_devrelease,
-                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )
