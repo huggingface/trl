@@ -36,10 +36,12 @@ from trl.trainer.utils import (
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
     get_callable_name,
+    get_peak_flops,
     get_peft_config,
     hash_module,
     is_async_callable,
@@ -261,6 +263,29 @@ class TestHashModule(TrlTestCase):
             model.lm_head.weight.add_(0.01)
         h2 = hash_module(model)
         assert h1 != h2
+
+
+class TestCreateModelFromPath(TrlTestCase):
+    @pytest.mark.parametrize(("device_type", "expected_device_map"), [("cpu", None), ("mps", None), ("cuda", "auto")])
+    def test_default_device_map(self, device_type, expected_device_map):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = device_type
+            create_model_from_path("trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM)
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == expected_device_map
+
+    def test_explicit_device_map_is_kept(self):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = "mps"
+            create_model_from_path(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
+            )
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
 
 @require_peft
@@ -685,6 +710,28 @@ class TestEntropyFromLogits(TrlTestCase):
 
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_tool_only_assistant_with_null_content(self, mock_stdout):
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the data.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
+                        }
+                    ],
+                }
+            ]
+        ]
+        print_prompt_completions_sample(["Find the table"], completions, {"reward": [0.0]}, None, 0)
+        assert "Inspect the data." in mock_stdout.getvalue()
+        assert "None" not in mock_stdout.getvalue()
+
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
@@ -1754,17 +1801,10 @@ class TestAddFusedLMHeadLoss:
         [
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.2.0"),
-                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                    ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__).is_devrelease,
-                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )
@@ -1969,6 +2009,52 @@ class TestComputeFlopsPerToken(TrlTestCase):
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
 
 
 class TestComputeMfu(TrlTestCase):
