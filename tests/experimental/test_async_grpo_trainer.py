@@ -64,7 +64,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import get_callable_name
+from trl.trainer.utils import FusedCausalLMOutput, get_callable_name
 
 from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
 
@@ -2172,7 +2172,7 @@ class TestImportanceSamplingGate(TrlTestCase):
         class _ZeroLogProbModel(torch.nn.Module):
             def forward(self, input_ids, **kwargs):
                 t = input_ids.shape[1] - 1
-                return {"log_probs": torch.zeros(1, t), "entropy": torch.zeros(1, t), "aux_loss": None}
+                return FusedCausalLMOutput(log_probs=torch.zeros(1, t), entropy=torch.zeros(1, t))
 
         return trainer, _ZeroLogProbModel()
 
@@ -2254,7 +2254,7 @@ class TestImportanceSamplingGate(TrlTestCase):
 
         def forward(self, input_ids, **kwargs):
             t = input_ids.shape[1] - 1
-            return {"log_probs": self.shift.expand(1, t), "entropy": torch.zeros(1, t), "aux_loss": None}
+            return FusedCausalLMOutput(log_probs=self.shift.expand(1, t), entropy=torch.zeros(1, t))
 
     def test_mask_drops_overflowed_tokens_instead_of_making_the_loss_nan(self):
         # In token_mask an out-of-range token whose ratio overflowed float32 exp produces an inf
@@ -2318,18 +2318,9 @@ class TestImportanceSamplingGate(TrlTestCase):
         # ratio the PPO min selects the coefficient arm, so d loss / d shift = -clamp(rho): the
         # same -C_min for every lifted ratio (never -rho, and never 0 as a detached graph would give),
         # including a ratio whose bare exp underflows float32.
-        class _ShiftLogProbModel(torch.nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.shift = torch.nn.Parameter(torch.tensor(0.0))
-
-            def forward(self, input_ids, **kwargs):
-                t = input_ids.shape[1] - 1
-                return {"log_probs": self.shift.expand(1, t), "entropy": torch.zeros(1, t), "aux_loss": None}
-
         for ratio in (0.01, 0.25, 1e-45):
             trainer, _ = self._stub_trainer_for_loss()
-            model = _ShiftLogProbModel()
+            model = self._ShiftLogProbModel()
             loss = trainer.compute_loss(model, self._packed_inputs([-math.log(ratio)] * 8, advantage=1.0))
             loss.backward()
             assert model.shift.grad is not None, "the correction detached the coefficient from the graph"
