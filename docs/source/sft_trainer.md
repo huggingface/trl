@@ -6,6 +6,8 @@
 
 TRL supports the Supervised Fine-Tuning (SFT) Trainer for training language models.
 
+[`SFTTrainer`] doesn't natively support diffusion models like DiffusionGemma, but it can be easily extended to do so, see the [block-diffusion SFT example](https://github.com/huggingface/trl/blob/main/examples/sft_diffusion_gemma/sft_diffusion_gemma.py).
+
 This post-training method was contributed by [Younes Belkada](https://huggingface.co/ybelkada).
 
 ## Quick start
@@ -102,7 +104,7 @@ The loss used in SFT is the **token-level cross-entropy loss**, defined as:
 $$
 \mathcal{L}_{\text{SFT}}(\theta) = - \sum_{t=1}^{T} \log p_\theta(y_t \mid y_{<t}),
 $$
-  
+
 where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is trained to predict the next token given the previous ones. In practice, padding tokens are masked out during loss computation.
 
 > [!TIP]
@@ -120,14 +122,15 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 
 While training and evaluating, we record the following metrics:
 
-* `global_step`: The total number of optimizer steps taken so far.
-* `epoch`: The current epoch number, based on dataset iteration.
-* `num_tokens`: The total number of tokens processed so far.
-* `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
-* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
-* `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
-* `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
-* `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
+- `global_step`: The total number of optimizer steps taken so far.
+- `epoch`: The current epoch number, based on dataset iteration.
+- `num_tokens`: The total number of tokens processed so far.
+- `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+- `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
+- `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
+- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
+- `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
+- `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
 
 ## Customization
 
@@ -173,6 +176,9 @@ training_args = SFTConfig(assistant_only_loss=True)
 
 > [!WARNING]
 > This functionality requires the chat template to include `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. See [Chat Templates](chat_templates#training-templates) for the full list of bundled training templates. For other models, check that your chat template includes these keywords. See [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
+
+> [!NOTE]
+> With a [vision dataset](#training-vision-language-models), assistant-only loss requires `transformers>=5.18.0` and a conversational [language modeling](dataset_formats#language-modeling) dataset.
 
 ### Train on completion only
 
@@ -306,8 +312,8 @@ Alternatively, use the structured conversation format (recommended):
 
 The [`SFTTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
-* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tools` column, typically provided as JSON schemas
+- The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+- The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 

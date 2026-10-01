@@ -103,14 +103,14 @@ HarborSpec(dataset, agent="path/to/harness.py:JupyterEnv") # file path to your H
 HarborSpec(dataset, agent=MyHarborEnv)                     # a HarborEnv subclass directly
 ```
 
-The built-in `"bash"` harness ([`~trl.experimental.harbor.HarborBashEnv`]) exposes one `bash` tool and submits by writing `/workdir/answer.txt`. Two richer harnesses ship as examples — each in its own folder with a README listing its tools — under [`examples/scripts/harbor/harnesses/`](https://github.com/huggingface/trl/tree/main/examples/scripts/harbor/harnesses):
+The built-in `"bash"` harness ([`~trl.experimental.harbor.HarborBashEnv`]) exposes one `bash` tool and submits by writing `/workdir/answer.txt`. Two richer harnesses ship as examples — each in its own folder with a README listing its tools — under [`examples/grpo_harbor/harnesses/`](https://github.com/huggingface/trl/tree/main/examples/grpo_harbor/harnesses):
 
-- [`jupyter/`](https://github.com/huggingface/trl/tree/main/examples/scripts/harbor/harnesses/jupyter) (`JupyterEnv`) — a stateful Python kernel (variables persist across cells) + a shell tool.
-- [`terminal_notes/`](https://github.com/huggingface/trl/tree/main/examples/scripts/harbor/harnesses/terminal_notes) (`TerminalNotesEnv`) — 6 shell tools (incl. background processes) + a 4-tool persistent note toolkit.
+- [`jupyter/`](https://github.com/huggingface/trl/tree/main/examples/grpo_harbor/harnesses/jupyter) (`JupyterEnv`) — a stateful Python kernel (variables persist across cells) + a shell tool.
+- [`terminal_notes/`](https://github.com/huggingface/trl/tree/main/examples/grpo_harbor/harnesses/terminal_notes) (`TerminalNotesEnv`) — 6 shell tools (incl. background processes) + a 4-tool persistent note toolkit.
 
 ```python
-HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/jupyter/env.py:JupyterEnv")
-HarborSpec(dataset, agent="examples/scripts/harbor/harnesses/terminal_notes/env.py:TerminalNotesEnv")
+HarborSpec(dataset, agent="examples/grpo_harbor/harnesses/jupyter/env.py:JupyterEnv")
+HarborSpec(dataset, agent="examples/grpo_harbor/harnesses/terminal_notes/env.py:TerminalNotesEnv")
 ```
 
 To write your own harness, subclass [`~trl.experimental.harbor.HarborEnv`] and add tool methods — every public method becomes a tool (TRL discovers them with `inspect.getmembers`), so give each a typed signature and a docstring (used to build the tool schema). Keep helpers underscore-prefixed. Use `self._exec(cmd)` to run shell commands in the sandbox, and set `PROMPT_SUFFIX` to append harness guidance to the task instruction:

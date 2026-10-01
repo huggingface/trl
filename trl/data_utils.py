@@ -191,7 +191,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
-            # Each message must a list of dictionaries with keys "role" and "content"
+            # Each message must be a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
@@ -454,12 +454,11 @@ def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
 def unpair_preference_dataset(
     dataset: DatasetType | IterableDatasetType, **map_kwargs
 ) -> DatasetType | IterableDatasetType:
-    # docstyle-ignore
     """
     Unpair a preference dataset.
 
-    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for
-    each chosen and rejected row.
+    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for each
+    chosen and rejected row.
 
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
@@ -469,7 +468,8 @@ def unpair_preference_dataset(
             Additional keyword arguments to pass to the dataset's map method when unpairing preferences.
 
     Returns:
-        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]:
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or
+        [`~datasets.IterableDatasetDict`]:
             The unpaired preference dataset.
 
     Example:
@@ -830,14 +830,15 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using a wrapped strategy."""
     columns = [column.chunks[0] for column in examples.combine_chunks().columns]
     _check_if_columns_can_be_packed(columns)
-    offsets, values = columns[0].offsets, columns[0].values
-    values = values[offsets[0].as_py() : offsets[-1].as_py()]
-    num_elements = len(values)
+    # Use `flatten()` and not `values`, which returns the whole child buffer and ignores the array's own offset. That
+    # offset is non-zero whenever the table is a slice, as it is for every batch but the first in a batched `map`.
+    values = [column.flatten() for column in columns]
+    num_elements = len(values[0])
     offsets = np.arange(0, num_elements, seq_length, dtype=columns[0].offsets.type.to_pandas_dtype())
     offsets = np.concatenate((offsets, [num_elements]))
     columns = [
-        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
-        for column in columns
+        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column_values)
+        for column, column_values in zip(columns, values, strict=True)
     ]
     return pa.Table.from_arrays(columns, names=examples.column_names)
 
@@ -923,7 +924,7 @@ def pack_dataset(
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: '{strategy}', must be one of {valid_strategies}.")
+        raise ValueError(f"Invalid packing strategy '{strategy}', must be one of {valid_strategies}.")
 
     if strategy in {"bfd", "bfd_split"} and "columns" in format:
         format["columns"] = format["columns"] + ["seq_lengths"]
@@ -965,7 +966,7 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     # It must be a list of messages
     if isinstance(maybe_messages, list):
         maybe_message = maybe_messages[0]
-        # Each message must a list of dictionaries with keys "from" and "value"
+        # Each message must be a list of dictionaries with keys "from" and "value"
         if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
             return True
 

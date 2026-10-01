@@ -20,7 +20,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class CPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.cpo.CPOTrainer`].
 
@@ -74,7 +73,7 @@ class CPOConfig(_BaseConfig):
             you need to specify if the model returned by the callable is an encoder-decoder model.
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
+            string. The `revision` value is also used when loading the processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`].
@@ -158,7 +157,7 @@ class CPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
-            "from a string."
+            "from a string. The `revision` value is also used when loading the processing class."
         },
     )
     trust_remote_code: bool = field(
