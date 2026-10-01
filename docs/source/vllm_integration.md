@@ -136,9 +136,6 @@ Only the following are required by TRL:
 | `--max-logprobs -1` | Lifts the OpenAI-compatible cap of 20 logprobs per token, required to request the top-k teacher distribution for distillation. |
 | `--enable-scale-out` | vLLM 0.30.0 and later, for multimodal prompts only: registers `/v1/chat/completions/render` and `/inference/v1/generate`, which the trainer uses to process images. Earlier versions reject the flag. |
 
-> [!WARNING]
-> `trl vllm-serve` is deprecated: it now only builds this command and runs vLLM's server. It prints the exact `vllm serve` command it runs, so you can copy it and drop the wrapper.
-
 ### 💆🏻‍♀️ What's the best distributed setup?
 
 Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since [vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel scaling for non-MoE models is not supported.
