@@ -1398,6 +1398,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # Adapter-only vLLM sync is derived from a PEFT model plus a server started with `--enable-lora`, rather
         # than configured. Rank 0 probes and broadcasts the answer below.
         self._lora_sync = False
+        # Set on rank 0 if the server probe raises, then raised on every rank after the broadcast below.
+        lora_sync_error = None
         self._lora_name = "trl-policy"
         # Absolute: the path is resolved by the *server's* process, which has its own working directory and may not
         # be on this machine. vLLM reads a path it cannot resolve as a Hub repo id, failing deep inside the engine.
@@ -1419,7 +1421,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 self.weight_transfer = weight_transfer
             else:
                 if is_peft_model(model):
-                    self._lora_sync = self._init_lora_sync(model)
+                    try:
+                        self._lora_sync = self._init_lora_sync(model)
+                    except Exception as error:
+                        lora_sync_error = error
                 if self._lora_sync:
                     # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
                     # group to build and no manifest to collect.
@@ -1477,8 +1482,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
             self.weight_transfer = None
 
         # Every rank must agree on the sync mode: one arm runs a collective adapter save, the other a collective
-        # parameter gather, and a split decision hangs both.
-        self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
+        # parameter gather, and a split decision hangs both. A failed probe rides along and is raised on every rank,
+        # since raising on rank 0 alone would leave the others waiting in this collective.
+        self._lora_sync, lora_sync_error = broadcast_object_list([self._lora_sync, lora_sync_error], from_process=0)
+        if lora_sync_error is not None:
+            raise lora_sync_error
 
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))

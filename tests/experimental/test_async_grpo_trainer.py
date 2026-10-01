@@ -1850,6 +1850,12 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert trainer._lora_sync is False
         assert fake_vllm.requests == []
 
+    def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
+        # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
+        # would leave the other ranks waiting in the collective that shares the sync mode.
+        with pytest.raises(ValueError, match="--max-lora-rank"):
+            self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
+
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
     def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
