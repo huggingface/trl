@@ -281,6 +281,7 @@ def main() -> None:
     p.add_argument("--max-inflight", type=int, default=32)  # concurrent rollouts, one sandbox each
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
     p.add_argument("--gradient-accumulation-steps", type=int, default=16)
+    p.add_argument("--ddp-timeout", type=int, default=36000)  # seconds a rank waits in a collective
     p.add_argument("--learning-rate", type=float, default=1e-5)
     p.add_argument("--lora-rank", type=int, default=0)  # 0: full fine-tuning
     p.add_argument("--optim", default="adamw_torch")
@@ -385,6 +386,10 @@ def main() -> None:
         optim=args.optim,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        # A rollout here runs for minutes, so the ranks that finish their rows first sit in a collective far
+        # longer than the 30 minutes NCCL allows by default, and the run dies on a watchdog timeout rather
+        # than on anything being wrong.
+        ddp_timeout=args.ddp_timeout,
         # The worker refreshes its heartbeat from its async loops, so a synchronous sandbox call blocks them both
         # and looks exactly like a hang. The longest one is the verifier's `--verify-timeout`.
         heartbeat_stale_after_s=3 * max(300, args.verify_timeout),
