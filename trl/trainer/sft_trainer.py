@@ -1521,9 +1521,11 @@ class SFTTrainer(_BaseTrainer):
                         outputs = model(**inputs, fused_lm_head=True)
                 elif self.label_smoother is not None and self.args.loss_type == "nll":
                     # Label smoothing needs the full logits; the fused outputs only feed the metrics
-                    loss = self.label_smoother(
-                        model(**inputs), inputs["labels"], shift_labels=True, num_items_in_batch=num_items_in_batch
-                    )
+                    # `LabelSmoother` takes `num_items_in_batch` since transformers 5.15.0
+                    kwargs = {}
+                    if Version(transformers.__version__) >= Version("5.15.0"):
+                        kwargs["num_items_in_batch"] = num_items_in_batch
+                    loss = self.label_smoother(model(**inputs), inputs["labels"], shift_labels=True, **kwargs)
                     with torch.no_grad():
                         outputs = model(**inputs, fused_lm_head=True)
                 else:
