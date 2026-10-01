@@ -170,14 +170,18 @@ class KLPOTrainer(GRPOTrainer):
 
         device = self.accelerator.device
         # Recover the raw terminal rewards for the local slice (self._rewards_per_func is gathered across processes).
-        # Unscorable completions (every reward func returned None) are NaN; zero them so they carry no signal.
         rewards = (self._rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-        rewards = torch.nan_to_num(rewards, nan=0.0)
         batch_size = output["completion_ids"].size(0)
         process_slice = slice(
             self.accelerator.process_index * batch_size, (self.accelerator.process_index + 1) * batch_size
         )
-        output["raw_rewards"] = rewards[process_slice]
+        # An unscorable completion (every reward func returned None) has no terminal reward, so it carries no learning
+        # signal at all. Zeroing only its reward would still leave the KL term -klpo_beta * ell (or the sequence
+        # residual) alive off-policy; instead, mask out the whole row so it drops out of the loss entirely, the same
+        # way a truncated completion is masked. Its reward is set to 0 only so the tensor stays finite.
+        unscorable = torch.isnan(self._rewards_per_func).all(dim=1)[process_slice]
+        output["raw_rewards"] = torch.nan_to_num(rewards[process_slice], nan=0.0)
+        output["completion_mask"] = output["completion_mask"] * (~unscorable).unsqueeze(1).int()
 
         # Extract the sampler records (the current model, before any update on this batch). These records stay fixed
         # while the batch is reused (num_iterations > 1 / gradient accumulation). The binary estimator needs no
@@ -305,12 +309,17 @@ class KLPOTrainer(GRPOTrainer):
                 correction = per_token_logps - (coefficients * p_logps).sum(-1)
 
         mode = "train" if self.model.training else "eval"
+        # KLPO averages over COMPLETE responses. A row with no active token (a truncated completion under
+        # mask_truncated_completions, or an unscorable one) is not a complete response carrying a terminal reward: it
+        # must leave the denominator too, not just contribute a zero numerator that shrinks the objective. A batch
+        # with no complete response yields a zero loss (clamp keeps the division finite).
+        num_complete = (mask.sum(-1) > 0).sum().clamp(min=1)
         if self.klpo_route == "token":
             # Detached per-token feedback h = R - beta * ell
             h = (raw_rewards.unsqueeze(1) - self.klpo_beta * ell).detach()
             per_token_loss = -h * correction
             # Sum over generated tokens WITHOUT length normalization, average over complete responses
-            loss = (per_token_loss * mask).sum(-1).mean()
+            loss = (per_token_loss * mask).sum() / num_complete
         elif self.klpo_route == "sequence":
             if self.kl_estimator == "mc":
                 # Leave-one-out residuals: weight column j's corrected score by the mean D over OTHER columns, which
@@ -326,7 +335,8 @@ class KLPOTrainer(GRPOTrainer):
                 corrected = (per_token_logps * mask).sum(-1, keepdim=True) - (record_p_logps * mask.unsqueeze(-1)).sum(
                     1
                 )  # (B, M)
-                loss = -(other_residuals * corrected).mean(-1).mean()
+                # `corrected` is already zero for a row with no active token, so summing over rows excludes it
+                loss = -(other_residuals * corrected).mean(-1).sum() / num_complete
             else:
                 # Trajectory residual D = R - beta * sum(ell + k), recomputed and detached at each learner step. For
                 # topk/full, k is differentiated through the current policy's log-probabilities (including the
@@ -336,7 +346,8 @@ class KLPOTrainer(GRPOTrainer):
                     corrected = (omega * per_token_logps * mask).sum(-1)
                 else:  # topk, full
                     corrected = ((per_token_logps + local_kl) * mask).sum(-1)
-                loss = -(residual * corrected).mean()
+                # `corrected` is already zero for a row with no active token, so summing over rows excludes it
+                loss = -(residual * corrected).sum() / num_complete
             self._metrics[mode]["klpo/residual"].append(self.accelerator.gather(residual).mean().item())
 
         normalizer = self.current_gradient_accumulation_steps if mode == "train" else 1.0  # no accum in eval

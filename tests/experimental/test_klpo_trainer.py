@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import patch
+
 import pytest
 import torch
 from datasets import load_dataset
 
 from trl.experimental.klpo import KLPOConfig, KLPOTrainer
+from trl.trainer.grpo_trainer import GRPOTrainer
 
 from ..testing_utils import TrlTestCase
 
@@ -222,3 +225,114 @@ class TestKLPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+
+class TestKLPOLossContract(TrlTestCase):
+    """Pins the "average over complete responses" contract of the KLPO loss through the real `_compute_loss`."""
+
+    def _trainer(self, **config_kwargs):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = KLPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            num_generations=1,
+            max_completion_length=8,
+            mc_samples=4,
+            kl_top_k=2,
+            report_to="none",
+            **config_kwargs,
+        )
+        return KLPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+    def _inputs(self, trainer, rewards, completion_mask):
+        # Hand-built batch: distinct completions, one terminal reward per row, and a caller-controlled completion
+        # mask so specific rows can be fully masked (as a truncated or unscorable completion would be). Token IDs are
+        # drawn once for a fixed maximum batch and sliced, so row i is identical across batches of different sizes.
+        generator = torch.Generator().manual_seed(0)
+        batch_size, prompt_len, completion_len = len(rewards), 3, 5
+        vocab = trainer.model.config.vocab_size
+        prompt_ids = torch.randint(1, vocab, (4, prompt_len), generator=generator)[:batch_size]
+        completion_ids = torch.randint(1, vocab, (4, completion_len), generator=generator)[:batch_size]
+        completion_mask = torch.tensor(completion_mask, dtype=torch.long)
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": torch.ones_like(prompt_ids),
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "raw_rewards": torch.tensor(rewards, dtype=torch.float32),
+        }
+        if trainer.kl_estimator != "binary":
+            input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            attention_mask = torch.cat([inputs["prompt_mask"], completion_mask], dim=1)
+            inputs.update(trainer._record_sampler_data(input_ids, attention_mask, completion_len))
+        # Off-policy sampler logps, so the KL term (-beta * ell) is non-zero and a fully masked row would otherwise
+        # still move the policy through it.
+        inputs["old_per_token_logps"] = torch.full((batch_size, completion_len), -2.0)
+        return inputs
+
+    @pytest.mark.parametrize(
+        "route, estimator",
+        [("token", "mc"), ("token", "binary"), ("token", "topk"), ("sequence", "mc"), ("sequence", "binary")],
+    )
+    def test_fully_masked_rows_leave_the_denominator(self, route, estimator):
+        # Bugbot: a truncated (or unscorable) completion is fully masked, but it must also leave the average over
+        # complete responses. Appending two fully masked rows to a batch must not change the loss at all.
+        trainer = self._trainer(klpo_route=route, kl_estimator=estimator)
+        trainer.model.eval()  # deterministic forward (no dropout) so the two losses are comparable
+        full = [1.0] * 5
+        empty = [0] * 5
+
+        torch.manual_seed(0)
+        loss_complete = trainer._compute_loss(trainer.model, self._inputs(trainer, [1.0, 0.0], [full, full]))
+        torch.manual_seed(0)
+        loss_padded = trainer._compute_loss(
+            trainer.model, self._inputs(trainer, [1.0, 0.0, 1.0, 0.0], [full, full, empty, empty])
+        )
+
+        # Rows 0-1 are identical across the two batches; rows 2-3 carry no active token. Pre-fix, the padded loss
+        # was exactly half the complete one. (MC draws are resampled per call, so the mc estimator is compared at a
+        # looser tolerance that still rules out the factor-of-two denominator bug.)
+        rtol = 0.05 if estimator == "mc" else 1e-5
+        torch.testing.assert_close(loss_padded, loss_complete, rtol=rtol, atol=1e-5)
+
+    def test_fully_masked_row_has_no_gradient(self):
+        # The off-policy KL term -beta * ell must not leak through a fully masked row: the whole row, not only its
+        # reward, is out of the loss.
+        trainer = self._trainer()
+        trainer.model.eval()
+        torch.manual_seed(0)
+        loss = trainer._compute_loss(trainer.model, self._inputs(trainer, [0.0], [[0] * 5]))
+        assert loss.item() == 0.0
+        loss.backward()
+        for name, param in trainer.model.named_parameters():
+            if param.grad is not None:
+                assert torch.count_nonzero(param.grad) == 0, f"{name} received gradient from a fully masked row"
+
+    def test_unscorable_completion_is_fully_masked(self):
+        # Bugbot: an unscorable completion (every reward func returned None) must be masked out at scoring time, the
+        # same way a truncated one is, so neither its reward nor its KL term reaches the loss.
+        trainer = self._trainer(mask_truncated_completions=False)
+        prompt_ids = torch.randint(1, trainer.model.config.vocab_size, (2, 3))
+        completion_ids = torch.randint(1, trainer.model.config.vocab_size, (2, 5))
+        completion_mask = torch.ones(2, 5, dtype=torch.long)
+
+        # Replay the scoring post-processing on a GRPO-shaped output: row 1 is unscorable (NaN for every reward
+        # function), row 0 carries reward 0.75.
+        trainer._rewards_per_func = torch.tensor([[0.75], [float("nan")]])
+        parent_output = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": torch.ones_like(prompt_ids),
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask.clone(),
+        }
+        with patch.object(GRPOTrainer, "_generate_and_score_completions", return_value=parent_output):
+            output = trainer._generate_and_score_completions([{}, {}])
+
+        torch.testing.assert_close(output["raw_rewards"], torch.tensor([0.75, 0.0]))
+        assert output["completion_mask"][0].tolist() == [1] * 5
+        assert output["completion_mask"][1].tolist() == [0] * 5, "unscorable row must be fully masked"
