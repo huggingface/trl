@@ -157,10 +157,11 @@ def policy_model_name(client: OpenAI, base_model: str) -> str:
     return f"trl-policy-v{max(versions)}" if versions else base_model
 
 
-class TrainingSession(ResourceSession):
+class TrainingSession:
     """A probe session as an OpenEnv loop-owning session: `wait_for_completion` runs the agent to its end,
     `fetch_proxy_trace` returns the model's recorded turns, and `verify` grades the sandbox with the task's
-    verifier. Mixed in front of a domain's session class, which supplies `run` and `grade`."""
+    verifier. Mixed in front of a domain's session class, which supplies `run`, `grade` and `close`; `ResourceSession`
+    comes last so those are what the abstract methods resolve to."""
 
     def __init__(self, *, binary_reward: bool, **kwargs):
         super().__init__(**kwargs)
@@ -236,11 +237,11 @@ class TrainingFactory:
         return super().make_session(binary_reward=self.binary_reward, **kwargs)
 
 
-class GeneralTrainingSession(TrainingSession, general_domain.GeneralTaskSession):
+class GeneralTrainingSession(TrainingSession, general_domain.GeneralTaskSession, ResourceSession):
     pass
 
 
-class SweTrainingSession(TrainingSession, swe_domain.SweTaskSession):
+class SweTrainingSession(TrainingSession, swe_domain.SweTaskSession, ResourceSession):
     pass
 
 
