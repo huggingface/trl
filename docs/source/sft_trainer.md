@@ -177,6 +177,9 @@ training_args = SFTConfig(assistant_only_loss=True)
 > [!WARNING]
 > This functionality requires the chat template to include `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. See [Chat Templates](chat_templates#training-templates) for the full list of bundled training templates. For other models, check that your chat template includes these keywords. See [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
 
+> [!NOTE]
+> With a [vision dataset](#training-vision-language-models), assistant-only loss requires `transformers>=5.18.0` and a conversational [language modeling](dataset_formats#language-modeling) dataset.
+
 ### Train on completion only
 
 To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`SFTConfig`].
