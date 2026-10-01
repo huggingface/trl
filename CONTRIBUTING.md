@@ -14,6 +14,8 @@ We encourage using AI tools to help with contributions — they can be a great w
 
 That said, **we will not review fully AI-generated PRs from first-time contributors.** Our review resources are limited, and reviewing agent-generated code is especially costly when the contributor cannot engage meaningfully in the discussion or vouch for the correctness of the changes. We want to make sure that every PR we spend time on reflects a genuine understanding of what is being proposed.
 
+This applies to issues too. A report produced by automated analysis, with no account of how a user would hit the problem, costs us more than it saves: it stays open as an apparently unclaimed task and draws near-identical pull requests from others. Tell us what you hit in real use, and say so when you did not.
+
 ## Ways to contribute
 
 There are several ways you can contribute to TRL:
