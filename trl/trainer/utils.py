@@ -775,7 +775,7 @@ def print_prompt_completions_sample(
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
                     if "content" in msg:
-                        t.append(msg["content"])
+                        t.append(msg["content"] or "")
                 elif "name" in msg and "args" in msg:
                     # Tool call
                     t.append(f"{role.upper()}\n", style="bold red")
