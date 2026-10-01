@@ -175,11 +175,24 @@ If a tool description contains characters that aren't safe to splice into Python
 
 `spec.reward_funcs` defaults to an outcome-only reward — for each rollout it returns the last non-null reward observed during the trajectory. This is the right default for sparse-reward envs (e.g. SETA, where only `submit_solution` returns a non-null reward).
 
+If no tool returns a non-null reward, the default reward function returns `None`, not `0.0`. This includes rollouts
+with no tool calls, only unscored tool calls, or only failed tool calls. An observed `0.0` or negative reward remains
+a valid score. A later unscored or failed tool call does not erase an earlier score.
+
+GRPO excludes rollouts for which **all** reward functions return `None` from the reward baseline and gives them zero
+advantage. This does not remove their tokens from loss normalization or disable other terms such as KL
+regularization. If another reward function scores the rollout, it can still receive a nonzero advantage.
+
+Missing scores do not identify why an episode ended. If giving up or reaching a tool-call limit should count as a
+task failure, return an explicit failure reward from your environment or custom reward function. Infrastructure or
+grader failures can instead remain unscorable; monitor scoring coverage alongside mean reward.
+
 If you want a custom reward, write a regular TRL reward function and pass it directly:
 
 ```python
-def my_reward(environments, **kwargs) -> list[float]:
-    return [env.reward * 2.0 for env in environments]   # double the env reward, etc.
+def my_reward(environments, **kwargs) -> list[float | None]:
+    rewards = spec.reward_funcs(environments=environments)
+    return [2.0 * reward if reward is not None else None for reward in rewards]
 
 trainer = GRPOTrainer(
     ...,
@@ -188,6 +201,9 @@ trainer = GRPOTrainer(
 ```
 
 The per-rollout adapter exposes the running state TRL needs — `env.reward`, `env.rewards`, `env.metadata`, `env.finished`, `env.last_output` — for arbitrary post-hoc reward shaping.
+
+For compatibility, `env.reward` still starts at `0.0`. The default reward function checks `env.rewards` to determine
+whether a score was actually observed.
 
 ## OpenRewardSpec
 
