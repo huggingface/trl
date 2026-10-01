@@ -174,12 +174,6 @@ training_args = KTOConfig(..., use_liger_kernel=True)
 </hfoption>
 </hfoptions>
 
-## Chunked log-probabilities
-
-At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`] never materialize it: positions with `labels == -100` are dropped before the `lm_head` matmul, and the log-probabilities are computed on `[4096 tokens × 32768 vocab]` tiles by a Triton kernel, so peak memory scales with the tile instead of `(batch × seq_len) × vocab_size`.
-
-This is always on and needs no configuration. On `Qwen3-8B` (vocab ≈ 152k) with 16k tokens, the head's forward and backward take +2.6 GiB instead of +45 GiB with full logits.
-
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
