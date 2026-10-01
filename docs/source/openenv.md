@@ -5,7 +5,7 @@
 This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
 
 > [!NOTE]
-> Ready-to-use OpenEnv examples: [`grpo_echo`](https://github.com/huggingface/trl/tree/main/examples/grpo_echo) (minimal), [`grpo_catch`](https://github.com/huggingface/trl/tree/main/examples/grpo_catch), [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle), [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku), [`grpo_multi_env`](https://github.com/huggingface/trl/tree/main/examples/grpo_multi_env), [`grpo_browsergym`](https://github.com/huggingface/trl/tree/main/examples/grpo_browsergym), [`grpo_carla`](https://github.com/huggingface/trl/tree/main/examples/grpo_carla), [`async_grpo_opencode`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_opencode), and [`async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) (local and HF Jobs).
+> Ready-to-use OpenEnv examples: [`grpo_echo`](https://github.com/huggingface/trl/tree/main/examples/grpo_echo) (minimal), [`grpo_catch`](https://github.com/huggingface/trl/tree/main/examples/grpo_catch), [`grpo_wordle`](https://github.com/huggingface/trl/tree/main/examples/grpo_wordle), [`grpo_sudoku`](https://github.com/huggingface/trl/tree/main/examples/grpo_sudoku), [`grpo_multi_env`](https://github.com/huggingface/trl/tree/main/examples/grpo_multi_env), [`grpo_browsergym`](https://github.com/huggingface/trl/tree/main/examples/grpo_browsergym), [`grpo_carla`](https://github.com/huggingface/trl/tree/main/examples/grpo_carla), and [`async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) (local and HF Jobs).
 
 ## When to use environments
 
@@ -604,40 +604,49 @@ app = create_app(
 
 Use `rollout_func` when `environment_factory` doesn't fit your use case. For example, **external agent servers** where an external server owns the generation loop and manages its own agent-environment interaction protocol.
 
-## Training on harnesses: training a real coding agent (opencode)
+## Training on harnesses: training real coding agents (Harbor)
 
 The integrations above are **white-box**: TRL drives the multi-turn loop itself. It samples each turn, parses the tool calls, runs them, and feeds the results back.
 
-Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
+Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) or [`claude-code`](https://github.com/anthropics/claude-code) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` specific for OpenEnv that drives an [OpenEnv `ResourceSessionFactory`](https://huggingface.co/docs/openenv). See [`examples/async_grpo_opencode/async_grpo_opencode.py`](https://github.com/huggingface/trl/blob/main/examples/async_grpo_opencode/async_grpo_opencode.py) for a complete, self-contained example. To scale rollouts beyond a single node, [`examples/async_grpo_opencode/opencode_hf_sandbox.py`](https://github.com/huggingface/trl/blob/main/examples/async_grpo_opencode/opencode_hf_sandbox.py) runs each rollout in its own remote Hugging Face sandbox instead of a local subprocess.
-
-The [Harbor example](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) uses the same worker with OpenEnv's Harbor integration. Harbor runs tasks through coding-agent harnesses such as OpenCode, Codex and Claude Code. It includes local setup and a Hugging Face Jobs launcher.
+For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` that drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
 
 ### How it works
 
 TRL does not sample each turn here. The agent runs to completion on its own, and TRL reads back what it did:
 
-1. The agent runs inside an OpenEnv session (a local subprocess sandbox in the example, so no container is needed) in `transparent_proxy` mode. A small proxy inside the sandbox forwards the agent's `/v1/chat/completions` calls to your vLLM server and records each turn's token ids and logprobs.
-2. When the agent stops, TRL receives the validated `TrainingTrace` from OpenEnv, builds rows from its tokens and masks, and scores the final workspace with the session's `verify()` method (a held-out verifier).
-3. GRPO trains on those rows. The reward is propagated to every trained token through the group-relative advantage.
+1. The OpenEnv Harbor server starts the agent on a Harbor task in a sandbox (for example E2B). Every model call the agent makes goes through the server's capture proxy to your vLLM server, which records the engine's own prompt and completion token ids, the sampled logprobs, and a per-token loss mask.
+2. When the agent stops, the task's own verifier scores the result, and TRL receives the validated `TrainingTrace` from OpenEnv and builds the training rows from its token ids and masks. TRL does not re-tokenize the captured prompts.
+3. GRPO trains on those rows. The reward is propagated to every trained token through the group-relative advantage, and the new weights are synced back into the same vLLM server.
 
-Each rollout runs in its own isolated session. In the example that means one sandbox directory, one proxy on its own port, and one agent process per rollout. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight_tasks` setting controls how many rollouts run at the same time.
+Each rollout runs in its own isolated session, with its own sandbox and its own capture session. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight_tasks` setting controls how many rollouts run at the same time, and the server's `MAX_CONCURRENT_ENVS` must be at least `max_inflight_tasks + 1` (the factory keeps one extra connection for task metadata).
 
 ### Wiring
 
-Pass a `HarnessRolloutWorker` to [`experimental.async_grpo.AsyncGRPOTrainer`] with `harness_adapter=None` for a loop-owning agent. The factory constructor receives the trainer's sampling policy. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
+You pass a `HarnessRolloutWorker` to [`experimental.async_grpo.AsyncGRPOTrainer`] with `harness_adapter=None` to select loop-owning mode. The worker builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
 
 ```python
 from functools import partial
 
+from harbor_env.harness import HarborSessionFactory
+
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker
 
+factory = partial(
+    HarborSessionFactory,
+    "http://localhost:8200",       # the OpenEnv Harbor server
+    split="<hf-dataset>",          # a Harbor task dataset the server serves
+    harness="mini-swe-agent",      # or "opencode", "claude-code", ...
+    sandbox="e2b",
+    llm_url=vllm_url,
+    model=model,
+)
 worker = HarnessRolloutWorker(
-    harness_session_factory=partial(build_factory, ...),  # accepts sampling= and returns a ResourceSessionFactory
-    harness_adapter=None,                         # loop-owning: the agent runs its own loop
-    rollout_reward_fn=my_reward,                  # outcome -> float | None
+    harness_session_factory=factory,  # called by the worker with its sampling policy
+    harness_adapter=None,             # loop-owning: the agent runs its own loop
+    rollout_reward_fn=my_reward,      # outcome -> float | None
     model_name=model,
     dataset=dataset,
     reward_funcs=[],
@@ -660,17 +669,17 @@ OpenEnv owns capture validation and token selection. TRL converts the producer's
 
 TRL does not know what success means for your task, so you turn each finished rollout into a scalar reward. The function receives a `HarnessRolloutOutcome` that describes what the agent did:
 
-- `env_reward` (`float | None`): the reward from the session's `verify()` (for opencode, the fraction of held-out tests that passed), or `None` when the rollout could not be scored.
+- `env_reward` (`float | None`): the reward from the task's verifier, or `None` when the rollout could not be scored.
 - `completion` (`list[dict]`): the final message transcript.
 - `trace` (`list[TraceEntry]`): the selected OpenEnv capture records, including zero-masked turns.
 - `tool_call_count` and `tool_failure_count` (`int`): how many tool calls the agent made, and how many looked like failures.
 - `tool_calls_by_name` (`dict[str, int]`): calls per tool, for example `{"bash": 3, "edit": 2}`.
 - `timed_out` (`bool`): whether the agent ran out of its time budget.
 
-Return a `float`, or return `None` to mark the rollout unscorable so it is dropped from the group baseline instead of being counted as a zero. If you do not pass this function, the raw `env_reward` is used as is. The opencode example turns the dense pass fraction into a binary pass or fail and subtracts small penalties for degenerate behavior, such as never running the code or looping for far too many steps.
+Return a `float`, or return `None` to mark the rollout unscorable so it is dropped from the group baseline instead of being counted as a zero. If you do not pass this function, the raw `env_reward` is used as is. The Harbor example keeps the verifier's correctness as the main signal and adds a small tool-efficiency bonus only when the task is solved.
 
 > [!NOTE]
-> **Why not just use `verify()`?** `verify()` is the environment's job and answers one question, "how correct was the outcome," which keeps it clean and reusable for evaluation. The reward you train on is a separate, training-time decision (binarize the score, penalize degenerate behavior, drop unscorable rollouts). It also needs signals `verify()` never sees, since `verify()` only inspects the final workspace, while `rollout_reward_fn` also gets the trajectory (tool counts, `timed_out`, the trace). For example, a rollout can pass some tests yet never run `bash`; only `rollout_reward_fn` can see that and penalize it.
+> **Why not just use the verifier?** The verifier is the environment's job and answers one question, "how correct was the outcome," which keeps it clean and reusable for evaluation. The reward you train on is a separate, training-time decision (binarize the score, penalize degenerate behavior, drop unscorable rollouts). It also needs signals the verifier never sees, since the verifier only inspects the final result, while `rollout_reward_fn` also gets the trajectory (tool counts, `timed_out`, the trace). For example, a rollout can pass some tests yet never run `bash`; only `rollout_reward_fn` can see that and penalize it.
 
 #### Token eligibility comes from OpenEnv
 
@@ -678,21 +687,27 @@ Return a `float`, or return `None` to mark the rollout unscorable so it is dropp
 
 For example, prompt `[10, 11]`, completion `[20, 21, 22]` and mask `[0, 0, 1, 0, 1]` train on tokens 20 and 22. Token 21 remains context. A wholly masked completion is retained for context and usage accounting.
 
-The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. The native OpenCode examples now use OpenEnv's agent selection and train final answers as well as tool-call turns. `verify()` remains independent of token eligibility.
+The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. `verify()` remains independent of token eligibility.
 
 Malformed captures fail at the OpenEnv boundary and stop the worker. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
 ### Requirements
 
-The vLLM server must expose tool-calling and real token ids, and enable NCCL weight sync so the agent always hits the current policy:
+The OpenEnv Harbor server owns the dataset and the sandboxes. It needs the credential of the sandbox backend (for example `E2B_API_KEY`):
+
+```bash
+MAX_CONCURRENT_ENVS=9 openenv harbor serve --dataset <hf-dataset> --port 8200 --capture-port 8300 --expose gradio
+```
+
+The vLLM server must expose tool calling and real token ids, and enable NCCL weight sync so the agent always hits the current policy. Rollouts and weight updates must use the same vLLM server:
 
 ```bash
 vllm serve <model> \
-    --enable-auto-tool-choice --tool-call-parser hermes \
+    --enable-auto-tool-choice --tool-call-parser <parser> \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
 
 > [!NOTE]
-> Loop-owning training lives under `trl.experimental` and its API may change. The example installs the `opencode` CLI into a sandbox template on first run (needs internet once) and uses [`agentica-org/DeepCoder-Preview-Dataset`](https://huggingface.co/datasets/agentica-org/DeepCoder-Preview-Dataset) with a held-out stdin/stdout verifier.
+> Loop-owning training lives under `trl.experimental` and its API may change. The example pins the OpenEnv revision it was tested with; see its [README](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for the exact setup.
