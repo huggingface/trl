@@ -90,24 +90,21 @@ def _send_full_tensors_lockstep(
         send_thread.start()
 
     for name, full in gathered_params:
-        if do_send:
-            while True:
-                try:
-                    send_queue.put((name, full), timeout=1.0)
-                    break
-                except queue.Full:
-                    if send_done.is_set():
-                        break
-        accelerator.wait_for_everyone()
-
-    if do_send:
-        while True:
+        # Rank 0 keeps iterating after the send side is done: `full_tensor()` is collective.
+        while do_send and not send_done.is_set():
             try:
-                send_queue.put(None, timeout=1.0)
+                send_queue.put((name, full), timeout=1.0)
                 break
             except queue.Full:
-                if send_done.is_set():
-                    break
+                pass
+        accelerator.wait_for_everyone()
+
+    while do_send and not send_done.is_set():
+        try:
+            send_queue.put(None, timeout=1.0)
+            break
+        except queue.Full:
+            pass
     accelerator.wait_for_everyone()
 
     if send_thread is not None:
@@ -122,9 +119,9 @@ class WeightTransferClient:
     Ported verbatim from [`~trl.experimental.async_grpo.weight_transfer.WeightTransferClient`]. Only the student is
     ever targeted: the teacher is static and never receives a weight update, so no analogous client exists for it.
 
-    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the main
-    thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than a hang,
-    and the abandoned thread dies with the process.
+    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the
+    calling thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than
+    a hang, and the abandoned thread dies with the process.
 
     Args:
         vllm_client ([`VLLMClient`]):
