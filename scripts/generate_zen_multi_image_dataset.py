@@ -234,6 +234,37 @@ def main(test_size, push_to_hub, repo_id):
     conversational_preference_dataset = conversational_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_preference_dataset.push_to_hub(repo_id, config_name="conversational_preference")
+
+    completion = [
+        [{"role": "assistant", "content": [{"type": "text", "text": "Beautiful."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Explicit."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Simple."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Very complicated."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Flat."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Sparse."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Readability."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Yes, special cases are special enough to break the rules."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Practicality."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Warnings."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "When explicitly silenced."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Give up."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "One, and preferably only one."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "French."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Some day."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Yes, often."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "It means it's a bad idea."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "It means it may be a good idea."}]}],
+        [{"role": "assistant", "content": [{"type": "text", "text": "Namespaces are one honking great idea."}]}],
+    ]
+    label = [True, True, True, False, True, True, True, False, True, False, True, False, True, False, False, True, True, True, True]
+    # Create the images
+    number_of_images = [sum(1 for part in row[0]["content"] if part.get("type") == "image") for row in prompt]
+    sizes = [np.random.randint(32, 64, size=(num_images, 2)) for num_images in number_of_images]
+    images = [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in s] for s in sizes]
+    conversational_unpaired_preference_dataset = Dataset.from_dict({"prompt": prompt, "completion": completion, "label": label, "images": images}, features=Features(prompt=Message, completion=Message, label=Value("bool"), images=List(Image())))
+    conversational_unpaired_preference_dataset = conversational_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
+    if push_to_hub:
+        conversational_unpaired_preference_dataset.push_to_hub(repo_id, config_name="conversational_unpaired_preference")
     # fmt: on
 
 

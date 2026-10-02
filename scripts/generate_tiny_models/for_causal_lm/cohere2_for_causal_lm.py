@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "CohereLabs/tiny-aya-earth"
 
@@ -38,6 +41,9 @@ config = Cohere2Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    # One of each attention type. Deriving the pattern from num_hidden_layers=2 gives two sliding
+    # layers (the reference is 3:1), so the full-attention NoPE path would never run.
+    layer_types=["sliding_attention", "full_attention"],
     logit_scale=1.0,
     rope_theta=50000,
     bos_token_id=2,

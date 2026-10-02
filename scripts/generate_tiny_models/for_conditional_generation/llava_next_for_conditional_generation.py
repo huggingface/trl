@@ -20,10 +20,19 @@
 import torch
 from transformers import AutoConfig, AutoProcessor, GenerationConfig, LlavaNextForConditionalGeneration
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "llava-hf/llava-v1.6-mistral-7b-hf"
 
@@ -42,8 +51,6 @@ vision_config = {
     "num_hidden_layers": 2,
     "hidden_size": 16,
     "num_attention_heads": 4,
-    "num_key_value_heads": 2,
-    "embed_dim": 64,
 }
 
 config = AutoConfig.from_pretrained(MODEL_ID, text_config=text_config, vision_config=vision_config)

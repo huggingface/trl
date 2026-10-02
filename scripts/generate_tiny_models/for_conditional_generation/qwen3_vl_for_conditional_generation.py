@@ -21,11 +21,20 @@
 import torch
 from transformers import AutoConfig, AutoProcessor, GenerationConfig, Qwen3VLForConditionalGeneration
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 TRANSFORMERS_VERSION = "4.57.0"
 check_transformers_version(TRANSFORMERS_VERSION)
+
+set_seed()
 
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 
@@ -40,11 +49,12 @@ text_config = {
     "rope_scaling": {"mrope_interleaved": True, "mrope_section": [2, 2, 2], "rope_type": "default"},
 }
 vision_config = {
-    "num_hidden_layers": 2,
+    # Real Qwen3-VL has depth=24 with deepstack at layers [5, 11, 17]. With depth=2 here, those
+    # indexes are unreachable, so the deepstack mergers were instantiated but never invoked.
+    # Pick an index inside [0, depth).
+    "deepstack_visual_indexes": [1],
     "hidden_size": 16,
-    "num_attention_heads": 4,
-    "num_key_value_heads": 2,
-    "embed_dim": 64,
+    "num_heads": 4,
     "depth": 2,
     "out_hidden_size": 16,
 }

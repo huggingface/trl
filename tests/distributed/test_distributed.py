@@ -21,7 +21,7 @@ import torch
 import transformers
 from packaging.version import Version
 
-from ..testing_utils import TrlTestCase, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,6 +98,42 @@ class TestDistributed(TrlTestCase):
             "fsdp2",
         ],
     )
+    def test_sft_nll_loss(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/sft.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_language_modeling",
+                "--loss_type", "nll",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
     def test_dpo(self, config, get_config_path):
         # fmt: off
         run_command(
@@ -107,6 +143,119 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+        ],
+    )
+    def test_dpo_precompute_ref_log_probs(self, config, get_config_path):
+        # `--eval_strategy epoch` passes an eval dataset, so reference log-probs are precomputed for both the train and
+        # eval splits (two passes), which is what previously broke multi-GPU precompute (fingerprint cache mismatch, and
+        # a corrupted ZeRO-3 parameter coordinator from re-initializing DeepSpeed on the policy model per pass).
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_preference",
+                "--precompute_ref_log_probs",
+                "--eval_strategy", "epoch",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
+    def test_dpo_liger(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_preference",
+                "--use_liger_kernel",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
+    def test_kto_liger(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/kto.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_unpaired_preference",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )
@@ -297,6 +446,45 @@ class TestDistributed(TrlTestCase):
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "conversational_prompt_only",
                 "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @require_liger_kernel
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version("5.0.0") <= Version(transformers.__version__) < Version("5.5.4"),
+                    reason="ZeRO-3 fails with transformers >= 5.0.0 and < 5.5.4 (fixed in transformers#45414), see #4899",
+                    strict=True,
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
+    def test_grpo_liger(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/grpo.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "conversational_prompt_only",
+                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                "--use_liger_kernel",
             ],
             os.environ.copy(),
         )

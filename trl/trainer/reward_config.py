@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class RewardConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`RewardTrainer`].
 
@@ -37,10 +36,13 @@ class RewardConfig(_BaseConfig):
         > Parameters that control the model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`RewardTrainer`] is provided as a string. If you're training a MoE architecture and want
-            to include the load balancing/auxiliary loss as a part of the final loss, remember to set
-            `output_router_logits=True` in this dictionary.
+            Keyword arguments for [`~transformers.AutoModelForSequenceClassification.from_pretrained`], used when the
+            `model` argument of the [`RewardTrainer`] is provided as a string. The `revision` value is also used when
+            loading the tokenizer.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForSequenceClassification.from_pretrained`] and
+            [`~transformers.AutoTokenizer.from_pretrained`].
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -65,8 +67,8 @@ class RewardConfig(_BaseConfig):
         > Parameters that control the training
 
         center_rewards_coefficient (`float`, *optional*):
-            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
-            https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
+            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by [this
+            paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
 
@@ -101,10 +103,16 @@ class RewardConfig(_BaseConfig):
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
-            "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string. If you're training a MoE architecture and want to include "
-            "the load balancing/auxiliary loss as a part of the final loss, remember to set "
-            "`output_router_logits=True` in this dictionary."
+            "help": "Keyword arguments for `AutoModelForSequenceClassification.from_pretrained`, used when the "
+            "`model` argument of the `RewardTrainer` is provided as a string. The `revision` value is also used when "
+            "loading the tokenizer."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForSequenceClassification.from_pretrained` and `AutoTokenizer.from_pretrained`."
         },
     )
     chat_template_path: str | None = field(
@@ -135,8 +143,8 @@ class RewardConfig(_BaseConfig):
     max_length: int | None = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
-            "the right. If `None`, no truncation is applied."
+            "help": "Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected "
+            "sequence exceeds this value. If `None`, no filtering is applied."
         },
     )
     pad_to_multiple_of: int | None = field(
@@ -149,7 +157,7 @@ class RewardConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "
-            "https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`."
+            "[this paper](https://huggingface.co/papers/2312.09244), Eq. 2). Recommended value: `0.01`."
         },
     )
     activation_offloading: bool = field(

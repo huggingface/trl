@@ -44,8 +44,8 @@ class RLOOScriptArguments(ScriptArguments):
                 - `"accuracy_reward"`
                 - `"reasoning_accuracy_reward"`
                 - `"think_format_reward"`
-                - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
-                - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
+                - `"get_soft_overlong_punishment"` (used values are `max_completion_len=1280`, `soft_punish_cache=256`)
+                - any dotted import path (e.g., `'my_lib.rewards.custom_reward'`).
     """
 
     reward_model_name_or_path: str | None = field(
@@ -58,7 +58,7 @@ class RLOOScriptArguments(ScriptArguments):
     reward_funcs: list[str] | None = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. Supported values are: `accuracy_reward`,  `reasoning_accuracy_reward`, `think_format_reward`, "
+            "help": "Reward functions to use. Supported values are: `accuracy_reward`, `reasoning_accuracy_reward`, `think_format_reward`, "
             "`get_soft_overlong_punishment` (used values are `max_completion_len=1280`, `soft_punish_cache=256`), or "
             "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
         },
@@ -66,10 +66,12 @@ class RLOOScriptArguments(ScriptArguments):
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    from accelerate import logging
+    import transformers
+    from accelerate.logging import get_logger
     from datasets import load_dataset
+    from packaging.version import Version
 
-    from trl import RLOOTrainer, get_dataset, get_peft_config
+    from trl import RLOOTrainer, get_dataset, get_peft_config, get_quantization_config
     from trl.rewards import (
         accuracy_reward,
         get_soft_overlong_punishment,
@@ -77,7 +79,7 @@ def main(script_args, training_args, model_args, dataset_args):
         think_format_reward,
     )
 
-    logger = logging.get_logger(__name__)
+    logger = get_logger(__name__)
 
     reward_funcs_registry = {
         "accuracy_reward": accuracy_reward,
@@ -107,6 +109,16 @@ def main(script_args, training_args, model_args, dataset_args):
                     f"{list(reward_funcs_registry.keys())} or a valid import path."
                 )
 
+    model_init_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=training_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        dtype=model_args.dtype,
+    )
+    if training_args.model_init_kwargs is not None:
+        model_init_kwargs.update(training_args.model_init_kwargs)
+    training_args.model_init_kwargs = model_init_kwargs
+
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
@@ -130,11 +142,12 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        quantization_config=get_quantization_config(model_args),
         peft_config=get_peft_config(model_args),
     )
 
     # Train the model
-    trainer.train()
+    trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
     # Log training complete
     trainer.accelerator.print("✅ Training completed.")
@@ -146,6 +159,10 @@ def main(script_args, training_args, model_args, dataset_args):
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
+
+    # Finish the trackers and destroy the process group
+    if Version(transformers.__version__) >= Version("5.18.0"):
+        trainer.end()
 
 
 def make_parser(subparsers: argparse._SubParsersAction | None = None, prog: str | None = None):

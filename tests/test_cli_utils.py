@@ -19,7 +19,7 @@ from unittest.mock import mock_open, patch
 import pytest
 from datasets import DatasetDict, load_dataset
 
-from trl import DatasetMixtureConfig, TrlParser, get_dataset
+from trl import DatasetMixtureConfig, DistillationConfig, GRPOConfig, RLOOConfig, SFTConfig, TrlParser, get_dataset
 from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
@@ -37,6 +37,22 @@ class InvalidDataclass:
 
 
 class TestTrlParser(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("config_cls", "field_name", "value", "expected"),
+        [
+            (SFTConfig, "dataset_kwargs", '{"skip_prepare_dataset": true}', {"skip_prepare_dataset": True}),
+            (GRPOConfig, "chat_template_kwargs", '{"enable_thinking": false}', {"enable_thinking": False}),
+            (GRPOConfig, "generation_kwargs", '{"suppress_tokens": [1, 2]}', {"suppress_tokens": [1, 2]}),
+            (RLOOConfig, "chat_template_kwargs", '{"enable_thinking": false}', {"enable_thinking": False}),
+            (DistillationConfig, "generation_kwargs", '{"suppress_tokens": [1]}', {"suppress_tokens": [1]}),
+        ],
+    )
+    def test_dict_field_from_command_line(self, config_cls, field_name, value, expected):
+        """Dict-typed fields are passed as JSON on the command line and decoded into dicts."""
+        parser = TrlParser(dataclass_types=[config_cls])
+        (config,) = parser.parse_args_into_dataclasses(["--output_dir", "dummy", f"--{field_name}", value])
+        assert getattr(config, field_name) == expected
+
     def test_init_without_config_field(self):
         """Test initialization without 'config' field in the dataclasses."""
         parser = TrlParser(dataclass_types=[MyDataclass])
@@ -105,6 +121,16 @@ class TestTrlParser(TrlTestCase):
 
         with pytest.raises(ValueError, match="`env` field should be a dict in the YAML file."):
             parser.parse_args_and_config(args)
+
+    @pytest.mark.parametrize("config", [None, [], "value", 42])
+    @patch("builtins.open", mock_open())
+    @patch("yaml.safe_load")
+    def test_parse_args_and_config_with_non_mapping_config(self, mock_yaml_load, config):
+        mock_yaml_load.return_value = config
+        parser = TrlParser(dataclass_types=[MyDataclass])
+
+        with pytest.raises(ValueError, match="must contain a YAML mapping"):
+            parser.parse_args_and_config(["--config", "config.yaml"])
 
     def test_parse_args_and_config_without_config(self):
         """Test parse_args_and_config without the `--config` argument."""
@@ -332,6 +358,40 @@ class TestGetDataset:
             "trl-internal-testing/zen", "standard_prompt_completion", split="train[:50%]"
         )
         assert prompts[len(prompts) // 2 :] == expected_second_half["prompt"]
+
+    def test_dataset_fraction(self):
+        # `fraction` sets each source's target share of the final mixture: normalized to sum to one and capped so no
+        # source is oversampled. With weights 0.75/0.25 on two equally-sized sources, the 0.75 source is the binding
+        # constraint (kept in full) and the 0.25 source contributes a third of its rows.
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.75),
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.25),
+            ]
+        )
+        result = get_dataset(mixture_config)
+        full = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        n_second = round(len(full) / 3)  # 0.25 * (len(full) / 0.75)
+        expected = list(full) + list(full.select(range(n_second)))
+        assert list(result["train"]) == expected
+
+    def test_dataset_fraction_partial_raises_error(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5),
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling"),
+            ]
+        )
+        with pytest.raises(ValueError, match="must be set for either all datasets"):
+            get_dataset(mixture_config)
+
+    def test_dataset_fraction_streaming_raises_error(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling", fraction=0.5)],
+            streaming=True,
+        )
+        with pytest.raises(ValueError, match="not supported with streaming datasets"):
+            get_dataset(mixture_config)
 
     def test_dataset_mixture_with_test_split(self):
         mixture_config = DatasetMixtureConfig(

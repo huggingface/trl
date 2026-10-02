@@ -20,22 +20,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from transformers import (
-    AutoProcessor,
-    DataCollator,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
+from transformers import AutoProcessor, DataCollator, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -44,10 +38,10 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_config_model_id,
+    global_then_local_main_first,
     pad,
-    selective_log_softmax,
+    selective_log_softmax_and_entropy,
 )
 from .tpo_config import TPOConfig
 
@@ -324,13 +318,19 @@ class TPOTrainer(_BaseTrainer):
             args.accelerator_config.dispatch_batches = False
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `TPOConfig`, but your model is already instantiated. "
@@ -339,7 +339,9 @@ class TPOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(get_config_model_id(model.config))
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
         if not isinstance(processing_class, PreTrainedTokenizerBase):
             raise TypeError(
                 "The `processing_class` must be a `PreTrainedTokenizerBase`. `TPOTrainer` does not currently "
@@ -349,6 +351,10 @@ class TPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -369,7 +375,23 @@ class TPOTrainer(_BaseTrainer):
                     "with the new `peft_config` to the trainer."
                 )
             # Create PEFT model
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
+                model, "is_loaded_in_8bit", False
+            )
+            get_peft_model_kwargs = {}
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -439,11 +461,19 @@ class TPOTrainer(_BaseTrainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction. `parallelism_config` requires accelerate 1.12.0.
+        if Version(accelerate.__version__) >= Version("1.12.0") and self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
+
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
 
+    @staticmethod
     def _tokenize(
-        self,
         processing_class: PreTrainedTokenizerBase,
         input: str | list,
         **kwargs,
@@ -494,7 +524,7 @@ class TPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed. Unlike DPO, we must also strip the extracted prompt from the reference
             # column (see `_extract_triple_prompt`), which assumes the reference shares the same implicit prompt.
             first_example = next(iter(dataset))
@@ -524,45 +554,47 @@ class TPOTrainer(_BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
+            # Bind `_tokenize` to a local so `tokenize_fn` doesn't capture `self`: a closure over `self` makes the map
+            # function unhashable, forcing a random fingerprint that silently disables dataset caching.
+            tokenize = self._tokenize
+
             def tokenize_fn(example, processing_class):
                 tools = example.get("tools")
                 tools = json.loads(tools) if isinstance(tools, str) else tools
                 output = {}
                 if is_conversational(example):
-                    prompt_ids = self._tokenize(
+                    prompt_ids = tokenize(
                         processing_class,
                         example["prompt"],
                         tools=tools,
                         add_generation_prompt=True,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_chosen_ids = self._tokenize(
+                    prompt_chosen_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["chosen"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_rejected_ids = self._tokenize(
+                    prompt_rejected_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["rejected"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
-                    prompt_reference_ids = self._tokenize(
+                    prompt_reference_ids = tokenize(
                         processing_class,
                         example["prompt"] + example["reference"],
                         tools=tools,
                         **example.get("chat_template_kwargs", {}),
                     )["input_ids"]
                 else:
-                    prompt_ids = self._tokenize(processing_class, example["prompt"])["input_ids"]
-                    prompt_chosen_ids = self._tokenize(processing_class, example["prompt"] + example["chosen"])[
+                    prompt_ids = tokenize(processing_class, example["prompt"])["input_ids"]
+                    prompt_chosen_ids = tokenize(processing_class, example["prompt"] + example["chosen"])["input_ids"]
+                    prompt_rejected_ids = tokenize(processing_class, example["prompt"] + example["rejected"])[
                         "input_ids"
                     ]
-                    prompt_rejected_ids = self._tokenize(processing_class, example["prompt"] + example["rejected"])[
-                        "input_ids"
-                    ]
-                    prompt_reference_ids = self._tokenize(processing_class, example["prompt"] + example["reference"])[
+                    prompt_reference_ids = tokenize(processing_class, example["prompt"] + example["reference"])[
                         "input_ids"
                     ]
 
@@ -618,11 +650,12 @@ class TPOTrainer(_BaseTrainer):
 
         input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :].contiguous()
-        shift_labels = input_ids[..., 1:].contiguous()
-        shift_completion_mask = completion_mask[..., 1:].contiguous()
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+        shift_logits = outputs.logits[..., :-1, :]
+        shift_labels = input_ids[..., 1:]
+        shift_completion_mask = completion_mask[..., 1:]
+        per_token_logps, per_token_entropy = selective_log_softmax_and_entropy(
+            shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
+        )
 
         # Length-normalized for IPO and TPO-L (matches the SimPO-style implicit reward used by the TPO paper);
         # summed otherwise.
@@ -681,7 +714,6 @@ class TPOTrainer(_BaseTrainer):
 
         # Log the metrics
         # Entropy
-        per_token_entropy = entropy_from_logits(shift_logits.detach())
         entropy = per_token_entropy[shift_completion_mask.bool()].mean()
         entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
         self._metrics[mode]["entropy"].append(entropy)
@@ -689,7 +721,7 @@ class TPOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions
@@ -748,6 +780,28 @@ class TPOTrainer(_BaseTrainer):
 
         return (loss, outputs) if return_outputs else loss
 
+    def evaluate(
+        self,
+        eval_dataset: Dataset | dict[str, Dataset] | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> dict[str, float]:
+        # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
+        # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer. `_prepare_dataset` is
+        # idempotent: it skips datasets that are already tokenized. A `str` selects a dataset that was already prepared
+        # at init time, so it's left untouched.
+        if eval_dataset is not None and not isinstance(eval_dataset, str):
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, self.processing_class, self.args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, self.processing_class, self.args, "eval")
+        return super().evaluate(
+            eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix
+        )
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         return self._compute_loss(model, inputs, return_outputs)
 
@@ -760,7 +814,7 @@ class TPOTrainer(_BaseTrainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 

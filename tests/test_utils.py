@@ -13,37 +13,44 @@
 # limitations under the License.
 
 import copy
+import functools
 import textwrap
 from io import StringIO
 from unittest.mock import patch
 
 import pytest
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import transformers
+from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
 from trl.trainer.utils import (
     RepeatSampler,
-    _ChunkedLogProbFunction,
+    add_fused_lm_head,
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
+    get_callable_name,
+    get_peak_flops,
     get_peft_config,
     hash_module,
+    is_async_callable,
     nanstd,
     pad,
-    patch_chunked_lm_head,
     print_prompt_completions_sample,
+    repeat_iterable_dataset,
     selective_log_softmax,
+    selective_log_softmax_and_entropy,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
@@ -55,7 +62,15 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 
 if is_peft_available():
-    from peft import AutoPeftModelForCausalLM, LoraConfig
+    from peft import (
+        AutoPeftModelForCausalLM,
+        LoraConfig,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 @require_peft
@@ -65,8 +80,11 @@ class TestUseAdapter(TrlTestCase):
             "trl-internal-testing/tiny-PeftModel", adapter_name="my_adapter"
         )
         input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        enabled = model(input_ids).logits
         with model.disable_adapter():
             expected = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(enabled, expected)
 
         with use_adapter(model, None):
             output = model(input_ids).logits
@@ -100,6 +118,8 @@ class TestUseAdapter(TrlTestCase):
         expected_1 = model(input_ids).logits
         model.set_adapter("my_adapter_2")
         expected_2 = model(input_ids).logits
+        # Otherwise the assertions below prove nothing
+        assert not torch.equal(expected_1, expected_2)
 
         with use_adapter(model, "my_adapter_1"):
             output_1 = model(input_ids).logits
@@ -245,6 +265,29 @@ class TestHashModule(TrlTestCase):
         assert h1 != h2
 
 
+class TestCreateModelFromPath(TrlTestCase):
+    @pytest.mark.parametrize(("device_type", "expected_device_map"), [("cpu", None), ("mps", None), ("cuda", "auto")])
+    def test_default_device_map(self, device_type, expected_device_map):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = device_type
+            create_model_from_path("trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM)
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == expected_device_map
+
+    def test_explicit_device_map_is_kept(self):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = "mps"
+            create_model_from_path(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
+            )
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
+
+
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
@@ -277,6 +320,77 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+
+class TestGetCallableName(TrlTestCase):
+    def test_function(self):
+        def accuracy_reward(completions):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(accuracy_reward) == "accuracy_reward"
+
+    def test_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(reward, threshold=0.5)) == "reward"
+
+    def test_nested_partial(self):
+        def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert get_callable_name(functools.partial(functools.partial(reward), threshold=0.5)) == "reward"
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert get_callable_name(LengthReward()) == "LengthReward"
+
+    def test_lambda(self):
+        assert get_callable_name(lambda completions: [0.0] * len(completions)) == "<lambda>"
+
+
+class TestIsAsyncCallable(TrlTestCase):
+    def test_function(self):
+        def reward(completions):
+            return [0.0] * len(completions)
+
+        assert not is_async_callable(reward)
+
+    def test_async_function(self):
+        async def reward(completions):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(reward)
+
+    def test_partial(self):
+        async def reward(completions, threshold):
+            return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(reward, threshold=0.5))
+
+    def test_callable_instance(self):
+        class LengthReward:
+            def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert not is_async_callable(LengthReward())
+
+    def test_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(LengthReward())
+
+    def test_partial_of_async_callable_instance(self):
+        class LengthReward:
+            async def __call__(self, completions, threshold):
+                return [0.0] * len(completions)
+
+        assert is_async_callable(functools.partial(LengthReward(), threshold=0.5))
 
 
 class TestNanStd(TrlTestCase):
@@ -316,7 +430,7 @@ class TestGenerateModelCard(TrlTestCase):
         card_text = str(model_card)
         assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "datasets: username/my_dataset" in card_text
         assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
         assert "](https://huggingface.co/spaces/username/space_id)" in card_text
@@ -342,7 +456,7 @@ class TestGenerateModelCard(TrlTestCase):
         )
         card_text = str(model_card)
         assert "my_model" in card_text
-        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device_map="auto")' in card_text
         assert "My Trainer" in card_text
 
 
@@ -502,6 +616,82 @@ class TestRepeatRandomSampler(TrlTestCase):
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
 
+class TestRepeatIterableDataset(TrlTestCase):
+    @staticmethod
+    def _make_dataset(n):
+        return IterableDataset.from_generator(lambda: ({"x": i} for i in range(n)))
+
+    @pytest.mark.parametrize("mini_repeat_count,batch_size,repeat_count", [(1, 1, 1), (2, 3, 4), (3, 2, 2), (2, 2, 3)])
+    def test_matches_repeat_sampler(self, mini_repeat_count, batch_size, repeat_count):
+        # The streaming transform must yield records in exactly the same order as RepeatSampler yields indices for a
+        # map-style dataset (unshuffled), across a representative range of arguments.
+        n = 12
+        expected = list(
+            RepeatSampler(
+                list(range(n)),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+                shuffle=False,
+            )
+        )
+        actual = [
+            record["x"]
+            for record in repeat_iterable_dataset(
+                self._make_dataset(n),
+                mini_repeat_count=mini_repeat_count,
+                batch_size=batch_size,
+                repeat_count=repeat_count,
+            )
+        ]
+        assert actual == expected
+
+    def test_default_arguments(self):
+        dataset = self._make_dataset(4)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=2)]
+        assert sampled == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    def test_drops_incomplete_batch(self):
+        dataset = self._make_dataset(7)
+        sampled = [record["x"] for record in repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=2)]
+        # The last element is dropped because it can't form a full batch of size 2.
+        assert sampled == [0, 1, 2, 3, 4, 5]
+
+    def test_preserves_all_columns(self):
+        dataset = IterableDataset.from_generator(lambda: ({"x": i, "answer": str(i)} for i in range(2)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled == [
+            {"x": 0, "answer": "0"},
+            {"x": 0, "answer": "0"},
+            {"x": 1, "answer": "1"},
+            {"x": 1, "answer": "1"},
+        ]
+
+    def test_repeats_are_independent_objects(self):
+        # Repeated records must be independent objects (like the map-style path, where the dataset re-materializes a
+        # fresh object per access), so an in-place edit to one repeat doesn't corrupt the others.
+        dataset = IterableDataset.from_generator(lambda: ({"prompt": [{"content": "hi"}]} for _ in range(1)))
+        sampled = list(repeat_iterable_dataset(dataset, mini_repeat_count=2))
+        assert sampled[0] is not sampled[1]
+        assert sampled[0]["prompt"] is not sampled[1]["prompt"]
+        sampled[0]["prompt"][-1]["content"] += " there"
+        assert sampled[1]["prompt"][-1]["content"] == "hi"
+
+    def test_reshuffles_across_epochs(self):
+        # The transform stays chained to the source, so `set_epoch` reaches an upstream `shuffle` and the order is
+        # reshuffled every epoch, matching RepeatSampler (whose RNG advances on each `__iter__`).
+        dataset = IterableDataset.from_generator(lambda: ({"x": i} for i in range(8))).shuffle(seed=42)
+        repeated = repeat_iterable_dataset(dataset, mini_repeat_count=1, batch_size=8)
+
+        repeated.set_epoch(0)
+        epoch_0 = [record["x"] for record in repeated]
+        repeated.set_epoch(1)
+        epoch_1 = [record["x"] for record in repeated]
+
+        assert sorted(epoch_0) == sorted(epoch_1) == list(range(8))  # same content
+        assert epoch_0 != epoch_1  # different order
+
+
 class TestEntropyFromLogits(TrlTestCase):
     @pytest.mark.parametrize("shape", [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)])
     @pytest.mark.parametrize("chunk_size", [1, 16])
@@ -520,6 +710,28 @@ class TestEntropyFromLogits(TrlTestCase):
 
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_tool_only_assistant_with_null_content(self, mock_stdout):
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the data.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
+                        }
+                    ],
+                }
+            ]
+        ]
+        print_prompt_completions_sample(["Find the table"], completions, {"reward": [0.0]}, None, 0)
+        assert "Inspect the data." in mock_stdout.getvalue()
+        assert "None" not in mock_stdout.getvalue()
+
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
@@ -546,6 +758,36 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         """)
 
         assert output == expected_output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_advantages(self, mock_stdout):
+        # When `advantages` is None, the Advantage column is omitted (e.g. distillation, which has no advantages).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456]}
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Correctness" in output
+        assert "Advantage" not in output
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_no_rewards_no_advantages(self, mock_stdout):
+        # Prompt/completion-only table: empty rewards and `advantages=None` (the distillation case).
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, {}, None, step)
+
+        output = mock_stdout.getvalue()
+        assert "Prompt" in output
+        assert "Completion" in output
+        assert "Advantage" not in output
 
     @patch("sys.stdout", new_callable=StringIO)
     def test_extra_columns(self, mock_stdout):
@@ -773,6 +1015,32 @@ class TestSelectiveLogSoftmax(TrlTestCase):
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
+    # On an accelerator this takes the fused kernel, on CPU the torch path
+    @pytest.mark.parametrize("device", ["cpu", pytest.param(torch_device, marks=require_torch_accelerator)])
+    def test_temperature_and_row_mask(self, device):
+        logits = torch.randn(2, 3, 257, device=device, requires_grad=True)
+        index = torch.randint(257, (2, 3), device=device)
+        row_mask = torch.tensor([[1, 0, 1], [0, 1, 1]], device=device, dtype=torch.bool)
+        if device != "cpu":  # the comparison below must be kernel against torch, not torch against torch
+            assert trainer_utils._fused_logprob_entropy is not None
+            assert trainer_utils._supports_trl_loss_kernel(logits, index, row_mask)
+
+        logprobs, entropy = selective_log_softmax_and_entropy(logits, index, temperature=0.7, row_mask=row_mask)
+        (logprobs + 0.1 * entropy).sum().backward()
+
+        reference_logits = logits.detach().clone().requires_grad_()
+        reference_logprobs = (reference_logits / 0.7).log_softmax(-1)
+        reference_entropy = -(reference_logprobs.exp() * reference_logprobs).sum(-1)
+        reference_logprobs = reference_logprobs.gather(-1, index.unsqueeze(-1)).squeeze(-1)
+        reference_logprobs = reference_logprobs.masked_fill(~row_mask, 0.0)
+        reference_entropy = reference_entropy.masked_fill(~row_mask, 0.0)
+        (reference_logprobs + 0.1 * reference_entropy).sum().backward()
+
+        torch.testing.assert_close(logprobs, reference_logprobs)
+        torch.testing.assert_close(entropy, reference_entropy)
+        torch.testing.assert_close(logits.grad, reference_logits.grad)
+        assert torch.count_nonzero(logits.grad[~row_mask]) == 0
+
     @pytest.mark.parametrize("dtype", [torch.float64, torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize("k", [1, 8])
     def test_selective_log_softmax_multi_index(self, dtype, k):
@@ -980,6 +1248,52 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["image_position_ids"][0], batch["image_position_ids"][:1])
         assert torch.equal(result["image_position_ids"][1], batch["image_position_ids"][1:])
 
+    def test_split_by_spatial_shapes(self):
+        batch = {
+            "num_images": [2, 1],
+            "num_tiles": [3, 2],
+            "pixel_values": torch.arange(5 * 4).reshape(5, 4),
+            "pixel_attention_mask": torch.arange(5 * 6).reshape(5, 6),
+            "spatial_shapes": torch.arange(5 * 2).reshape(5, 2),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:3])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][3:])
+        assert isinstance(result["pixel_attention_mask"], list)
+        assert torch.equal(result["pixel_attention_mask"][0], batch["pixel_attention_mask"][:3])
+        assert torch.equal(result["pixel_attention_mask"][1], batch["pixel_attention_mask"][3:])
+        assert isinstance(result["spatial_shapes"], list)
+        assert torch.equal(result["spatial_shapes"][0], batch["spatial_shapes"][:3])
+        assert torch.equal(result["spatial_shapes"][1], batch["spatial_shapes"][3:])
+
+    def test_split_without_grid_metadata(self):
+        # LLaVA-style: no grid metadata at all, pixel_values and image_sizes are indexed by image
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(3 * 4).reshape(3, 4),
+            "image_sizes": torch.tensor([[8, 8], [4, 4], [2, 2]]),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:1])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][1:])
+        assert isinstance(result["image_sizes"], list)
+        assert len(result["image_sizes"]) == 2
+        assert torch.equal(result["image_sizes"][0], batch["image_sizes"][:1])
+        assert torch.equal(result["image_sizes"][1], batch["image_sizes"][1:])
+
+    def test_no_split_when_padded_by_sample(self):
+        # Idefics-style: pixel_values is padded to (num_samples, max_num_images, ...), already sample-indexed
+        batch = {
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(2 * 2 * 4).reshape(2, 2, 4),
+        }
+        result = split_pixel_values_by_grid(batch)
+        assert result == batch
+
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
@@ -1004,6 +1318,31 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert isinstance(result["image_position_ids"], torch.Tensor)
         assert torch.equal(result["image_position_ids"], image_position_ids_merged)
 
+    def test_unsplit_spatial_shapes(self):
+        pixel_values = [torch.randn(3, 4), torch.randn(2, 4)]
+        pixel_attention_mask = [torch.randn(3, 6), torch.randn(2, 6)]
+        spatial_shapes = [torch.tensor([[1, 2], [3, 4], [5, 6]]), torch.tensor([[7, 8], [9, 10]])]
+        batch = {
+            "pixel_values": pixel_values,
+            "pixel_attention_mask": pixel_attention_mask,
+            "spatial_shapes": spatial_shapes,
+        }
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_values"], torch.cat(pixel_values, dim=0))
+        assert isinstance(result["pixel_attention_mask"], torch.Tensor)
+        torch.testing.assert_close(result["pixel_attention_mask"], torch.cat(pixel_attention_mask, dim=0))
+        assert isinstance(result["spatial_shapes"], torch.Tensor)
+        assert torch.equal(result["spatial_shapes"], torch.cat(spatial_shapes, dim=0))
+
+    def test_unsplit_image_sizes(self):
+        pixel_values = [torch.randn(1, 4), torch.randn(2, 4)]
+        image_sizes = [torch.tensor([[8, 8]]), torch.tensor([[4, 4], [2, 2]])]
+        batch = {"pixel_values": pixel_values, "image_sizes": image_sizes}
+        result = unsplit_pixel_values_by_grid(batch)
+        assert isinstance(result["image_sizes"], torch.Tensor)
+        assert torch.equal(result["image_sizes"], torch.cat(image_sizes, dim=0))
+
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
         batch = {"pixel_values": original}
@@ -1011,110 +1350,7 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
         assert torch.equal(result["pixel_values"], original)
 
 
-class TestChunkedLogProbFunction:
-    N, H, V = 64, 32, 128
-    CHUNK_SIZE = 32
-
-    def _reference_logprobs_and_entropy(self, hidden, weight, labels, temperature):
-        logits = (hidden @ weight.t()).to(torch.float32) / temperature  # [N, V]
-        log_p = F.log_softmax(logits, dim=-1)
-        logprobs = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
-        p = torch.softmax(logits, dim=-1)
-        entropy = -(p * log_p).sum(dim=-1)
-        return logprobs, entropy
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_forward(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H)
-        weight = torch.randn(self.V, self.H)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        logprobs_chunked, entropy_chunked = _ChunkedLogProbFunction.apply(
-            hidden, weight, labels, temperature, self.CHUNK_SIZE
-        )
-        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-
-        torch.testing.assert_close(logprobs_chunked, logprobs_ref, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(entropy_chunked, entropy_ref, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True)
-        weight = torch.randn(self.V, self.H, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
-        logprobs_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        logprobs_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward_bfloat16(self, temperature):
-        torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, dtype=torch.bfloat16, requires_grad=True)
-        weight = torch.randn(self.V, self.H, dtype=torch.bfloat16, requires_grad=True)
-        labels = torch.randint(0, self.V, (self.N,))
-
-        # Chunked backward
-        logprobs_chunked, _ = _ChunkedLogProbFunction.apply(hidden, weight, labels, temperature, self.CHUNK_SIZE)
-        logprobs_chunked.sum().backward()
-        grad_hidden_chunked = hidden.grad.clone()
-        grad_weight_chunked = weight.grad.clone()
-
-        hidden.grad = None
-        weight.grad = None
-
-        # Reference backward
-        logprobs_ref, _ = self._reference_logprobs_and_entropy(hidden, weight, labels, temperature)
-        logprobs_ref.sum().backward()
-
-        torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-2, rtol=1e-2)
-        torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-2, rtol=1e-2)
-
-
-class _FakeTransformerModel(nn.Module):
-    """Minimal stand-in for a transformer body: returns random hidden states of the right shape."""
-
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self._hidden = None
-
-    def forward(self, input_ids, attention_mask=None, use_cache=False, **kwargs):
-        b, s = input_ids.shape
-        if self._hidden is None or self._hidden.shape[:2] != (b, s):
-            torch.manual_seed(123)
-            self._hidden = torch.randn(b, s, self.hidden_size, requires_grad=True)
-        return type("Out", (), {"last_hidden_state": self._hidden})()
-
-
-class _FakeCausalLM(nn.Module):
-    """Minimal CausalLM with .model and .lm_head, enough for patch_chunked_lm_head."""
-
-    def __init__(self, hidden_size, vocab_size):
-        super().__init__()
-        self.config = type("Config", (), {})()
-        self.model = _FakeTransformerModel(hidden_size)
-        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
-
-    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
-        raise NotImplementedError("should be monkey-patched")
-
-
-_CHUNKED_LM_HEAD_MODEL_IDS = [
+_FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
     pytest.param(
@@ -1134,12 +1370,35 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GPT2LMHeadModel",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
     "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
     "trl-internal-testing/tiny-LlamaForCausalLM-3",
     "trl-internal-testing/tiny-MistralForCausalLM-0.1",
     "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Olmo3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Olmo 3 was introduced in transformers>=4.57.0",
+        ),
+    ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1149,92 +1408,114 @@ _CHUNKED_LM_HEAD_MODEL_IDS = [
 
 
 @require_torch_accelerator
-class TestPatchChunkedLMHead:
-    B, S = 4, 16  # batch size, sequence length (including prompt + completion)
-    H, V = 32, 128
-    CHUNK_SIZE = 32
+class TestAddFusedLMHead:
+    def test_masked_labels(self):
+        """Positions labelled `-100` are zero and the others match an unmasked run."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
+        labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
-    def _build_model_and_inputs(self, temperature=1.0):
-        torch.manual_seed(42)
-        model = _FakeCausalLM(self.H, self.V)
-        patch_chunked_lm_head(model, self.CHUNK_SIZE, temperature)
+        out_full = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
-        input_ids = torch.randint(0, self.V, (self.B, self.S))
-        attention_mask = torch.ones(self.B, self.S, dtype=torch.long)
-        # First half of each sequence is prompt (0), second half is completion (1)
-        completion_mask = torch.zeros(self.B, self.S, dtype=torch.float32)
-        completion_mask[:, self.S // 2 :] = 1.0
-        return model, input_ids, attention_mask, completion_mask
+        mask = labels[:, 1:] != -100
+        torch.testing.assert_close(out["log_probs"][mask], out_full["log_probs"][mask])
+        torch.testing.assert_close(out["entropy"][mask], out_full["entropy"][mask])
+        assert (out["log_probs"][~mask] == 0).all()
+        assert (out["entropy"][~mask] == 0).all()
 
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_dummy_model_chunked_forward_with_completion_mask(self, temperature):
-        """Masked forward matches unmasked forward at completion positions and is zero at prompt positions."""
-        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
+    def test_shift_labels(self):
+        """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
 
-        # Run WITHOUT completion_mask (baseline — computes all positions)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+        out_shifted = model(input_ids=input_ids, shift_labels=shift_labels, fused_lm_head=True)
 
-        # Reset hidden state cache so both runs use the same hidden states
-        model.model._hidden = None
+        torch.testing.assert_close(out_shifted["log_probs"][:, :-1], out["log_probs"])
+        torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
+        assert (out_shifted["log_probs"][:, -1] == 0).all()
 
-        # Run WITH completion_mask
-        out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
+    def test_all_masked_labels_backward(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
+
+        out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
+        out["log_probs"].sum().backward()
+
+        assert out["log_probs"].count_nonzero() == 0
+        assert model.lm_head.weight.grad is not None
+        assert model.lm_head.weight.grad.count_nonzero() == 0
+
+    def test_generate_unchanged(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device=torch_device)
+        expected = model.generate(input_ids, max_new_tokens=8, do_sample=False)
+
+        add_fused_lm_head(model)
+
+        torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
+
+    def test_output_multiplier(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        model.config.output_multiplier = 0.5
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    def test_cast_lm_head_to_fp32(self):
+        """Under bf16 autocast, the projection runs in fp32 and matches an fp32 projection of the same hidden states."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        add_fused_lm_head(model, cast_lm_head_to_fp32=True)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        with torch.autocast(torch_device, dtype=torch.bfloat16):
+            out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+            hidden_states = model.model(input_ids=input_ids).last_hidden_state[:, :-1]
+        logps = torch.nn.functional.linear(hidden_states.float(), model.lm_head.weight).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+    )
+    def test_aux_loss(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[1, 8:] = 0
+        expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
+
+        add_fused_lm_head(model)
+        out = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            output_router_logits=True,
+            fused_lm_head=True,
         )
 
-        # shifted completion_mask (matching the shift in _chunked_forward)
-        shifted_mask = completion_mask[:, 1:].bool()
+        torch.testing.assert_close(out["aux_loss"], expected)
 
-        # At completion positions, values should match
-        torch.testing.assert_close(
-            out_masked["log_probs"][shifted_mask],
-            out_full["log_probs"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-        torch.testing.assert_close(
-            out_masked["entropy"][shifted_mask],
-            out_full["entropy"][shifted_mask],
-            atol=1e-5,
-            rtol=1e-5,
-        )
-
-        # At prompt positions, values should be zero
-        prompt_mask = ~shifted_mask
-        assert (out_masked["log_probs"][prompt_mask] == 0).all()
-        assert (out_masked["entropy"][prompt_mask] == 0).all()
-
-    @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_dummy_model_chunked_forward_completion_mask_backward(self, temperature):
-        model, input_ids, attention_mask, completion_mask = self._build_model_and_inputs(temperature)
-
-        # Full forward + backward (mask applied after, as the trainer does)
-        out_full = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
-        shifted_mask = completion_mask[:, 1:]
-        loss_full = (out_full["log_probs"] * shifted_mask).sum()
-        loss_full.backward()
-        grad_weight_full = model.lm_head.weight.grad.clone()
-
-        model.lm_head.weight.grad = None
-        model.model._hidden = None
-
-        # Masked forward + backward
-        out_masked = model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, completion_mask=completion_mask
-        )
-        loss_masked = (out_masked["log_probs"] * shifted_mask).sum()
-        loss_masked.backward()
-        grad_weight_masked = model.lm_head.weight.grad.clone()
-
-        torch.testing.assert_close(grad_weight_masked, grad_weight_full, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
         model.eval()
 
-        B, S, chunk_size = 2, 8, 32
+        B, S = 2, 8
         torch.manual_seed(42)
         input_ids = torch.randint(0, model.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
@@ -1249,20 +1530,26 @@ class TestPatchChunkedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        patch_chunked_lm_head(model, chunk_size, temperature)
+        add_fused_lm_head(model, temperature)
         with torch.no_grad():
-            out = model(input_ids=input_ids, labels=labels)
+            out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
         torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=5e-3, rtol=5e-3)
         torch.testing.assert_close(out["entropy"], ref_entropy, atol=5e-3, rtol=5e-3)
 
-    @pytest.mark.parametrize("model_id", _CHUNKED_LM_HEAD_MODEL_IDS)
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, model_id, temperature):
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(torch_device)
+        # Run in float32, not bfloat16. For models that tie their embeddings, `lm_head.weight.grad` is the sum of the
+        # LM-head projection and the input-embedding lookup, so its absolute error is set by the larger of the two
+        # rather than by the element's own value. In bfloat16 that error (~1 ULP at the gradient's scale) swamps the
+        # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
+        # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
+        # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
+        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
-        B, S, chunk_size = 2, 8, 32
+        B, S = 2, 8
         torch.manual_seed(42)
         input_ids = torch.randint(0, model_ref.config.vocab_size, (B, S), device=torch_device)
         labels = input_ids.clone()
@@ -1276,12 +1563,372 @@ class TestPatchChunkedLMHead:
         ref_grad = model_ref.lm_head.weight.grad.clone()
 
         # Chunked backward
-        patch_chunked_lm_head(model_chunked, chunk_size, temperature)
-        out = model_chunked(input_ids=input_ids, labels=labels)
+        add_fused_lm_head(model_chunked, temperature)
+        out = model_chunked(input_ids=input_ids, labels=labels, fused_lm_head=True)
         out["log_probs"].sum().backward()
         chunked_grad = model_chunked.lm_head.weight.grad.clone()
 
-        torch.testing.assert_close(chunked_grad, ref_grad, atol=5e-2, rtol=5e-2)
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
+
+
+_FUSED_LM_HEAD_LOSS_MODEL_IDS = [
+    "trl-internal-testing/tiny-CohereForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Gemma2ForCausalLM",
+    "trl-internal-testing/tiny-GemmaForCausalLM",
+    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+    "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-Lfm2ForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+    "trl-internal-testing/tiny-LlamaForCausalLM-3",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
+    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
+    pytest.param(
+        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.3.0"),
+            reason="Nemotron 3 was introduced in transformers>=5.3.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
+    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+]
+
+
+_FUSED_LM_HEAD_VLM_MODEL_IDS = [
+    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.5.0"),
+            reason="Gemma4 models were introduced in transformers-5.5.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2.5-VL requires transformers>=5.0.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.15.0"),
+            reason="Muse Glimmer was introduced in transformers-5.15.0",
+        ),
+    ),
+    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("4.57.0"),
+            reason="Qwen3-VL series were introduced in transformers-4.57.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.2.0"),
+            reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+]
+
+
+@require_torch_accelerator
+class TestAddFusedLMHeadLoss:
+    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
+
+    def _setup(self, model_id):
+        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100  # prompt-like mask
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    def _setup_vlm(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        vocab_size = ref_model.config.text_config.vocab_size
+        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+        return ref_model, chunked_model, input_ids, labels, num_items
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_LOSS_MODEL_IDS)
+    def test_forward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ],
+    )
+    def test_forward_matches_reference_with_aux_loss(self, model_id):
+        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
+        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
+        )
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_LOSS_MODEL_IDS)
+    def test_backward_matches_reference(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Base decoder gradients
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    def test_forward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model)
+
+        # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
+        # removes the attribute), so we have to pass it at call time on both paths.
+        B, S = 2, 16
+        input_ids = torch.randint(0, ref_model.config.text_config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        with torch.no_grad():
+            ref_out = ref_model(
+                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
+            )
+            out = chunked_model(
+                input_ids=input_ids,
+                labels=labels,
+                num_items_in_batch=num_items,
+                output_router_logits=True,
+                fused_lm_head=True,
+            )
+
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    def test_backward_matches_reference_vlm(self, model_id):
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        ref_out.loss.backward()
+
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        out.loss.backward()
+
+        # lm_head gradient
+        torch.testing.assert_close(
+            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
+        )
+        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
+        for name, ref_param in ref_model.model.named_parameters():
+            chunked_grad = chunked_model.model.get_parameter(name).grad
+            ref_grad = ref_param.grad
+            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
+            if ref_grad is not None:
+                torch.testing.assert_close(
+                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
+                )
+
+    def test_forward_without_fused_lm_head_matches_reference(self):
+        """Without `fused_lm_head=True` the patched forward is the original one: same logits (including per-model
+        post-processing such as `final_logit_softcapping` and `logit_scale`) and same loss."""
+        ref_model, chunked_model, input_ids, labels, num_items = self._setup(
+            "trl-internal-testing/tiny-CohereForCausalLM"
+        )
+        with torch.no_grad():
+            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    @pytest.mark.parametrize(
+        "peft_config_factory",
+        [
+            pytest.param(lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"]), id="lora"),
+            pytest.param(
+                lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
+                id="lora+modules_to_save",
+            ),
+            pytest.param(
+                lambda: PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_tuning"
+            ),
+            pytest.param(
+                lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
+            ),
+            pytest.param(
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
+            ),
+        ],
+    )
+    def test_forward_matches_reference_with_peft(self, peft_config_factory):
+        """Patching the inner causal LM (`peft_model.get_base_model()`) must produce a forward whose loss matches
+        the unpatched PEFT reference for both LoRA-style (adapters live in the module tree) and prompt-learning
+        (`PeftModel.forward` injects virtual tokens, then delegates into the patched inner forward)."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
+        chunked_model = copy.deepcopy(ref_model)
+        add_fused_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()
+        labels[:, :4] = -100
+        num_items = int((labels[..., 1:] != -100).sum())
+
+        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
+        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items, fused_lm_head=True)
+        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
+
+        ref_out.loss.backward()
+        out.loss.backward()
+        chunked_params = dict(chunked_model.named_parameters())
+        for name, ref_param in ref_model.named_parameters():
+            if not ref_param.requires_grad or ref_param.grad is None:
+                continue
+            torch.testing.assert_close(
+                chunked_params[name].grad,
+                ref_param.grad,
+                atol=1e-5,
+                rtol=1e-5,
+                msg=f"gradient mismatch on {name}",
+            )
+
+    @require_peft
+    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
+    def test_label_mask_with_prompt_learning_peft(self):
+        """For prompt-learning PEFT (PromptTuning, P-Tuning), `PeftModel.forward` prepends `-100`-padded virtual
+        tokens before delegating into the patched inner forward. The patched output's `label_mask` must reflect the
+        padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
+        token's hidden state."""
+        base = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
+        )
+        peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
+        chunked_model = get_peft_model(base, peft_config)
+        add_fused_lm_head(chunked_model.get_base_model())
+
+        B, S = 2, 16
+        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
+        labels = input_ids.clone()  # all positions valid, including label[0]
+
+        out = chunked_model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        # `labels[..., 1:]` (un-padded, what compute_loss used to compute) excludes original `label[0]`,
+        # but the patched forward sees padded labels and counts `label[0]` as a valid target.
+        unpadded = int((labels[..., 1:] != -100).sum())
+        # One extra valid target per sequence (original `label[0]`).
+        assert out.label_mask.sum().item() == unpadded + B
 
 
 class TestComputeFlopsPerToken(TrlTestCase):
@@ -1299,14 +1946,22 @@ class TestComputeFlopsPerToken(TrlTestCase):
         assert f_32k - f_16k == 2 * (f_16k - f_8k)
 
     def test_tied_vs_untied_lm_head(self):
-        # Untied lm_head adds `2 * V * h` forward FLOPs, ×3 for fwd+bwd.
+        # Tying shares weights, not compute: lm_head is still a 2*V*h matmul.
         cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
         cfg.tie_word_embeddings = True
         f_tied = compute_flops_per_token(cfg, 16384)
         cfg.tie_word_embeddings = False
         f_untied = compute_flops_per_token(cfg, 16384)
-        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
-        assert f_untied - f_tied == expected_delta
+        assert f_tied == f_untied
+
+    def test_vocab_size_scaling(self):
+        # Only the lm_head scales with vocab: 3 * 2 * ΔV * h (fwd + bwd).
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = False
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.vocab_size += 1000
+        f_hi = compute_flops_per_token(cfg, 16384)
+        assert f_hi - f_lo == 3 * 2 * 1000 * cfg.hidden_size
 
     def test_moe_active_vs_total_experts(self):
         # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
@@ -1322,6 +1977,60 @@ class TestComputeFlopsPerToken(TrlTestCase):
         per_expert_per_layer = 2 * 3 * cfg.hidden_size * cfg.moe_intermediate_size
         expected_delta = 3 * moe_layers * (2 - 1) * per_expert_per_layer
         assert f_hi - f_lo == expected_delta
+
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        derived = compute_flops_per_token(cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert compute_flops_per_token(cfg, 16384) == derived
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
 
 
 class TestComputeMfu(TrlTestCase):
@@ -1364,3 +2073,11 @@ class TestAdjustedMfu(TrlTestCase):
         f_med = adjusted_mfu(100.0, cfg, 16384)
         f_long = adjusted_mfu(100.0, cfg, 65536)
         assert f_short > f_med > f_long
+
+    def test_config_without_head_dim(self):
+        # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
+        # num_attention_heads` must give the same result as setting it explicitly.
+        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        derived = adjusted_mfu(100.0, cfg, 16384)
+        cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
+        assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
