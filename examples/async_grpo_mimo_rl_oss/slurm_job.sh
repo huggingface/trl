@@ -83,8 +83,13 @@ LORA_ARGS=""
 
 # --logprobs-mode processed_logprobs: the PPO denominator comes from these logprobs.
 # --generation-config vllm: ignore the model card's sampling defaults, which would apply to every rollout.
+# Runtime LoRA updating is what lets the trainer push an adapter instead of the merged weights, and vLLM refuses it
+# once data parallelism gives the server more than one API process. A full fine-tune never pushes an adapter, so the
+# variable is only set when there is one.
+LORA_ENV=()
+[ "$LORA_RANK" -gt 0 ] && LORA_ENV=(VLLM_ALLOW_RUNTIME_LORA_UPDATING=1)
 CUDA_VISIBLE_DEVICES=$VLLM_DEVICES \
-VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 \
+VLLM_SERVER_DEV_MODE=1 "${LORA_ENV[@]}" \
     "${VLLM_LAUNCH[@]}" vllm serve "$MODEL" \
         --host 0.0.0.0 --port "$PORT" \
         --tensor-parallel-size "$VLLM_TP" \
