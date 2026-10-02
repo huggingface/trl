@@ -327,9 +327,10 @@ class RewardTrainer(_BaseTrainer):
             to ensure that the reward head is properly trained.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
-    loss_is_scaled_for_ga = False
     _template_file = "rm_model_card.md"
 
     def __init__(

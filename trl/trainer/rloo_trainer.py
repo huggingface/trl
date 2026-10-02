@@ -215,9 +215,10 @@ class RLOOTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "rloo"]
     _name = "RLOO"
-    loss_is_scaled_for_ga = False
     _paper = {
         "title": "Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
         "id": "2402.14740",

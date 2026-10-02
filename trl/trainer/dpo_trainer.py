@@ -490,9 +490,10 @@ class DPOTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "dpo"]
     _name = "DPO"
-    loss_is_scaled_for_ga = False
     _paper = {
         "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
         "id": "2305.18290",

@@ -79,9 +79,10 @@ class SSDTrainer(_BaseTrainer):
     ``prompt`` column.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "ssd"]
     _name = "SSD"
-    loss_is_scaled_for_ga = True
     config_cls = SSDConfig
     # docstyle-ignore
     _paper = {

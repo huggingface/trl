@@ -64,12 +64,13 @@ _TELEMETRY_TRAINERS = {
 
 
 class _BaseTrainer(Trainer):
+    # Whether `compute_loss` already scales the loss for gradient accumulation, see `Trainer.loss_is_scaled_for_ga`
+    loss_is_scaled_for_ga = None
+
     _tag_names = []
     _name = "Base"
     _paper = {}
     _template_file = None
-    # Whether `compute_loss` already scales the loss for gradient accumulation, see `Trainer.loss_is_scaled_for_ga`
-    loss_is_scaled_for_ga = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

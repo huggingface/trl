@@ -92,6 +92,8 @@ def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
 
 
 class ORPOTrainer(_BaseTrainer):
+    loss_is_scaled_for_ga = False
+
     r"""
     Initialize ORPOTrainer.
 
@@ -131,7 +133,6 @@ class ORPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "orpo"]
     _name = "ORPO"
-    loss_is_scaled_for_ga = False
     _paper = {
         "title": "ORPO: Monolithic Preference Optimization without Reference Model",
         "id": "2403.07691",

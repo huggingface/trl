@@ -206,9 +206,10 @@ class DemonstrationTeacherContextBuilder:
 class SDFTTrainer(_BaseTrainer):
     """Trainer for SDFT-style on-policy self-distillation with explicit teacher prompts."""
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
-    loss_is_scaled_for_ga = True
     config_cls = SDFTConfig
     # docstyle-ignore
     _paper = {

@@ -329,10 +329,11 @@ class SDPOTrainer(_BaseTrainer):
     next-token predictions back into the policy.
     """
 
+    loss_is_scaled_for_ga = True
+
     config_cls = SDPOConfig
     _tag_names = ["trl", "sdpo"]
     _name = "SDPO"
-    loss_is_scaled_for_ga = True
     # docstyle-ignore
     _paper = {
         "title": "Reinforcement Learning via Self-Distillation",

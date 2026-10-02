@@ -80,6 +80,8 @@ logger = get_logger(__name__)
 
 
 class CPOTrainer(_BaseTrainer):
+    loss_is_scaled_for_ga = False
+
     r"""
     Initialize CPOTrainer.
 
@@ -119,7 +121,6 @@ class CPOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "cpo"]
     _name = "CPO"
-    loss_is_scaled_for_ga = False
     _paper = {
         "title": "Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
         "id": "2401.08417",

@@ -552,9 +552,10 @@ class KTOTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "kto"]
     _name = "KTO"
-    loss_is_scaled_for_ga = False
     _paper = {
         "title": "KTO: Model Alignment as Prospect Theoretic Optimization",
         "id": "2402.01306",

@@ -1024,9 +1024,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             implementation to disable trainer-side weight sync.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "async-grpo"]
     _name = "AsyncGRPO"
-    loss_is_scaled_for_ga = True
     _paper = {
         "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
         "id": "2402.03300",

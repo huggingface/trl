@@ -376,9 +376,10 @@ class DistillationTrainer(_BaseTrainer):
             use and that it has been fine-tuned for tool calling.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "distillation"]
     _name = "Distillation"
-    loss_is_scaled_for_ga = True
     _paper = {
         "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
         "id": "2306.13649",

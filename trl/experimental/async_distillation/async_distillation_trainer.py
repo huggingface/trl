@@ -931,9 +931,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
             `rollout_worker` updates the policy itself).
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "async-distillation"]
     _name = "AsyncDistillation"
-    loss_is_scaled_for_ga = True
     _paper = {
         "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
         "id": "2306.13649",

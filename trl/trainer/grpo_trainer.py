@@ -281,9 +281,10 @@ class GRPOTrainer(_BaseTrainer):
             any time without prior notice.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "grpo"]
     _name = "GRPO"
-    loss_is_scaled_for_ga = True
     _paper = {
         "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
         "id": "2402.03300",
