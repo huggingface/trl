@@ -115,11 +115,11 @@ class TrainingClientProtocol(Protocol):
                 the backend never sees any of it. Called exactly once, in the trainer's process, with grad enabled.
             aux_loss_coef (`float`, *optional*, defaults to `0.0`):
                 Coefficient for the mixture-of-experts auxiliary loss, already scaled for gradient accumulation. The
-                backend adds `aux_loss_coef * aux_loss` to the objective it back-propagates, and reports the same
-                total as `loss`. An in-process backend gets both at once by adding it to the connected loss. An
-                off-process backend has to add it to its *remote* backward, next to the log-prob surrogate: the router
-                loss is produced by the model and never reaches `loss_fn`, so adding it only to the returned scalar
-                would report it while dropping the router's gradients. `0.0` disables it.
+                backend adds `aux_loss_coef * aux_loss` to the objective it back-propagates, and reports the same total
+                as `loss`. An in-process backend gets both at once by adding it to the connected loss. An off-process
+                backend has to add it to its *remote* backward, next to the log-prob surrogate: the router loss is
+                produced by the model and never reaches `loss_fn`, so adding it only to the returned scalar would
+                report it while dropping the router's gradients. `0.0` disables it.
         """
         ...
 
