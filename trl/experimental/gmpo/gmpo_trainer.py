@@ -89,7 +89,7 @@ class GMPOTrainer(GRPOTrainer):
         # sign-aware, one-sided clipping = PPO's trust-region "min" trick written in log-spaces:
         advantages_col = advantages.unsqueeze(1)
         clipped_log_ratio = torch.where(
-            advantages_col > 0,
+            advantages_col >= 0,
             torch.minimum(log_ratio, clamped_log_ratio),
             torch.maximum(log_ratio, clamped_log_ratio),
         )
@@ -97,12 +97,49 @@ class GMPOTrainer(GRPOTrainer):
         # Optionally drop low-entropy tokens from the geometric mean
         seq_mask = mask * entropy_mask if entropy_mask is not None else mask
 
+        # Off-policy sequence masking (DeepSeek-V3.2, Eq 9): masks out tokens with high KL divergence for
+        # negative-advantage sequences. Applied to seq_mask so masked tokens are excluded from the geometric mean.
+        if self.off_policy_mask_threshold is not None:
+            sampling_per_token_logps = inputs.get("sampling_per_token_logps", old_per_token_logps)
+            off_policy_mask = self.get_off_policy_mask(
+                advantages=advantages_col,  # parent unsqueezes before calling, pass 2D to avoid broadcast bug
+                per_token_logps=per_token_logps,
+                sampling_per_token_logps=sampling_per_token_logps,
+                mask=mask,
+                off_policy_threshold=self.off_policy_mask_threshold,
+            )
+            seq_mask = seq_mask * off_policy_mask
+
+        # vLLM importance sampling correction: match GRPO's per-token loss * IS ratio at the sequence level.
+        # Token-level modes (token_truncate, token_mask): IS ratio is (B, T), apply as weights in the geometric mean.
+        # Sequence-level modes (sequence_truncate, sequence_mask): IS ratio is (B, 1), constant per sequence so it
+        # would cancel in a weighted geometric mean — multiply into per_sequence_loss instead.
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            is_ratio = inputs["importance_sampling_ratio"]
+            if is_ratio.size(1) == 1:
+                # Sequence-level IS: multiply directly into per_sequence_loss after the geometric mean
+                seq_is_ratio = is_ratio.squeeze(-1)  # (B,)
+            else:
+                # Token-level IS: apply as weights in the geometric mean
+                seq_mask = seq_mask * is_ratio
+                seq_is_ratio = None
+        else:
+            seq_is_ratio = None
+
         # Geometric mean of the clipped token ratios = exp(mean of clipped log-ratios over valid tokens). The 1/|o_i|
         # exponent is the geometric-mean normalization; the paper's ablation shows it is essential.
-        log_importance_weights = (clipped_log_ratio * seq_mask).sum(-1) / seq_mask.sum(-1).clamp(min=1.0)  # (B,)
+        seq_token_count = seq_mask.sum(-1)  # (B,)
+        log_importance_weights = (clipped_log_ratio * seq_mask).sum(-1) / seq_token_count.clamp(min=1.0)  # (B,)
         coef = torch.exp(log_importance_weights)  # (B,) sequence-level (geometric-mean) importance weight
 
         per_sequence_loss = -coef * advantages  # (B,)
+
+        # Apply sequence-level vLLM IS correction (saved earlier) to per_sequence_loss
+        if seq_is_ratio is not None:
+            per_sequence_loss = per_sequence_loss * seq_is_ratio
+
+        # Zero out loss for sequences with no valid tokens after masking (off-policy mask + entropy mask + vLLM IS)
+        per_sequence_loss = torch.where(seq_token_count > 0, per_sequence_loss, 0.0)
 
         # KL regularization toward the reference model (optional; sequence-averaged to match GMPO's sequence-level
         # objective). Disabled by default (beta == 0)
