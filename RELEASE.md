@@ -127,14 +127,14 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
 
 A patch release is cut from the latest minor release only. Older release branches do not get patches.
 
-A merged PR goes into the next patch release, and gets the `🩹 for patch` label, when it fixes one of:
+A merged PR goes into the next patch release and gets the `🩹 for patch` label when it fixes one of:
 
 - a security issue,
 - silently wrong training (corrupted rollouts, a wrong loss),
 - a crash or hang in a supported configuration (within the dependency ranges declared in `pyproject.toml`),
 - a regression from the previous release,
 
-and the fix is small, tested, and cherry-picks cleanly onto the release branch. How long the bug has existed does not matter.
+and the fix is small, tested, and can be cherry-picked cleanly onto the release branch. How long the bug has existed does not matter.
 
 These wait for the next minor release, even when they are fixes:
 
