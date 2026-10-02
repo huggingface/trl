@@ -36,8 +36,9 @@ from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
+from transformers import AutoConfig, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.trainer import TRAINING_ARGS_NAME
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers.utils import is_peft_available
 
@@ -56,7 +57,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .training_client import ForwardBackwardOutput, GRPOLoss, LocalTrainingClient
+from .training_client import ForwardBackwardOutput, GRPOLoss, LocalTrainingClient, _RemoteModel, _RemoteOptimizer
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -186,13 +187,11 @@ class TrainingClientProtocol(Protocol):
     """Interface a training-compute backend must implement to be passed as `training_client` to
     [`experimental.async_grpo.AsyncGRPOTrainer`].
 
-    The default [`LocalTrainingClient`] runs the model in this process. Implement this protocol to run the forward and
-    backward passes somewhere else (another process, another set of GPUs, or a remote service) while the trainer keeps
-    owning the loss. Every rank calls its own client.
-
-    Gradient clipping and the optimizer step are deliberately absent: a backend that owns the parameters passes an
-    optimizer through the trainer's `optimizers` argument whose `step` reaches them, reading the scheduled learning
-    rate from its param groups.
+    Without a client, the trainer loads the model and runs it in this process through [`LocalTrainingClient`]. A client
+    passed to the trainer owns the model instead (its weights, optimizer state, and checkpoints), somewhere else:
+    another process, another set of GPUs, or a remote service. The trainer then loads only the model's config, keeps
+    owning the loss and the learning-rate schedule, and calls the client for every step that touches the weights. Every
+    rank calls its own client.
     """
 
     def forward_backward(
@@ -229,6 +228,22 @@ class TrainingClientProtocol(Protocol):
                 backend adds `aux_loss_coef * aux_loss` to the objective it back-propagates and reports the same total
                 as `loss`. `0.0` disables it.
         """
+        ...
+
+    def optimizer_step(self, learning_rate: float) -> dict[str, float]:
+        """Clip the accumulated gradients, step the optimizer at `learning_rate`, and clear the gradients.
+
+        Called once per optimizer step, after every micro-batch's `forward_backward`. `learning_rate` is the trainer's
+        scheduled rate for this step. Returns metrics to log, e.g. `{"grad_norm": ...}`.
+        """
+        ...
+
+    def save(self, output_dir: str) -> None:
+        """Save the model weights and the optimizer state to `output_dir`, as part of a checkpoint or the final model."""
+        ...
+
+    def load(self, checkpoint_dir: str) -> None:
+        """Restore the model weights and the optimizer state saved by `save` in `checkpoint_dir`, to resume training."""
         ...
 
 
@@ -1074,10 +1089,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
             implementation to disable trainer-side weight sync.
         training_client (`TrainingClientProtocol`, *optional*):
-            Custom training-compute backend implementing [`TrainingClientProtocol`]. If `None`, a default
-            [`LocalTrainingClient`] is created, which runs the model in this process. Pass a custom client to run the
-            forward and backward passes elsewhere (another process, another set of GPUs, or a remote service). The loss
-            stays here either way; only the model compute moves.
+            Custom training backend implementing [`TrainingClientProtocol`], which owns the model: its weights,
+            optimizer state, and checkpoints. The trainer then loads only the model's config and requires a
+            `weight_transfer` that syncs the weights from the client. If `None`, the trainer loads the model and runs
+            it in this process.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -1129,14 +1144,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
         model_revision = model_init_kwargs.get("revision")
-        # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
-        # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
-        model = create_model_from_path(
-            model,
-            device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
-            **model_init_kwargs,
-        )
+        # A training client owns the model, so only its config is loaded here
+        self._remote_model = training_client is not None
+        if self._remote_model:
+            if peft_config is not None:
+                raise ValueError("`peft_config` is not supported with a `training_client`, which owns the model.")
+            if weight_transfer is None:
+                raise ValueError(
+                    "A `training_client` owns the model weights, so the trainer has none to stream to vLLM. Pass a "
+                    "`weight_transfer` that syncs the weights from the client."
+                )
+            config = AutoConfig.from_pretrained(
+                model, revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
+            model = _RemoteModel(config)
+        else:
+            # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
+            # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
+            model = create_model_from_path(
+                model,
+                device_map=None,
+                attn_implementation="kernels-community/flash-attn3",
+                **model_init_kwargs,
+            )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -1154,7 +1184,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
         self._is_vlm = text_config is not model.config
-        if self._is_vlm:
+        if self._is_vlm and not self._remote_model:
             # Train the text model only. It is located through the text config, since module names differ across
             # architectures (`model.language_model` for Qwen-VL and Gemma 3, `model.text_model` for SmolVLM).
             text_model = next(
@@ -1166,7 +1196,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature)
+        if not self._remote_model:
+            add_fused_lm_head(model, temperature=self.temperature)
 
         # Processing class
         if processing_class is None:
@@ -1249,6 +1280,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
 
+        if self._remote_model and args.gradient_checkpointing:
+            logger.info("`gradient_checkpointing` is set to `False`: the training client runs the model.")
+            args.gradient_checkpointing = False
+
         # Initialize the Trainer
         super().__init__(
             model=model,
@@ -1264,13 +1299,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
-        precision = self.accelerator.mixed_precision
-        dtype = {
-            "bf16": "bfloat16",
-            "fp16": "float16",
-            "no": str(self.model.dtype).removeprefix("torch."),
-        }.get(precision, precision)
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
+        # MFU measures the local device, which does no model compute when a training client owns the model
+        self._peak_flops_per_device = None
+        if not self._remote_model:
+            precision = self.accelerator.mixed_precision
+            dtype = {
+                "bf16": "bfloat16",
+                "fp16": "float16",
+                "no": str(self.model.dtype).removeprefix("torch."),
+            }.get(precision, precision)
+            self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
@@ -1803,7 +1841,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_peft_model(model):
             model.merge_adapter()
         try:
-            if self.accelerator.is_main_process and self.weight_transfer:
+            if self._remote_model:
+                # The training client holds the weights, so there is nothing local to stream or gather
+                if self.accelerator.is_main_process and self.weight_transfer:
+                    self.weight_transfer.send_weights(iter(()))
+            elif self.accelerator.is_main_process and self.weight_transfer:
                 self.weight_transfer.send_weights(self._streaming_iter())
             else:
                 # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
@@ -1897,6 +1939,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
             with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
+
+    def create_optimizer(self, model=None):
+        if self._remote_model and self.optimizer is None:
+            self.optimizer = _RemoteOptimizer(
+                self.model.parameters(), self.training_client, self.args.learning_rate, self._metrics["train"]
+            )
+        return super().create_optimizer(model)
+
+    def _save(self, output_dir: str | None = None, state_dict: dict | None = None) -> None:
+        if not self._remote_model:
+            return super()._save(output_dir, state_dict)
+        # The training client holds the weights; the trainer only adds what it owns
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        self.training_client.save(output_dir)
+        self.processing_class.save_pretrained(output_dir)
+        torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+
+    def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None) -> None:
+        if self._remote_model:
+            self.training_client.load(resume_from_checkpoint)
+        else:
+            super()._load_from_checkpoint(resume_from_checkpoint, model)
 
     def _inner_training_loop(self, *args, **kwargs):
         # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.

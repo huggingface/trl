@@ -47,9 +47,10 @@ The number of concurrent requests sent to the vLLM server is controlled by `max_
 ## External training compute
 
 In addition to making rollout generation and weight transfer pluggable, [`AsyncGRPOTrainer`] accepts a
-`training_client` implementing [`TrainingClientProtocol`]. The client owns the model forward and backward compute,
-while the trainer continues to own the GRPO objective, advantages, masks, and metrics. If no client is provided,
-[`LocalTrainingClient`] runs the model in the trainer process and preserves the default behavior.
+`training_client` implementing [`TrainingClientProtocol`]. The client owns the model: its weights, optimizer state, and
+checkpoints, typically on another set of GPUs or a remote service. The trainer then loads only the model's config and
+keeps the GRPO objective, advantages, masks, metrics, and the learning-rate schedule. Without a client, the trainer loads
+the model and runs it in its own process through [`LocalTrainingClient`].
 
 The trainer passes the packed token row, position IDs, completion mask, and its loss as a [`GRPOLoss`] to
 `training_client.forward_backward(...)`. The loss is both data and a function of the per-token log probs, so a backend
@@ -75,17 +76,25 @@ The training client is independent of the other two extension points:
 |---|---|
 | `rollout_worker` | Generate and score rollouts |
 | `weight_transfer` | Synchronize the trained policy with the rollout engine |
-| `training_client` | Run policy forward and backward compute |
+| `training_client` | Own the policy model: forward and backward, optimizer step, checkpoints |
 
-A backend that owns the training parameters must also provide a compatible optimizer through the existing
-`optimizers=` argument. The backend remains responsible for applying the effective learning rate, gradient clipping,
-and its optimizer state correctly.
+Every step that touches the weights goes through the client:
+
+| Trainer step | Client call |
+|---|---|
+| Forward and backward of each micro-batch | `forward_backward(...)` |
+| Optimizer step, at the scheduled learning rate | `optimizer_step(learning_rate)`, whose returned metrics (e.g. `grad_norm`) are logged |
+| `save_model` and checkpoints | `save(output_dir)` |
+| `train(resume_from_checkpoint=...)` | `load(checkpoint_dir)` |
+
+Since the trainer holds no weights to stream, a `weight_transfer` that syncs the weights from the client to the
+rollout engine is required, and its `send_weights` receives an empty iterator. PEFT is configured on the backend
+rather than through `peft_config`.
 
 > [!IMPORTANT]
-> This is an experimental Python extension point for [`AsyncGRPOTrainer`], not a standardized HTTP training API. The
-> trainer still loads and prepares its local model, and every Accelerate rank invokes its own `training_client`.
-> Backend implementations must support that rank topology or reject unsupported configurations before training.
-> Remote optimizer checkpointing and propagation of remotely skipped optimizer steps are not provided by this API.
+> This is an experimental Python extension point for [`AsyncGRPOTrainer`], not a standardized HTTP training API.
+> Every Accelerate rank calls its own `training_client`, and `save` is called on the main process only. Backend
+> implementations must support that rank topology or reject unsupported configurations before training.
 
 TRL does not bundle vendor clients or add their dependencies. For example, the
 [Arctic Platform](https://github.com/Snowflake-AI-Research/Arctic-Platform) adapter is maintained in Arctic Platform.

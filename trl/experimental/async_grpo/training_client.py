@@ -31,17 +31,20 @@ in `d(loss)/d(log_probs)`. It stays a backend concern, added to whatever the bac
 trainer only as a number to log.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 import torch
+from torch import nn
+from transformers import GenerationConfig, PretrainedConfig
 
 
 @dataclass
 class GRPOLoss:
     """The clipped GRPO objective of one micro-batch, as data and as a function of the per-token log probs.
 
-    Every tensor is in the target-token frame: shape `(batch_size, sequence_length - 1)`, one entry per predicted token,
-    matching the log probs the backend produces.
+    Every tensor is in the target-token frame: shape `(batch_size, sequence_length - 1)`, one entry per predicted
+    token, matching the log probs the backend produces.
 
     Args:
         old_log_probs (`torch.Tensor`):
@@ -88,9 +91,9 @@ class ForwardBackwardOutput:
 
     Args:
         loss (`torch.Tensor`):
-            The scalar the trainer passes to `accelerator.backward`. For an in-process backend this is still attached to
-            the model's graph. For an off-process backend it is a leaf carrying a hook, so back-propagating it triggers
-            the remote backward instead.
+            The scalar the trainer passes to `accelerator.backward`. For an in-process backend this is still attached
+            to the model's graph. For an off-process backend it is a leaf carrying a hook, so back-propagating it
+            triggers the remote backward instead.
         log_probs (`torch.Tensor`):
             Log probability of each target token, shape `(batch_size, sequence_length - 1)`. Detached, and provided for
             metrics.
@@ -109,12 +112,11 @@ class ForwardBackwardOutput:
 
 
 class LocalTrainingClient:
-    """Runs the model in the trainer's own process.
+    """Runs the trainer's own model in this process.
 
-    The default backend, and the reference implementation of
-    [`~experimental.async_grpo.async_grpo_trainer.TrainingClientProtocol`]. One forward pass, and the returned loss is
-    still attached to it, so the trainer's backward reaches the model directly. Gradients are bit-identical to computing
-    the loss inline.
+    Used when no `training_client` is passed. The trainer then owns the optimizer and the checkpoints itself, so this
+    client only implements `forward_backward`: one forward pass, with the returned loss still attached to it, so the
+    trainer's backward reaches the model directly. Gradients are bit-identical to computing the loss inline.
     """
 
     def forward_backward(
@@ -148,3 +150,39 @@ class LocalTrainingClient:
             entropy=outputs.entropy.detach(),
             aux_loss=aux_loss.detach() if aux_loss is not None else None,
         )
+
+
+class _RemoteModel(nn.Module):
+    """Stands in for a model whose weights live with a custom training client.
+
+    Carries the model's config, which the trainer still reads (MoE and VLM detection, the pad token, the served model
+    name), and a single placeholder parameter for `Trainer` and `accelerate` to place and wrap. It has no forward: the
+    training client runs the model.
+    """
+
+    def __init__(self, config: PretrainedConfig):
+        super().__init__()
+        self.config = config
+        self.generation_config = GenerationConfig.from_model_config(config)
+        self.placeholder = nn.Parameter(torch.zeros(1))
+
+    def forward(self, *args, **kwargs):
+        raise RuntimeError("The model's weights live with the training client, which runs its forward.")
+
+
+class _RemoteOptimizer(torch.optim.Optimizer):
+    """Steps the optimizer of a training client that owns the parameters.
+
+    The trainer's learning-rate scheduler writes the scheduled rate into `param_groups`, and each `step` forwards it to
+    the client, so the schedule drives the remote optimizer. The metrics the client returns (e.g. `grad_norm`) go to
+    the trainer's metric sink, since the local placeholder parameter carries no gradient to measure.
+    """
+
+    def __init__(self, params, training_client, lr: float, metrics: defaultdict):
+        super().__init__(params, {"lr": lr})
+        self.training_client = training_client
+        self.metrics = metrics
+
+    def step(self, closure=None):
+        for key, value in self.training_client.optimizer_step(learning_rate=self.param_groups[0]["lr"]).items():
+            self.metrics[key].append(value)

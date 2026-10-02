@@ -2169,3 +2169,133 @@ class TestTrainingClient(TrlTestCase):
         torch.testing.assert_close(outputs.log_probs, expected.log_probs.detach(), rtol=0, atol=0)
         torch.testing.assert_close(outputs.entropy, expected.entropy.detach(), rtol=0, atol=0)
         torch.testing.assert_close(outputs.loss.detach(), self.loss(expected.log_probs).detach(), rtol=0, atol=0)
+
+
+class _InProcessRemoteTrainingClient:
+    """Plays the remote backend in this process: it owns its own model and optimizer, never the trainer's."""
+
+    def __init__(self, model_id):
+        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32)
+        self.optimizer = torch.optim.AdamW(self.model.parameters())
+        self.learning_rates = []
+        self.grad_norms = []
+        self.saved = []
+        self.loaded = []
+
+    def _log_probs(self, input_ids, position_ids):
+        logits = self.model(input_ids=input_ids, position_ids=position_ids).logits[:, :-1]
+        return torch.gather(logits.log_softmax(-1), 2, input_ids[:, 1:, None]).squeeze(-1)
+
+    def forward_backward(self, model, input_ids, position_ids, completion_mask, loss, aux_loss_coef=0.0):
+        self.model.to(input_ids.device)
+        with torch.no_grad():
+            log_probs = self._log_probs(input_ids, position_ids)
+        leaf = log_probs.requires_grad_(True)
+        value = loss(leaf)
+        (grad_log_probs,) = torch.autograd.grad(value, leaf)
+
+        def apply_surrogate(grad_loss):
+            with torch.enable_grad():
+                surrogate = (self._log_probs(input_ids, position_ids) * grad_log_probs * grad_loss).sum()
+            surrogate.backward()
+
+        out = value.detach().requires_grad_(True)
+        out.register_hook(apply_surrogate)
+        return ForwardBackwardOutput(loss=out, log_probs=leaf.detach(), entropy=torch.zeros_like(leaf))
+
+    def optimizer_step(self, learning_rate):
+        self.learning_rates.append(learning_rate)
+        for group in self.optimizer.param_groups:
+            group["lr"] = learning_rate
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.grad_norms.append(grad_norm.item())
+        return {"grad_norm": grad_norm.item()}
+
+    def save(self, output_dir):
+        self.saved.append(output_dir)
+        self.model.save_pretrained(output_dir)
+
+    def load(self, checkpoint_dir):
+        self.loaded.append(checkpoint_dir)
+
+
+class _RecordingWeightTransfer(_StubWeightTransfer):
+    def __init__(self):
+        self.sent = []
+
+    def send_weights(self, iterator):
+        self.sent.append(list(iterator))
+
+
+class TestRemoteTrainingClient(TrlTestCase):
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+    def _trainer(self, training_client, weight_transfer, **config_kwargs):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            lr_scheduler_type="linear",
+            logging_steps=1,
+            report_to="none",
+            **config_kwargs,
+        )
+        return AsyncGRPOTrainer(
+            model=self.model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(
+                AutoTokenizer.from_pretrained(self.model_id), dataset, num_generations=3
+            ),
+            weight_transfer=weight_transfer,
+            training_client=training_client,
+        )
+
+    def test_train(self):
+        client = _InProcessRemoteTrainingClient(self.model_id)
+        weight_transfer = _RecordingWeightTransfer()
+        trainer = self._trainer(client, weight_transfer, max_steps=3, save_strategy="no")
+        # Only the config is loaded locally; the client holds the weights
+        assert not isinstance(trainer.model, PreTrainedModel)
+        assert sum(p.numel() for p in trainer.model.parameters()) == 1
+        previous_params = {n: p.clone() for n, p in client.model.named_parameters()}
+
+        trainer.train()
+
+        assert any(not torch.equal(p, previous_params[n].to(p.device)) for n, p in client.model.named_parameters())
+        # The trainer's linear schedule drives the client's optimizer
+        assert len(client.learning_rates) == 3
+        assert client.learning_rates == sorted(client.learning_rates, reverse=True)
+        assert client.learning_rates[0] > client.learning_rates[-1]
+        # `grad_norm` is the client's, not the norm of the placeholder parameter's missing gradient
+        logged = [entry["grad_norm"] for entry in trainer.state.log_history if "grad_norm" in entry]
+        assert logged == pytest.approx(client.grad_norms)
+        # Weight syncs stream nothing: the weight transfer syncs from the client
+        assert weight_transfer.sent and all(sent == [] for sent in weight_transfer.sent)
+
+        trainer.save_model(self.tmp_dir)
+        assert client.saved == [self.tmp_dir]
+        assert os.path.isfile(os.path.join(self.tmp_dir, "model.safetensors"))
+        assert os.path.isfile(os.path.join(self.tmp_dir, "tokenizer_config.json"))
+
+    def test_resume_loads_through_client(self):
+        trainer = self._trainer(
+            _InProcessRemoteTrainingClient(self.model_id), _StubWeightTransfer(), max_steps=2, save_steps=2
+        )
+        trainer.train()
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-2")
+        assert os.path.isfile(os.path.join(checkpoint, "model.safetensors"))
+
+        client = _InProcessRemoteTrainingClient(self.model_id)
+        trainer = self._trainer(client, _StubWeightTransfer(), max_steps=3, save_strategy="no")
+        trainer.train(resume_from_checkpoint=checkpoint)
+
+        assert client.loaded == [checkpoint]
+        assert trainer.state.global_step == 3
