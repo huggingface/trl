@@ -332,6 +332,7 @@ class SDPOTrainer(_BaseTrainer):
     config_cls = SDPOConfig
     _tag_names = ["trl", "sdpo"]
     _name = "SDPO"
+    loss_is_scaled_for_ga = True
     # docstyle-ignore
     _paper = {
         "title": "Reinforcement Learning via Self-Distillation",
@@ -511,7 +512,6 @@ class SDPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -564,7 +564,6 @@ class SDPOTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
         self.importance_sampling_level = args.importance_sampling_level
         self.scale_rewards = args.scale_rewards

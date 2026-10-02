@@ -554,6 +554,7 @@ class KTOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "kto"]
     _name = "KTO"
+    loss_is_scaled_for_ga = False
     _paper = {
         "title": "KTO: Model Alignment as Prospect Theoretic Optimization",
         "id": "2402.01306",
@@ -960,11 +961,6 @@ class KTOTrainer(_BaseTrainer):
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)

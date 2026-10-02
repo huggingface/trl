@@ -16,9 +16,11 @@ import os
 from pathlib import Path
 
 import torch
+import transformers
 from accelerate.utils import is_peft_model
 from datasets import Dataset
 from huggingface_hub.utils import send_telemetry
+from packaging.version import Version
 from transformers import CONFIG_MAPPING, Trainer, is_wandb_available
 
 from .. import __version__
@@ -66,9 +68,16 @@ class _BaseTrainer(Trainer):
     _name = "Base"
     _paper = {}
     _template_file = None
+    # Whether `compute_loss` already scales the loss for gradient accumulation, see `Trainer.loss_is_scaled_for_ga`
+    loss_is_scaled_for_ga = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # `Trainer.loss_is_scaled_for_ga` requires transformers 5.19; older versions only read these two attributes
+        if Version(transformers.__version__) < Version("5.19.0.dev0") and self.loss_is_scaled_for_ga is not None:
+            self.model_accepts_loss_kwargs = False
+            if self.loss_is_scaled_for_ga:
+                self.compute_loss_func = "non-None value to disable scaling"
         self._send_telemetry()
 
     def _send_telemetry(self):

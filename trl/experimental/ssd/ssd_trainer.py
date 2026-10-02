@@ -81,6 +81,7 @@ class SSDTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "ssd"]
     _name = "SSD"
+    loss_is_scaled_for_ga = True
     config_cls = SSDConfig
     # docstyle-ignore
     _paper = {
@@ -227,15 +228,12 @@ class SSDTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
         self.model.add_model_tags(self._tag_names)
-
-        self.model_accepts_loss_kwargs = False
 
         if self.use_vllm:
             from ...generation.vllm_generation import VLLMGeneration

@@ -208,6 +208,7 @@ class SDFTTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
+    loss_is_scaled_for_ga = True
     config_cls = SDFTConfig
     # docstyle-ignore
     _paper = {
@@ -383,7 +384,6 @@ class SDFTTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -436,7 +436,6 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:

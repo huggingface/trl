@@ -217,6 +217,7 @@ class RLOOTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "rloo"]
     _name = "RLOO"
+    loss_is_scaled_for_ga = False
     _paper = {
         "title": "Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
         "id": "2402.14740",
@@ -750,10 +751,6 @@ class RLOOTrainer(_BaseTrainer):
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
         self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model

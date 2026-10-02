@@ -378,6 +378,7 @@ class DistillationTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "distillation"]
     _name = "Distillation"
+    loss_is_scaled_for_ga = True
     _paper = {
         "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
         "id": "2306.13649",
@@ -705,18 +706,7 @@ class DistillationTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
-            # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
-            # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
-            # (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses that behavior
-            # without rewriting `training_step`.
-            compute_loss_func="non-None value to disable scaling",
         )
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         self._dist = DistributedBackend(self.accelerator)
 
