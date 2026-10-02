@@ -201,6 +201,7 @@ Patched Qwen3.6 template. Diff vs `qwen3_6.jinja`: same set of changes as `qwen3
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted — prefix-preservation then holds even when the caller passes `preserve_thinking=False` — and wrap assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+
 ### `smolvlm_training.jinja`
 
 Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:

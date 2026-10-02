@@ -135,6 +135,7 @@ Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, 
 ### `qwen3_8.jinja`
 
 Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
+
 ### `smolvlm.jinja`
 
 Original SmolVLM chat template. Also matches SmolVLM2, which ships a byte-identical template. Does not support tool calling.
@@ -321,6 +322,7 @@ Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<th
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss.
+
 ### `smolvlm_training.jinja`
 
 Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
