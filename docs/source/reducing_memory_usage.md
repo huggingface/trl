@@ -272,7 +272,7 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 
 ## PyTorch caching allocator
 
-PyTorch's caching allocator can fragment over long training runs — separate caches for forward activations, optimizer states, KL reference logits, and FlashAttention workspace each grow and shrink at different rates, leaving holes that cannot satisfy a new large allocation even though aggregate free memory is high. This is especially common in online RL methods (GRPO, RLOO, Online DPO) where the rollout, log-prob, and update steps allocate at different sizes within each iteration.
+Over long runs, PyTorch's caching allocator can fragment GPU memory, so a large allocation fails even though plenty of memory is free in total. Online RL methods (GRPO, RLOO, Online DPO) are the most exposed, since generation and training allocate very different sizes within each step.
 
 Setting `expandable_segments:True` lets the allocator grow existing segments instead of fragmenting into fresh fixed blocks, which can substantially reduce the gap between allocated and reserved memory on long-context training.
 
@@ -286,13 +286,7 @@ Set both names: `PYTORCH_ALLOC_CONF` is the canonical knob since PyTorch 2.10 (`
 > [!WARNING]
 > `expandable_segments:True` conflicts with the `CuMemAllocator` that vLLM uses for [vLLM sleep mode](#vllm-sleep-mode). This only applies when sleep mode is enabled (`vllm_enable_sleep_mode=True`); plain `use_vllm=True` is unaffected. vLLM detects the setting and temporarily disables expandable segments while its memory pool is active, but it reads only `PYTORCH_CUDA_ALLOC_CONF` — if you enable expandable segments only via `PYTORCH_ALLOC_CONF`, that detection is bypassed. With sleep mode enabled, prefer setting the legacy name (or both).
 
-For runs where fragmentation persists despite this knob (typically chunked-LM-head and other custom kernels that allocate transient ~GB tensors), append `garbage_collection_threshold:0.85` to trigger the allocator's defragmentation pass earlier:
-
-```bash
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.85
-```
-
-This is a defragmentation-only knob; it does not change peak memory or training dynamics. See the [PyTorch CUDA semantics docs](https://pytorch.org/docs/stable/notes/cuda.html#environment-variables) for the full list of options.
+See the [PyTorch CUDA semantics docs](https://pytorch.org/docs/stable/notes/cuda.html#environment-variables) for the full list of allocator options.
 
 ## Disabling model gathering for generation in online methods
 
