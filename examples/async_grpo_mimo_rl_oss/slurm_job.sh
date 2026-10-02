@@ -105,9 +105,10 @@ LORA_ARGS=""
 # variable is only set when there is one.
 LORA_ENV=()
 [ "$LORA_RANK" -gt 0 ] && LORA_ENV=(VLLM_ALLOW_RUNTIME_LORA_UPDATING=1)
-CUDA_VISIBLE_DEVICES=$VLLM_DEVICES \
-VLLM_SERVER_DEV_MODE=1 "${LORA_ENV[@]}" \
-    "${VLLM_LAUNCH[@]}" vllm serve "$MODEL" \
+# Through `env`, not as a bare prefix: bash resolves assignment prefixes before it expands anything, so an expanded
+# `VAR=1` is run as a command rather than exported.
+CUDA_VISIBLE_DEVICES=$VLLM_DEVICES VLLM_SERVER_DEV_MODE=1 \
+    env "${LORA_ENV[@]}" "${VLLM_LAUNCH[@]}" vllm serve "$MODEL" \
         --host 0.0.0.0 --port "$PORT" \
         --tensor-parallel-size "$VLLM_TP" \
         --data-parallel-size "$VLLM_DP" \
