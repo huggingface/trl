@@ -139,10 +139,11 @@ and the fix is small, tested, and can be cherry-picked cleanly onto the release 
 These wait for the next minor release, even when they are fixes:
 
 - new features and public API changes,
+- anything in `trl.experimental`, which makes no stability promise,
 - changes that alter the results of a run that was already correct (for example, a different initialization for the same seed),
 - everything else.
 
-Whether to cut a patch release at all, and how soon, depends on how severe the bug is: how many users hit it, whether it fails silently, whether there is a workaround, and how soon the next minor release is due. Otherwise, the labelled fixes ship with the next minor release.
+Whether a fix justifies a patch release depends on how severe the bug is: how many users hit it, whether it fails silently, whether there is a workaround, and how soon the next minor release is due. If it does, cut the patch release as soon as the fix is merged, without waiting for other fixes: patch releases are cheap, and a user hitting the bug should not have to wait for an unrelated fix to land. Otherwise, the fix ships with the next minor release.
 
 ### 1. Ensure your local repository is up to date with the upstream repository
 
