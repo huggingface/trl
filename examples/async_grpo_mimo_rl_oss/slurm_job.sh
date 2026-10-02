@@ -96,15 +96,18 @@ echo "=== $DOMAINS | $PACKING | $MODEL | vLLM $VLLM_GPUS GPU(s) on $VLLM_HOST:$P
 # --max-loras >= max_staleness + 2: the trainer keeps `max_staleness + 1` versions servable and loads the next
 # before unloading the oldest. 12 covers a staleness of up to 10.
 LORA_ARGS=""
-[ "$LORA_RANK" -gt 0 ] && LORA_ARGS="--enable-lora --max-lora-rank $LORA_RANK --max-loras 12 --max-cpu-loras 16"
+[ "$LORA_RANK" -gt 0 ] && [ "$VLLM_DP" -eq 1 ] && LORA_ARGS="--enable-lora --max-lora-rank $LORA_RANK --max-loras 12 --max-cpu-loras 16"
 
 # --logprobs-mode processed_logprobs: the PPO denominator comes from these logprobs.
 # --generation-config vllm: ignore the model card's sampling defaults, which would apply to every rollout.
 # Runtime LoRA updating is what lets the trainer push an adapter instead of the merged weights, and vLLM refuses it
 # once data parallelism gives the server more than one API process. A full fine-tune never pushes an adapter, so the
 # variable is only set when there is one.
+# Only for a single-replica adapter run: vLLM refuses the flag once data parallelism gives the server more than one
+# API process, and with several replicas the trainer merges the adapter and streams the full weights anyway -- which
+# NCCL does in about a second, so the adapter fast path is not worth arranging the server around.
 LORA_ENV=()
-[ "$LORA_RANK" -gt 0 ] && LORA_ENV=(VLLM_ALLOW_RUNTIME_LORA_UPDATING=1)
+[ "$LORA_RANK" -gt 0 ] && [ "$VLLM_DP" -eq 1 ] && LORA_ENV=(VLLM_ALLOW_RUNTIME_LORA_UPDATING=1)
 # Through `env`, not as a bare prefix: bash resolves assignment prefixes before it expands anything, so an expanded
 # `VAR=1` is run as a command rather than exported.
 CUDA_VISIBLE_DEVICES=$VLLM_DEVICES VLLM_SERVER_DEV_MODE=1 \
