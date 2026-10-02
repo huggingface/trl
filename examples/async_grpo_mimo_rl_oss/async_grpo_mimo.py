@@ -330,6 +330,7 @@ def main() -> None:
     p.add_argument("--weight-sync-steps", type=int, default=1)
     p.add_argument("--max-steps", type=int, default=100)
     p.add_argument("--save-steps", type=int, default=20)
+    p.add_argument("--save-total-limit", type=int, default=2)
     p.add_argument("--sandbox-flavor", default="cpu-basic")
     p.add_argument("--step-limit", type=int, default=500)
     p.add_argument("--agent-timeout", type=int, default=1200)
@@ -435,6 +436,9 @@ def main() -> None:
         logging_steps=1,
         save_strategy="steps",
         save_steps=args.save_steps,
+        # A full fine-tune of a 9B checkpoints params plus fp32 Adam states, about 100 GB a time. Keeping
+        # every one of them fills a shared filesystem long before the run ends.
+        save_total_limit=args.save_total_limit,
         vllm_server_base_url=args.vllm_url,
         report_to="trackio",
         project=args.project,
