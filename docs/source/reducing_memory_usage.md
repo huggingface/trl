@@ -78,11 +78,11 @@ TRL implements packing using **Best-Fit Decreasing (BFD)** bin packing, which gr
 
 TRL supports three strategies:
 
-* `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
+- `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
 
-* `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
+- `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
 
-* `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
+- `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
 
 > [!NOTE]
 > If all sequences are shorter than `max_length`, **`bfd` and `bfd_split` behave identically**, since no truncation or splitting is required.
@@ -166,15 +166,6 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 from trl import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GKD">
-
-```python
-from trl.experimental.gkd import GKDConfig
-
-training_args = GKDConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
@@ -349,5 +340,19 @@ training_args = SFTConfig(..., gradient_checkpointing=True)
 
 > [!NOTE]
 > Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+### Selective activation checkpointing
+
+With [`SFTTrainer`], you can save the attention output during the forward pass instead of recomputing it in the backward pass. This recovers most of the checkpointing slowdown at long context, for one extra hidden-state-sized tensor per layer. It forces non-reentrant checkpointing.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    ...,
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective": True},
+)
+```
 
 For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

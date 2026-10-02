@@ -32,7 +32,7 @@ from trl.experimental.iw_opd.iw_opd_trainer import (
     build_teacher_request_inputs,
 )
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+from ..testing_utils import TrlTestCase
 
 
 def _make_distillation_config_kwargs(tmp_path):
@@ -138,16 +138,6 @@ def _variable_length_dataset():
     )
 
 
-def test_distillation_config_rejects_liger_with_teacher_server(tmp_path):
-    with pytest.raises(ValueError, match="use_liger_kernel=True is not supported with use_teacher_server=True"):
-        IWOPDConfig(
-            **_make_distillation_config_kwargs(tmp_path),
-            use_teacher_server=True,
-            teacher_model_server_url="http://localhost:8000",
-            use_liger_kernel=True,
-        )
-
-
 def test_distillation_config_rejects_invalid_reverse_kl_top_1_mode(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode must be one of"):
         IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
@@ -166,17 +156,6 @@ def test_distillation_config_rejects_invalid_iw_opd_gamma(tmp_path):
 def test_distillation_config_rejects_invalid_iw_opd_epsilon(tmp_path):
     with pytest.raises(ValueError, match="iw_opd_epsilon must be positive"):
         IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_epsilon=0.0)
-
-
-def test_distillation_config_rejects_iw_opd_with_liger(tmp_path):
-    with pytest.raises(
-        ValueError, match="use_liger_kernel=True is not supported with distillation_objective='iw_opd'"
-    ):
-        IWOPDConfig(
-            **_make_distillation_config_kwargs(tmp_path),
-            distillation_objective="iw_opd",
-            use_liger_kernel=True,
-        )
 
 
 def test_distillation_config_rejects_iw_opd_when_not_fully_on_policy(tmp_path):
@@ -524,7 +503,8 @@ class TestIWOPDTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         assert trainer.state.log_history[0]["eval_loss"] is not None
-        assert train_result.metrics["train_loss"] >= 0.0
+        # Student and teacher are the same model, so the JSD is exactly zero up to float32 rounding.
+        assert train_result.metrics["train_loss"] == pytest.approx(0.0, abs=1e-6)
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
     @pytest.mark.parametrize(
@@ -605,29 +585,6 @@ class TestIWOPDTrainer(TrlTestCase):
         torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
-
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_distillation_trainer_with_liger(self):
-        import importlib
-
-        training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        trainer = IWOPDTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=training_args,
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
-
-        try:
-            assert trainer.use_liger_loss is True
-            trainer.train()
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-        finally:
-            importlib.reload(importlib.import_module(trainer.model.__module__))
 
     def test_sampled_mode_matches_between_local_and_external_teachers(self, monkeypatch):
         import trl.generation.vllm_client as vllm_client_module
@@ -823,6 +780,24 @@ class TestIWOPDTrainer(TrlTestCase):
 
         assert torch.isfinite(loss)
         assert teacher_client.calls[0]["top_logprobs"] == 1
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        model_id = "trl-internal-testing/tiny-MistralForCausalLM-0.2"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        trainer = IWOPDTrainer(
+            model=model_id,
+            teacher_model=model_id,
+            args=IWOPDConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
 
 
 class TestIWOPDTrainerServerPath(TrlTestCase):

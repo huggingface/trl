@@ -104,7 +104,7 @@ We're always looking for improvements to the documentation that make it more cle
 ## Submitting a pull request (PR)
 
 > [!IMPORTANT]
-> **First-time contributors: you MUST fill out the [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md) when opening a pull request.** PRs that do not follow the template (missing description, unchecked checklist, no linked issue) will be closed without review.
+> **First-time contributors: you MUST open an issue and get it assigned to you before opening a pull request, and you MUST fill out the [PR template](https://github.com/huggingface/trl/blob/main/.github/PULL_REQUEST_TEMPLATE.md).** Describe the change in an issue first, ask to be assigned, then reference that issue in the PR description. PRs that do not follow the template (missing description, unchecked checklist) or that link no issue assigned to their author will be closed without review.
 
 Before writing code, we strongly advise you to search through the existing PRs or issues to make sure that nobody is already working on the same thing. If you are unsure, it is always a good idea to open an issue to get some feedback.
 
@@ -192,8 +192,7 @@ Follow these steps to start contributing:
 
     Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
-    It is a good idea to sync your copy of the code with the original
-    repository regularly. This way you can quickly account for changes:
+    It is a good idea to sync your copy of the code with the original repository regularly. This way you can quickly account for changes:
 
     ```bash
     git fetch upstream
@@ -220,11 +219,9 @@ Follow these steps to start contributing:
 
 ### Tests
 
-An extensive test suite is included to test the library behavior and several examples. Library tests can be found in
-the [tests folder](https://github.com/huggingface/trl/tree/main/tests).
+An extensive test suite is included to test the library behavior and several examples. Library tests can be found in the [tests folder](https://github.com/huggingface/trl/tree/main/tests).
 
-We use `pytest` to run the tests. From the root of the
-repository here's how to run tests with `pytest` for the library:
+We use `pytest` to run the tests. From the root of the repository here's how to run tests with `pytest` for the library:
 
 ```bash
 python -m pytest -sv ./tests
@@ -232,8 +229,7 @@ python -m pytest -sv ./tests
 
 That's how `make test` is implemented (without the `pip install` line)!
 
-You can specify a smaller set of tests to test only the feature
-you're working on.
+You can specify a smaller set of tests to test only the feature you're working on.
 
 ### Default values guidelines
 
@@ -275,10 +271,10 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
             Number of times to replicate the string.
         sep (`str`, *optional*, defaults to `" "`):
             Separator to use between each replication.
-    
+
     Returns:
         `str`: The replicated string.
-    
+
     Examples:
     ```python
     >>> replicate_str("hello", 3)
@@ -317,20 +313,20 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
     def calculate_statistics(data: list[float], precision: int = 2, include_variance: bool = False) -> dict[str, float]:
         r"""
         Calculates basic statistics for a given dataset.
-    
+
         Args:
             > Data inputs
-    
+
             data (`list[float]`):
                 A list of numerical values to analyze.
-    
+
             > Configuration parameters
-    
+
             precision (`int`, *optional*, defaults to `2`):
                 Number of decimal places to round the results.
             include_variance (`bool`, *optional*, defaults to `False`):
                 Whether to include the variance of the dataset in the results.
-    
+
         Returns:
             `dict[str, float]`:
                 A dictionary containing calculated statistics such as mean, median, and optionally variance.
