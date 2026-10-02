@@ -71,7 +71,7 @@ def _send_full_tensors_lockstep(
     send_queue: queue.Queue | None = None
     send_thread: threading.Thread | None = None
     send_error: list[BaseException] = []
-    send_failed = threading.Event()
+    send_done = threading.Event()
     do_send = accelerator.is_main_process
 
     if do_send:
@@ -82,7 +82,10 @@ def _send_full_tensors_lockstep(
                 weight_transfer.send_weights(_iter_from_send_queue(send_queue))
             except BaseException as exc:  # noqa: BLE001
                 send_error.append(exc)
-                send_failed.set()
+            finally:
+                # Also set when `send_weights` returns without draining the queue (a no-op transfer, or one that syncs
+                # out of band), so rank 0 stops putting instead of blocking on a full queue.
+                send_done.set()
 
         send_thread = threading.Thread(target=_run_send, daemon=True)
         send_thread.start()
@@ -94,7 +97,7 @@ def _send_full_tensors_lockstep(
                     send_queue.put((name, full), timeout=1.0)
                     break
                 except queue.Full:
-                    if send_failed.is_set():
+                    if send_done.is_set():
                         break
         accelerator.wait_for_everyone()
 
@@ -104,7 +107,7 @@ def _send_full_tensors_lockstep(
                 send_queue.put(None, timeout=1.0)
                 break
             except queue.Full:
-                if send_failed.is_set():
+                if send_done.is_set():
                     break
     accelerator.wait_for_everyone()
 

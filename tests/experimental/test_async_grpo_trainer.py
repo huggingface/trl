@@ -2000,3 +2000,12 @@ class TestLockstepWeightSend:
         items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
         with pytest.raises(RuntimeError, match="transfer blew up"):
             _send_full_tensors_lockstep(Accelerator(), _RecordingWeightTransfer(fail=True), iter(items))
+
+    def test_returns_when_send_does_not_drain(self):
+        # A transfer that syncs out of band and never reads the iterator, like a no-op implementation
+        class _OutOfBandWeightTransfer:
+            def send_weights(self, iterator):
+                pass
+
+        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
+        _send_full_tensors_lockstep(Accelerator(), _OutOfBandWeightTransfer(), iter(items))
