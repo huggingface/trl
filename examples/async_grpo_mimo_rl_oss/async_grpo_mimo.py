@@ -282,9 +282,16 @@ def main() -> None:
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
     p.add_argument("--gradient-accumulation-steps", type=int, default=16)
     p.add_argument("--ddp-timeout", type=int, default=36000)  # seconds a rank waits in a collective
-    p.add_argument("--learning-rate", type=float, default=1e-5)
+    p.add_argument("--learning-rate", type=float, default=3e-6)  # MiMo technical report, 5.1
     p.add_argument("--lora-rank", type=int, default=0)  # 0: full fine-tuning
     p.add_argument("--optim", default="adamw_torch")
+    # MiMo's own RL settings (technical report, 5.1): no weight decay, no warmup, a gradient clip of 1.0, and
+    # betas at 0.95/0.95 for the Adam component of their Muon variant. Their learning rate is 3e-6.
+    p.add_argument("--adam-beta1", type=float, default=0.95)
+    p.add_argument("--adam-beta2", type=float, default=0.95)
+    # They clip the importance ratio with decoupled bounds initialized to [0.2, 5.0]. TRL carries one bound per
+    # side rather than four, so the high side is the part worth matching.
+    p.add_argument("--epsilon-high", type=float, default=None)
     p.add_argument("--temperature", type=float, default=1.0)
     # top_p 1.0 rather than upstream's 0.95: the PPO denominator is vLLM's processed logprobs, and nucleus sampling
     # would put mass the trainer cannot reproduce into them.
@@ -384,6 +391,9 @@ def main() -> None:
         token_budget=args.token_budget,
         learning_rate=args.learning_rate,
         optim=args.optim,
+        adam_beta1=args.adam_beta1,
+        adam_beta2=args.adam_beta2,
+        epsilon_high=args.epsilon_high,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         # A rollout here runs for minutes, so the ranks that finish their rows first sit in a collective far
