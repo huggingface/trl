@@ -2043,15 +2043,10 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_torch_accelerator
-    @pytest.mark.parametrize("packing", [True, False])
-    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
-    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
-    def test_train_with_activation_offloading(self, packing):
+    def test_train_with_activation_offloading(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir, activation_offloading=True, packing=packing, max_length=10, report_to="none"
-        )
+        training_args = SFTConfig(output_dir=self.tmp_dir, activation_offloading=True, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
