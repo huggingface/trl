@@ -1123,6 +1123,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
         if peft_config is not None:
@@ -1330,6 +1340,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
+                    eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
