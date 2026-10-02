@@ -894,6 +894,15 @@ class TestPackingAwareBatching(TrlTestCase):
             assert all(len(group) > 0 for group in groups)  # no rank forwards zero tokens
             assert sum(len(group) for group in groups) == 4  # fixed sample count per micro-batch
 
+    def test_accumulation_window_counts_completion_tokens_across_microbatches(self):
+        trainer = object.__new__(AsyncGRPOTrainer)
+        batch_a = {"global_n_tokens": torch.tensor([100.0, 100.0])}
+        batch_b = {"global_n_tokens": torch.tensor([900.0, 900.0])}
+
+        total = trainer._get_num_items_in_batch([batch_a, batch_b], torch.device("cpu"))
+
+        assert total.item() == 1000.0
+
     def test_collator_pads_unequal_rows(self):
         # The planner hands the collator a pre-partitioned micro-batch, wrapped in a length-1 list by the dataloader.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)

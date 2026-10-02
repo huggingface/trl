@@ -1455,6 +1455,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "mean_seq_len",
             ]
 
+    def _get_num_items_in_batch(self, batch_samples, device):
+        """Count completion tokens across the full gradient-accumulation window."""
+        if not batch_samples:
+            return None
+        return torch.stack(
+            [batch["global_n_tokens"].reshape(-1)[0].to(device=device, dtype=torch.float32) for batch in batch_samples]
+        ).sum()
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Padding-free: the collator already packed this rank's samples into a single row (real tokens concatenated,
         # `position_ids` resetting per sequence, advantages expanded per-token), then padded the row to the longest
@@ -1496,13 +1504,25 @@ class AsyncGRPOTrainer(_BaseTrainer):
         loss = (per_token_loss * completion_mask).sum()
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
-        tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
-        loss = loss / tokens_per_rank.to(torch.float32)
+
+        # Trainer prefetches the full gradient-accumulation window and passes the same
+        # num_items_in_batch to every micro-batch. Normalize every local loss sum by
+        # that shared window-wide token count so repacking the same tokens into uneven
+        # micro-batches cannot change their effective weights.
+        if num_items_in_batch is None:
+            # Preserve the historical scale for direct compute_loss calls that do not
+            # come through Trainer.training_step.
+            accumulation_scale = self.current_gradient_accumulation_steps if self.model.training else 1
+            normalization_tokens = global_n_tokens * accumulation_scale
+        else:
+            normalization_tokens = torch.as_tensor(num_items_in_batch, device=loss.device, dtype=torch.float32)
+        tokens_per_rank = (normalization_tokens / world_size).clamp(min=1.0)
+        loss = loss / tokens_per_rank
         # For DAPO, we would scale like this instead:
         # loss = loss / max(per_token_loss.size(0), 1)
-        loss = loss / self.current_gradient_accumulation_steps
 
-        # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        # Router auxiliary loss is a per-forward scalar, so keep averaging it over
+        # micro-batches independently of the token-normalized policy objective.
         if self.aux_loss_enabled:
             aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
