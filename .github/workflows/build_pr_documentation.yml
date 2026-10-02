@@ -19,3 +19,4 @@ jobs:
       pr_number: ${{ github.event.number }}
       package: trl
       version_tag_suffix: ""
+      python_version: "3.12"
