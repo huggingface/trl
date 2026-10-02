@@ -14,6 +14,8 @@ We encourage using AI tools to help with contributions — they can be a great w
 
 That said, **we will not review fully AI-generated PRs from first-time contributors.** Our review resources are limited, and reviewing agent-generated code is especially costly when the contributor cannot engage meaningfully in the discussion or vouch for the correctness of the changes. We want to make sure that every PR we spend time on reflects a genuine understanding of what is being proposed.
 
+This applies to issues too. A report produced by automated analysis, with no account of how a user would hit the problem, costs us more than it saves: it stays open as an apparently unclaimed task and draws near-identical pull requests from others. Tell us what you hit in real use, and say so when you did not.
+
 ## Ways to contribute
 
 There are several ways you can contribute to TRL:
@@ -48,6 +50,8 @@ Do your best to follow these guidelines when submitting a bug-related issue or a
 The TRL library is robust and reliable thanks to users who report the problems they encounter.
 
 Before you report an issue, we would really appreciate it if you could **make sure the bug was not already reported** (use the search bar on GitHub under Issues). Your issue should also be related to bugs in the library itself, and not your code.
+
+We also need to know that the bug matters in practice. Tell us how you hit it: what you were training, with which configuration, and what it cost you. A report showing only that a function can be made to fail, with no plausible path by which a user would get there, is not something we will act on, however clean the reproduction.
 
 Once you've confirmed the bug hasn't already been reported, please include the following information in your issue so we can quickly resolve it:
 
