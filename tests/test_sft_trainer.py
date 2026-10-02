@@ -34,7 +34,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
+from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -2052,6 +2052,26 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_torch_accelerator
+    def test_train_with_activation_offloading(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, activation_offloading=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_tag_added(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
@@ -2780,48 +2800,6 @@ class TestSFTTrainerSlow(TrlTestCase):
             release_memory(trainer.model, trainer)
         finally:
             cleanup_liger_patches(trainer)
-
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_torch_accelerator
-    @pytest.mark.skipif(
-        backend_device_count(torch_device) > 1,
-        reason="segfaults in accelerate's get_max_memory when more than one accelerator is visible, taking the whole "
-        "pytest process down; cause not yet diagnosed (https://github.com/huggingface/trl/issues/6836)",
-    )
-    def test_train_offloading(self, model_name, packing):
-        """Test that activation offloading works with SFTTrainer."""
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            activation_offloading=True,
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=2,
-            packing=packing,
-            max_length=self.max_length,
-        )
-        trainer = SFTTrainer(
-            model=model_name, args=training_args, train_dataset=self.train_dataset, eval_dataset=self.eval_dataset
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(trainer.model, trainer)
 
 
 _CHUNKED_CE_MODEL_IDS = [
