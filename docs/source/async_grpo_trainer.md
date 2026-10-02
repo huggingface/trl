@@ -81,11 +81,10 @@ and its optimizer state correctly.
 > Backend implementations must support that rank topology or reject unsupported configurations before training.
 > Remote optimizer checkpointing and propagation of remotely skipped optimizer steps are not provided by this API.
 
-TRL does not bundle vendor clients or add their dependencies. The first external proof-of-concept is the
-[Arctic Platform adapter](https://github.com/Snowflake-AI-Research/Arctic-Platform/pull/84), which is maintained in
-Arctic Platform and targets the API proposed in
-[TRL PR #6676](https://github.com/huggingface/trl/pull/6676). Follow the backend's documentation for installation,
-configuration, supported rank topology, and optimizer/checkpoint limitations.
+TRL does not bundle vendor clients or add their dependencies. For example, the
+[Arctic Platform](https://github.com/Snowflake-AI-Research/Arctic-Platform) adapter is maintained in Arctic Platform.
+Follow the backend's documentation for installation, configuration, supported rank topology, and optimizer/checkpoint
+limitations.
 
 ## Quick start
 

@@ -163,55 +163,17 @@ class _StubWeightTransfer:
         pass
 
 
-class TestTrainingClientIntegration:
-    def test_compute_loss_uses_shifted_mask_for_per_sequence_metrics(self):
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.num_processes = 1
-        trainer.accelerator.reduce.side_effect = lambda tensor, reduction: tensor
-        trainer.accelerator.gather.side_effect = lambda tensor: tensor
+class _FixedLogProbsTrainingClient:
+    """Training client that skips the model and returns fixed log probs, so the trainer's loss and metrics are exact."""
 
-        def forward_backward(model, input_ids, position_ids, completion_mask, loss_fn, aux_loss_coef=0.0):
-            log_probs = torch.tensor([[0.0, -1.0, 0.0, 1.0, 0.0]], requires_grad=True)
-            return ForwardBackwardOutput(
-                loss=loss_fn(log_probs),
-                log_probs=log_probs.detach(),
-                entropy=torch.zeros_like(log_probs),
-            )
+    def __init__(self, log_probs):
+        self.log_probs = log_probs
 
-        trainer.training_client = MagicMock()
-        trainer.training_client.forward_backward.side_effect = forward_backward
-        trainer.epsilon_low = 0.2
-        trainer.epsilon_high = 0.2
-        trainer.current_gradient_accumulation_steps = 1
-        trainer.aux_loss_enabled = False
-        trainer.router_aux_loss_coef = 0.0
-        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        trainer._step_forward_tokens = 0.0
-        trainer._step_trained_tokens = 0.0
-        trainer._step_seq_len_weighted = 0.0
-        trainer._step_samples = 0.0
-        trainer._step_forward_s = 0.0
-
-        inputs = {
-            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6]]),
-            "attention_mask": torch.ones(1, 6, dtype=torch.long),
-            "completion_mask": torch.tensor([[0, 0, 1, 0, 1, 1]]),
-            "old_log_probs": torch.zeros(1, 6),
-            "position_ids": torch.tensor([[0, 1, 2, 0, 1, 2]]),
-            "advantages": torch.tensor([[0.0, 0.0, -1.0, 0.0, 1.0, 1.0]]),
-            "global_n_tokens": torch.tensor([3]),
-            "global_n_forward_tokens": torch.tensor([6]),
-            "mean_seq_len": torch.tensor([3.0]),
-        }
-
-        loss = trainer.compute_loss(model=None, inputs=inputs)
-
-        assert loss.ndim == 0
-        assert trainer._metrics["train"]["clip_ratio/low_mean"] == [pytest.approx(1 / 3)]
-        assert trainer._metrics["train"]["clip_ratio/high_mean"] == [pytest.approx(1 / 3)]
-        assert trainer._metrics["train"]["clip_ratio/low_min"] == [0.0]
-        assert trainer._metrics["train"]["clip_ratio/high_max"] == [0.5]
+    def forward_backward(self, model, input_ids, position_ids, completion_mask, loss_fn, aux_loss_coef=0.0):
+        log_probs = self.log_probs.to(input_ids.device).requires_grad_(True)
+        return ForwardBackwardOutput(
+            loss=loss_fn(log_probs), log_probs=log_probs.detach(), entropy=torch.zeros_like(log_probs)
+        )
 
 
 class FakeVLLMServer:
@@ -378,6 +340,43 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             weight_transfer=_StubWeightTransfer(),
         )
+
+    def test_compute_loss_uses_training_client(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+            training_client=_FixedLogProbsTrainingClient(torch.tensor([[0.0, -1.0, 0.0, 1.0, 0.0]])),
+        )
+        # Two packed completions: tokens 0-2 and 3-5. Shifted to target tokens, the completion mask keeps one token of
+        # the first and two of the second; each completion has one clipped token.
+        inputs = {
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6]]),
+            "attention_mask": torch.ones(1, 6, dtype=torch.long),
+            "completion_mask": torch.tensor([[0, 0, 1, 0, 1, 1]]),
+            "old_log_probs": torch.zeros(1, 6),
+            "position_ids": torch.tensor([[0, 1, 2, 0, 1, 2]]),
+            "advantages": torch.tensor([[0.0, 0.0, -1.0, 0.0, 1.0, 1.0]]),
+            "global_n_tokens": torch.tensor([3]),
+            "global_n_forward_tokens": torch.tensor([6]),
+            "mean_seq_len": torch.tensor([3.0]),
+        }
+        inputs = {key: value.to(trainer.accelerator.device) for key, value in inputs.items()}
+        trainer.current_gradient_accumulation_steps = 1  # set by `Trainer`'s training loop
+
+        loss = trainer.compute_loss(trainer.model, inputs)
+
+        assert loss.ndim == 0 and loss.requires_grad
+        metrics = trainer._metrics["train"]
+        assert metrics["clip_ratio/low_mean"] == [pytest.approx(1 / 3)]
+        assert metrics["clip_ratio/high_mean"] == [pytest.approx(1 / 3)]
+        assert metrics["clip_ratio/low_min"] == [0.0]
+        assert metrics["clip_ratio/high_max"] == [0.5]
 
     def test_train(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
