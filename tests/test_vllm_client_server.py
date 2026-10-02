@@ -180,7 +180,6 @@ class TestExtractLogprobs(TrlTestCase):
         assert all_token_ids is None
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
 @pytest.mark.xdist_group("vllm_server")
@@ -425,7 +424,6 @@ class TestVLLMClientServer(TrlTestCase):
 
 
 # Same as above but using base_url to instantiate the client.
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
 @pytest.mark.xdist_group("vllm_server")
@@ -588,7 +586,6 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_3_accelerators
 @require_vllm
 @pytest.mark.xdist_group("vllm_server")
@@ -754,7 +751,6 @@ class TestVLLMClientServerTP(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
 @pytest.mark.xdist_group("vllm_server")
@@ -827,7 +823,6 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_vllm
 @require_vision
 @pytest.mark.xdist_group("vllm_server")
