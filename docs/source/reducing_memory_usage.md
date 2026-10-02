@@ -265,21 +265,15 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 
 ## PyTorch caching allocator
 
-Over long runs, PyTorch's caching allocator can fragment GPU memory, so a large allocation fails even though plenty of memory is free in total. Online RL methods (GRPO, RLOO, Online DPO) are the most exposed, since generation and training allocate very different sizes within each step.
-
-Setting `expandable_segments:True` lets the allocator grow existing segments instead of fragmenting into fresh fixed blocks, which can substantially reduce the gap between allocated and reserved memory on long-context training.
+On long runs, especially online RL (GRPO, RLOO, Online DPO), GPU memory can fragment. Setting [`expandable_segments:True`](https://docs.pytorch.org/docs/stable/notes/cuda.html) lets PyTorch's caching allocator grow existing segments instead, which reduces the gap between allocated and reserved memory:
 
 ```bash
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export PYTORCH_ALLOC_CONF=expandable_segments:True   # canonical name in PyTorch >= 2.10
+export PYTORCH_ALLOC_CONF=expandable_segments:True  # canonical name since PyTorch 2.10
 ```
 
-Set both names: `PYTORCH_ALLOC_CONF` is the canonical knob since PyTorch 2.10 (`PYTORCH_CUDA_ALLOC_CONF` is kept as a backward-compatibility alias); PyTorch 2.9 and older only read `PYTORCH_CUDA_ALLOC_CONF`. Note that vLLM (and possibly other libraries) inspect only `PYTORCH_CUDA_ALLOC_CONF`, so setting only the new name can silently bypass their allocator-config handling.
-
 > [!WARNING]
-> `expandable_segments:True` conflicts with the `CuMemAllocator` that vLLM uses for [vLLM sleep mode](#vllm-sleep-mode). This only applies when sleep mode is enabled (`vllm_enable_sleep_mode=True`); plain `use_vllm=True` is unaffected. vLLM detects the setting and temporarily disables expandable segments while its memory pool is active, but it reads only `PYTORCH_CUDA_ALLOC_CONF` — if you enable expandable segments only via `PYTORCH_ALLOC_CONF`, that detection is bypassed. With sleep mode enabled, prefer setting the legacy name (or both).
-
-See the [PyTorch CUDA semantics docs](https://pytorch.org/docs/stable/notes/cuda.html#environment-variables) for the full list of allocator options.
+> With vLLM sleep mode (`vllm_enable_sleep_mode=True`), vLLM only reads `PYTORCH_CUDA_ALLOC_CONF` to work around this setting, so don't set only `PYTORCH_ALLOC_CONF`.
 
 ## Disabling model gathering for generation in online methods
 
