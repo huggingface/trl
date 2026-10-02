@@ -28,6 +28,8 @@ TRAIN_GPUS=${TRAIN_GPUS:-2}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-40960}
 LORA_RANK=${LORA_RANK:-0}
 TRAIN_ARGS=${TRAIN_ARGS:-}
+# A full fine-tune reshards after the forward pass; an adapter run keeps the gathered parameters resident.
+FSDP_CONFIG=${FSDP_CONFIG:-$([ "$LORA_RANK" -gt 0 ] && echo fsdp2.yaml || echo fsdp2_fullft.yaml)}
 
 # `venv-load` prestages the venv onto the node's NVMe; on a partition without one it passes the path through. The
 # hub cache stays on /fsx: it holds a handful of large weight files, not the thousands of small ones that make an
@@ -84,7 +86,7 @@ curl -sf "http://localhost:$PORT/health" > /dev/null || { echo "!!! vLLM never c
 echo "=== vLLM ready"
 
 CUDA_VISIBLE_DEVICES=$(seq -s, "$VLLM_GPUS" $((VLLM_GPUS + TRAIN_GPUS - 1))) \
-    accelerate launch --config_file "$EXAMPLE_DIR/fsdp2.yaml" --num_processes "$TRAIN_GPUS" \
+    accelerate launch --config_file "$EXAMPLE_DIR/$FSDP_CONFIG" --num_processes "$TRAIN_GPUS" \
         --main_process_port "$RDZV_PORT" \
         "$EXAMPLE_DIR/async_grpo_mimo.py" \
         --model "$MODEL" \

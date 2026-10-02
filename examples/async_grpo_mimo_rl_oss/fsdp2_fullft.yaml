@@ -1,0 +1,24 @@
+# FSDP2 for a full fine-tune. Same as `fsdp2.yaml` except that it reshards after the forward pass: keeping the
+# gathered parameters resident is worth it for an adapter, whose own states are tiny, but a full fine-tune of a 9B
+# already spends ~21 GB a rank on sharded parameters, gradients and Adam states, and the extra 18 GB of unsharded
+# parameters is what takes it past 80 GB.
+#
+# `SHARDED_STATE_DICT`, not `FULL_STATE_DICT`: with FSDP2 + PEFT the full-state-dict path checkpoints only rank 0's
+# shard of each adapter tensor, so a resume silently reverts every other rank's half
+# (https://github.com/huggingface/accelerate/pull/4206). The sharded path handles DTensor natively.
+compute_environment: LOCAL_MACHINE
+distributed_type: FSDP
+fsdp_config:
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_reshard_after_forward: true
+  fsdp_state_dict_type: SHARDED_STATE_DICT
+  fsdp_version: 2
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+rdzv_backend: static
+same_network: true
+use_cpu: false
