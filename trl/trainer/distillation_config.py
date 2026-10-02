@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,13 +41,21 @@ class DistillationConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
             for both the student and teacher.
-        teacher_model_name_or_path (`str`, *optional*):
-            Model name or path for the teacher model. Used when the teacher is loaded locally.
+        teacher_model_name_or_path (`str` or `dict[str, str]`, *optional*):
+            Model name or path for the teacher model. Used when the teacher is loaded locally. A mapping from routing
+            ID to model name or path instead selects multi-teacher distillation, where each dataset row's `teacher_id`
+            column names the teacher that scores it. On the command line, the mapping is given as a JSON object, e.g.
+            `--teacher_model_name_or_path '{"math": "org/math-expert", "code": "org/code-expert"}'`.
         teacher_model_revision (`str`, *optional*):
             Model revision of the teacher model (e.g., branch name, tag, or commit hash).
         teacher_model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments passed to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
+        teacher_model_init_kwargs_by_teacher (`str` or `dict[str, dict[str, Any]]`, *optional*):
+            Per-teacher loading overrides for multi-teacher distillation, keyed by the routing ID used in the trainer's
+            `teacher_model` mapping. Each entry is merged over `teacher_model_init_kwargs`, so it can give one teacher
+            its own `revision` or `dtype` while the rest share the common kwargs. Only valid together with a mapping of
+            teachers.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the student model during training.
 
@@ -163,6 +172,7 @@ class DistillationConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "teacher_model_init_kwargs",
+        "teacher_model_init_kwargs_by_teacher",
         "generation_kwargs",
         "chat_template_kwargs",
     ]
@@ -190,9 +200,12 @@ class DistillationConfig(_BaseConfig):
             "student and teacher."
         },
     )
-    teacher_model_name_or_path: str | None = field(
+    teacher_model_name_or_path: dict[str, str] | str | None = field(
         default=None,
-        metadata={"help": "Model name or path for the teacher model."},
+        metadata={
+            "help": "Model name or path for the teacher model, or a JSON object mapping a routing ID to a model "
+            "name or path for multi-teacher distillation."
+        },
     )
     teacher_model_revision: str | None = field(
         default=None,
@@ -202,6 +215,13 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained` when instantiating the teacher."
+        },
+    )
+    teacher_model_init_kwargs_by_teacher: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Per-teacher loading overrides for multi-teacher distillation, keyed by routing ID. Each entry "
+            "is merged over `teacher_model_init_kwargs`."
         },
     )
     disable_dropout: bool = field(
@@ -391,6 +411,12 @@ class DistillationConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Not a `_VALID_DICT_FIELDS` entry: that machinery JSON-parses every string it is given, while a plain model
+        # id is a perfectly valid value here. Only the object form, which argparse can only pass as a string, is
+        # parsed.
+        if isinstance(self.teacher_model_name_or_path, str) and self.teacher_model_name_or_path.startswith("{"):
+            self.teacher_model_name_or_path = json.loads(self.teacher_model_name_or_path)
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")
