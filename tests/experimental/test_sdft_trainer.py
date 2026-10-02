@@ -14,13 +14,13 @@
 
 import pytest
 import torch
-from datasets import Dataset
+from datasets import Dataset, DatasetDict
 from transformers import TrainerCallback
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
@@ -72,6 +72,29 @@ class TestSDFTTrainer(TrlTestCase):
             for name, previous_param in previous_trainable_params.items()
         )
 
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDFTTrainer(
+                model=model_id,
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDFTTrainer(
+            model=model_id,
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_train(self):
         dataset = Dataset.from_dict(
             {
@@ -105,61 +128,41 @@ class TestSDFTTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
 
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_liger_loss_matches_non_liger_loss(self):
-        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["Example answer: 4."]})
-        common = dict(
-            output_dir=self.tmp_dir,
-            report_to="none",
-            per_device_train_batch_size=1,
-            max_completion_length=3,
-            num_generations=1,
-            distillation_mode="full_logits",
-            distillation_is_clip=None,
-            num_loss_tokens_to_skip=1,
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in SDFT
+        train_dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
         )
+        eval_split = Dataset.from_dict({"prompt": ["Solve 3+3."], "privileged_context": ["Example answer: 6."]})
 
-        ref_trainer = SDFTTrainer(
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = eval_split
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": eval_split, "data2": eval_split})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = SDFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=SDFTConfig(use_liger_kernel=False, **common),
-            train_dataset=dataset,
-        )
-        liger_trainer = SDFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=SDFTConfig(use_liger_kernel=True, **common),
-            train_dataset=dataset,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
         )
 
-        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for param in ref_trainer.teacher_model.parameters():
-                param.add_(0.5 * torch.randn_like(param))
-        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
-
-        device = next(ref_trainer.model.parameters()).device
-        batch = {
-            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
-            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
-            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
-            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
-            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
-            "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
-        }
-
-        ref_trainer.model.eval()
-        liger_trainer.model.eval()
-        with torch.no_grad():
-            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
-            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
-
-        torch.testing.assert_close(
-            torch.tensor(liger_loss),
-            torch.tensor(ref_loss),
-            rtol=2e-2,
-            atol=1e-6,
-        )
+        # SDFT tokenizes prompts/completions on the fly during generation, so eval datasets are stored as-is.
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     def test_train_rejects_none_privileged_context(self):
         dataset = Dataset.from_dict(
@@ -266,6 +269,30 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = SDFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=SDFTConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @require_peft
     def test_train_with_peft_model(self):
@@ -499,3 +526,23 @@ class TestSDFTTrainer(TrlTestCase):
         loss.backward()
         assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
         assert trainer.teacher_client.calls[0]["top_logprobs"] == 2
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+
+        training_args = SDFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2", args=training_args, train_dataset=dataset
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id

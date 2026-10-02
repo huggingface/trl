@@ -19,19 +19,19 @@ three properties off of it — ``.train_dataset``, ``.environment_factory``, ``.
 directly into the matching ``GRPOTrainer`` kwarg:
 
 ```python
-from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.openreward import OpenRewardSpec
+>>> from trl import GRPOConfig, GRPOTrainer
+>>> from trl.experimental.openreward import OpenRewardSpec
 
-spec = OpenRewardSpec("Eigent/SETA", num_tasks=64)
+>>> spec = OpenRewardSpec("Eigent/SETA", num_tasks=64)
 
-trainer = GRPOTrainer(
-    model="Qwen/Qwen3-4B",
-    args=GRPOConfig(num_generations=2, max_steps=5, max_tool_calling_iterations=20),
-    train_dataset=spec.train_dataset,
-    environment_factory=spec.environment_factory,
-    reward_funcs=spec.reward_funcs,
-)
-trainer.train()
+>>> trainer = GRPOTrainer(
+...     model="Qwen/Qwen3-4B",
+...     args=GRPOConfig(num_generations=2, max_steps=5, max_tool_calling_iterations=20),
+...     train_dataset=spec.train_dataset,
+...     environment_factory=spec.environment_factory,
+...     reward_funcs=spec.reward_funcs,
+... )
+>>> trainer.train()
 ```
 
 Backed by the official ``openreward`` SDK (lazy-imported); install with ``pip install trl[openreward]``.

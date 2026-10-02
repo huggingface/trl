@@ -18,6 +18,7 @@ from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
+from trl.models import activation_offloading as activation_offloading_module
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
 
 from .testing_utils import TrlTestCase, require_peft, require_torch_accelerator
@@ -63,7 +64,9 @@ class TestActivationOffloading(TrlTestCase):
 
         # Second forward-backward pass with offloading
         torch.manual_seed(42)
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             loss_c = model(inp, labels=inp).loss
         loss_c.backward()
 
@@ -83,7 +86,9 @@ class TestActivationOffloading(TrlTestCase):
         inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
         # Run with offloading but disable for specific section
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             # First forward-backward with normal offloading
             torch.manual_seed(42)
             out1 = model(inp, labels=inp)
@@ -143,7 +148,9 @@ class TestActivationOffloading(TrlTestCase):
             p.grad = None
 
         # With offloading
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             torch.manual_seed(42)
             out2 = model(inp, labels=inp).loss
             out2.backward()
@@ -197,6 +204,53 @@ class TestActivationOffloading(TrlTestCase):
         loss.backward()
 
     @require_torch_accelerator
+    def test_reused_storage_key_after_stash_reap_is_not_deduplicated(self):
+        """A reused allocator address should not be treated as a live view."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        first = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        filler = torch.randn(4, 4, device=torch_device, requires_grad=True)
+        reused = torch.randn(4, 4, device=torch_device, requires_grad=True)
+
+        def fake_storage_key(tensor):
+            if id(tensor) in {id(first), id(reused)}:
+                return ("reused-storage-key", tensor.dtype)
+            return (id(tensor), tensor.dtype)
+
+        offload_ctx = OffloadActivations(
+            use_pin_memory=False,
+            use_streams=True,
+            min_offload_size=1,
+            max_fwd_stash_size=1,
+        )
+
+        original_get_unique_tensor_key = activation_offloading_module._get_unique_tensor_key
+        activation_offloading_module._get_unique_tensor_key = fake_storage_key
+        try:
+            with offload_ctx:
+                loss = SaveTensor.apply(first) + SaveTensor.apply(filler) + SaveTensor.apply(reused)
+        finally:
+            activation_offloading_module._get_unique_tensor_key = original_get_unique_tensor_key
+
+        offloaded_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if modified)
+        deduplicated_count = sum(1 for _, modified, _, _, _ in offload_ctx.tracker.values() if not modified)
+
+        assert offloaded_count == 3
+        assert deduplicated_count == 0
+
+        loss.backward()
+
+    @require_torch_accelerator
     def test_stale_tracker_state_is_cleared_between_forwards(self):
         """Test that tensors from unused graph branches don't accumulate across steps."""
 
@@ -235,3 +289,32 @@ class TestActivationOffloading(TrlTestCase):
 
         param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
         assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"
+
+    @require_torch_accelerator
+    def test_tensor_deduplication_only_happens_in_streams_mode(self):
+        """Two saved views of the same storage are deduplicated (one re-offload skipped) only when use_streams=True."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        def offload_two_views(use_streams: bool) -> list[bool]:
+            base = torch.randn(64, 64, device=torch_device, requires_grad=True)
+            view1 = base.view(-1)
+            view2 = base.transpose(0, 1)
+            offload_ctx = OffloadActivations(use_streams=use_streams, min_offload_size=1)
+            with offload_ctx:
+                loss = SaveTensor.apply(view1) + SaveTensor.apply(view2)
+            modified_flags = [modified for _, modified, _, _, _ in offload_ctx.tracker.values()]
+            loss.backward()
+            return modified_flags
+
+        assert offload_two_views(use_streams=False) == [True, True]
+        assert offload_two_views(use_streams=True) == [True, False]

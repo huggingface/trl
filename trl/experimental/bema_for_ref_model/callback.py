@@ -95,7 +95,9 @@ class BEMACallback(_BEMACallback):
         ema_power (`float`, *optional*, defaults to `0.5`):
             Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper. To disable EMA, set this to `0.0`.
         bias_power (`float`, *optional*, defaults to `0.2`):
-            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
+            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. A large value (e.g.
+            `8.0`) makes  \\( \alpha_t \\) decay to `0`, approximating disabled bias-correction; `0.0`
+            instead pins  \\( \alpha_t \\) at `1` for every step (maximum, undecayed correction).
         lag (`int`, *optional*, defaults to `10`):
             Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
             starting age for the updates. Denoted as  \\( \rho \\) in the paper.
@@ -119,9 +121,9 @@ class BEMACallback(_BEMACallback):
     Example:
 
     ```python
-    from trl import BEMACallback
+    >>> from trl import BEMACallback
 
-    trainer = Trainer(..., callbacks=[BEMACallback()])
+    >>> trainer = Trainer(..., callbacks=[BEMACallback()])
     ```
     """
 

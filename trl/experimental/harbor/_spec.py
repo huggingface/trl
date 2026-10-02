@@ -18,19 +18,19 @@ Construct **one** ``HarborSpec`` and read three properties off it — ``.train_d
 ``.reward_funcs`` — each plugging into the matching ``GRPOTrainer`` kwarg:
 
 ```python
-from trl import GRPOConfig, GRPOTrainer
-from trl.experimental.harbor import HarborSpec
+>>> from trl import GRPOConfig, GRPOTrainer
+>>> from trl.experimental.harbor import HarborSpec
 
-spec = HarborSpec("AdithyaSK/data_agent_rl_environment_train", agent="bash", num_tasks=64)
+>>> spec = HarborSpec("AdithyaSK/data_agent_rl_environment_train", agent="bash", num_tasks=64)
 
-trainer = GRPOTrainer(
-    model="Qwen/Qwen3.5-4B",
-    args=GRPOConfig(num_generations=8, max_steps=50, max_tool_calling_iterations=25),
-    train_dataset=spec.train_dataset,
-    environment_factory=spec.environment_factory,
-    reward_funcs=spec.reward_funcs,
-)
-trainer.train()
+>>> trainer = GRPOTrainer(
+...     model="Qwen/Qwen3.5-4B",
+...     args=GRPOConfig(num_generations=8, max_steps=50, max_tool_calling_iterations=25),
+...     train_dataset=spec.train_dataset,
+...     environment_factory=spec.environment_factory,
+...     reward_funcs=spec.reward_funcs,
+... )
+>>> trainer.train()
 ```
 
 A Harbor *task* is a directory (``instruction.md`` + ``task.toml`` + ``environment/`` + ``tests/``); the dataset is a

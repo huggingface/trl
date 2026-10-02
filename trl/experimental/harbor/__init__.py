@@ -19,9 +19,9 @@ Train on Harbor agentic task suites with `GRPOTrainer` via `environment_factory`
 imported lazily so this module imports without it.
 
 ```python
-from trl.experimental.harbor import HarborSpec
+>>> from trl.experimental.harbor import HarborSpec
 
-spec = HarborSpec("AdithyaSK/data_agent_rl_environment_train", agent="bash", num_tasks=64)
+>>> spec = HarborSpec("AdithyaSK/data_agent_rl_environment_train", agent="bash", num_tasks=64)
 ```
 """
 

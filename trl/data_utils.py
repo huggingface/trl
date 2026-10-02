@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from itertools import takewhile
@@ -124,39 +123,6 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
     return new_messages
 
 
-def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # docstyle-ignore  # because <Image> is not parsable in the code block
-    """
-    Convert structured multimodal messages into a format compatible with vLLM. Replaces `"type": "image"` blocks with
-    `"type": "image_pil"` blocks, and `"image": Image` with `"image_pil": Image`.
-
-    Args:
-        messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content is expected to be a list of structured blocks.
-
-    Returns:
-        `list[dict[str, Any]]`:
-            A deep-copied list of messages compatible with vLLM's expected input format.
-
-    Example:
-    ```python
-    # Input
-    [{"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
-
-    # Output
-    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
-    ```
-    """
-    messages = copy.deepcopy(messages)  # avoid modifying the original messages
-    for message in messages:
-        if isinstance(message["content"], list):
-            for part in message["content"]:
-                if part["type"] == "image":
-                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
-                    part["image_pil"] = part.pop("image")
-    return messages
-
-
 def is_conversational(example: dict[str, Any]) -> bool:
     r"""
     Check if the example is in a conversational format.
@@ -191,7 +157,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
         # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
-            # Each message must a list of dictionaries with keys "role" and "content"
+            # Each message must be a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:
                 return True
 
@@ -268,8 +234,6 @@ def apply_chat_template(
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
             # common prefix between the two. In most cases, this is a no-op.
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen, strict=False)))
-
-            chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = processing_class.apply_chat_template(
                 example["prompt"] + example["rejected"],
@@ -282,7 +246,6 @@ def apply_chat_template(
             prompt = "".join(
                 x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected, strict=False))
             )
-            rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = processing_class.apply_chat_template(
                 example["prompt"] + example["completion"],
@@ -295,6 +258,11 @@ def apply_chat_template(
             prompt = "".join(
                 x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion, strict=False))
             )
+        if "chosen" in example:
+            chosen = prompt_chosen[len(prompt) :]
+        if "rejected" in example:
+            rejected = prompt_rejected[len(prompt) :]
+        if "completion" in example:
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
@@ -396,6 +364,45 @@ def maybe_apply_chat_template(
         return example
 
 
+def _tokenize(
+    processing_class: PreTrainedTokenizerBase | ProcessorMixin,
+    input: str | list,
+    **apply_chat_template_kwargs,
+) -> dict[str, list]:
+    """
+    Tokenize a single example for dataset preprocessing.
+
+    Dispatches to `apply_chat_template` for conversational input (list of message dicts) and to `__call__` for
+    non-conversational input (str). For VLMs, normalizes the batch dimension that processors emit even for single
+    examples.
+
+    Args:
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`]):
+            The tokenizer or processor to use.
+        input (`str` or `list`):
+            A string for non-conversational input, or a list of message dicts for conversational input.
+        **apply_chat_template_kwargs:
+            Forwarded to `apply_chat_template` (e.g. `chat_template`, `tools`, `add_generation_prompt`,
+            `return_assistant_tokens_mask`,...).
+
+    Returns:
+        `dict` with at least an `"input_ids"` key mapping to a flat `list[int]`.
+    """
+    is_vlm = isinstance(processing_class, ProcessorMixin)
+    if isinstance(input, list):  # conversational: list of message dicts
+        if is_vlm:
+            input = prepare_multimodal_messages(input)
+        result = processing_class.apply_chat_template(
+            input, tokenize=True, return_dict=True, **apply_chat_template_kwargs
+        )
+    else:  # non-conversational: plain text string
+        result = processing_class(text=input)
+    # VLMs emit a batch dimension even for single examples; unwrap it
+    if is_vlm:
+        return {k: v[0] for k, v in result.items()}
+    return result
+
+
 def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     batch_size = len(batch["chosen"])
     new_batch = {
@@ -404,17 +411,20 @@ def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     }
     if "prompt" in batch:
         new_batch["prompt"] = batch["prompt"] + batch["prompt"]
+    for k in batch:
+        if k not in ("chosen", "rejected", "prompt"):
+            new_batch[k] = batch[k] + batch[k]
     return new_batch
 
 
 def unpair_preference_dataset(
     dataset: DatasetType | IterableDatasetType, **map_kwargs
 ) -> DatasetType | IterableDatasetType:
-    # docstyle-ignore
     """
     Unpair a preference dataset.
 
-    The output contains only `"prompt"`, `"completion"`, and `"label"`; all other columns are dropped.
+    The output contains `"prompt"`, `"completion"`, and `"label"` plus any extra columns, which are duplicated for each
+    chosen and rejected row.
 
     Args:
         dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]):
@@ -424,7 +434,8 @@ def unpair_preference_dataset(
             Additional keyword arguments to pass to the dataset's map method when unpairing preferences.
 
     Returns:
-        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or [`~datasets.IterableDatasetDict`]:
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`] or [`~datasets.IterableDataset`] or
+        [`~datasets.IterableDatasetDict`]:
             The unpaired preference dataset.
 
     Example:
@@ -785,14 +796,15 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using a wrapped strategy."""
     columns = [column.chunks[0] for column in examples.combine_chunks().columns]
     _check_if_columns_can_be_packed(columns)
-    offsets, values = columns[0].offsets, columns[0].values
-    values = values[offsets[0].as_py() : offsets[-1].as_py()]
-    num_elements = len(values)
+    # Use `flatten()` and not `values`, which returns the whole child buffer and ignores the array's own offset. That
+    # offset is non-zero whenever the table is a slice, as it is for every batch but the first in a batched `map`.
+    values = [column.flatten() for column in columns]
+    num_elements = len(values[0])
     offsets = np.arange(0, num_elements, seq_length, dtype=columns[0].offsets.type.to_pandas_dtype())
     offsets = np.concatenate((offsets, [num_elements]))
     columns = [
-        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
-        for column in columns
+        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column_values)
+        for column, column_values in zip(columns, values, strict=True)
     ]
     return pa.Table.from_arrays(columns, names=examples.column_names)
 
@@ -878,7 +890,7 @@ def pack_dataset(
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: '{strategy}', must be one of {valid_strategies}.")
+        raise ValueError(f"Invalid packing strategy '{strategy}', must be one of {valid_strategies}.")
 
     if strategy in {"bfd", "bfd_split"} and "columns" in format:
         format["columns"] = format["columns"] + ["seq_lengths"]
@@ -920,7 +932,7 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     # It must be a list of messages
     if isinstance(maybe_messages, list):
         maybe_message = maybe_messages[0]
-        # Each message must a list of dictionaries with keys "from" and "value"
+        # Each message must be a list of dictionaries with keys "from" and "value"
         if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
             return True
 
@@ -975,3 +987,7 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
         example["messages"] = example.pop("conversations")
 
     return example
+
+
+def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names

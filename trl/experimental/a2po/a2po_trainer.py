@@ -31,9 +31,10 @@ from transformers import (
 )
 
 from ...data_utils import maybe_apply_chat_template
-from ...models import create_reference_model, unwrap_model_for_generation
+from ...models import unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import selective_log_softmax
+from ..utils import create_reference_model
 from .a2po_config import A2POConfig
 
 
@@ -45,7 +46,6 @@ RewardFunc = Callable[..., list[float]]
 
 
 class A2POTrainer(_BaseTrainer):
-    # docstyle-ignore
     """
     Trainer for the A*-PO (Optimal Advantage Regression) method, introduced in [Accelerating RL for LLM Reasoning with
     Optimal Advantage Regression](https://huggingface.co/papers/2505.20686).
@@ -53,8 +53,8 @@ class A2POTrainer(_BaseTrainer):
     A*-PO runs in two stages:
 
     1. **Offline value estimation.** Before training, `num_value_samples` completions are sampled from the reference
-       policy for every training prompt and scored with `reward_funcs`. The optimal value is estimated as
-       `V*(x) = beta1 * log(mean_i exp(r(x, y_i) / beta1))` and cached per prompt.
+       policy for every training prompt and scored with `reward_funcs`. The optimal value is estimated as `V*(x) =
+       beta1 * log(mean_i exp(r(x, y_i) / beta1))` and cached per prompt.
     2. **On-policy regression.** During training, a single completion is generated per prompt from the current policy.
        The loss is the squared error between the implicit reward `beta2 * log(pi(y|x) / pi_ref(y|x))` and the optimal
        advantage estimate `r(x, y) - V*(x)`.
@@ -67,7 +67,7 @@ class A2POTrainer(_BaseTrainer):
             Reward function(s). Each takes `prompts` and `completions` (plus dataset columns as keyword arguments) and
             returns a list of float rewards. When multiple are provided, their weighted sum (see
             [`A2POConfig.reward_weights`]) is the scalar reward `r`, which A*-PO assumes to be binary (in `{0, 1}`).
-        args ([`A2POConfig`], *optional*):
+        args ([`experimental.a2po.A2POConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`], *optional*):
             Training dataset. Must contain a `"prompt"` column.
@@ -113,8 +113,12 @@ class A2POTrainer(_BaseTrainer):
             args = A2POConfig(f"{model if isinstance(model, str) else model.config._name_or_path}-A2PO")
 
         # Models
+        model_revision = None
         if isinstance(model, str):
-            model = AutoModelForCausalLM.from_pretrained(model, **(args.model_init_kwargs or {}))
+            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         model_id = model.config._name_or_path
 
         # Some models (e.g. SmolVLM/Idefics3) don't support the `logits_to_keep` argument and error out if we pass it.
@@ -126,7 +130,9 @@ class A2POTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+            processing_class = AutoTokenizer.from_pretrained(
+                model_id, revision=model_revision, padding_side="left", trust_remote_code=args.trust_remote_code
+            )
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -265,8 +271,9 @@ class A2POTrainer(_BaseTrainer):
         # so evaluation can still look up their V*.
         if self.args.filter_all_incorrect:
             self.train_dataset = self.train_dataset.filter(
-                lambda example: maybe_apply_chat_template(example, self.processing_class)["prompt"]
-                not in all_incorrect
+                lambda example: (
+                    maybe_apply_chat_template(example, self.processing_class)["prompt"] not in all_incorrect
+                )
             )
         logger.info(f"Stage 1 complete: estimated V* for {len(self._optimal_values)} prompts.")
 

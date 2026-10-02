@@ -13,16 +13,17 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn.functional as F
-from datasets import Dataset, load_dataset
+from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_torch_accelerator
 
 
 class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
@@ -59,9 +60,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             temperature=0.0,
         )
 
-        outputs = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
-        )
+        outputs = GKDTrainer.generate_on_policy_outputs(self.model, inputs, deterministic_generation_config)
 
         new_input_ids, new_attention_mask, new_labels = outputs
 
@@ -75,9 +74,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             )
 
         # Run the generation twice and check if the outputs are identical
-        outputs2 = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, deterministic_generation_config, self.tokenizer.pad_token_id
-        )
+        outputs2 = GKDTrainer.generate_on_policy_outputs(self.model, inputs, deterministic_generation_config)
 
         new_input_ids2, new_attention_mask2, new_labels2 = outputs2
 
@@ -94,12 +91,10 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
 
         inputs = {
             "prompts": tokenized_prompts["input_ids"].to(self.device),
-            "attention_mask": tokenized_prompts["attention_mask"].to(self.device),
+            "prompt_attention_mask": tokenized_prompts["attention_mask"].to(self.device),
         }
 
-        outputs = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, self.generation_config, self.tokenizer.pad_token_id
-        )
+        outputs = GKDTrainer.generate_on_policy_outputs(self.model, inputs, self.generation_config)
 
         # Check that outputs is a tuple of three tensors
         assert isinstance(outputs, tuple)
@@ -148,14 +143,101 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
             do_sample=False,
         )
 
-        _, _, new_labels = GKDTrainer.generate_on_policy_outputs(
-            self.model, inputs, generation_config, self.tokenizer.pad_token_id
-        )
+        _, _, new_labels = GKDTrainer.generate_on_policy_outputs(self.model, inputs, generation_config)
 
         # Every prompt position (the first `prompt_width` columns) must be masked.
         assert (new_labels[:, :prompt_width] == -100).all(), "Prompt positions are not fully masked"
         # The completion region must still carry signal (not entirely masked away).
         assert (new_labels[:, prompt_width:] != -100).any(), "Completion tokens were unexpectedly all masked"
+
+    def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(self):
+        # pad == eos here (the setup ties them): identity-based pad masking used to erase the
+        # terminating EOS label on every row and zero attention on pad-id tokens inside the prompt.
+        eos_id = self.tokenizer.eos_token_id
+        pad_id = self.tokenizer.pad_token_id
+        assert pad_id == eos_id
+
+        # Row 0 stops on EOS and is right-padded; row 1 runs to max_new_tokens (no padding).
+        prompts = torch.tensor([[pad_id, 11, eos_id, 13], [pad_id, 11, eos_id, 13]], device=self.device)
+        prompt_mask = torch.tensor([[0, 1, 1, 1], [0, 1, 1, 1]], device=self.device)
+        completions = torch.tensor([[21, 22, eos_id, pad_id, pad_id], [21, 22, 23, 24, 25]], device=self.device)
+        generated_sequence = torch.cat([prompts, completions], dim=1)
+
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                return SimpleNamespace(sequences=generated_sequence)
+
+        inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, self.generation_config
+        )
+
+        prompt_width = prompts.shape[1]
+        eos_pos = prompt_width + 2
+        # Pad-id tokens inside the prompt keep attention, only real prompt padding is masked
+        assert torch.equal(new_attention_mask[:, :prompt_width], prompt_mask)
+        # The terminating EOS stays attended and supervised, only the padding after it is masked
+        assert new_attention_mask[0, eos_pos] == 1
+        assert new_labels[0, eos_pos] == eos_id
+        assert torch.all(new_attention_mask[0, eos_pos + 1 :] == 0)
+        assert torch.all(new_labels[0, eos_pos + 1 :] == -100)
+        # A row that hits max_new_tokens has no padding and stays fully supervised
+        assert torch.all(new_attention_mask[1, prompt_width:] == 1)
+        assert torch.equal(new_labels[1, prompt_width:], completions[1])
+        # Prompt positions never contribute to the loss
+        assert torch.all(new_labels[:, :prompt_width] == -100)
+
+    def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(self):
+        # GenerationConfig defaults eos_token_id to None; torch.tensor(None) would raise, so the
+        # None guard must keep the whole completion instead of trying to find a stop token.
+        prompts = torch.tensor([[11, 12, 13], [14, 15, 16]], device=self.device)
+        prompt_mask = torch.ones_like(prompts)
+        completions = torch.tensor([[21, 22, 23, 24], [25, 26, 27, 28]], device=self.device)
+        generated_sequence = torch.cat([prompts, completions], dim=1)
+
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                return SimpleNamespace(sequences=generated_sequence)
+
+        generation_config = SimpleNamespace(eos_token_id=None)
+        inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, generation_config
+        )
+
+        prompt_width = prompts.shape[1]
+        # With no stop token nothing is masked in the completion region
+        assert torch.all(new_attention_mask[:, prompt_width:] == 1)
+        assert torch.all(new_labels[:, prompt_width:] != -100)
+
+    def test_generate_on_policy_outputs_masks_after_any_stop_token(self):
+        # eos_token_id can be a list of stop tokens; each row must stop on the first occurrence of
+        # any of them. A scalar == would only catch one id and miss the other row's terminator.
+        prompts = torch.tensor([[11, 12, 13], [14, 15, 16]], device=self.device)
+        prompt_mask = torch.ones_like(prompts)
+        # Row 0 terminates on 7, row 1 terminates on 9, each at a different position
+        completions = torch.tensor([[21, 7, 23, 24], [25, 26, 9, 28]], device=self.device)
+        generated_sequence = torch.cat([prompts, completions], dim=1)
+
+        class DummyModel:
+            def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
+                return SimpleNamespace(sequences=generated_sequence)
+
+        generation_config = SimpleNamespace(eos_token_id=[7, 9])
+        inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
+        _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
+            DummyModel(), inputs, generation_config
+        )
+
+        prompt_width = prompts.shape[1]
+        completion_mask = new_attention_mask[:, prompt_width:]
+        # Row 0 stops on 7 at index 1, row 1 stops on 9 at index 2: keep up to and including it
+        assert torch.equal(completion_mask[0], torch.tensor([1, 1, 0, 0], device=self.device))
+        assert torch.equal(completion_mask[1], torch.tensor([1, 1, 1, 0], device=self.device))
+        assert new_labels[0, prompt_width + 1] == 7
+        assert new_labels[1, prompt_width + 2] == 9
+        assert torch.all(new_labels[0, prompt_width + 2 :] == -100)
+        assert torch.all(new_labels[1, prompt_width + 3 :] == -100)
 
 
 class TestGeneralizedJSDLoss(TrlTestCase):
@@ -270,33 +352,53 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.state.log_history[0]["eval_loss"] is not None
         assert "model.safetensors" in os.listdir(self.tmp_dir + "/checkpoint-2")
 
-    @require_liger_kernel
-    def test_gkd_trainer_with_liger(self):
-        training_args = GKDConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=64,
-            report_to="none",
-            use_liger_kernel=True,
-        )
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+    @pytest.mark.parametrize(
+        "eval_dataset_type",
+        [
+            "dataset",
+            "iterable_dataset",
+            "dataset_dict",
+            "iterable_dataset_dict",
+            "dict_of_dataset",
+            "dict_of_iterable_dataset",
+            "none",
+        ],
+    )
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        train_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        else:
+            streaming = "iterable" in eval_dataset_type
+            eval_split = load_dataset(
+                "trl-internal-testing/zen", "conversational_language_modeling", split="test", streaming=streaming
+            )
+            if eval_dataset_type in ("dataset", "iterable_dataset"):
+                eval_dataset = eval_split
+            elif eval_dataset_type in ("dataset_dict", "iterable_dataset_dict"):
+                dataset_dict_cls = IterableDatasetDict if streaming else DatasetDict
+                eval_dataset = dataset_dict_cls({"data1": eval_split, "data2": eval_split})
+            else:  # "dict_of_dataset" or "dict_of_iterable_dataset"
+                eval_dataset = {"data1": eval_split, "data2": eval_split}
+
+        training_args = GKDConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
             args=training_args,
-            train_dataset=dataset,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
             processing_class=self.tokenizer,
         )
 
-        # Ensure liger fused JSD path is enabled; if not, skip (runtime may lack system libs)
-        if not getattr(trainer, "use_liger_gkd_loss", False):
-            pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
-
-        trainer.train()
-
-        # Check we logged a train loss
-        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # GKD skips dataset preparation (`skip_prepare_dataset=True`), so eval datasets are stored as-is.
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     def test_generation_config_init(self):
         training_args = GKDConfig(output_dir=self.tmp_dir)
@@ -316,93 +418,57 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
         assert trainer.generation_config.temperature == training_args.temperature
         assert trainer.generation_config.top_k == 0
+        assert trainer.generation_config.top_p == 1.0
 
-    @require_liger_kernel
-    def test_compute_loss_return_outputs_with_liger(self):
-        """Test that return_outputs=True works correctly with Liger kernel path."""
-        training_args = GKDConfig(
-            output_dir=self.tmp_dir,
-            report_to="none",
-            use_liger_kernel=True,
-            max_steps=2,
-            eval_strategy="steps",
-            eval_steps=1,
-            per_device_train_batch_size=2,
-            per_device_eval_batch_size=2,
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+    def test_init_multimodal_model(self):
+        """Multimodal configs keep vocab_size in their text_config; the vocab check must handle them."""
+        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = GKDConfig(output_dir=self.tmp_dir, report_to="none")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
+            model=model_id,
+            teacher_model=model_id,
             args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            processing_class=self.tokenizer,
+            train_dataset=dataset["train"],
+            processing_class=tokenizer,
         )
 
-        # evaluate() calls compute_loss with return_outputs=True; must not raise UnboundLocalError
-        eval_results = trainer.evaluate()
-        assert "eval_loss" in eval_results
-        assert eval_results["eval_loss"] is not None
+        student_vocab_size = trainer.model.config.get_text_config().vocab_size
+        assert student_vocab_size == trainer.teacher_model.config.get_text_config().vocab_size
 
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_liger_loss_matches_non_liger_loss(self):
-        # The Liger fused JSD path must compute the same loss as the non-Liger path
-        # (LigerFusedLinearJSDLoss defaults mix 0.5 * CE + 0.5 * JSD, but GKD wants pure JSD).
-        common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
-            range(2)
+    def test_on_policy_with_multimodal_model(self):
+        """On-policy generation must work when the chunked-CE patch has replaced the model's forward."""
+        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            lmbda=1.0,
+            max_steps=1,
+            per_device_train_batch_size=2,
+            max_new_tokens=8,
+            report_to="none",
         )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
-        ref_trainer = GKDTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=GKDConfig(use_liger_kernel=False, **common),
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
+        trainer = GKDTrainer(
+            model=model_id,
+            teacher_model=model_id,
+            args=training_args,
+            train_dataset=dataset["train"],
+            processing_class=tokenizer,
         )
-        liger_trainer = GKDTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=GKDConfig(use_liger_kernel=True, **common),
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
+        trainer.train()
 
-        # Force student/teacher weights identical between trainers, then diverge teacher
-        # so JSD is well above fp noise.
-        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in ref_trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
-        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
-
-        device = next(ref_trainer.model.parameters()).device
-        batch = ref_trainer.data_collator([ref_trainer.train_dataset[i] for i in range(2)])
-        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
-
-        ref_trainer.model.eval()
-        liger_trainer.model.eval()
-        with torch.no_grad():
-            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
-            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
-
-        torch.testing.assert_close(
-            torch.tensor(liger_loss),
-            torch.tensor(ref_loss),
-            rtol=2e-2,
-            atol=1e-6,
-        )
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
     @require_torch_accelerator
     def test_loss_normalizes_by_num_items_in_batch(self):
         # When `num_items_in_batch` is passed (as under gradient accumulation), the loss must be the JSD summed over
         # valid tokens divided by that global count, rather than the local per-microbatch mean. See issue #4719.
-        # GPU-gated like `test_liger_loss_matches_non_liger_loss`: GKD's loss path is accelerator-affine, so the model
-        # runs on the device rather than being forced to CPU.
+        # GPU-gated: GKD's loss path is accelerator-affine, so the model runs on the device rather than being
+        # forced to CPU.
         common = dict(
             output_dir=self.tmp_dir,
             report_to="none",
@@ -415,7 +481,7 @@ class TestGKDTrainer(TrlTestCase):
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_liger_kernel=False, **common),
+            args=GKDConfig(**common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
@@ -470,7 +536,7 @@ class TestGKDTrainer(TrlTestCase):
         trainer = GKDTrainer(
             model=self.model_id,
             teacher_model=self.model_id,
-            args=GKDConfig(use_liger_kernel=False, **common),
+            args=GKDConfig(**common),
             train_dataset=dataset,
             processing_class=self.tokenizer,
         )
@@ -498,41 +564,3 @@ class TestGKDTrainer(TrlTestCase):
         # If the loss covers every valid completion token, the global-count reduction (sum / num_valid) equals the
         # local mean. The old prompt-width slice summed FEWER tokens than num_valid, so loss_global != loss_mean.
         torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
-
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_liger_loss_normalizes_by_num_items_in_batch(self):
-        # The Liger fused JSD path normalizes by the local valid-token count internally; passing num_items_in_batch
-        # must rescale it to the global count (see issue #4719). Mirrors the non-Liger test on the Liger path.
-        common = dict(output_dir=self.tmp_dir, report_to="none", per_device_train_batch_size=2, max_length=64)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train").select(
-            range(2)
-        )
-        trainer = GKDTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=GKDConfig(use_liger_kernel=True, **common),
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
-        if not getattr(trainer, "use_liger_gkd_loss", False):
-            pytest.skip("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
-
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for p in trainer.teacher_model.parameters():
-                p.add_(0.5 * torch.randn_like(p))
-
-        device = next(trainer.model.parameters()).device
-        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(2)])
-        batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
-
-        trainer.model.eval()
-        with torch.no_grad():
-            loss_mean = trainer.compute_loss(trainer.model, batch)  # num_items_in_batch=None -> local mean
-            loss_k = trainer.compute_loss(trainer.model, batch, num_items_in_batch=100)
-            loss_2k = trainer.compute_loss(trainer.model, batch, num_items_in_batch=200)
-
-        # Doubling the global count exactly halves the loss; the rescaled loss differs from the local mean.
-        torch.testing.assert_close(loss_2k, loss_k / 2, rtol=1e-4, atol=1e-6)
-        assert not torch.allclose(loss_k, loss_mean)

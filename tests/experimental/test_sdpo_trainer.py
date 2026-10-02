@@ -14,13 +14,14 @@
 
 import logging
 
+import pytest
 import torch
-from datasets import Dataset, load_dataset
-from transformers import TrainerCallback
+from datasets import Dataset, DatasetDict, load_dataset
+from transformers import HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+from ..testing_utils import TrlTestCase
 
 
 class SelfDistillationCaptureCallback(TrainerCallback):
@@ -72,6 +73,31 @@ class RecordingTeacherClient:
 
 
 class TestSDPOTrainer(TrlTestCase):
+    def test_trust_remote_code(self):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+
+        with pytest.raises(ValueError, match="custom code"):
+            SDPOTrainer(
+                model=model_id,
+                reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+                args=SDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+            )
+
+        trainer = SDPOTrainer(
+            model=model_id,
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
+
     def test_train_with_positional_config_argument(self):
         dataset = Dataset.from_dict(
             {
@@ -143,65 +169,34 @@ class TestSDPOTrainer(TrlTestCase):
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_liger_loss_matches_non_liger_loss(self):
-        dataset = Dataset.from_dict({"prompt": ["Solve 2+2."]})
-        common = dict(
-            output_dir=self.tmp_dir,
-            report_to="none",
-            per_device_train_batch_size=1,
-            generation_batch_size=2,
-            num_generations=2,
-            max_completion_length=3,
-            distillation_mode="full_logits",
-            distillation_is_clip=None,
-            distillation_weight=1.0,
-        )
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-        ref_trainer = SDPOTrainer(
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = SDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
-            args=SDPOConfig(use_liger_kernel=False, **common),
-            train_dataset=dataset,
-        )
-        liger_trainer = SDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
-            args=SDPOConfig(use_liger_kernel=True, **common),
-            train_dataset=dataset,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
         )
 
-        liger_trainer.model.load_state_dict(ref_trainer.model.state_dict())
-        torch.manual_seed(0)
-        with torch.no_grad():
-            for param in ref_trainer.teacher_model.parameters():
-                param.add_(0.5 * torch.randn_like(param))
-        liger_trainer.teacher_model.load_state_dict(ref_trainer.teacher_model.state_dict())
-
-        device = next(ref_trainer.model.parameters()).device
-        batch = {
-            "prompt_ids": torch.tensor([[10, 11], [12, 13]], device=device),
-            "prompt_mask": torch.tensor([[1, 1], [1, 1]], device=device),
-            "completion_ids": torch.tensor([[14, 15, 16], [17, 18, 19]], device=device),
-            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1]], device=device),
-            "teacher_input_ids": torch.tensor([[20, 21, 22, 14, 15, 16], [23, 24, 25, 17, 18, 19]], device=device),
-            "teacher_attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]], device=device),
-            "self_distillation_mask": torch.tensor([1.0, 0.0], device=device),
-        }
-
-        ref_trainer.model.eval()
-        liger_trainer.model.eval()
-        with torch.no_grad():
-            ref_loss = ref_trainer.compute_loss(ref_trainer.model, batch).item()
-            liger_loss = liger_trainer.compute_loss(liger_trainer.model, batch).item()
-
-        torch.testing.assert_close(
-            torch.tensor(liger_loss),
-            torch.tensor(ref_loss),
-            rtol=2e-2,
-            atol=1e-6,
-        )
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     def test_train_without_successful_rollouts(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -346,6 +341,46 @@ class TestSDPOTrainer(TrlTestCase):
         assert 'Feedback: use {"x": 2} as a check.' in capture_callback.captured_teacher_input_text
         assert "{{" not in capture_callback.captured_teacher_input_text
         assert "}}" not in capture_callback.captured_teacher_input_text
+
+    def test_scale_rewards_accepts_string_via_cli(self):
+        parser = HfArgumentParser((SDPOConfig,))
+        (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "batch"])
+        assert args.scale_rewards == "batch"
+        (args,) = parser.parse_args_into_dataclasses(["--output_dir", self.tmp_dir, "--scale_rewards", "none"])
+        assert args.scale_rewards == "none"
+
+    def test_warns_when_feedback_available_but_disabled(self, caplog):
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2."],
+                "privileged_context": ["The correct answer is 4."],
+            }
+        )
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,
+            generation_batch_size=2,
+            num_generations=2,
+            max_completion_length=8,
+            include_environment_feedback=False,
+            max_steps=1,
+            report_to="none",
+        )
+
+        def reward(**kwargs):
+            return [0.0] * len(kwargs["prompts"])
+
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        with caplog.at_level(logging.WARNING, logger="trl.experimental.sdpo.sdpo_trainer"):
+            trainer.train()
+
+        assert any("include_environment_feedback" in record.message for record in caplog.records)
 
     def test_train_with_conversational_prompts_preserves_context(self):
         dataset = Dataset.from_dict(
@@ -554,3 +589,26 @@ class TestSDPOTrainer(TrlTestCase):
         loss.backward()
         assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
         assert trainer.teacher_client.calls[0]["top_logprobs"] == 2
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+
+        training_args = SDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDPOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2",
+            reward_funcs=lambda **kwargs: [0.0] * len(kwargs["prompts"]),
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
