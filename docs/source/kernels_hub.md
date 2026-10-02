@@ -116,4 +116,4 @@ training_args = SFTConfig(
 )
 ```
 
-Learn more about the [Liger Kernel Integration](./liger_kernel_integration).
+Learn more about the [Liger Kernel Integration](liger_kernel_integration).

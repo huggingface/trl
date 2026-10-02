@@ -20,11 +20,11 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import accelerate
+import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
 from packaging.version import Version
-from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig, PreTrainedModel
 
@@ -34,6 +34,11 @@ from ..import_utils import suppress_experimental_warning
 with suppress_experimental_warning():
     from ..experimental.utils import create_reference_model as _create_reference_model
 
+
+if Version(torch.__version__) >= Version("2.6.0"):
+    from torch.distributed.fsdp import FSDPModule
+else:  # the FSDP2 API was public only from torch 2.6
+    from torch.distributed._composable.fsdp import FSDPModule
 
 if Version(accelerate.__version__) >= Version("1.11.0"):
     from accelerate.utils.fsdp_utils import get_parameters_from_modules
@@ -77,8 +82,6 @@ def iter_params(module, recurse=False):
 
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
-    import deepspeed
-
     if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
         return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
@@ -96,11 +99,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
         if not coordinator.is_invalid_trace():
             coordinator._invalidate_trace()
 
-    if Version(deepspeed.__version__) >= Version("0.16.4"):
-        # Account for renaming in https://github.com/deepspeedai/DeepSpeed/pull/6847
-        optimizer_offload._register_deepspeed_module(optimizer_offload.module)
-    else:
-        optimizer_offload._register_hooks_recursively(optimizer_offload.module)
+    optimizer_offload._register_deepspeed_module(optimizer_offload.module)
 
 
 @contextmanager
@@ -167,8 +166,10 @@ def _override_model_generation_config(model, generation_kwargs=None):
     their intended inference behavior.
 
     Args:
-        model: The model (typically unwrapped_model) whose generation_config to temporarily override.
-        generation_kwargs (dict): Generation kwargs to be used to override model's generation config.
+        model ([`~transformers.PreTrainedModel`]):
+            The model (typically unwrapped_model) whose generation_config to temporarily override.
+        generation_kwargs (`dict`):
+            Generation kwargs to be used to override model's generation config.
     """
     if (
         # Issue fixed in transformers v5 by PR transformers#42702
@@ -216,7 +217,7 @@ def unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
-        generation_kwargs (dict, *optional*):
+        generation_kwargs (`dict`, *optional*):
             If provided, temporarily overrides the model's generation_config during generation. The original config is
             automatically restored when exiting the context. This is useful for using different generation parameters
             during training vs. inference.
@@ -301,7 +302,10 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             }
             model = FSDP(model, **kwargs)
         elif fsdp_plugin.fsdp_version == 2:
-            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+            if Version(torch.__version__) >= Version("2.6.0"):
+                from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+            else:
+                from torch.distributed._composable.fsdp import MixedPrecisionPolicy, fully_shard
 
             mesh = getattr(accelerator, "torch_device_mesh", None)
             if Version(accelerate.__version__) >= Version("1.11.0"):
@@ -312,15 +316,17 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
                     "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
                 )
                 ignored_params = None
-            fully_shard(
-                model,
-                reshard_after_forward=fsdp_plugin.reshard_after_forward,
-                offload_policy=fsdp_plugin.cpu_offload,
+            fsdp2_kwargs = {
+                "reshard_after_forward": fsdp_plugin.reshard_after_forward,
+                "offload_policy": fsdp_plugin.cpu_offload,
                 # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
-                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
-                mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
-                ignored_params=ignored_params,
-            )
+                "mp_policy": fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                "mesh": mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+            }
+            # `ignored_params` is only supported in torch >= 2.7.0
+            if Version(torch.__version__) >= Version("2.7.0"):
+                fsdp2_kwargs["ignored_params"] = ignored_params
+            fully_shard(model, **fsdp2_kwargs)
         else:
             raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
@@ -386,7 +392,7 @@ def disable_gradient_checkpointing(model: PreTrainedModel, gradient_checkpointin
     Args:
         model (`PreTrainedModel`):
             Model for which to temporarily disable gradient checkpointing.
-        gradient_checkpointing_kwargs (`dict` or `None`, *optional*):
+        gradient_checkpointing_kwargs (`dict`, *optional*):
             Additional kwargs for gradient checkpointing enabling.
     """
     was_enabled = model.is_gradient_checkpointing
