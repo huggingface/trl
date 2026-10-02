@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from itertools import takewhile
@@ -122,39 +121,6 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
             new_messages[i] = {**message, "content": new_content}
 
     return new_messages
-
-
-def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # docstyle-ignore  # because <Image> is not parsable in the code block
-    """
-    Convert structured multimodal messages into a format compatible with vLLM. Replaces `"type": "image"` blocks with
-    `"type": "image_pil"` blocks, and `"image": Image` with `"image_pil": Image`.
-
-    Args:
-        messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content is expected to be a list of structured blocks.
-
-    Returns:
-        `list[dict[str, Any]]`:
-            A deep-copied list of messages compatible with vLLM's expected input format.
-
-    Example:
-    ```python
-    # Input
-    [{"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
-
-    # Output
-    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
-    ```
-    """
-    messages = copy.deepcopy(messages)  # avoid modifying the original messages
-    for message in messages:
-        if isinstance(message["content"], list):
-            for part in message["content"]:
-                if part["type"] == "image":
-                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
-                    part["image_pil"] = part.pop("image")
-    return messages
 
 
 def is_conversational(example: dict[str, Any]) -> bool:
@@ -830,14 +796,15 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using a wrapped strategy."""
     columns = [column.chunks[0] for column in examples.combine_chunks().columns]
     _check_if_columns_can_be_packed(columns)
-    offsets, values = columns[0].offsets, columns[0].values
-    values = values[offsets[0].as_py() : offsets[-1].as_py()]
-    num_elements = len(values)
+    # Use `flatten()` and not `values`, which returns the whole child buffer and ignores the array's own offset. That
+    # offset is non-zero whenever the table is a slice, as it is for every batch but the first in a batched `map`.
+    values = [column.flatten() for column in columns]
+    num_elements = len(values[0])
     offsets = np.arange(0, num_elements, seq_length, dtype=columns[0].offsets.type.to_pandas_dtype())
     offsets = np.concatenate((offsets, [num_elements]))
     columns = [
-        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column.values)
-        for column in columns
+        type(column).from_arrays(offsets.astype(column.offsets.type.to_pandas_dtype()), column_values)
+        for column, column_values in zip(columns, values, strict=True)
     ]
     return pa.Table.from_arrays(columns, names=examples.column_names)
 

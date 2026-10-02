@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "tiiuae/falcon-mamba-7b-instruct"
 
@@ -40,6 +43,8 @@ config = FalconMambaConfig(
     bos_token_id=8,
     eos_token_id=11,
     pad_token_id=0,
+    # Stale alias in the reference; `FalconMambaConfig` reads `use_falcon_mambapy`.
+    use_mambapy=False,
 )
 model = FalconMambaForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

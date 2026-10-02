@@ -5,12 +5,13 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
-permissions:
-  contents: read
-  pull-requests: write
+permissions: {}
 
 jobs:
   labeler:
+    permissions:
+      contents: read
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       # The config is read from the base branch, so a pull request cannot relabel itself.

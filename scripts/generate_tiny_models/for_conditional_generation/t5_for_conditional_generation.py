@@ -15,10 +15,12 @@
 import torch
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig, T5ForConditionalGeneration
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub
+from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, set_seed
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "google/flan-t5-small"
 
