@@ -602,6 +602,8 @@ idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(enco
 
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
+lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
+
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
 lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
@@ -978,6 +980,8 @@ idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinj
 
 lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read_text(encoding="utf-8")
 
+lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
@@ -1138,6 +1142,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == lfm2_chat_template:
         return lfm2_training_chat_template
+
+    if processing_class.chat_template == lfm2_v2_chat_template:
+        return lfm2_v2_training_chat_template
 
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
