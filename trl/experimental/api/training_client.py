@@ -149,23 +149,25 @@ class LocalTrainingClient:
         loss_fn: Callable[[torch.Tensor], torch.Tensor],
         aux_loss_coef: float = 0.0,
     ) -> ForwardBackwardOutput:
+        # MoE models: request router logits so the forward returns the load-balancing loss
+        router_kwargs = {"output_router_logits": True} if aux_loss_coef else {}
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
-            labels=input_ids,
-            completion_mask=completion_mask,
-            use_cache=False,
+            labels=input_ids.masked_fill(completion_mask == 0, -100),
+            fused_lm_head=True,
+            **router_kwargs,
         )
-        log_probs = outputs["log_probs"]
+        log_probs = outputs.log_probs
         loss = loss_fn(log_probs)
 
-        aux_loss = outputs["aux_loss"] if aux_loss_coef else None
+        aux_loss = outputs.aux_loss if aux_loss_coef else None
         if aux_loss is not None:
             loss = loss + aux_loss_coef * aux_loss
 
         return ForwardBackwardOutput(
             loss=loss,
             log_probs=log_probs.detach(),
-            entropy=outputs["entropy"].detach(),
+            entropy=outputs.entropy.detach(),
             aux_loss=aux_loss.detach() if aux_loss is not None else None,
         )

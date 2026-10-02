@@ -44,13 +44,12 @@ Homepage = "https://github.com/huggingface/trl"
 trl = "trl.cli:main"
 
 [project.optional-dependencies]
-bco = [
-    "scikit-learn",
-    "joblib"
-]
 deepspeed = [
     "deepspeed>=0.18.6",
     "transformers!=5.1.0",  # see transformers#43780
+]
+harbor = [
+    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
 ]
 kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
@@ -58,6 +57,12 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
 ]
 liger = [
     "liger-kernel>=0.8.2"
+]
+math_verify = [
+    "math-verify>=0.5.2",
+]
+openreward = [
+    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
 ]
 peft = [
     "peft>=0.13.0"
@@ -69,20 +74,17 @@ quality = [
 quantization = [
     "bitsandbytes"
 ]
-scikit = [
-    "scikit-learn"
-]
 test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-reportlog",  # test report consumed by scripts/log_reports.py
-    "pytest-rerunfailures==15.1",
+    "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.19.1,<=0.27.1",
+    "vllm>=0.20.1,<=0.30.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -91,19 +93,7 @@ vlm = [
     "torchvision",
     "num2words==0.5.14"
 ]
-math_verify = [
-    "math-verify>=0.5.2",
-]
-openreward = [
-    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
-]
-harbor = [
-    "harbor>=0.13.0; python_version >= '3.12'",  # harbor requires Python 3.12+ (pulls its sandbox backends)
-]
 dev = [
-    # bco
-    "scikit-learn",
-    "joblib",
     # deepspeed
     "deepspeed>=0.18.6",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
@@ -120,12 +110,11 @@ dev = [
     "hf-doc-builder",
     # quantization
     "bitsandbytes",
-    # scikit: included in bco
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-reportlog",  # test report consumed by scripts/log_reports.py
-    "pytest-rerunfailures==15.1",
+    "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
     "tabulate",  # test report rendering in scripts/log_reports.py
@@ -217,9 +206,11 @@ filterwarnings = [
 
     # kernels-community/mamba-ssm (a Hub-hosted build of state-spaces/mamba) calls the deprecated
     # torch.get_autocast_gpu_dtype() in its Triton ssd_combined.py kernel (upstream, not actionable in TRL)
-    # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast
+    # Triggered by the NemotronH (Nemotron 3) Mamba2 mixer fast path during training under CUDA autocast, only with
+    # transformers 5.3 to 5.5, which load the Hub kernel ignoring `use_mamba_kernels=False` (fixed upstream in 5.6)
     # Tracking issue: https://github.com/huggingface/trl/issues/6555
-    # Remove once: the resolved Hub kernel build no longer calls it
+    # Upstream fix: https://github.com/huggingface/transformers/pull/44853
+    # Remove once: transformers >= 5.6 is required (kernels-community#1187 won't reach the v1 build 5.3-5.5 pin)
     "ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning",
 
     # bitsandbytes warns, on every forward of a 4-bit layer whose inner dimension is not a multiple of the quantization

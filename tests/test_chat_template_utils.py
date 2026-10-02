@@ -38,8 +38,8 @@ from .testing_utils import TrlTestCase, require_response_parsing, require_vision
 class TestCloneChatTemplate(TrlTestCase):
     def test_clone(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         _, modified_tokenizer, _ = clone_chat_template(model, tokenizer, source)
@@ -49,8 +49,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_resize(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         modified_model, modified_tokenizer, _ = clone_chat_template(
@@ -64,8 +64,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         # This will add <extra_id_0>, <extra_id_1>, ... to the tokenizer
@@ -84,8 +84,8 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_apply_new_chat_template(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         _, modified_tokenizer, _ = clone_chat_template(model, tokenizer, source)
@@ -103,9 +103,9 @@ class TestCloneChatTemplate(TrlTestCase):
 
     def test_clone_with_sequence_classification_model(self):
         # This tokenizer doesn't have a chat_template by default
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptNeoXForSequenceClassification")
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPTNeoXForSequenceClassification")
         model = AutoModelForSequenceClassification.from_pretrained(
-            "trl-internal-testing/tiny-GptNeoXForSequenceClassification"
+            "trl-internal-testing/tiny-GPTNeoXForSequenceClassification"
         )
         # This one has a chat_template by default
         source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
@@ -398,10 +398,9 @@ class TestSupportsToolCalling:
         [
             # No chat template
             pytest.param("trl-internal-testing/tiny-BartModel", id="bart"),
-            pytest.param("trl-internal-testing/tiny-BloomForCausalLM", id="bloom"),
             pytest.param("trl-internal-testing/tiny-GPT2LMHeadModel", id="gpt2"),
             pytest.param("trl-internal-testing/tiny-GPTNeoXForCausalLM", id="gptneox"),
-            pytest.param("trl-internal-testing/tiny-GptNeoXForSequenceClassification", id="gptneox-seq"),
+            pytest.param("trl-internal-testing/tiny-GPTNeoXForSequenceClassification", id="gptneox-seq"),
             pytest.param("trl-internal-testing/tiny-OPTForCausalLM", id="opt"),
             pytest.param("trl-internal-testing/tiny-T5ForConditionalGeneration", id="t5"),
             # TemplateError: rejects tool role sequence
@@ -826,12 +825,9 @@ class TestGetTrainingChatTemplate:
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
     def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
-        if tokenizer_name in (
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-        ):
-            reason = f"{tokenizer_name}: the processor returns an all-zero assistant tokens mask"
-            request.node.add_marker(pytest.mark.xfail(strict=False, reason=reason))
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+            reason = "Llava's official chat template emits no end-of-turn token after the assistant turn."
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         tokenizer = self._load(tokenizer_name)
         new_chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_stop_token_trained(tokenizer, chat_template=new_chat_template) is True
@@ -1040,7 +1036,9 @@ class TestGetTrainingChatTemplate:
         assert before == after
 
     def test_assistant_masks(self, tokenizer_name, request):
-        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1063,14 +1061,16 @@ class TestGetTrainingChatTemplate:
         masks = result["assistant_masks"]
         if self.is_vlm:  # VLM processors return batched output
             masks = masks[0]
-        assert 1 in masks
         # The first tokens (user turn) should not be masked
         assert masks[0] == 0
-        # The last tokens (assistant turn ending with <|im_end|>) should be masked
-        assert masks[-1] == 1
+        # Should have one masked region (the assistant turn)
+        region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
+        assert region_starts == 1
 
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
-        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
             request.node.add_marker(
                 pytest.mark.xfail(
                     reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
@@ -1095,9 +1095,9 @@ class TestGetTrainingChatTemplate:
         masks = result["assistant_masks"]
         if self.is_vlm:  # VLM processors return batched output
             masks = masks[0]
-        # Should have two masked regions (two assistant turns): 0→1, 1→0, 0→1
-        transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
-        assert transitions == 3
+        # Should have two masked regions (two assistant turns)
+        region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
+        assert region_starts == 2
 
 
 @pytest.mark.parametrize(

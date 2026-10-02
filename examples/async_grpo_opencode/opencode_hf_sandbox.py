@@ -18,8 +18,8 @@
 #     "trackio",
 #     "datasets",
 #     "huggingface_hub>=1.22",
-#     "openenv @ git+https://github.com/huggingface/OpenEnv.git",
-#     "openenv-opencode-env @ git+https://github.com/huggingface/OpenEnv.git#subdirectory=envs/opencode_env",
+#     "openenv @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv-opencode-env @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3#subdirectory=envs/opencode_env",
 # ]
 # ///
 
@@ -81,6 +81,7 @@ import argparse
 import hashlib
 import json
 import random
+from functools import partial
 from typing import Any
 
 from datasets import Dataset, load_dataset
@@ -95,8 +96,6 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.openenv_harness import (
     HarnessRolloutOutcome,
     HarnessRolloutWorker,
-    TraceEntry,
-    has_tool_call,
 )
 
 
@@ -256,9 +255,10 @@ class OpencodeTaskFactory(ResourceSessionFactory):
 
 
 def build_factory(
-    sandbox_vllm_url: str, model: str, tests_by_id: dict, image: str, flavor: str
+    sandbox_vllm_url: str, model: str, tests_by_id: dict, image: str, flavor: str, *, sampling: dict
 ) -> OpencodeTaskFactory:
     config = OpenCodeConfig(
+        extra_opencode_json={"agent": {"build": {"temperature": sampling["temperature"], "top_p": sampling["top_p"]}}},
         provider="openai_compatible",
         base_url=f"{sandbox_vllm_url}/v1",  # the in-sandbox proxy forwards here; remote, so a public url (tunnel)
         model=model,  # proxy --model-override forces this exact id on upstream requests
@@ -271,14 +271,15 @@ def build_factory(
     inner = OpenCodeSessionFactory(
         config=config,
         sandbox_backend=HFSandboxBackend(image=image, flavor=flavor),  # each rollout = its own remote HF sandbox
-        mode="transparent_proxy",  # in-sandbox proxy captures completion_token_ids + per_token_logps
+        mode="transparent_proxy",
+        sampling=sampling,
         verifier=DeepCoderStdinVerifier(tests_by_id),
     )
     return OpencodeTaskFactory(inner)
 
 
 # ============================================================================================================
-# Reward + turn-selection policy (application-owned; passed to the worker as hooks)
+# Rollout reward
 # ============================================================================================================
 
 
@@ -301,30 +302,6 @@ def opencode_reward(outcome: HarnessRolloutOutcome) -> float | None:
     base = 0.0 if outcome.timed_out else frac  # dense: fraction of held-out tests passed (partial credit)
     over = max(0, outcome.tool_call_count - step_budget)
     return base - min(step_penalty_cap, step_penalty * over)
-
-
-def opencode_agent_turns(trace: list[TraceEntry]) -> list[TraceEntry]:
-    """`agent_turn_fn`: keep only the REAL agent turns. opencode fires extra LLM calls for its own bookkeeping (a
-    title generator, a context summarizer) either without tools or with a different system prompt; those are a
-    different task and must not be trained/scored. The agent loop reuses ONE tool-enabled system prompt, so anchor
-    on the first tool-enabled turn's system prompt and keep only matching entries."""
-
-    def system_of(messages):
-        return next((m.get("content") for m in messages if m.get("role") == "system"), None)
-
-    primary = None
-    for entry in trace:
-        request = entry.get("request") or {}
-        if request.get("messages") and request.get("tools"):
-            primary = system_of(request["messages"])
-            break
-    return [
-        entry
-        for entry in trace
-        if (request := entry.get("request") or {}).get("messages")
-        and request.get("tools")
-        and system_of(request["messages"]) == primary
-    ]
 
 
 # ============================================================================================================
@@ -389,13 +366,11 @@ def main() -> None:
     )
 
     worker = HarnessRolloutWorker(
-        harness_session_factory=build_factory(
-            args.sandbox_vllm_url, args.model, tests_by_id, args.sandbox_image, args.sandbox_flavor
+        harness_session_factory=partial(
+            build_factory, args.sandbox_vllm_url, args.model, tests_by_id, args.sandbox_image, args.sandbox_flavor
         ),
         harness_adapter=None,  # loop-owning: opencode runs its own loop; TRL reads the proxy trace
         rollout_reward_fn=opencode_reward,  # reward policy (binary verifier + degeneracy penalties)
-        train_turn_fn=has_tool_call,  # coding agent: reinforce only action turns, not prose
-        agent_turn_fn=opencode_agent_turns,  # drop opencode's title/summarizer aux calls from the trace
         model_name=args.model,
         dataset=dataset,
         reward_funcs=[],  # reward comes from the harness verifier via rollout_reward_fn, not reward_funcs
@@ -420,6 +395,8 @@ def main() -> None:
     trainer.train()
     if args.push_to_hub:
         trainer.push_to_hub()
+
+    trainer.end()
 
 
 if __name__ == "__main__":

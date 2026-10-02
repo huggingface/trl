@@ -17,9 +17,9 @@ import torch
 from transformers import AutoModelForCausalLM
 
 from trl.experimental.api import ForwardBackwardOutput, LocalTrainingClient
-from trl.trainer.utils import patch_chunked_lm_head
+from trl.trainer.utils import add_fused_lm_head
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_torch_accelerator
 
 
 MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -40,16 +40,15 @@ class RemoteStyleTrainingClient:
         return self.model(
             input_ids=input_ids,
             position_ids=position_ids,
-            labels=input_ids,
-            completion_mask=completion_mask,
-            use_cache=False,
+            labels=input_ids.masked_fill(completion_mask == 0, -100),
+            fused_lm_head=True,
         )
 
     def forward_backward(self, model, input_ids, position_ids, completion_mask, loss_fn, aux_loss_coef=0.0):
         with torch.no_grad():
             outputs = self._score(input_ids, position_ids, completion_mask)
 
-        leaf = outputs["log_probs"].detach().requires_grad_(True)
+        leaf = outputs.log_probs.detach().requires_grad_(True)
         loss = loss_fn(leaf)
         (grad_log_probs,) = torch.autograd.grad(loss, leaf)
 
@@ -58,23 +57,24 @@ class RemoteStyleTrainingClient:
             # inside a backward hook, so the replay has to re-enable it or it builds nothing to back-propagate.
             with torch.enable_grad():
                 replayed = self._score(input_ids, position_ids, completion_mask)
-                surrogate = (replayed["log_probs"] * grad_log_probs * grad_loss).sum()
+                surrogate = (replayed.log_probs * grad_log_probs * grad_loss).sum()
             surrogate.backward()
 
         out = loss.detach().requires_grad_(True)
         out.register_hook(apply_surrogate)
         return ForwardBackwardOutput(
             loss=out,
-            log_probs=outputs["log_probs"].detach(),
-            entropy=outputs["entropy"].detach(),
+            log_probs=outputs.log_probs.detach(),
+            entropy=outputs.entropy.detach(),
         )
 
 
+@require_torch_accelerator
 class TestTrainingClient(TrlTestCase):
     def setup_method(self):
         torch.manual_seed(0)
         self.model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float32, attn_implementation="sdpa")
-        patch_chunked_lm_head(self.model, chunk_size=8192, temperature=1.0)
+        add_fused_lm_head(self.model, temperature=1.0)
         self.model.train()
 
         torch.manual_seed(1)
@@ -100,9 +100,8 @@ class TestTrainingClient(TrlTestCase):
         return self.model(
             input_ids=self.input_ids,
             position_ids=self.position_ids,
-            labels=self.input_ids,
-            completion_mask=self.completion_mask,
-            use_cache=False,
+            labels=self.input_ids.masked_fill(self.completion_mask == 0, -100),
+            fused_lm_head=True,
         )
 
     def _grads(self):
@@ -114,7 +113,7 @@ class TestTrainingClient(TrlTestCase):
     def _inline_grads(self, loss_scale):
         """Gradients from computing the loss on the live graph, i.e. the behavior before the client existed."""
         self.model.zero_grad(set_to_none=True)
-        (self.loss_fn(self._model_outputs()["log_probs"]) * loss_scale).backward()
+        (self.loss_fn(self._model_outputs().log_probs) * loss_scale).backward()
         return self._grads()
 
     def _client_grads(self, client, loss_scale):
@@ -165,6 +164,6 @@ class TestTrainingClient(TrlTestCase):
         )
         expected = self._model_outputs()
 
-        torch.testing.assert_close(outputs.log_probs, expected["log_probs"].detach(), rtol=0, atol=0)
-        torch.testing.assert_close(outputs.entropy, expected["entropy"].detach(), rtol=0, atol=0)
-        torch.testing.assert_close(outputs.loss.detach(), self.loss_fn(expected["log_probs"]).detach(), rtol=0, atol=0)
+        torch.testing.assert_close(outputs.log_probs, expected.log_probs.detach(), rtol=0, atol=0)
+        torch.testing.assert_close(outputs.entropy, expected.entropy.detach(), rtol=0, atol=0)
+        torch.testing.assert_close(outputs.loss.detach(), self.loss_fn(expected.log_probs).detach(), rtol=0, atol=0)
