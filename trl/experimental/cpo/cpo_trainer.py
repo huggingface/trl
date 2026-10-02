@@ -80,8 +80,6 @@ logger = get_logger(__name__)
 
 
 class CPOTrainer(_BaseTrainer):
-    loss_is_scaled_for_ga = False
-
     r"""
     Initialize CPOTrainer.
 
@@ -118,6 +116,8 @@ class CPOTrainer(_BaseTrainer):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
             metric values.
     """
+
+    loss_is_scaled_for_ga = False
 
     _tag_names = ["trl", "cpo"]
     _name = "CPO"

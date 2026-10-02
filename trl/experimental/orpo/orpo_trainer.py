@@ -92,8 +92,6 @@ def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
 
 
 class ORPOTrainer(_BaseTrainer):
-    loss_is_scaled_for_ga = False
-
     r"""
     Initialize ORPOTrainer.
 
@@ -130,6 +128,8 @@ class ORPOTrainer(_BaseTrainer):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
             metric values.
     """
+
+    loss_is_scaled_for_ga = False
 
     _tag_names = ["trl", "orpo"]
     _name = "ORPO"
