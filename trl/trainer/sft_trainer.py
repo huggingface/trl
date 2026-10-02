@@ -801,7 +801,8 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     per_token_loss = -logprobs.exp().detach() * logprobs
     if num_items_in_batch is None:
         num_items_in_batch = loss_mask.sum()
-    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
+    loss = (per_token_loss * loss_mask).sum() / torch.as_tensor(num_items_in_batch).clamp(min=1)
     return loss
 
 

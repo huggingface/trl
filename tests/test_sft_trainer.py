@@ -33,6 +33,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
@@ -94,6 +95,15 @@ class TestDFTLoss(TrlTestCase):
         # If we have just two tokens in our vocab and all logits are the same,
         # dft scales the ce_loss per token by 0.5. So the dft_loss should be ce_loss/2
         torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("num_items_in_batch", [None, 0])
+    def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
+        outputs = CausalLMOutputWithPast(logits=torch.randn(2, 3, 2, requires_grad=True))
+        labels = torch.full((2, 3), -100)
+        loss = dft_loss(outputs, labels, num_items_in_batch)
+        loss.backward()
+        assert loss.item() == 0.0
+        assert torch.isfinite(outputs.logits.grad).all()
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
