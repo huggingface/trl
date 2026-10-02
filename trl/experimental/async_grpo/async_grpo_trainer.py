@@ -54,9 +54,9 @@ from ...trainer.utils import (
     nanmin,
     pad,
 )
-from ..api import LocalTrainingClient, TrainingClientProtocol
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
+from .training_client import ForwardBackwardOutput, GRPOLoss, LocalTrainingClient
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -179,6 +179,56 @@ class WeightTransferProtocol(Protocol):
 
     def destroy(self) -> None:
         """Release transfer resources. Called on train end."""
+        ...
+
+
+class TrainingClientProtocol(Protocol):
+    """Interface a training-compute backend must implement to be passed as `training_client` to
+    [`experimental.async_grpo.AsyncGRPOTrainer`].
+
+    The default [`LocalTrainingClient`] runs the model in this process. Implement this protocol to run the forward and
+    backward passes somewhere else (another process, another set of GPUs, or a remote service) while the trainer keeps
+    owning the loss. Every rank calls its own client.
+
+    Gradient clipping and the optimizer step are deliberately absent: a backend that owns the parameters passes an
+    optimizer through the trainer's `optimizers` argument whose `step` reaches them, reading the scheduled learning
+    rate from its param groups.
+    """
+
+    def forward_backward(
+        self,
+        model: torch.nn.Module,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        completion_mask: torch.Tensor,
+        loss: GRPOLoss,
+        aux_loss_coef: float = 0.0,
+    ) -> ForwardBackwardOutput:
+        """Run the forward pass, build the trainer's loss on it, and prepare the backward.
+
+        The backward itself is left to the trainer, which calls `accelerator.backward` on the returned loss. Keeping it
+        there is what preserves gradient accumulation, the grad scaler, and the `no_sync` context that DDP relies on.
+        An off-process backend returns a detached loss carrying a hook and does its remote backward from inside that
+        hook. Grad mode is off there, so anything the hook recomputes must re-enable it explicitly.
+
+        Args:
+            model (`torch.nn.Module`):
+                The trainer's prepared model. In-process backends run it; off-process backends ignore it.
+            input_ids (`torch.Tensor`):
+                Token ids, shape `(batch_size, sequence_length)`.
+            position_ids (`torch.Tensor`):
+                Position ids, same shape as `input_ids`. In padding-free mode, sequences are concatenated into a single
+                row and boundaries are the positions where this resets to zero.
+            completion_mask (`torch.Tensor`):
+                1 for tokens the policy generated, 0 for prompt and tool-result tokens, same shape as `input_ids`.
+            loss ([`GRPOLoss`]):
+                The trainer's loss for this micro-batch. Call it on log probs of shape `(batch_size, sequence_length -
+                1)`, or read its fields to compute the same objective next to the model.
+            aux_loss_coef (`float`, *optional*, defaults to `0.0`):
+                Coefficient for the mixture-of-experts auxiliary loss, already scaled for gradient accumulation. The
+                backend adds `aux_loss_coef * aux_loss` to the objective it back-propagates and reports the same total
+                as `loss`. `0.0` disables it.
+        """
         ...
 
 
@@ -1487,24 +1537,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
         shifted_old_log_probs = old_log_probs[:, 1:]
         shifted_advantages = advantages[:, 1:]
 
-        def loss_fn(log_probs):
-            # The client calls this on the log probs it just produced. In-process that keeps `loss` attached to the
-            # model; off-process the client differentiates it here and ships the gradient. Either way GRPO stays on
-            # this side of the boundary and the client never learns what algorithm it is running.
-            coef_1 = torch.exp(log_probs - shifted_old_log_probs)
-            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-            per_token_loss1 = coef_1 * shifted_advantages
-            per_token_loss2 = coef_2 * shifted_advantages
-            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-
-            # DDP/FSDP averages gradients across ranks (world_size).
-            # To get correct per-token normalization we scale by 1/tokens_per_rank
-            # = world_size / global_n_tokens, so after DDP averaging the effective
-            loss = (per_token_loss * shifted_completion_mask).sum()
-            loss = loss / tokens_per_rank.to(torch.float32)
-            # For DAPO, we would scale like this instead:
-            # loss = loss / max(per_token_loss.size(0), 1)
-            return loss / self.current_gradient_accumulation_steps
+        grpo_loss = GRPOLoss(
+            old_log_probs=shifted_old_log_probs,
+            advantages=shifted_advantages,
+            completion_mask=shifted_completion_mask,
+            epsilon_low=self.epsilon_low,
+            epsilon_high=self.epsilon_high,
+            num_tokens_per_rank=tokens_per_rank,
+            gradient_accumulation_steps=self.current_gradient_accumulation_steps,
+        )
 
         forward_start = time.time()
         outputs = self.training_client.forward_backward(
@@ -1512,9 +1553,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             input_ids=input_ids,
             position_ids=position_ids,
             completion_mask=completion_mask,
-            loss_fn=loss_fn,
+            loss=grpo_loss,
             # The policy loss is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
-            # The client adds `aux_loss_coef * aux_loss` to what it back-propagates, and reports the same total.
+            # The client adds `aux_loss_coef * aux_loss` to what it back-propagates and reports the same total.
             aux_loss_coef=self.router_aux_loss_coef / self.current_gradient_accumulation_steps
             if self.aux_loss_enabled
             else 0.0,
@@ -1523,8 +1564,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         loss, log_probs, entropy = outputs.loss, outputs.log_probs, outputs.entropy
 
         with torch.no_grad():
-            # Recomputed from the detached log probs rather than threaded out of `loss_fn`, which keeps the loss a
-            # plain function of its input. Two elementwise ops on a tensor that is already resident.
+            # Recomputed from the detached log probs rather than threaded out of the loss, which keeps it a plain
+            # function of its input. Two elementwise ops on a tensor that is already resident.
             log_ratio = log_probs - shifted_old_log_probs
             coef_1 = torch.exp(log_ratio)
 

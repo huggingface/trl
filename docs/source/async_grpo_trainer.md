@@ -51,11 +51,17 @@ In addition to making rollout generation and weight transfer pluggable, [`AsyncG
 while the trainer continues to own the GRPO objective, advantages, masks, and metrics. If no client is provided,
 [`LocalTrainingClient`] runs the model in the trainer process and preserves the default behavior.
 
-The trainer passes the packed token row, position IDs, completion mask, and its loss as a Python callable to
-`training_client.forward_backward(...)`. An off-process implementation can score the tokens remotely, evaluate the
-callable in the trainer process, and send `d(loss) / d(log_probs)` back to the service. The service can then apply the
-equivalent first-order surrogate to its model. The callable itself is not a wire format: transport, serialization, and
-remote lifecycle are the responsibility of the backend adapter.
+The trainer passes the packed token row, position IDs, completion mask, and its loss as a [`GRPOLoss`] to
+`training_client.forward_backward(...)`. The loss is both data and a function of the per-token log probs, so a backend
+can use it either way:
+
+- **Call it.** An off-process backend can score the tokens remotely, call the loss on the returned log probs in the
+  trainer process, and send `d(loss) / d(log_probs)` back to the service, which applies the equivalent first-order
+  surrogate to its model. The backend never needs to know what GRPO is.
+- **Read it.** A backend that computes the loss next to the model reads the advantages, old log probs, mask, and
+  clipping bounds from its fields and runs the same objective there, saving the surrogate's extra round trip.
+
+Transport, serialization, and remote lifecycle are the responsibility of the backend adapter.
 
 A mixture-of-experts router loss is the one term that surrogate does not carry, because it is produced by the model
 rather than from its log probs. It stays with the backend, which adds `aux_loss_coef * aux_loss` to the objective it
@@ -385,12 +391,16 @@ MFU is reported only when peak compute capacity is known for the local training 
 
 ## TrainingClientProtocol
 
-[[autodoc]] trl.experimental.api.TrainingClientProtocol
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.TrainingClientProtocol
+
+## GRPOLoss
+
+[[autodoc]] trl.experimental.async_grpo.training_client.GRPOLoss
 
 ## ForwardBackwardOutput
 
-[[autodoc]] trl.experimental.api.ForwardBackwardOutput
+[[autodoc]] trl.experimental.async_grpo.training_client.ForwardBackwardOutput
 
 ## LocalTrainingClient
 
-[[autodoc]] trl.experimental.api.LocalTrainingClient
+[[autodoc]] trl.experimental.async_grpo.training_client.LocalTrainingClient
