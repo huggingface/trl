@@ -37,6 +37,7 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     TokenBudgetBatcher,
     _add_tail_bucket,
     _balance_by_squared_length,
+    _chunked_jsd_loss,
     _EpochStopCallback,
     _jsd_divergence,
     _narrow_top1_actual_support,
@@ -706,6 +707,63 @@ class TestSparseGeneralizedJSDMatchesFullVocabReference:
         ours = jsd.sum() / max(jsd.shape[0] * jsd.shape[1], 1)  # batchmean, matching the reference's reduction
 
         torch.testing.assert_close(ours, reference)
+
+
+class TestPerTeacherStats:
+    """MOPD's per-teacher breakdown: `_chunked_jsd_loss` returns a `(count, jsd_sum, teacher_entropy_sum)` triple per
+    teacher, which `compute_loss` turns into `teacher_jsd/{id}`. Packing concatenates several teachers' tokens into one
+    row and then splits that row into fixed-size chunks, so the partition has to survive a teacher's positions being
+    spread across chunk boundaries.
+    """
+
+    NUM_POSITIONS, HIDDEN_SIZE, VOCAB_SIZE, NUM_TEACHERS = 10, 8, 32, 2
+
+    def _run(self, teacher_id_idx, chunk_size):
+        generator = torch.Generator().manual_seed(0)
+        hidden = torch.randn(self.NUM_POSITIONS, self.HIDDEN_SIZE, generator=generator)
+        lm_head_weight = torch.randn(self.VOCAB_SIZE, self.HIDDEN_SIZE, generator=generator)
+        actual_token_ids = torch.randint(self.VOCAB_SIZE, (self.NUM_POSITIONS,), generator=generator).tolist()
+        ids, logprobs = _make_teacher_topk(self.VOCAB_SIZE, actual_token_ids, TEACHER_TOP_K, seed=0)
+        target_ids = torch.tensor(ids)
+
+        return _chunked_jsd_loss(
+            hidden,
+            lm_head_weight,
+            None,
+            1.0,
+            None,
+            target_ids,
+            torch.tensor(logprobs),
+            torch.ones_like(target_ids, dtype=torch.bool),
+            0.0,
+            1.0,
+            True,
+            teacher_id_idx,
+            self.NUM_TEACHERS,
+            chunk_size,
+        )
+
+    @pytest.mark.parametrize("chunk_size", [3, 256])
+    def test_stats_partition_the_batch_by_teacher(self, chunk_size):
+        teacher_id_idx = torch.tensor([0, 1, 1, 0, 0, 1, 0, 1, 1, 0])
+        _, jsd_sum, _, teacher_entropy_sum, per_teacher_stats = self._run(teacher_id_idx, chunk_size)
+
+        counts, jsd_sums, entropy_sums = per_teacher_stats.view(self.NUM_TEACHERS, 3).T
+        torch.testing.assert_close(counts, torch.bincount(teacher_id_idx).float())
+        torch.testing.assert_close(jsd_sums.sum(), jsd_sum)
+        torch.testing.assert_close(entropy_sums.sum(), teacher_entropy_sum)
+
+    def test_chunking_does_not_move_tokens_between_teachers(self):
+        teacher_id_idx = torch.tensor([0, 1, 1, 0, 0, 1, 0, 1, 1, 0])
+        chunked = self._run(teacher_id_idx, 3)[-1]
+        whole = self._run(teacher_id_idx, self.NUM_POSITIONS)[-1]
+
+        torch.testing.assert_close(chunked, whole)
+
+    def test_single_teacher_reports_no_breakdown(self):
+        per_teacher_stats = self._run(None, 3)[-1]
+
+        assert not per_teacher_stats.any()
 
 
 @pytest.mark.skipif(

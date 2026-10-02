@@ -7,17 +7,10 @@ multi-ecosystem-groups:
       interval: "weekly"
 
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    cooldown:
-      default-days: 7
-    patterns: ["*"]
-    multi-ecosystem-group: "github-actions-and-pre-commit"
-
-  # Actions pinned inside our local composite actions. The "/" directory above
-  # does not cover them: it only scans .github/workflows and the root action.yml.
+  # "/" only covers .github/workflows and the root action.yml, hence the composite actions glob.
   - package-ecosystem: "github-actions"
     directories:
+      - "/"
       - "/.github/actions/*"
     cooldown:
       default-days: 7

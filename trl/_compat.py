@@ -32,8 +32,10 @@ def _is_package_version_below(package_name: str, version_threshold: str) -> bool
     Check if installed package version is below the given threshold.
 
     Args:
-        package_name (str): Package name.
-        version_threshold (str): Maximum version threshold.
+        package_name (`str`):
+            Package name.
+        version_threshold (`str`):
+            Maximum version threshold.
 
     Returns:
         - True if package is installed and version < version_threshold.
@@ -56,8 +58,10 @@ def _is_package_version_at_least(package_name: str, version_threshold: str) -> b
     Check if installed package version is at least the given threshold.
 
     Args:
-        package_name (str): Package name.
-        version_threshold (str): Minimum version threshold.
+        package_name (`str`):
+            Package name.
+        version_threshold (`str`):
+            Minimum version threshold.
 
     Returns:
         - True if package is installed and version >= version_threshold.

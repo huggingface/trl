@@ -24,7 +24,6 @@ import pyarrow as pa
 import pyarrow.types
 import torch
 from accelerate.utils import is_peft_model
-from packaging.version import Version
 from pyarrow import compute as pc
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -51,7 +50,6 @@ from ..trainer.utils import flush_left, pad
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -898,11 +896,7 @@ def prepare_peft_model(
 
     # Create PEFT model
     if peft_config is not None:
-        if (
-            Version(peft.__version__) >= Version("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
+        if getattr(model, "is_loaded_in_4bit", False) and is_sharded_qlora:
             model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
         else:
             model = get_peft_model(model, peft_config)

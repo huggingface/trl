@@ -76,7 +76,7 @@ class VLLMClient:
         return response.json()["world_size"]
 
     def pause(self, timeout: int = 1800) -> None:
-        """Pause generation while keeping the KV cache warm (`mode=keep`), so weights can be swapped in."""
+        """Freeze in-flight requests and clear caches before replacing the model weights."""
         response = requests.post(f"{self.server_url}/pause", params={"mode": "keep"}, timeout=timeout)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
