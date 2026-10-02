@@ -82,6 +82,11 @@ class MiniLLMConfig(GRPOConfig):
         default=True,
         metadata={"help": "Whether to apply length normalization to the rewards."},
     )
+    on_policy_logq: bool = field(
+        default=False,
+        metadata={"help": "Whether to use on-policy log Q_{\theta} values for computing reverse KL."
+                  "If False, the student log probs will be the 'old' log probs computed using the rollout policy."},
+    )
 
     def __post_init__(self):
         # We do not use the post_init of GRPOConfig because:
