@@ -47,11 +47,10 @@ from ...trainer.utils import (
     is_trackio_available,
     pad,
 )
-from ..async_grpo.weight_transfer import _send_full_tensors_lockstep
 from .async_distillation_config import AsyncDistillationConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .vllm_client import VLLMClient
-from .weight_transfer import WeightTransferClient
+from .weight_transfer import WeightTransferClient, _send_full_tensors_lockstep
 
 
 logger = get_logger(__name__)

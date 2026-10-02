@@ -67,8 +67,6 @@ def _send_full_tensors_lockstep(
     Every rank iterates `gathered_params` here (so `full_tensor()` stays on the training thread). Rank 0 `put`s into a
     bounded queue that the send thread only `get`s. `wait_for_everyone()` after every put — and after the sentinel —
     keeps non-0 ranks from running ahead when the queue is full.
-
-    Shared by AsyncGRPO and AsyncDistillation: both drive the same NCCL send client from FSDP2 `full_tensor()`.
     """
     send_queue: queue.Queue | None = None
     send_thread: threading.Thread | None = None
