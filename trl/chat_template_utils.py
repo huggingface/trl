@@ -648,6 +648,7 @@ qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
 
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
+
 # Also matches SmolVLM2, which ships a byte-identical chat template.
 smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
 
@@ -1029,6 +1030,7 @@ qwen3_5_think_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think_tra
 qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja").read_text(encoding="utf-8")
 
 qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja").read_text(encoding="utf-8")
+
 smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja").read_text(encoding="utf-8")
 
 
