@@ -33,6 +33,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
@@ -97,14 +98,12 @@ class TestDFTLoss(TrlTestCase):
 
     @pytest.mark.parametrize("num_items_in_batch", [None, 0])
     def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
-        logits = torch.randn(2, 3, 2, requires_grad=True)
-        outputs = MagicMock()
-        outputs.logits = logits
+        outputs = CausalLMOutputWithPast(logits=torch.randn(2, 3, 2, requires_grad=True))
         labels = torch.full((2, 3), -100)
         loss = dft_loss(outputs, labels, num_items_in_batch)
         loss.backward()
         assert loss.item() == 0.0
-        assert torch.isfinite(logits.grad).all()
+        assert torch.isfinite(outputs.logits.grad).all()
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
