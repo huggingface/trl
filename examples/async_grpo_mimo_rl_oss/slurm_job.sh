@@ -24,6 +24,10 @@ OUTPUT_DIR=${OUTPUT_DIR:?set OUTPUT_DIR}
 PROJECT=${PROJECT:-async-grpo-mimo}
 RUN_NAME=${RUN_NAME:-$DOMAINS}
 VLLM_GPUS=${VLLM_GPUS:-1}
+# Replicas, not a wider shard: KV cache is what a 9B runs out of when hundreds of agents are in flight, and each
+# replica brings its own. Tensor parallelism only helps a model too big for one GPU.
+VLLM_DP=${VLLM_DP:-$VLLM_GPUS}
+VLLM_TP=${VLLM_TP:-1}
 TRAIN_GPUS=${TRAIN_GPUS:-2}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-40960}
 LORA_RANK=${LORA_RANK:-0}
@@ -50,7 +54,27 @@ mkdir -p "$OUTPUT_DIR"
 PORT=$((8000 + (SLURM_JOB_ID % 90) * 10))
 RDZV_PORT=$((29500 + SLURM_JOB_ID % 1000))
 VLLM_LOG=$OUTPUT_DIR/vllm-$SLURM_JOB_ID.log
-echo "=== $DOMAINS | $PACKING | $MODEL | vLLM on $VLLM_GPUS GPU(s) port $PORT | trainer on $TRAIN_GPUS | $OUTPUT_DIR"
+
+# On one node the server and the trainer split its GPUs. On two, the server takes the second node whole and the
+# trainer the first, which is what feeding hundreds of concurrent sandboxes needs: KV cache, not compute, is what
+# runs out first, and it scales with replicas.
+NODES=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
+if [ "${#NODES[@]}" -gt 1 ]; then
+    VLLM_HOST=${NODES[1]}
+    VLLM_DEVICES=$(seq -s, 0 $((VLLM_GPUS - 1)))
+    TRAIN_DEVICES=$(seq -s, 0 $((TRAIN_GPUS - 1)))
+    # `--overlap --exact` because a step otherwise claims the whole allocation and the second one would wait for
+    # the first to exit instead of running beside it.
+    VLLM_LAUNCH=(srun --overlap --exact --nodes=1 --ntasks=1 --gres=gpu:"$VLLM_GPUS" -w "$VLLM_HOST")
+    TRAIN_LAUNCH=(srun --overlap --exact --nodes=1 --ntasks=1 --gres=gpu:"$TRAIN_GPUS" -w "${NODES[0]}")
+else
+    VLLM_HOST=localhost
+    VLLM_DEVICES=$(seq -s, 0 $((VLLM_GPUS - 1)))
+    TRAIN_DEVICES=$(seq -s, "$VLLM_GPUS" $((VLLM_GPUS + TRAIN_GPUS - 1)))
+    VLLM_LAUNCH=()
+    TRAIN_LAUNCH=()
+fi
+echo "=== $DOMAINS | $PACKING | $MODEL | vLLM $VLLM_GPUS GPU(s) on $VLLM_HOST:$PORT | trainer $TRAIN_GPUS on ${NODES[0]} | $OUTPUT_DIR"
 
 # --max-loras >= max_staleness + 2: the trainer keeps `max_staleness + 1` versions servable and loads the next
 # before unloading the oldest. 12 covers a staleness of up to 10.
@@ -59,11 +83,12 @@ LORA_ARGS=""
 
 # --logprobs-mode processed_logprobs: the PPO denominator comes from these logprobs.
 # --generation-config vllm: ignore the model card's sampling defaults, which would apply to every rollout.
-CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((VLLM_GPUS - 1))) \
+CUDA_VISIBLE_DEVICES=$VLLM_DEVICES \
 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 \
-    vllm serve "$MODEL" \
+    "${VLLM_LAUNCH[@]}" vllm serve "$MODEL" \
         --host 0.0.0.0 --port "$PORT" \
-        --tensor-parallel-size "$VLLM_GPUS" \
+        --tensor-parallel-size "$VLLM_TP" \
+        --data-parallel-size "$VLLM_DP" \
         --dtype bfloat16 \
         --max-model-len "$MAX_MODEL_LEN" \
         --gpu-memory-utilization 0.85 \
@@ -78,15 +103,15 @@ trap 'kill $VLLM_PID 2>/dev/null' EXIT
 
 echo "=== waiting for vLLM (up to 30 min), log: $VLLM_LOG"
 for _ in $(seq 1 360); do
-    curl -sf "http://localhost:$PORT/health" > /dev/null && break
+    curl -sf "http://$VLLM_HOST:$PORT/health" > /dev/null && break
     kill -0 $VLLM_PID 2>/dev/null || { echo "!!! vLLM died"; tail -40 "$VLLM_LOG"; exit 1; }
     sleep 5
 done
-curl -sf "http://localhost:$PORT/health" > /dev/null || { echo "!!! vLLM never came up"; tail -40 "$VLLM_LOG"; exit 1; }
+curl -sf "http://$VLLM_HOST:$PORT/health" > /dev/null || { echo "!!! vLLM never came up"; tail -40 "$VLLM_LOG"; exit 1; }
 echo "=== vLLM ready"
 
-CUDA_VISIBLE_DEVICES=$(seq -s, "$VLLM_GPUS" $((VLLM_GPUS + TRAIN_GPUS - 1))) \
-    accelerate launch --config_file "$EXAMPLE_DIR/$FSDP_CONFIG" --num_processes "$TRAIN_GPUS" \
+CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES \
+    "${TRAIN_LAUNCH[@]}" accelerate launch --config_file "$EXAMPLE_DIR/$FSDP_CONFIG" --num_processes "$TRAIN_GPUS" \
         --main_process_port "$RDZV_PORT" \
         "$EXAMPLE_DIR/async_grpo_mimo.py" \
         --model "$MODEL" \
@@ -94,7 +119,7 @@ CUDA_VISIBLE_DEVICES=$(seq -s, "$VLLM_GPUS" $((VLLM_GPUS + TRAIN_GPUS - 1))) \
         --packing "$PACKING" \
         --lora-rank "$LORA_RANK" \
         --gradient-checkpointing \
-        --vllm-url "http://localhost:$PORT" \
+        --vllm-url "http://$VLLM_HOST:$PORT" \
         --output-dir "$OUTPUT_DIR" \
         --project "$PROJECT" --run-name "$RUN_NAME" --trackio-space-id "$PROJECT" \
         $TRAIN_ARGS

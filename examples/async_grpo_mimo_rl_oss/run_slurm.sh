@@ -4,6 +4,7 @@
 #
 #   ./run_slurm.sh                                   # general, code, and the three mixed
 #   DOMAIN_SETS=code ./run_slurm.sh                  # just the Code run
+#   NODES=2 VLLM_GPUS=8 TRAIN_GPUS=8 LORA_RANK=0 ./run_slurm.sh   # a node each, full fine-tune
 #   TRAIN_ARGS="--max-steps 50 --instances-file trainable_instances.json" ./run_slurm.sh
 #
 # The venv (trl + vllm + mimoagent + openenv) has to be staged first, once, from a login node, and so do the General
@@ -19,6 +20,7 @@ PARTITION=${PARTITION:-hopper-atl}
 TIME=${TIME:-12:00:00}
 MODEL=${MODEL:-XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B}
 VLLM_GPUS=${VLLM_GPUS:-1}
+NODES=${NODES:-1}  # 2 gives vLLM the second node whole, which is what hundreds of sandboxes need
 TRAIN_GPUS=${TRAIN_GPUS:-2}
 LORA_RANK=${LORA_RANK:-32}
 # Sequence, not tree: three of every four layers of Qwen3.5 are linear-attention layers, whose recurrent state
@@ -41,13 +43,14 @@ for domains in $DOMAIN_SETS; do
     # comma-separated list of assignments, so a `DOMAINS=general,cyber` written there arrives as `DOMAINS=general`
     # and the job trains on one domain without saying so. `--export=ALL` passes this environment through whole.
     export EXAMPLE_DIR="$PWD" LORA_RANK PACKING MODEL VLLM_GPUS TRAIN_GPUS PROJECT TRAIN_ARGS
+    export VLLM_DP VLLM_TP
     export DOMAINS="$domains" OUTPUT_DIR="$RUNS_DIR/$name" RUN_NAME="$RUN_TAG-$name"
     # Untyped `--gres=gpu:N`: `gpu:h100:N` matches nothing on hopper-atl or hopper-extra and pends forever.
     sbatch \
         --job-name="mimo-$name" \
         --partition="$PARTITION" \
-        --nodes=1 \
-        --gres=gpu:$((VLLM_GPUS + TRAIN_GPUS)) \
+        --nodes="$NODES" \
+        --gres=gpu:$([ "$NODES" -gt 1 ] && echo $((VLLM_GPUS > TRAIN_GPUS ? VLLM_GPUS : TRAIN_GPUS)) || echo $((VLLM_GPUS + TRAIN_GPUS))) \
         --time="$TIME" \
         --qos=low \
         --output="$RUNS_DIR/logs/%x-%j.out" \
