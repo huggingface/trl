@@ -15,6 +15,7 @@
 import pytest
 import torch
 from transformers import AutoModelForCausalLM
+from transformers.testing_utils import torch_device
 
 from trl.experimental.api import ForwardBackwardOutput, LocalTrainingClient
 from trl.trainer.utils import add_fused_lm_head
@@ -73,14 +74,16 @@ class RemoteStyleTrainingClient:
 class TestTrainingClient(TrlTestCase):
     def setup_method(self):
         torch.manual_seed(0)
-        self.model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float32, attn_implementation="sdpa")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, dtype=torch.float32, attn_implementation="sdpa"
+        ).to(torch_device)
         add_fused_lm_head(self.model, temperature=1.0)
         self.model.train()
 
         torch.manual_seed(1)
-        self.input_ids = torch.randint(0, self.model.config.vocab_size, (2, 12))
-        self.position_ids = torch.arange(12).expand(2, 12)
-        self.completion_mask = torch.zeros(2, 12, dtype=torch.long)
+        self.input_ids = torch.randint(0, self.model.config.vocab_size, (2, 12), device=torch_device)
+        self.position_ids = torch.arange(12, device=torch_device).expand(2, 12)
+        self.completion_mask = torch.zeros(2, 12, dtype=torch.long, device=torch_device)
         self.completion_mask[:, 6:] = 1
 
         shifted = self.completion_mask[:, 1:].float()
