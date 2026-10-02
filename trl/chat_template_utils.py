@@ -594,6 +594,14 @@ gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding
 
 gemma4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4.jinja").read_text(encoding="utf-8")
 
+gemma4_v2_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v2.jinja").read_text(encoding="utf-8")
+
+gemma4_v3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v3.jinja").read_text(encoding="utf-8")
+
+gemma4_v4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v4.jinja").read_text(encoding="utf-8")
+
+gemma4_v5_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5.jinja").read_text(encoding="utf-8")
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
@@ -725,7 +733,13 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
         # tokenizer already requires transformers >= 5.0.0.
         schema, template = None, lfm2_2_5_template
-    elif chat_template == gemma4_chat_template:
+    elif chat_template in [
+        gemma4_chat_template,
+        gemma4_v2_chat_template,
+        gemma4_v3_chat_template,
+        gemma4_v4_chat_template,
+        gemma4_v5_chat_template,
+    ]:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
         schema, template = None, gemma4_template
