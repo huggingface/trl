@@ -45,6 +45,9 @@ export TRL_EXPERIMENTAL_SILENCE=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Node-local: the ranks race on the cache and /fsx does not give Triton the atomic renames it relies on.
 export TRITON_CACHE_DIR=/tmp/triton-$SLURM_JOB_ID
+# Every data-parallel worker compiles the model and reads its weights off /fsx at the same time, which takes a
+# multiple of the single-GPU start that the 600 s default was sized for.
+export VLLM_ENGINE_READY_TIMEOUT_S=${VLLM_ENGINE_READY_TIMEOUT_S:-2400}
 # cuDNN and the CUDA runtime ship inside the venv rather than on the node.
 SITE_PACKAGES=$(echo "$VIRTUAL_ENV"/lib/python*/site-packages)
 export LD_LIBRARY_PATH="$SITE_PACKAGES/nvidia/cudnn/lib:$SITE_PACKAGES/nvidia/cu13/lib:${LD_LIBRARY_PATH:-}"
@@ -75,6 +78,20 @@ else
     TRAIN_LAUNCH=()
 fi
 echo "=== $DOMAINS | $PACKING | $MODEL | vLLM $VLLM_GPUS GPU(s) on $VLLM_HOST:$PORT | trainer $TRAIN_GPUS on ${NODES[0]} | $OUTPUT_DIR"
+# The resolved configuration, one `key=value` a line, so a run can be read back from its own log instead of from
+# whatever the launcher happened to be set to at the time.
+{
+    echo "CONFIG model=$MODEL"
+    echo "CONFIG domains=$DOMAINS"
+    echo "CONFIG packing=$PACKING"
+    echo "CONFIG lora_rank=$LORA_RANK"
+    echo "CONFIG max_model_len=$MAX_MODEL_LEN"
+    echo "CONFIG nodes=${#NODES[@]}"
+    echo "CONFIG vllm_gpus=$VLLM_GPUS vllm_tp=$VLLM_TP vllm_dp=$VLLM_DP"
+    echo "CONFIG train_gpus=$TRAIN_GPUS fsdp=$FSDP_CONFIG"
+    echo "CONFIG parsers=$TOOL_PARSER/$REASONING_PARSER"
+    echo "CONFIG train_args=$TRAIN_ARGS"
+} | tee -a "$OUTPUT_DIR/config-$SLURM_JOB_ID.txt"
 
 # --max-loras >= max_staleness + 2: the trainer keeps `max_staleness + 1` versions servable and loads the next
 # before unloading the oldest. 12 covers a staleness of up to 10.
