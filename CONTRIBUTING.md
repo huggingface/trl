@@ -259,7 +259,7 @@ Not every invalid value deserves a check. Before adding one, answer two question
 
 1. **Would a real user reach this state?** Describe the training run that produces it. A value nobody would choose on purpose, or a report from an automated code-analysis pass rather than a real run, is not a case we handle.
 
-2. **How does it fail today?** If it fails loudly at the point of use, with a traceback on the line responsible, a guard only rewords an error the user already gets. If it fails silently, produces wrong training, or raises far from the setting that caused it, that is worth a guard.
+2. **How does it fail today?** If it fails loudly at the point of use, with a traceback on the line responsible, a guard only rewords an error the user already gets. If it hangs, fails silently, produces wrong training, or raises far from the setting that caused it, that is worth a guard.
 
 Avoid guards that encode what merely looks reasonable today. A plausible bound on a hyperparameter can rule out a configuration that later turns out to be useful, and TRL is used for research. Guard states that are definitely wrong, such as mismatched shapes or incompatible features, not values that merely look unusual.
 
