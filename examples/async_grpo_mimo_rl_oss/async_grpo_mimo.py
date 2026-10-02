@@ -82,12 +82,13 @@ from mimoagent.models.openai_chat import (  # noqa: E402
 from openai import OpenAI
 from openenv.core.harness import ResourceSession, ResourceSessionFactory, ToolResult, VerifyResult
 from peft import LoraConfig
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, TrainerCallback
 from transformers.trainer_utils import get_last_checkpoint
 
 import trl.experimental.async_grpo.async_grpo_trainer as async_grpo_trainer
 from trl.chat_template_utils import add_response_schema, qwen3_5_template
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo.async_grpo_trainer import save_lora_adapter
 from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker, TraceEntry
 
 
@@ -265,6 +266,25 @@ class MixedSessionFactory(ResourceSessionFactory):
     def create(self, task: Any, seed: int | None = None, episode_id: str | None = None) -> TrainingSession:
         instance = self.tasks[task[-1]["content"]]
         return self.factories[instance["domain"]].create(instance, episode_id[:8])
+
+
+class SaveAdapterCallback(TrainerCallback):
+    """Write a loadable adapter beside every checkpoint.
+
+    The trainer's own checkpoint is an FSDP shard set: it resumes this run and nothing else. A run that is preempted
+    or stopped partway is far more useful if it also left an adapter that vLLM or `from_pretrained` can open, so each
+    save publishes one next to the checkpoint it belongs to."""
+
+    def __init__(self, trainer):
+        self.trainer = trainer
+
+    def on_save(self, args, state, control, **kwargs):
+        save_lora_adapter(
+            self.trainer.accelerator.unwrap_model(self.trainer.model),
+            self.trainer.accelerator,
+            self.trainer._adapter_name,
+            os.path.join(args.output_dir, f"adapter-step-{state.global_step}"),
+        )
 
 
 def main() -> None:
@@ -447,6 +467,9 @@ def main() -> None:
         if args.lora_rank
         else None,
     )
+
+    if args.lora_rank:
+        trainer.add_callback(SaveAdapterCallback(trainer))
 
     last_checkpoint = get_last_checkpoint(args.output_dir) if os.path.isdir(args.output_dir) else None
     trainer.train(resume_from_checkpoint=last_checkpoint)
