@@ -15,11 +15,11 @@ Used for identity comparison only.
 
 ### `cohere.jinja`
 
-Original Cohere Command chat template (as shipped by `CohereForAI/c4ai-command-r-v01` and related checkpoints).
+Original Cohere chat template (as shipped by `CohereLabs/aya-expanse-8b`).
 
 ### `cohere2.jinja`
 
-Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-2024` and related checkpoints).
+Original Cohere2 chat template (as shipped by `CohereLabs/tiny-aya-earth`).
 
 ### `deepseek_r1_distill.jinja`
 
