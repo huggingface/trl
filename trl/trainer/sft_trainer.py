@@ -819,7 +819,8 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     per_token_loss = -logprobs.exp().detach() * logprobs
     if num_items_in_batch is None:
         num_items_in_batch = loss_mask.sum()
-    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
+    loss = (per_token_loss * loss_mask).sum() / torch.as_tensor(num_items_in_batch).clamp(min=1)
     return loss
 
 
@@ -1192,9 +1193,11 @@ class SFTTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
