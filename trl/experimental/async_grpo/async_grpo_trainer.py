@@ -1940,12 +1940,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
 
-    def create_optimizer(self, model=None):
-        if self._remote_model and self.optimizer is None:
+    def create_optimizer(self, *args, **kwargs):
+        # transformers >= 5.5 adds a `model` argument, passed through unchanged
+        if not self._remote_model:
+            return super().create_optimizer(*args, **kwargs)
+        if self.optimizer is None:
             self.optimizer = _RemoteOptimizer(
                 self.model.parameters(), self.training_client, self.args.learning_rate, self._metrics["train"]
             )
-        return super().create_optimizer(model)
+        return self.optimizer
 
     def _save(self, output_dir: str | None = None, state_dict: dict | None = None) -> None:
         if not self._remote_model:
