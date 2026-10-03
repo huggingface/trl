@@ -414,10 +414,7 @@ class _AsyncRolloutLoop:
                 instance = factory()
                 has_reset = False
                 methods = []
-                # Look the tool methods up on the class, not the instance: `inspect.getmembers` evaluates every
-                # attribute it lists before applying the predicate, so probing the instance would run its properties
-                # (which may be expensive or have side effects, e.g. scoring a rollout). On the class a property is
-                # inert, and the functions found there are bound to the instance by name.
+                # List on the class: getmembers on the instance evaluates properties
                 for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
@@ -577,8 +574,6 @@ class _AsyncRolloutLoop:
                     # Build this rollout's tool dict: the standalone tools plus the methods of its environment.
                     methods = []
                     if environment is not None:
-                        # Looked up on the class, not the instance, for the reason given in `__init__`: the instance
-                        # is a pooled one, and evaluating its properties here would run them before every rollout.
                         methods = [
                             getattr(environment, member_name)
                             for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
