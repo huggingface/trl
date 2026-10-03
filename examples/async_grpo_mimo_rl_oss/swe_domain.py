@@ -85,6 +85,9 @@ DOMAINS = {
             {"tool": "Glob"},
         ],
         "step_limit": 500,
+        # `TRAJECTORY_TIMEOUT` of `scripts/code/train.sh` upstream. Four times the General budget, because a
+        # repository task spends much of its life in builds and test runs rather than in model calls.
+        "agent_timeout": 4800,
         # Upstream builds these images clean and runs the cleanup; it strips build residue that would otherwise
         # tell the agent what the hidden tests expect.
         "anti_hack_cleanup": True,
@@ -101,6 +104,9 @@ DOMAINS = {
             {"tool": "Edit"},
         ],
         "step_limit": 300,
+        # `TRAJECTORY_TIMEOUT` of `scripts/arvo/arvo.sh` upstream: eight hours. Reproducing a crash means building
+        # and running a sanitizer target many times over, so the budget is far larger than any other domain's.
+        "agent_timeout": 28800,
         "anti_hack_cleanup": False,
         # Upstream runs the agent as an unprivileged user so it cannot reach the grading server's verdict file; a
         # sandbox has one user, so the guard stands in for that wall as it does for the General sidecar.

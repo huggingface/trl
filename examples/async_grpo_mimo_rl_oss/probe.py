@@ -209,6 +209,7 @@ def summarize_packing(results: list[dict]) -> None:
 
 
 def make_factory(domain: str, args, transcripts_dir: Path):
+    domain_timeout = 1200 if domain == "general" else swe_domain.DOMAINS[domain]["agent_timeout"]
     common = dict(
         base_url=args.base_url,
         api_key=args.api_key,
@@ -218,7 +219,7 @@ def make_factory(domain: str, args, transcripts_dir: Path):
         top_p=args.top_p,
         max_turn_tokens=args.max_turn_tokens,
         max_observation_length=args.max_observation_length,
-        agent_timeout=args.agent_timeout,
+        agent_timeout=args.agent_timeout or domain_timeout,
         verify_timeout=args.verify_timeout,
         flavor=args.sandbox_flavor,
         transcripts_dir=transcripts_dir,
@@ -264,7 +265,9 @@ def main() -> None:
     p.add_argument("--max-observation-length", type=int, default=8000)
     p.add_argument("--enable-thinking", action="store_true")
     p.add_argument("--step-limit", type=int, default=500)  # general only; the others carry their own
-    p.add_argument("--agent-timeout", type=int, default=1200)  # upstream TRAJECTORY_TIMEOUT
+    # `TRAJECTORY_TIMEOUT` upstream, which differs per domain: 1200 s for General, 4800 for Code and 28800 for
+    # Cyber. Left unset, each domain takes its own; a value here overrides all of them.
+    p.add_argument("--agent-timeout", type=int, default=None)
     p.add_argument("--verify-timeout", type=int, default=900)
     p.add_argument("--sandbox-flavor", default="cpu-basic")
     p.add_argument("--judge-url", default="https://router.huggingface.co/v1")
