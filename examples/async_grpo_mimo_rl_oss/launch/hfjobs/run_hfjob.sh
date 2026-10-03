@@ -42,7 +42,8 @@ LORA_RANK=${LORA_RANK:-32}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-40960}
 TOOL_PARSER=${TOOL_PARSER:-hermes}
 REASONING_PARSER=${REASONING_PARSER:-qwen3}
-PROJECT=${PROJECT:-async-grpo-mimo-abl}
+# The same Space the Slurm launcher reports to, so an arm lands in one place however it was scheduled.
+PROJECT=${PROJECT:-async-grpo-mimo}
 RUN_NAME=${RUN_NAME:-hfjob-$PACKING-$(date +%m%d-%H%M)}
 TIMEOUT=${TIMEOUT:-8h}
 # Checkpoints and adapters go to a bucket: a job's own filesystem is gone the moment it ends, so anything written
