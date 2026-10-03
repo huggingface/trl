@@ -11,7 +11,7 @@
 set -uo pipefail
 
 # Slurm runs a *copy* of this script out of its spool directory, so `$0` is not where the example lives.
-EXAMPLE_DIR=${EXAMPLE_DIR:-$SLURM_SUBMIT_DIR}
+EXAMPLE_DIR=${EXAMPLE_DIR:-$(cd "$SLURM_SUBMIT_DIR/../.." && pwd)}
 VENV=${VENV:-/fsx/$USER/envs/trl-agent}
 HF_HUB=${HF_HUB:-/fsx/$USER/hf-hub}
 MODEL=${MODEL:-XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B}
@@ -137,7 +137,7 @@ curl -sf "http://$VLLM_HOST:$PORT/health" > /dev/null || { echo "!!! vLLM never 
 echo "=== vLLM ready"
 
 CUDA_VISIBLE_DEVICES=$TRAIN_DEVICES \
-    "${TRAIN_LAUNCH[@]}" accelerate launch --config_file "$EXAMPLE_DIR/$FSDP_CONFIG" --num_processes "$TRAIN_GPUS" \
+    "${TRAIN_LAUNCH[@]}" accelerate launch --config_file "$EXAMPLE_DIR/launch/slurm/$FSDP_CONFIG" --num_processes "$TRAIN_GPUS" \
         --main_process_port "$RDZV_PORT" \
         "$EXAMPLE_DIR/async_grpo_mimo.py" \
         --model "$MODEL" \

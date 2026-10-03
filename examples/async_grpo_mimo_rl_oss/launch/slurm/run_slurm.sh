@@ -42,7 +42,7 @@ for domains in $DOMAIN_SETS; do
     # Exported into the environment rather than listed in `--export`: that option parses its argument as a
     # comma-separated list of assignments, so a `DOMAINS=general,cyber` written there arrives as `DOMAINS=general`
     # and the job trains on one domain without saying so. `--export=ALL` passes this environment through whole.
-    export EXAMPLE_DIR="$PWD" LORA_RANK PACKING MODEL VLLM_GPUS TRAIN_GPUS PROJECT TRAIN_ARGS
+    export EXAMPLE_DIR="$(cd ../.. && pwd)" LORA_RANK PACKING MODEL VLLM_GPUS TRAIN_GPUS PROJECT TRAIN_ARGS
     export VLLM_DP VLLM_TP
     export DOMAINS="$domains" OUTPUT_DIR="$RUNS_DIR/$name" RUN_NAME="$RUN_TAG-$name"
     # Untyped `--gres=gpu:N`: `gpu:h100:N` matches nothing on hopper-atl or hopper-extra and pends forever.
