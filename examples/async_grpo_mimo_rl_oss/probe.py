@@ -13,7 +13,7 @@
 # limitations under the License.
 # /// script
 # dependencies = [
-#     "mimoagent @ git+https://github.com/XiaomiMiMo/MiMo-Agent.git",
+#     "mimoagent @ git+https://github.com/XiaomiMiMo/mimoagent.git",
 #     "huggingface_hub>=1.31",
 #     "pandas",
 #     "pyarrow",

@@ -22,7 +22,7 @@
 #     "pandas",
 #     "pyarrow",
 #     "huggingface_hub>=1.31",
-#     "mimoagent @ git+https://github.com/XiaomiMiMo/MiMo-Agent.git",
+#     "mimoagent @ git+https://github.com/XiaomiMiMo/mimoagent.git",
 #     "openenv @ git+https://github.com/huggingface/OpenEnv.git",
 # ]
 # ///

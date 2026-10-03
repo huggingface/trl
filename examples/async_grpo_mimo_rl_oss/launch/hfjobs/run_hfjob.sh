@@ -29,9 +29,11 @@ VLLM_DP=${VLLM_DP:-$VLLM_GPUS}
 # whatever the branch points at when it happens to start.
 TRL_SHA=${TRL_SHA:-$(git -C "$EXAMPLE_DIR" rev-parse HEAD)}
 VLLM_TAG=${VLLM_TAG:-v0.27.1}
-# Tarballs rather than `git+https`: the vLLM image ships no git, and pip's VCS installer shells out to it.
-MIMOAGENT_REF=${MIMOAGENT_REF:-main}
-OPENENV_REF=${OPENENV_REF:-49aa302ba5c6}
+# Tarballs rather than `git+https`: the vLLM image ships no git and pip's VCS installer shells out to it. The URL
+# has to carry a real `.tar.gz` and the repository's own name: pip exits 0 without installing anything when the
+# extension is missing, and `MiMo-Agent` is a redirect that codeload answers with a different project.
+MIMOAGENT_SHA=${MIMOAGENT_SHA:-467f0a19016f0ac4d63b8d17a1f0da9ba07f232c}
+OPENENV_SHA=${OPENENV_SHA:-49aa302ba5c6}
 
 MODEL=${MODEL:-Qwen/Qwen3-8B}
 DOMAINS=${DOMAINS:-general}
@@ -56,16 +58,19 @@ uvx hf jobs run \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "VLLM_GPUS=$VLLM_GPUS" -e "TRAIN_GPUS=$TRAIN_GPUS" -e "VLLM_TP=$VLLM_TP" -e "VLLM_DP=$VLLM_DP" \
     -e "PROJECT=$PROJECT" -e "RUN_NAME=$RUN_NAME" -e "TRAIN_ARGS=$TRAIN_ARGS" \
-    -e "MIMOAGENT_REF=$MIMOAGENT_REF" -e "OPENENV_REF=$OPENENV_REF" \
+    -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
 set -euo pipefail
 export HF_HOME=/tmp/hf PYTHONUNBUFFERED=1 TRL_EXPERIMENTAL_SILENCE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # GitHub rate-limits datacenter IPs, so this may need a retry.
-pip install -q "https://codeload.github.com/huggingface/trl/tar.gz/${TRL_SHA}" \
-    "kernels>=0.16,<0.17" trackio "huggingface_hub>=1.31" pandas pyarrow openai \
-    "https://codeload.github.com/XiaomiMiMo/MiMo-Agent/tar.gz/${MIMOAGENT_REF}" \
-    "https://codeload.github.com/huggingface/OpenEnv/tar.gz/${OPENENV_REF}"
+pip install "https://github.com/huggingface/trl/archive/${TRL_SHA}.tar.gz" \
+    "kernels>=0.16,<0.17" trackio "huggingface_hub>=1.31" pandas pyarrow openai flash-linear-attention \
+    "https://github.com/XiaomiMiMo/mimoagent/archive/${MIMOAGENT_SHA}.tar.gz" \
+    "https://github.com/huggingface/OpenEnv/archive/${OPENENV_SHA}.tar.gz"
+# pip can report success while installing nothing, so check what the trainer actually needs before paying for a
+# vLLM start.
+python -c "import trl, mimoagent, openenv; from mimoagent.agents.cc import CCAgent; print('deps ok')"
 
 SERVE_IDS=$(seq -s, "$TRAIN_GPUS" $((TRAIN_GPUS + VLLM_GPUS - 1)))
 TRAIN_IDS=$(seq -s, 0 $((TRAIN_GPUS - 1)))
