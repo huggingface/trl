@@ -489,3 +489,23 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    @pytest.mark.parametrize("config", ["zero2", "zero3"])
+    def test_a2po(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "tests/distributed/a2po_zero3.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--max_steps", "1",
+                "--learning_rate", "0.1",
+                "--per_device_train_batch_size", "1",
+                "--max_completion_length", "8",
+                "--num_value_samples", "2",
+                "--filter_all_incorrect", "False",
+                "--report_to", "none",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
