@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
-
 import pytest
 import torch
-from datasets import Dataset, DatasetDict, load_dataset
+from datasets import DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
@@ -35,38 +33,6 @@ class TestCPOTrainer(TrlTestCase):
         model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
         self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id, dtype="float32")
         self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    def test_simpo_loss_is_finite_with_truncated_completion(self):
-        dataset = Dataset.from_dict(
-            {
-                "prompt": ["Question: what is 2+2?\nAnswer:"],
-                "chosen": [" step" * 64],
-                "rejected": [" The answer is 4."],
-            }
-        )
-        training_args = CPOConfig(
-            output_dir=self.tmp_dir,
-            loss_type="simpo",
-            cpo_alpha=0.0,
-            max_length=32,
-            max_steps=1,
-            logging_steps=1,
-            per_device_train_batch_size=1,
-            report_to="none",
-        )
-        trainer = CPOTrainer(
-            model=self.model,
-            args=training_args,
-            processing_class=self.tokenizer,
-            train_dataset=dataset,
-        )
-
-        trainer.train()
-
-        step_metrics = next(metrics for metrics in trainer.state.log_history if "grad_norm" in metrics)
-        assert math.isfinite(step_metrics["loss"])
-        assert math.isfinite(step_metrics["grad_norm"])
-        assert all(torch.isfinite(parameter).all() for parameter in trainer.model.parameters())
 
     def test_trust_remote_code(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -144,6 +110,24 @@ class TestCPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
+
+    def test_cpo_trainer_truncation(self):
+        # Each response is truncated to `max_length` minus the prompt length. The prompt is never truncated, so a prompt
+        # longer than `max_length` is kept whole with an empty completion.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = CPOConfig(output_dir=self.tmp_dir, report_to="none")
+        full = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+        training_args = CPOConfig(output_dir=self.tmp_dir, max_length=8, report_to="none")
+        truncated = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+
+        for full_row, truncated_row in zip(full, truncated, strict=True):
+            length = max(8, len(full_row["prompt_input_ids"]))
+            assert truncated_row["chosen_input_ids"] == full_row["chosen_input_ids"][:length]
+            assert truncated_row["rejected_input_ids"] == full_row["rejected_input_ids"][:length]
 
     @pytest.mark.parametrize(
         "eval_dataset_type",

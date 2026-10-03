@@ -546,9 +546,8 @@ class ORPOTrainer(_BaseTrainer):
                         ]
                 if len(answer_tokens["input_ids"]) == 0:
                     logger.warning_once(
-                        "Truncation resulted in an empty completion. "
-                        "This example will contribute no learning signal. "
-                        "Consider increasing `max_length` or filtering long prompts."
+                        "The prompt alone fills `max_length`, so truncation leaves an empty completion. Consider "
+                        "increasing `max_length` or filtering out long prompts."
                     )
 
             # Create labels
