@@ -130,6 +130,7 @@ class A2POTrainer(_BaseTrainer):
         # Distributed training requires device_map=None ("auto" fails)
         if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("dtype", model.dtype)
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         self.ref_model = create_model_from_path(get_config_model_id(model.config), **model_init_kwargs)
         self.ref_model.requires_grad_(False)

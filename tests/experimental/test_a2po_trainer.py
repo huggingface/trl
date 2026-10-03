@@ -203,10 +203,12 @@ class TestA2POTrainer(TrlTestCase):
         assert "gamma" in trainer._optimal_values and "delta" in trainer._optimal_values
 
     @pytest.mark.parametrize("model_input", ["path", "model"])
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, None])
     def test_reference_model_from_checkpoint(self, model_input, dtype):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model_init_kwargs = {"dtype": dtype, "device_map": None, "trust_remote_code": False}
+        model_init_kwargs = {"device_map": None, "trust_remote_code": False}
+        if dtype is not None:
+            model_init_kwargs["dtype"] = dtype
         expected_model_init_kwargs = dict(model_init_kwargs)
         model = (
             model_id if model_input == "path" else AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
@@ -229,8 +231,30 @@ class TestA2POTrainer(TrlTestCase):
         assert training_args.model_init_kwargs == expected_model_init_kwargs
         for name, reference_param in trainer.ref_model.named_parameters():
             policy_param = trainer.model.get_parameter(name)
-            assert reference_param.dtype == policy_param.dtype == dtype
+            assert reference_param.dtype == policy_param.dtype
+            if dtype is not None:
+                assert policy_param.dtype == dtype
             assert reference_param.data_ptr() != policy_param.data_ptr()
+            torch.testing.assert_close(reference_param, policy_param, rtol=0, atol=0)
+
+    @pytest.mark.parametrize("model_input", ["path", "model"])
+    @pytest.mark.parametrize("model_init_kwargs", [None, {}])
+    def test_reference_model_default_dtype(self, model_input, model_init_kwargs):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = (
+            model_id if model_input == "path" else AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32)
+        )
+        trainer = A2POTrainer(
+            model=model,
+            reward_funcs=completion_parity_reward,
+            args=A2POConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none"),
+            train_dataset=Dataset.from_dict({"prompt": ["The capital of France is"]}),
+        )
+
+        assert trainer.args.model_init_kwargs == model_init_kwargs
+        for name, reference_param in trainer.ref_model.named_parameters():
+            policy_param = trainer.model.get_parameter(name)
+            assert reference_param.dtype == policy_param.dtype
             torch.testing.assert_close(reference_param, policy_param, rtol=0, atol=0)
 
     def test_reference_model_from_local_checkpoint(self):

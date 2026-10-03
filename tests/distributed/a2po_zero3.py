@@ -35,7 +35,6 @@ def snapshot_parameters(model):
 
 def main():
     training_args, model_args = HfArgumentParser((A2POConfig, ModelConfig)).parse_args_into_dataclasses()
-    training_args.model_init_kwargs = {"dtype": torch.bfloat16 if training_args.bf16 else torch.float32}
     dataset = Dataset.from_dict(
         {"prompt": ["The capital of France is", "Two plus two equals", "Water is made of", "The sky is"]}
     )
