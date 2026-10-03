@@ -18,7 +18,13 @@ from io import StringIO
 from unittest.mock import patch
 
 import pytest
+import torch
 import yaml
+from datasets import Dataset
+from transformers import set_seed
+
+from trl import DatasetMixtureConfig, ModelConfig, ScriptArguments, SFTConfig
+from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
 
@@ -36,6 +42,47 @@ def test_help_no_type_error(command):
 
 
 class TestCLI(TrlTestCase):
+    def test_dataset_split_seed(self):
+        from transformers import AutoModelForCausalLM
+
+        from trl.scripts import sft
+
+        dataset_path = os.path.join(self.tmp_dir, "data.jsonl")
+        Dataset.from_dict({"text": [f"The answer is {i}." for i in range(100)]}).to_json(dataset_path)
+        weights = []
+        for seed, ambient_seed in [(42, 111), (42, 222), (43, 111)]:
+            output_dir = os.path.join(self.tmp_dir, f"{seed}-{ambient_seed}")
+            training_args = SFTConfig(
+                output_dir=output_dir,
+                seed=seed,
+                use_cpu=True,
+                bf16=False,
+                eval_strategy="steps",
+                max_steps=1,
+                max_length=32,
+                per_device_train_batch_size=2,
+                learning_rate=0.01,
+                save_strategy="no",
+                disable_tqdm=True,
+                report_to="none",
+            )
+            dataset_args = DatasetMixtureConfig(
+                datasets=[DatasetConfig(path="json", data_files=dataset_path)], test_split_size=0.2
+            )
+            set_seed(ambient_seed)
+            sft.main(
+                ScriptArguments(),
+                training_args,
+                ModelConfig(model_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+                dataset_args,
+            )
+            model = AutoModelForCausalLM.from_pretrained(output_dir, dtype="float32")
+            weights.append(model.model.embed_tokens.weight.detach().clone())
+
+        # Real training must be reproducible even when the process starts with a different RNG state.
+        assert torch.equal(weights[0], weights[1])
+        assert not torch.equal(weights[0], weights[2])
+
     @pytest.mark.parametrize(
         "command,trainer_name",
         [

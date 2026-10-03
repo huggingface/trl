@@ -119,6 +119,9 @@ def main(script_args, training_args, model_args, dataset_args):
         model_init_kwargs.update(training_args.model_init_kwargs)
     training_args.model_init_kwargs = model_init_kwargs
 
+    # Seed before loading the dataset so train/test splits are reproducible.
+    transformers.set_seed(training_args.seed)
+
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
