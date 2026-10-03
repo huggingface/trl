@@ -18,10 +18,14 @@ import os
 import sys
 import traceback
 from functools import wraps
+from unittest.mock import Mock
 
 import pytest
 import torch
+from accelerate import Accelerator
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
+
+from trl.generation.vllm_generation import VLLMGeneration
 
 
 # ============================================================================
@@ -300,3 +304,11 @@ def undo_liger_kernel_patching(monkeypatch):
     yield
     for module, snapshot in snapshots.values():
         vars(module).update(snapshot)
+
+
+@pytest.fixture
+def vllm_generation(monkeypatch):
+    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)
+    generation = VLLMGeneration(torch.nn.Linear(1, 1), Accelerator(cpu=True), None)
+    generation.llm = Mock()
+    return generation

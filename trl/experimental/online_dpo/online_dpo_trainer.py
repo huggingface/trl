@@ -74,6 +74,7 @@ if is_bitsandbytes_available():
 
 if is_peft_available():
     from peft import PeftConfig
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 if is_sagemaker_mp_enabled():
@@ -819,6 +820,13 @@ class OnlineDPOTrainer(_BaseTrainer):
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with gather_if_zero3(list(self.model.parameters())):
+                # Unmerging is lossy, so keep exact copies to restore
+                originals = [
+                    (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
+                    for module in self.model.modules()
+                    if isinstance(module, BaseTunerLayer) and not zero_stage_3
+                    for name, param in module.get_base_layer().named_parameters(recurse=False)
+                ]
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
@@ -853,6 +861,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
+                # bitsandbytes merges replace the parameter, so re-register the original
+                for base_layer, name, param, data in originals:
+                    param.data.copy_(data)
+                    base_layer.register_parameter(name, param)
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
