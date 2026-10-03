@@ -332,6 +332,10 @@ class TestVLLMClientServer(TrlTestCase):
         # Test resetting the prefix cache
         self.client.reset_prefix_cache()
 
+    def test_reset_encoder_cache(self):
+        # Test resetting the encoder cache
+        self.client.reset_encoder_cache()
+
     @pytest.mark.xfail(reason="Importing `bitsandbytes` causes issues, see vllm-project/vllm#32793")
     def test_logprobs_match_with_non_default_sampling(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -576,6 +580,10 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         # Test resetting the prefix cache
         self.client.reset_prefix_cache()
 
+    def test_reset_encoder_cache(self):
+        # Test resetting the encoder cache
+        self.client.reset_encoder_cache()
+
     @classmethod
     def teardown_class(cls):
         # Close the client
@@ -740,6 +748,10 @@ class TestVLLMClientServerTP(TrlTestCase):
     def test_reset_prefix_cache(self):
         # Test resetting the prefix cache
         self.client.reset_prefix_cache()
+
+    def test_reset_encoder_cache(self):
+        # Test resetting the encoder cache
+        self.client.reset_encoder_cache()
 
     @classmethod
     def teardown_class(cls):
