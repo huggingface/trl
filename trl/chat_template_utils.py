@@ -102,7 +102,7 @@ def clone_chat_template(
 
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
-    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.get_text_config().eos_token_id = tokenizer.eos_token_id
     if model.can_generate():  # Non-generative models (e.g. SequenceClassification) may not have a generation_config
         model.generation_config.eos_token_id = tokenizer.eos_token_id
 
@@ -649,6 +649,9 @@ qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encodi
 
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
 
+# Also matches SmolVLM2, which ships a byte-identical chat template.
+smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
+
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
 
@@ -1028,6 +1031,8 @@ qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja"
 
 qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja").read_text(encoding="utf-8")
 
+smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja").read_text(encoding="utf-8")
+
 
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -1040,7 +1045,7 @@ def get_training_chat_template(
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
     Currently Cohere, Cohere 2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
     Idefics3, LFM2, LLaMA 3, Muse Glimmer, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the
-    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
+    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, and SmolVLM (including SmolVLM2) are supported.
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1192,6 +1197,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == qwen3_8_chat_template:
         return qwen3_8_training_chat_template
+
+    if processing_class.chat_template == smolvlm_chat_template:
+        return smolvlm_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "

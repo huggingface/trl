@@ -7,13 +7,13 @@ env:
   TRL_EXPERIMENTAL_SILENCE: 1
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   build:
     if: github.event.pull_request.draft == false
-    uses: huggingface/doc-builder/.github/workflows/build_pr_documentation.yml@af49b8dc3859c3d80c7220c8c0ba146431132e49  # main
+    uses: huggingface/doc-builder/.github/workflows/build_pr_documentation.yml@63ec6f1a0ac9300e6a35f4efe140b09ac9f68a89  # main
     with:
       commit_sha: ${{ github.event.pull_request.head.sha }}
       pr_number: ${{ github.event.number }}

@@ -20,7 +20,7 @@ from ...trainer.distillation_config import DistillationConfig
 @dataclass
 class ServerDistillationConfig(DistillationConfig):
     r"""
-    Configuration class for the [`ServerDistillationTrainer`].
+    Configuration class for the [`experimental.server_distillation.ServerDistillationTrainer`].
 
     Extends [`DistillationConfig`] with the address of an external vLLM server that scores the student's completions.
     The teacher is never held locally: instead of a local forward pass, per-token teacher logprobs are fetched from the

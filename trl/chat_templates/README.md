@@ -136,6 +136,10 @@ Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, 
 
 Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `smolvlm.jinja`
+
+Original SmolVLM chat template. Also matches SmolVLM2, which ships a byte-identical template. Does not support tool calling.
+
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
@@ -229,43 +233,37 @@ Wrap the whole assistant branch — every ATEM channel of the turn — with `{% 
 
 Patched Nemotron Nano template. Diff vs `nemotron_3_nano.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_super_training.jinja`
 
 Patched Nemotron Super template. Diff vs `nemotron_3_super.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_ultra_training.jinja`
 
 Patched Nemotron Ultra template. Diff vs `nemotron_3_ultra.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `nemotron_3_5_lightning_training.jinja`
 
 Patched Nemotron 3.5 Lightning template. Diff vs `nemotron_3_5_lightning.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `phi3_training.jinja`
 
 Patched Phi-3 template. Diff vs `phi3.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `phi3_5_training.jinja`
 
 Patched Phi-3.5 template. Diff vs `phi3.5.jinja`:
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that
-`return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `qwen2_5_training.jinja`
 
@@ -324,3 +322,9 @@ Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<th
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss.
+
+### `smolvlm_training.jinja`
+
+Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.
