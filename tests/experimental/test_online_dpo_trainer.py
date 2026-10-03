@@ -487,6 +487,41 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
 @require_vision
 class TestOnlineDPOVisionTrainer(TrlTestCase):
+    @pytest.mark.parametrize("with_image", [True, False])
+    def test_mixed_image_batch(self, with_image):
+        model_id = "trl-internal-testing/tiny-LlavaForConditionalGeneration"
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [
+                    [{"role": "user", "content": "Describe the image."}],
+                    [{"role": "user", "content": "Say hello."}],
+                ],
+                "image": [Image.new("RGB", (56, 56)) if with_image else None, None],
+            }
+        ).cast_column("image", features.Image())
+        trainer = OnlineDPOTrainer(
+            model=AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32"),
+            processing_class=AutoProcessor.from_pretrained(model_id),
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=OnlineDPOConfig(
+                output_dir=self.tmp_dir,
+                use_cpu=True,
+                bf16=False,
+                per_device_train_batch_size=2,
+                max_steps=1,
+                max_new_tokens=2,
+                max_length=2048,
+                report_to="none",
+                save_strategy="no",
+            ),
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        assert trainer.state.global_step == 1
+        assert np.isfinite(trainer.state.log_history[-1]["train_loss"])
+
     @pytest.mark.parametrize(
         "model_id",
         [
