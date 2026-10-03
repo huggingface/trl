@@ -45,6 +45,9 @@ REASONING_PARSER=${REASONING_PARSER:-qwen3}
 PROJECT=${PROJECT:-async-grpo-mimo-abl}
 RUN_NAME=${RUN_NAME:-hfjob-$PACKING-$(date +%m%d-%H%M)}
 TIMEOUT=${TIMEOUT:-8h}
+# Checkpoints and adapters go to a bucket: a job's own filesystem is gone the moment it ends, so anything written
+# to /tmp is lost even on a clean finish.
+OUT_BUCKET=${OUT_BUCKET:-aminediroHF/mimo-rl-adapters}
 TRAIN_ARGS=${TRAIN_ARGS:---max-turn-tokens 4096 --token-budget 45056 --num-generations 16 --max-staleness 4 --max-steps 1000 --reward score --max-inflight 128 --agent-timeout 1500 --verify-timeout 900 --save-steps 25 --save-total-limit 3 --learning-rate 1e-5 --n-prompts 96 --gradient-accumulation-steps 1 --instances-file /work/trainable_instances.json}
 
 echo "=== $FLAVOR | $MODEL | $PACKING | lora=$LORA_RANK | vLLM $VLLM_GPUS (tp=$VLLM_TP dp=$VLLM_DP) | trainer $TRAIN_GPUS"
@@ -53,12 +56,14 @@ echo "=== trl @ $TRL_SHA -> trackio project '$PROJECT', run '$RUN_NAME'"
 uvx hf jobs run \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" \
+    -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
     -e "TRL_SHA=$TRL_SHA" -e "MODEL=$MODEL" -e "DOMAINS=$DOMAINS" -e "PACKING=$PACKING" \
     -e "LORA_RANK=$LORA_RANK" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "VLLM_GPUS=$VLLM_GPUS" -e "TRAIN_GPUS=$TRAIN_GPUS" -e "VLLM_TP=$VLLM_TP" -e "VLLM_DP=$VLLM_DP" \
     -e "PROJECT=$PROJECT" -e "RUN_NAME=$RUN_NAME" -e "TRAIN_ARGS=$TRAIN_ARGS" \
     -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
+    -e "RUN_NAME=$RUN_NAME" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
 set -euo pipefail
 export HF_HOME=/tmp/hf PYTHONUNBUFFERED=1 TRL_EXPERIMENTAL_SILENCE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -116,7 +121,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_IDS" accelerate launch \
     /work/async_grpo_mimo.py \
         --model "$MODEL" --domains "$DOMAINS" --packing "$PACKING" --lora-rank "$LORA_RANK" \
         --gradient-checkpointing --vllm-url http://localhost:8000 \
-        --output-dir /tmp/run --project "$PROJECT" --run-name "$RUN_NAME" --trackio-space-id "$PROJECT" \
+        --output-dir "/out/$RUN_NAME" --project "$PROJECT" --run-name "$RUN_NAME" --trackio-space-id "$PROJECT" \
         $TRAIN_ARGS || {
     echo "=== trainer failed; last 120 lines of the vLLM server log ==="
     tail -120 /tmp/vllm.log
