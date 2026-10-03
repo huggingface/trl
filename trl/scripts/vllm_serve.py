@@ -15,9 +15,7 @@
 import argparse
 import json
 import os
-import shlex
 import sys
-import warnings
 from dataclasses import dataclass, field
 
 from trl.import_utils import is_vllm_available
@@ -281,15 +279,6 @@ def main(script_args: ScriptArguments, extra_args: list[str] | None = None):
     env = os.environ.copy()
     # The weight-transfer and prefix-cache endpoints that trainers rely on live behind vLLM's dev mode.
     env["VLLM_SERVER_DEV_MODE"] = "1"
-
-    equivalent = shlex.join(["vllm", *command[command.index("serve") :]])
-    warnings.warn(
-        "`trl vllm-serve` is deprecated and will be removed in v2.0.0: it now only runs vLLM's own server. Run it "
-        "directly instead:\n\n"
-        f"    VLLM_SERVER_DEV_MODE=1 {equivalent}\n",
-        FutureWarning,
-        stacklevel=2,
-    )
     os.execve(sys.executable, command, env)
 
 

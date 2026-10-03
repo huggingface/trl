@@ -25,6 +25,7 @@ from transformers.testing_utils import backend_device_count, torch_device
 from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_vllm_available
+from trl.scripts.vllm_serve import ScriptArguments, build_command
 
 from .testing_utils import (
     TrlTestCase,
@@ -50,7 +51,7 @@ VLLM_SERVE_TRL_ARGS = [
 ]
 # From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
 if is_vllm_available(min_version="0.30.0"):
-    VLLM_SERVE_TRL_ARGS.append("--enable-scale-out")
+    VLLM_SERVE_TRL_ARGS.insert(0, "--enable-scale-out")
 
 
 class TestConnectionPoolSize(TrlTestCase):
@@ -69,6 +70,13 @@ class TestConnectionPoolSize(TrlTestCase):
             pool = adapter.poolmanager.connection_from_url(url)
             # Retain enough connections for the default generation concurrency.
             assert pool.pool.maxsize >= _DEFAULT_GENERATION_CONCURRENCY
+
+
+class TestBuildCommand(TrlTestCase):
+    def test_adds_the_documented_vllm_serve_settings(self):
+        command = build_command(ScriptArguments(model="Qwen/Qwen3-0.6B"))
+        # `trl vllm-serve` must add the settings documented for launching `vllm serve` directly.
+        assert command[-len(VLLM_SERVE_TRL_ARGS) :] == VLLM_SERVE_TRL_ARGS
 
 
 class TestResetPrefixCache(TrlTestCase):

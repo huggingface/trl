@@ -29,11 +29,10 @@ pip install "trl[vllm]"
 Then run the server on specific GPUs (e.g., GPUs 0-3):
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --tensor-parallel-size 4 \
-    --weight-transfer-config '{"backend": "nccl"}' \
-    --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 4
 ```
+
+`trl vllm-serve` runs vLLM's own `vllm serve` with the settings TRL requires for the installed vLLM version. To launch the server yourself, see the settings listed under "More customization options with vLLM?" below.
 
 Once the server is running, you can use it to generate completions for training. In the example below, we are using the different supported trainers using the vLLM server for generation. The `--tensor-parallel-size` and `--data-parallel-size` arguments control how the model and data are sharded across GPUs.
 
@@ -124,9 +123,9 @@ The server only generates. After each optimizer step the trainer streams the upd
 
 ### 🍷 More customization options with vLLM?
 
-You can customize the server configuration by passing any `vllm serve` argument, for instance `--tensor-parallel-size`, `--data-parallel-size`, `--max-model-len`, `--enable-prefix-caching`, `--enforce-eager`, `--kv-cache-dtype` or `--trust-remote-code`. Run `vllm serve --help` for the full list.
+You can customize the server configuration by passing any `vllm serve` argument to `trl vllm-serve`, for instance `--tensor-parallel-size`, `--data-parallel-size`, `--max-model-len`, `--enable-prefix-caching`, `--enforce-eager`, `--kv-cache-dtype` or `--trust-remote-code`. Run `vllm serve --help` for the full list.
 
-Only the following are required by TRL:
+To launch the server yourself (for example from your own deployment tooling), run `vllm serve` with the following settings, which `trl vllm-serve` adds for you:
 
 | Setting | Why |
 | --- | --- |
@@ -135,9 +134,6 @@ Only the following are required by TRL:
 | `--logprobs-mode processed_logprobs` | Returns logprobs after temperature scaling and logit processing, which is what the importance sampling correction expects. |
 | `--max-logprobs -1` | Lifts the OpenAI-compatible cap of 20 logprobs per token, required to request the top-k teacher distribution for distillation. |
 | `--enable-scale-out` | vLLM 0.30.0 and later, for multimodal prompts only: registers `/v1/chat/completions/render` and `/inference/v1/generate`, which the trainer uses to process images. Earlier versions reject the flag. |
-
-> [!WARNING]
-> `trl vllm-serve` is deprecated: it now only builds this command and runs vLLM's server. It prints the exact `vllm serve` command it runs, so you can copy it and drop the wrapper.
 
 ### 💆🏻‍♀️ What's the best distributed setup?
 
