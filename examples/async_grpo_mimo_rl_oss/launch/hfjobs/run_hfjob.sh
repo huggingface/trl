@@ -70,7 +70,7 @@ pip install "https://github.com/huggingface/trl/archive/${TRL_SHA}.tar.gz" \
     "https://github.com/huggingface/OpenEnv/archive/${OPENENV_SHA}.tar.gz"
 # pip can report success while installing nothing, so check what the trainer actually needs before paying for a
 # vLLM start. A heredoc, not `python -c`: the job body is single-quoted, so a quote in here would end it.
-python - <<"PYCHECK"
+python3 - <<"PYCHECK"
 import trl, mimoagent, openenv
 from mimoagent.agents.cc import CCAgent
 from mimoagent.environments.datasets import ARVOEnvironment, OpenSourceCodeEnvironment
