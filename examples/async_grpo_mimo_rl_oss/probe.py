@@ -209,7 +209,9 @@ def summarize_packing(results: list[dict]) -> None:
 
 
 def make_factory(domain: str, args, transcripts_dir: Path):
-    domain_timeout = 1200 if domain == "general" else swe_domain.DOMAINS[domain]["agent_timeout"]
+    domain_timeout = (
+        general_domain.AGENT_TIMEOUT if domain == "general" else swe_domain.DOMAINS[domain]["agent_timeout"]
+    )
     common = dict(
         base_url=args.base_url,
         api_key=args.api_key,

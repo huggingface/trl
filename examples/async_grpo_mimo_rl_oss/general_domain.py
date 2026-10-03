@@ -56,6 +56,8 @@ SYSTEM_TEMPLATE = (
     "You can use the tools available to you to interact with the computer to assist the user in completing tasks.\n"
 )
 INSTANCE_TEMPLATE = "{{task}}\n"
+# `TRAJECTORY_TIMEOUT` of `scripts/general/train.sh` upstream.
+AGENT_TIMEOUT = 1200
 TOOLS = [
     {"tool": "Bash", "config": {"timeout": 60}},
     {"tool": "Read"},

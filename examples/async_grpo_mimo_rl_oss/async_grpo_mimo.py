@@ -336,7 +336,9 @@ def main() -> None:
     p.add_argument("--save-total-limit", type=int, default=2)
     p.add_argument("--sandbox-flavor", default="cpu-basic")
     p.add_argument("--step-limit", type=int, default=500)
-    p.add_argument("--agent-timeout", type=int, default=1200)
+    # `TRAJECTORY_TIMEOUT` upstream, which differs per domain: 1200 s for General, 4800 for Code and 28800
+    # for Cyber. Left unset, each domain takes its own; a value here overrides all of them.
+    p.add_argument("--agent-timeout", type=int, default=None)
     p.add_argument("--verify-timeout", type=int, default=900)
     p.add_argument("--judge-url", default="https://router.huggingface.co/v1")
     p.add_argument("--judge-model", default="Qwen/Qwen3-235B-A22B-Instruct-2507")
@@ -374,7 +376,6 @@ def main() -> None:
         top_p=args.top_p,
         max_turn_tokens=args.max_turn_tokens,
         max_observation_length=args.max_observation_length,
-        agent_timeout=args.agent_timeout,
         verify_timeout=args.verify_timeout,
         flavor=args.sandbox_flavor,
         transcripts_dir=transcripts_dir,
@@ -390,13 +391,18 @@ def main() -> None:
                 instance_ids=instance_ids.get(domain),
             )
             factories[domain] = GeneralTrainingFactory(
+                agent_timeout=args.agent_timeout or general_domain.AGENT_TIMEOUT,
                 step_limit=args.step_limit,
                 judge_env=general_domain.judge_env(args.judge_url, args.judge_key, args.judge_model),
                 **common,
             )
         else:
             domain_tasks = swe_domain.load_tasks(domain, args.n_prompts, args.seed, instance_ids.get(domain))
-            factories[domain] = SweTrainingFactory(domain=domain, **common)
+            factories[domain] = SweTrainingFactory(
+                domain=domain,
+                agent_timeout=args.agent_timeout or swe_domain.DOMAINS[domain]["agent_timeout"],
+                **common,
+            )
         tasks += [task | {"domain": domain} for task in domain_tasks]
     print(f"{len(tasks)} tasks: {dict(Counter(task['domain'] for task in tasks))}", flush=True)
 

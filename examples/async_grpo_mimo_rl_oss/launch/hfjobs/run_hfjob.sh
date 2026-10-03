@@ -48,7 +48,7 @@ TIMEOUT=${TIMEOUT:-8h}
 # Checkpoints and adapters go to a bucket: a job's own filesystem is gone the moment it ends, so anything written
 # to /tmp is lost even on a clean finish.
 OUT_BUCKET=${OUT_BUCKET:-aminediroHF/mimo-rl-adapters}
-TRAIN_ARGS=${TRAIN_ARGS:---max-turn-tokens 4096 --token-budget 45056 --num-generations 16 --max-staleness 4 --max-steps 1000 --reward score --max-inflight 128 --agent-timeout 1500 --verify-timeout 900 --save-steps 25 --save-total-limit 3 --learning-rate 1e-5 --n-prompts 96 --gradient-accumulation-steps 1 --instances-file /work/trainable_instances.json}
+TRAIN_ARGS=${TRAIN_ARGS:---max-turn-tokens 4096 --token-budget 45056 --num-generations 16 --max-staleness 4 --max-steps 1000 --reward score --max-inflight 128 --verify-timeout 900 --save-steps 25 --save-total-limit 3 --learning-rate 1e-5 --n-prompts 96 --gradient-accumulation-steps 1 --instances-file /work/trainable_instances.json}
 
 echo "=== $FLAVOR | $MODEL | $PACKING | lora=$LORA_RANK | vLLM $VLLM_GPUS (tp=$VLLM_TP dp=$VLLM_DP) | trainer $TRAIN_GPUS"
 echo "=== trl @ $TRL_SHA -> trackio project '$PROJECT', run '$RUN_NAME'"
@@ -57,13 +57,12 @@ uvx hf jobs run --name "$RUN_NAME" \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" \
     -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
-    -e "TRL_SHA=$TRL_SHA" -e "MODEL=$MODEL" -e "DOMAINS=$DOMAINS" -e "PACKING=$PACKING" \
+    -e "TRL_SHA=$TRL_SHA" -e "MODEL=$MODEL" -e "DOMAINS=$DOMAINS" -e "PACKING=$PACKING" -e "FLAVOR=$FLAVOR" \
     -e "LORA_RANK=$LORA_RANK" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "VLLM_GPUS=$VLLM_GPUS" -e "TRAIN_GPUS=$TRAIN_GPUS" -e "VLLM_TP=$VLLM_TP" -e "VLLM_DP=$VLLM_DP" \
     -e "PROJECT=$PROJECT" -e "RUN_NAME=$RUN_NAME" -e "TRAIN_ARGS=$TRAIN_ARGS" \
     -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
-    -e "RUN_NAME=$RUN_NAME" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
 set -euo pipefail
 export HF_HOME=/tmp/hf PYTHONUNBUFFERED=1 TRL_EXPERIMENTAL_SILENCE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -89,6 +88,16 @@ PYCHECK
 SERVE_IDS=$(seq -s, "$TRAIN_GPUS" $((TRAIN_GPUS + VLLM_GPUS - 1)))
 TRAIN_IDS=$(seq -s, 0 $((TRAIN_GPUS - 1)))
 echo "serve gpus=$SERVE_IDS  train gpus=$TRAIN_IDS"
+echo "CONFIG model=$MODEL"
+echo "CONFIG domains=$DOMAINS"
+echo "CONFIG packing=$PACKING"
+echo "CONFIG lora_rank=$LORA_RANK"
+echo "CONFIG max_model_len=$MAX_MODEL_LEN"
+echo "CONFIG scheduler=hf-jobs flavor=$FLAVOR"
+echo "CONFIG vllm_gpus=$VLLM_GPUS vllm_tp=$VLLM_TP vllm_dp=$VLLM_DP"
+echo "CONFIG train_gpus=$TRAIN_GPUS"
+echo "CONFIG parsers=$TOOL_PARSER/$REASONING_PARSER"
+echo "CONFIG train_args=$TRAIN_ARGS"
 
 # The adapter fast path needs a flag vLLM refuses once data parallelism gives the server several API processes;
 # with replicas the trainer merges and streams the full weights instead, which NCCL does in about a second.
