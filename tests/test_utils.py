@@ -24,7 +24,11 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+)
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -129,6 +133,52 @@ class TestUseAdapter(TrlTestCase):
 
         assert torch.equal(output_1, expected_1)
         assert torch.equal(output_2, expected_2)
+
+
+class TestCreateModelFromPathSubfolder(TrlTestCase):
+    @pytest.mark.parametrize("subfolder", ["", "checkpoint"])
+    def test_loads_model_and_config_from_same_directory(self, tmp_path, subfolder):
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32, attn_implementation="eager"
+        ).eval()
+        model.save_pretrained(tmp_path / subfolder)
+
+        loaded_model = create_model_from_path(
+            str(tmp_path), subfolder=subfolder, local_files_only=True, device_map=None, attn_implementation="eager"
+        )
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        with torch.no_grad():
+            expected = model(input_ids).logits
+            actual = loaded_model(input_ids).logits
+        torch.testing.assert_close(actual, expected)
+
+    @pytest.mark.parametrize("subfolder", ["", "checkpoint"])
+    def test_loads_config_from_requested_cached_revision(self, tmp_path, subfolder):
+        model_id = "trl-offline-tests/tiny-gpt2"
+        revision = "b" * 40
+        snapshot = tmp_path / "models--trl-offline-tests--tiny-gpt2" / "snapshots" / revision
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32, attn_implementation="eager"
+        ).eval()
+        model.save_pretrained(snapshot / subfolder)
+
+        # No default-revision snapshot exists, and the cache is outside the user's Hub cache.
+        with patch("huggingface_hub.constants.HF_HUB_OFFLINE", True):
+            loaded_model = create_model_from_path(
+                model_id,
+                revision=revision,
+                cache_dir=str(tmp_path),
+                subfolder=subfolder,
+                local_files_only=True,
+                device_map=None,
+            )
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        with torch.no_grad():
+            expected = model(input_ids).logits
+            actual = loaded_model(input_ids).logits
+        torch.testing.assert_close(actual, expected)
 
 
 class TestPad(TrlTestCase):
