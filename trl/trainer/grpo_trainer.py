@@ -95,6 +95,7 @@ from .utils import (
     split_pixel_values_by_grid,
     split_tensor_dict,
     start_event_loop_in_daemon,
+    strip_images_from_messages,
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
@@ -2647,10 +2648,6 @@ class GRPOTrainer(_BaseTrainer):
             else:
                 ref_per_token_logps = None
 
-        # Decode
-        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
         # Merge extra_fields from rollout_func into inputs for reward functions
         if extra_fields:
             for i, inp in enumerate(inputs):
@@ -2742,9 +2739,9 @@ class GRPOTrainer(_BaseTrainer):
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
-        # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        # Log prompts and completions
+        self._logs["prompt"].extend(gather_object(prompts))
+        self._logs["completion"].extend(gather_object(completions))
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
@@ -3253,8 +3250,8 @@ class GRPOTrainer(_BaseTrainer):
 
             table = {
                 "step": [self.state.global_step] * len(self._logs["prompt"]),
-                "prompt": self._logs["prompt"],
-                "completion": self._logs["completion"],
+                "prompt": [strip_images_from_messages(messages) for messages in self._logs["prompt"]],
+                "completion": [strip_images_from_messages(messages) for messages in self._logs["completion"]],
                 **self._logs["rewards"],
                 **self._logs["extra"],
                 "advantage": self._logs["advantages"],
@@ -3288,7 +3285,8 @@ class GRPOTrainer(_BaseTrainer):
                     df = df_base
 
                 if self.log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
+                    # Prompts are conversations (lists of dicts), so compare them by their text
+                    df = df[~df["prompt"].astype(str).duplicated()]
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 
