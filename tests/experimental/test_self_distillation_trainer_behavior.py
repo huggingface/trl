@@ -45,13 +45,17 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         args = {
             "distillation_mode": "sampled_token",
             "distillation_topk": None,
+            "distillation_topk_support": "student",
             "distillation_alpha": 1.0,
             "distillation_add_tail": False,
+            "distillation_kl_clip": None,
             "distillation_is_clip": None,
         }
         args.update(args_overrides)
         trainer.args = SimpleNamespace(**args)
-        trainer.accelerator = SimpleNamespace(gather=lambda tensor: tensor)
+        trainer.accelerator = SimpleNamespace(
+            gather=lambda tensor: tensor, reduce=lambda tensor, reduction="sum": tensor
+        )
         trainer._metrics = {
             "train": defaultdict(list),
             "eval": defaultdict(list),
