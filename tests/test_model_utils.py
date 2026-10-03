@@ -16,76 +16,46 @@ import types
 from unittest.mock import patch
 
 import pytest
-import torch.nn as nn
-from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers.utils import is_peft_available
 
 from trl.import_utils import is_deepspeed_available
 from trl.models.utils import disable_gradient_checkpointing, freeze_non_language_model_parameters, prepare_deepspeed
 
 
-class _TextModel(PreTrainedModel):
-    config_class = PretrainedConfig
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.proj = nn.Linear(4, 4)
-
-
-class _MultimodalConfig(PretrainedConfig):
-    def __init__(self):
-        self.text_config = PretrainedConfig()
-        super().__init__()
-
-    def get_text_config(self, decoder=False):
-        return self.text_config
-
-
-class _MultimodalModel(PreTrainedModel):
-    config_class = _MultimodalConfig
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.vision_tower = nn.Linear(4, 4)
-        self.multi_modal_projector = nn.Linear(4, 4)
-        self.language_model = _TextModel(config.text_config)
-        self.lm_head = nn.Linear(4, 4)
-
-    def get_output_embeddings(self):
-        return self.lm_head
-
-
-class _PromptLearningModel(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.base_model = _MultimodalModel(_MultimodalConfig())
-        self.prompt_encoder = nn.ModuleDict({"default": nn.Linear(4, 4)})
-        self.peft_config = {"default": types.SimpleNamespace(is_prompt_learning=True)}
-
-    def get_base_model(self):
-        return self.base_model
+if is_peft_available():
+    from peft import PromptTuningConfig, TaskType, get_peft_model
 
 
 def test_freeze_non_language_model_parameters_preserves_language_trainability():
-    model = _MultimodalModel(_MultimodalConfig())
-    model.language_model.proj.bias.requires_grad_(False)
+    model = AutoModelForImageTextToText.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
+    language_model = model.model.language_model
+    frozen_parameter = next(language_model.parameters())
+    frozen_parameter.requires_grad_(False)
 
     freeze_non_language_model_parameters(model)
 
-    assert not any(parameter.requires_grad for parameter in model.vision_tower.parameters())
-    assert not any(parameter.requires_grad for parameter in model.multi_modal_projector.parameters())
-    assert model.language_model.proj.weight.requires_grad
-    assert not model.language_model.proj.bias.requires_grad
+    assert not any(parameter.requires_grad for parameter in model.model.vision_tower.parameters())
+    assert not any(parameter.requires_grad for parameter in model.model.multi_modal_projector.parameters())
+    assert not frozen_parameter.requires_grad
+    assert all(
+        parameter.requires_grad for parameter in language_model.parameters() if parameter is not frozen_parameter
+    )
     assert all(parameter.requires_grad for parameter in model.lm_head.parameters())
 
 
+@pytest.mark.skipif(not is_peft_available(), reason="peft is not installed")
 def test_freeze_non_language_model_parameters_preserves_prompt_encoder():
-    model = _PromptLearningModel()
+    base_model = AutoModelForImageTextToText.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
+    model = get_peft_model(
+        base_model,
+        PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+    )
 
-    with patch("trl.models.utils.is_peft_model", return_value=True):
-        freeze_non_language_model_parameters(model)
+    freeze_non_language_model_parameters(model)
 
     assert all(parameter.requires_grad for parameter in model.prompt_encoder.parameters())
-    assert not any(parameter.requires_grad for parameter in model.base_model.vision_tower.parameters())
+    assert not any(parameter.requires_grad for parameter in model.get_base_model().model.vision_tower.parameters())
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
