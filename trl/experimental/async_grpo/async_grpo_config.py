@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -125,6 +126,27 @@ class AsyncGRPOConfig(_BaseConfig):
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
             being discarded.
+        vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
+            Whether to apply an importance-sampling correction to the policy loss. Unlike the synchronous GRPO trainer,
+            AsyncGRPO cannot recompute the old log probabilities with the generation-time weights (they are up to
+            `max_staleness` versions gone by the time a sample is trained on), so the correction applies to the
+            combined ratio current-policy/vLLM-sampler, which folds policy drift and training-inference mismatch into
+            one number.
+        vllm_importance_sampling_mode (`str`, *optional*, defaults to `"token_truncate"`):
+            How to constrain the combined importance-sampling ratio. `"token_truncate"` clamps each token's ratio to
+            the clip bounds before PPO clipping; `"token_mask"` zeroes the loss of tokens whose ratio falls outside
+            them; `"sequence_mask"` zeroes every token of a packed sequence whose product of token ratios leaves the
+            bounds (and needs far looser bounds than the synchronous trainer's defaults, because the combined ratio's
+            product grows with completion length under ordinary staleness drift). There is no `"sequence_truncate"`: a
+            sequence-level product cannot be divided back out of a per-token loss.
+        vllm_importance_sampling_clip_max (`float`, *optional*, defaults to `3.0`):
+            Upper bound for the importance-sampling ratio; must be positive and finite. Above it, `token_truncate`
+            clamps the ratio and the mask modes zero the token or sequence. `None` means no upper bound.
+        vllm_importance_sampling_clip_min (`float`, *optional*):
+            Lower bound for the importance-sampling ratio; must be positive and finite. `None` (default) means no lower
+            bound. Set it near the surviving probability mass of your sampling configuration to lift the top-p support
+            bias, where an unchanged policy reads a ratio equal to that mass instead of 1.0. Below the bound,
+            `token_truncate` raises the ratio back to it and the mask modes zero the token or sequence.
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
@@ -362,6 +384,47 @@ class AsyncGRPOConfig(_BaseConfig):
             "before being discarded."
         },
     )
+    vllm_importance_sampling_correction: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to gate the policy loss with an importance-sampling correction. Unlike the synchronous "
+            "GRPO trainer, AsyncGRPO cannot recompute the old log probabilities with the generation-time weights "
+            "(they are up to `max_staleness` versions gone by the time a sample is trained on), so the correction "
+            "applies to the combined ratio current-policy/vLLM-sampler, which folds policy drift and "
+            "training-inference mismatch into one number."
+        },
+    )
+    vllm_importance_sampling_mode: str = field(
+        default="token_truncate",
+        metadata={
+            "help": "How to constrain the combined importance-sampling ratio. `'token_truncate'` clamps each token's "
+            "ratio to the clip bounds before PPO clipping; `'token_mask'` zeroes tokens whose ratio falls outside "
+            "them; `'sequence_mask'` zeroes every token of a packed sequence whose product of token ratios leaves "
+            "the bounds. Because the combined ratio's product grows with completion length under ordinary staleness "
+            "drift, `'sequence_mask'` needs far looser bounds than the synchronous trainer's defaults. There is no "
+            "`'sequence_truncate'`: a sequence-level product cannot be divided back out of a per-token loss.",
+            "choices": ["token_truncate", "token_mask", "sequence_mask"],
+        },
+    )
+    vllm_importance_sampling_clip_max: float | None = field(
+        default=3.0,
+        metadata={
+            "help": "Upper bound for the importance-sampling ratio; must be positive. Above it, `token_truncate` "
+            "caps the effective weight and the mask modes zero the token or sequence. `None` means no upper bound."
+        },
+    )
+    vllm_importance_sampling_clip_min: float | None = field(
+        default=None,
+        metadata={
+            "help": "Lower bound for the importance-sampling ratio; must be positive. `None` (default) means no "
+            "lower bound: a low ratio has no stability role to bound (with a negative advantage it sits in PPO's "
+            "zero-gradient clipped branch, and with a positive advantage its contribution shrinks with the ratio), "
+            "so flooring it by default would only reweight stale positive-advantage tokens. Set it to lift the "
+            "top-p support bias, where an unchanged policy reads a ratio equal to the surviving probability mass S "
+            "instead of 1.0: with `token_truncate` and a bound near S the effective weight is raised back to the "
+            "bound. The mask modes zero the token or sequence below the bound."
+        },
+    )
     queue_maxsize: int = field(
         default=1024,
         metadata={"help": "Maximum number of rollout samples to buffer in the rollout queue."},
@@ -393,6 +456,38 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        valid_is_modes = ("token_truncate", "token_mask", "sequence_mask")
+        if self.vllm_importance_sampling_mode not in valid_is_modes:
+            raise ValueError(
+                f"vllm_importance_sampling_mode ({self.vllm_importance_sampling_mode!r}) must be one of "
+                f"{valid_is_modes}."
+            )
+        for bound_name in ("vllm_importance_sampling_clip_min", "vllm_importance_sampling_clip_max"):
+            bound = getattr(self, bound_name)
+            if bound is not None and (not math.isfinite(bound) or bound <= 0.0):
+                raise ValueError(
+                    f"{bound_name} ({bound}) must be positive and finite: the ratio is a quotient of probabilities."
+                )
+        if (
+            self.vllm_importance_sampling_clip_min is not None
+            and self.vllm_importance_sampling_clip_max is not None
+            and self.vllm_importance_sampling_clip_min >= self.vllm_importance_sampling_clip_max
+        ):
+            raise ValueError(
+                f"vllm_importance_sampling_clip_min ({self.vllm_importance_sampling_clip_min}) must be less than "
+                f"vllm_importance_sampling_clip_max ({self.vllm_importance_sampling_clip_max})."
+            )
+        if (
+            self.vllm_importance_sampling_correction
+            and self.vllm_importance_sampling_clip_min is None
+            and self.vllm_importance_sampling_clip_max is None
+        ):
+            raise ValueError(
+                "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` must be "
+                "set when `vllm_importance_sampling_correction` is enabled; with both `None` every mode is a no-op. "
+                "Set `vllm_importance_sampling_correction=False` to disable the correction explicitly."
+            )
 
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
