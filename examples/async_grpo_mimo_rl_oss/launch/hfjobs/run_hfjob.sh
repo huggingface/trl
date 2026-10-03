@@ -29,6 +29,9 @@ VLLM_DP=${VLLM_DP:-$VLLM_GPUS}
 # whatever the branch points at when it happens to start.
 TRL_SHA=${TRL_SHA:-$(git -C "$EXAMPLE_DIR" rev-parse HEAD)}
 VLLM_TAG=${VLLM_TAG:-v0.27.1}
+# Tarballs rather than `git+https`: the vLLM image ships no git, and pip's VCS installer shells out to it.
+MIMOAGENT_REF=${MIMOAGENT_REF:-main}
+OPENENV_REF=${OPENENV_REF:-49aa302ba5c6}
 
 MODEL=${MODEL:-Qwen/Qwen3-8B}
 DOMAINS=${DOMAINS:-general}
@@ -53,6 +56,7 @@ uvx hf jobs run \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "VLLM_GPUS=$VLLM_GPUS" -e "TRAIN_GPUS=$TRAIN_GPUS" -e "VLLM_TP=$VLLM_TP" -e "VLLM_DP=$VLLM_DP" \
     -e "PROJECT=$PROJECT" -e "RUN_NAME=$RUN_NAME" -e "TRAIN_ARGS=$TRAIN_ARGS" \
+    -e "MIMOAGENT_REF=$MIMOAGENT_REF" -e "OPENENV_REF=$OPENENV_REF" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
 set -euo pipefail
 export HF_HOME=/tmp/hf PYTHONUNBUFFERED=1 TRL_EXPERIMENTAL_SILENCE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -60,7 +64,8 @@ export HF_HOME=/tmp/hf PYTHONUNBUFFERED=1 TRL_EXPERIMENTAL_SILENCE=1 PYTORCH_CUD
 # GitHub rate-limits datacenter IPs, so this may need a retry.
 pip install -q "https://codeload.github.com/huggingface/trl/tar.gz/${TRL_SHA}" \
     "kernels>=0.16,<0.17" trackio "huggingface_hub>=1.31" pandas pyarrow openai \
-    "git+https://github.com/XiaomiMiMo/MiMo-Agent.git" "git+https://github.com/huggingface/OpenEnv.git"
+    "https://codeload.github.com/XiaomiMiMo/MiMo-Agent/tar.gz/${MIMOAGENT_REF}" \
+    "https://codeload.github.com/huggingface/OpenEnv/tar.gz/${OPENENV_REF}"
 
 SERVE_IDS=$(seq -s, "$TRAIN_GPUS" $((TRAIN_GPUS + VLLM_GPUS - 1)))
 TRAIN_IDS=$(seq -s, 0 $((TRAIN_GPUS - 1)))
