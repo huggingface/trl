@@ -2345,6 +2345,8 @@ class GRPOTrainer(_BaseTrainer):
             images,
             tool_images,
         ) = self._generate(prompts)
+        if self.use_vllm:
+            self.vllm_generation.sleep()
         if images is None:
             images = dataset_images  # restore dataset images (rollout_func path returns None)
 
