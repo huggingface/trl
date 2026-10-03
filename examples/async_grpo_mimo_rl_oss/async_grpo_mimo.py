@@ -309,8 +309,11 @@ def main() -> None:
     # betas at 0.95/0.95 for the Adam component of their Muon variant. Their learning rate is 3e-6.
     p.add_argument("--adam-beta1", type=float, default=0.95)
     p.add_argument("--adam-beta2", type=float, default=0.95)
-    # They clip the importance ratio with decoupled bounds initialized to [0.2, 5.0]. TRL carries one bound per
-    # side rather than four, so the high side is the part worth matching.
+    # The report initializes decoupled clip bounds at [0.2, 5.0] but retunes them online against policy entropy,
+    # widening the positive side when entropy is low and narrowing it when entropy is high. Pinning the initial 5.0
+    # without that controller lets positive-advantage tokens be amplified without a counterweight, and entropy runs
+    # away: a run here went from 0.49 to 4.6 over thirty steps while reward fell from 0.61 back to 0.11. Default to
+    # the symmetric bound and leave the wide one to a run that also implements the controller.
     p.add_argument("--epsilon-high", type=float, default=None)
     p.add_argument("--temperature", type=float, default=1.0)
     # top_p 1.0 rather than upstream's 0.95: the PPO denominator is vLLM's processed logprobs, and nucleus sampling
