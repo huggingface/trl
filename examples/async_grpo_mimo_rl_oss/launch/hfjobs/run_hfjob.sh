@@ -34,6 +34,11 @@ VLLM_TAG=${VLLM_TAG:-v0.27.1}
 # extension is missing, and `MiMo-Agent` is a redirect that codeload answers with a different project.
 MIMOAGENT_SHA=${MIMOAGENT_SHA:-467f0a19016f0ac4d63b8d17a1f0da9ba07f232c}
 OPENENV_SHA=${OPENENV_SHA:-49aa302ba5c6}
+# The job installs this commit as a tarball, so it has to be on the remote: an unpushed SHA 404s inside the
+# job, minutes after it was scheduled and with the flavor already paid for.
+curl -fsI "https://codeload.github.com/huggingface/trl/tar.gz/$TRL_SHA" >/dev/null \
+    || { echo "TRL_SHA $TRL_SHA is not on GitHub -- push the branch first"; exit 1; }
+
 
 MODEL=${MODEL:-Qwen/Qwen3-8B}
 DOMAINS=${DOMAINS:-general}

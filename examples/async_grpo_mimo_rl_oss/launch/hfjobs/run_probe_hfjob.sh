@@ -25,6 +25,11 @@ RUN_NAME=${RUN_NAME:-probe-$DOMAIN-$(date +%m%d-%H%M)}
 TRL_SHA=${TRL_SHA:-$(git -C "$EXAMPLE_DIR" rev-parse HEAD)}
 MIMOAGENT_SHA=${MIMOAGENT_SHA:-467f0a19016f0ac4d63b8d17a1f0da9ba07f232c}
 OPENENV_SHA=${OPENENV_SHA:-49aa302ba5c6}
+# The job installs this commit as a tarball, so it has to be on the remote: an unpushed SHA 404s inside the
+# job, minutes after it was scheduled and with the flavor already paid for.
+curl -fsI "https://codeload.github.com/huggingface/trl/tar.gz/$TRL_SHA" >/dev/null \
+    || { echo "TRL_SHA $TRL_SHA is not on GitHub -- push the branch first"; exit 1; }
+
 VLLM_TAG=${VLLM_TAG:-v0.27.1}
 
 echo "=== probe $DOMAIN | $MODEL | $FLAVOR | $N_TASKS tasks x $SAMPLES samples"
