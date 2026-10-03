@@ -30,7 +30,7 @@ import numpy as np
 import pytest
 import requests
 import torch
-from accelerate import PartialState
+from accelerate import Accelerator, PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
@@ -63,6 +63,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
+from trl.experimental.async_grpo.weight_transfer import _send_full_tensors_lockstep
 from trl.trainer.base_trainer import _BaseTrainer
 from trl.trainer.utils import get_callable_name
 
@@ -2002,3 +2003,38 @@ def _any_adapter_merged(model) -> bool:
     from peft.tuners.tuners_utils import BaseTunerLayer
 
     return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+
+
+class _RecordingWeightTransfer:
+    # Stands in for the remote vLLM server side of the weight transfer.
+    def __init__(self, fail=False):
+        self.sent = []
+        self.fail = fail
+
+    def send_weights(self, iterator):
+        for name, _ in iterator:
+            if self.fail:
+                raise RuntimeError("transfer blew up")
+            self.sent.append(name)
+
+
+class TestLockstepWeightSend:
+    def test_forwards_every_item(self):
+        weight_transfer = _RecordingWeightTransfer()
+        items = [("embed", torch.ones(2)), ("lm_head", torch.ones(3))]
+        _send_full_tensors_lockstep(Accelerator(), weight_transfer, iter(items))
+        assert weight_transfer.sent == ["embed", "lm_head"]
+
+    def test_propagates_send_failure(self):
+        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
+        with pytest.raises(RuntimeError, match="transfer blew up"):
+            _send_full_tensors_lockstep(Accelerator(), _RecordingWeightTransfer(fail=True), iter(items))
+
+    def test_returns_when_send_does_not_drain(self):
+        # A transfer that syncs out of band and never reads the iterator, like a no-op implementation
+        class _OutOfBandWeightTransfer:
+            def send_weights(self, iterator):
+                pass
+
+        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
+        _send_full_tensors_lockstep(Accelerator(), _OutOfBandWeightTransfer(), iter(items))

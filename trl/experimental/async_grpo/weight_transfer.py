@@ -13,10 +13,13 @@
 # limitations under the License.
 
 import contextlib
+import queue
 import threading
 import time
 from collections import Counter
+from collections.abc import Iterator
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
@@ -39,13 +42,84 @@ elif is_vllm_available(min_version="0.22.0"):
 
 logger = get_logger(__name__)
 
+# Rank 0 keeps at most this many gathered tensors between `full_tensor()` and the NCCL send thread.
+_WEIGHT_SEND_QUEUE_MAXSIZE = 2
+
+
+def _iter_from_send_queue(send_queue: queue.Queue):
+    """Yield `(name, tensor)` from `send_queue` until a `None` sentinel. Consumed by the NCCL send thread."""
+    while True:
+        item = send_queue.get()
+        if item is None:
+            return
+        yield item
+
+
+def _send_full_tensors_lockstep(
+    accelerator, weight_transfer, gathered_params: Iterator[tuple[str, torch.Tensor]]
+) -> None:
+    """All-gather on the training thread; NCCL-send from a bounded queue.
+
+    [`WeightTransferClient.send_weights`] pulls its iterator on a daemon thread while the caller blocks on HTTP
+    `/update_weights`. Driving `full_tensor()` from that iterator therefore all-gathers on rank 0's NCCL thread and on
+    every other rank's training thread, and non-0 ranks start the next gather while rank 0 is still sending.
+
+    Every rank iterates `gathered_params` here (so `full_tensor()` stays on the training thread). Rank 0 `put`s into a
+    bounded queue that the send thread only `get`s. `wait_for_everyone()` after every put — and after the sentinel —
+    keeps non-0 ranks from running ahead when the queue is full.
+    """
+    send_queue: queue.Queue | None = None
+    send_thread: threading.Thread | None = None
+    send_error: list[BaseException] = []
+    send_done = threading.Event()
+    do_send = accelerator.is_main_process
+
+    if do_send:
+        send_queue = queue.Queue(maxsize=_WEIGHT_SEND_QUEUE_MAXSIZE)
+
+        def _run_send():
+            try:
+                weight_transfer.send_weights(_iter_from_send_queue(send_queue))
+            except BaseException as exc:  # noqa: BLE001
+                send_error.append(exc)
+            finally:
+                # Also set when `send_weights` returns without draining the queue (a no-op transfer, or one that syncs
+                # out of band), so rank 0 stops putting instead of blocking on a full queue.
+                send_done.set()
+
+        send_thread = threading.Thread(target=_run_send, daemon=True)
+        send_thread.start()
+
+    for name, full in gathered_params:
+        # Rank 0 keeps iterating after the send side is done: `full_tensor()` is collective.
+        while do_send and not send_done.is_set():
+            try:
+                send_queue.put((name, full), timeout=1.0)
+                break
+            except queue.Full:
+                pass
+        accelerator.wait_for_everyone()
+
+    while do_send and not send_done.is_set():
+        try:
+            send_queue.put(None, timeout=1.0)
+            break
+        except queue.Full:
+            pass
+    accelerator.wait_for_everyone()
+
+    if send_thread is not None:
+        send_thread.join()
+    if send_error:
+        raise send_error[0]
+
 
 class WeightTransferClient:
     """Streams the trainer's weights into the vLLM server over NCCL.
 
-    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the main
-    thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than a hang,
-    and the abandoned thread dies with the process.
+    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the
+    calling thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than
+    a hang, and the abandoned thread dies with the process.
 
     Args:
         vllm_client ([`VLLMClient`]):

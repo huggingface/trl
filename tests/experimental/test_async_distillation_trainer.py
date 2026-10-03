@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from accelerate import Accelerator
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
@@ -49,6 +50,7 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
 )
+from trl.experimental.async_distillation.weight_transfer import _send_full_tensors_lockstep
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
@@ -1014,3 +1016,38 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer._prompts_before_resume == 77
         # The worker restarts `prompt_id` at 0, so ids left over from an earlier run would collide with this one's.
         assert trainer._trained_prompts == set()
+
+
+class _RecordingWeightTransfer:
+    # Stands in for the remote vLLM server side of the weight transfer.
+    def __init__(self, fail=False):
+        self.sent = []
+        self.fail = fail
+
+    def send_weights(self, iterator):
+        for name, _ in iterator:
+            if self.fail:
+                raise RuntimeError("transfer blew up")
+            self.sent.append(name)
+
+
+class TestLockstepWeightSend:
+    def test_forwards_every_item(self):
+        weight_transfer = _RecordingWeightTransfer()
+        items = [("embed", torch.ones(2)), ("lm_head", torch.ones(3))]
+        _send_full_tensors_lockstep(Accelerator(), weight_transfer, iter(items))
+        assert weight_transfer.sent == ["embed", "lm_head"]
+
+    def test_propagates_send_failure(self):
+        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
+        with pytest.raises(RuntimeError, match="transfer blew up"):
+            _send_full_tensors_lockstep(Accelerator(), _RecordingWeightTransfer(fail=True), iter(items))
+
+    def test_returns_when_send_does_not_drain(self):
+        # A transfer that syncs out of band and never reads the iterator, like a no-op implementation
+        class _OutOfBandWeightTransfer:
+            def send_weights(self, iterator):
+                pass
+
+        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
+        _send_full_tensors_lockstep(Accelerator(), _OutOfBandWeightTransfer(), iter(items))
