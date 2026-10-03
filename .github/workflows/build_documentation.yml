@@ -17,5 +17,6 @@ jobs:
       commit_sha: ${{ github.sha }}
       package: trl
       version_tag_suffix: ""
+      python_version: "3.12"
     secrets:
       hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
