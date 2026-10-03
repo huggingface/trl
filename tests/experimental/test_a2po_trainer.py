@@ -15,6 +15,7 @@
 import pytest
 import torch
 from datasets import Dataset, DatasetDict
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.experimental.a2po import A2POConfig, A2POTrainer
 
@@ -69,6 +70,9 @@ class TestA2POTrainer(TrlTestCase):
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_reference_params = {n: param.clone() for n, param in trainer.ref_model.named_parameters()}
+        assert not trainer.ref_model.training
+        assert all(not param.requires_grad for param in trainer.ref_model.parameters())
 
         trainer.train()
 
@@ -78,6 +82,8 @@ class TestA2POTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+        for n, param in previous_reference_params.items():
+            torch.testing.assert_close(trainer.ref_model.get_parameter(n), param, rtol=0, atol=0)
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
@@ -195,3 +201,53 @@ class TestA2POTrainer(TrlTestCase):
 
         assert "eval_loss" in metrics
         assert "gamma" in trainer._optimal_values and "delta" in trainer._optimal_values
+
+    @pytest.mark.parametrize("model_input", ["path", "model"])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    def test_reference_model_from_checkpoint(self, model_input, dtype):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model_init_kwargs = {"dtype": dtype, "device_map": None, "trust_remote_code": False}
+        expected_model_init_kwargs = dict(model_init_kwargs)
+        model = (
+            model_id if model_input == "path" else AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+        )
+        training_args = A2POConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs=model_init_kwargs,
+            report_to="none",
+        )
+        trainer = A2POTrainer(
+            model=model,
+            reward_funcs=completion_parity_reward,
+            args=training_args,
+            train_dataset=Dataset.from_dict({"prompt": ["The capital of France is"]}),
+        )
+
+        assert trainer.ref_model is not trainer.model
+        assert not trainer.ref_model.training
+        assert all(not param.requires_grad for param in trainer.ref_model.parameters())
+        assert training_args.model_init_kwargs == expected_model_init_kwargs
+        for name, reference_param in trainer.ref_model.named_parameters():
+            policy_param = trainer.model.get_parameter(name)
+            assert reference_param.dtype == policy_param.dtype == dtype
+            assert reference_param.data_ptr() != policy_param.data_ptr()
+            torch.testing.assert_close(reference_param, policy_param, rtol=0, atol=0)
+
+    def test_reference_model_from_local_checkpoint(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        with torch.no_grad():
+            model.get_input_embeddings().weight.add_(0.1)
+        model.save_pretrained(self.tmp_dir)
+        tokenizer.save_pretrained(self.tmp_dir)
+        trainer = A2POTrainer(
+            model=self.tmp_dir,
+            reward_funcs=completion_parity_reward,
+            args=A2POConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=Dataset.from_dict({"prompt": ["The capital of France is"]}),
+        )
+
+        assert trainer.ref_model is not trainer.model
+        for name, reference_param in trainer.ref_model.named_parameters():
+            torch.testing.assert_close(reference_param, model.get_parameter(name), rtol=0, atol=0)
