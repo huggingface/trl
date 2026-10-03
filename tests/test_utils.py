@@ -1976,6 +1976,25 @@ class TestAddFusedLMHeadLoss:
         assert out.label_mask.sum().item() == unpadded + B
 
 
+class TestCreateModelFromPath:
+    @pytest.mark.parametrize("architectures", [None, []])
+    def test_falls_back_to_causal_lm_without_architecture_metadata(self, architectures):
+        config = PretrainedConfig()
+        config.architectures = architectures
+        expected_model = object()
+
+        with (
+            patch("trl.trainer.utils.AutoConfig.from_pretrained", return_value=config),
+            patch(
+                "trl.trainer.utils.AutoModelForCausalLM.from_pretrained", return_value=expected_model
+            ) as mock_loader,
+        ):
+            model = create_model_from_path("model-id")
+
+        assert model is expected_model
+        assert mock_loader.call_args.args == ("model-id",)
+
+
 class TestComputeFlopsPerToken(TrlTestCase):
     DENSE_MODEL_ID = "trl-internal-testing/tiny-Qwen3ForCausalLM"
     MOE_MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
