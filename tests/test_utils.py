@@ -1477,8 +1477,22 @@ class TestAddFusedLMHead:
         "model_type, config_kwargs",
         [
             ("granite", {"logits_scaling": 8.0}),
-            ("minicpm3", {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16}),
-            ("hyperclovax", {"logits_scaling": 4.0}),
+            pytest.param(
+                "minicpm3",
+                {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.13.0"),
+                    reason="MiniCPM3 was introduced in transformers>=5.13.0",
+                ),
+            ),
+            pytest.param(
+                "hyperclovax",
+                {"logits_scaling": 4.0},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.9.0"),
+                    reason="HyperCLOVA X was introduced in transformers>=5.9.0",
+                ),
+            ),
             ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
         ],
     )
