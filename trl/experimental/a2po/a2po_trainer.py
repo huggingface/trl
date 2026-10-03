@@ -134,6 +134,16 @@ class A2POTrainer(_BaseTrainer):
                 model_id, revision=model_revision, padding_side="left", trust_remote_code=args.trust_remote_code
             )
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
@@ -311,7 +321,7 @@ class A2POTrainer(_BaseTrainer):
         # Attention mask: the tokenizer's prompt mask followed by the completion mask. The completion mask is 1 up to
         # and including the first EOS and 0 afterwards, so the terminal EOS stays in the log-prob sum (a plain
         # `!= pad_token_id` mask would drop it when `pad_token == eos_token`).
-        is_eos = completion_ids == self.processing_class.eos_token_id
+        is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
