@@ -53,7 +53,7 @@ TRAIN_ARGS=${TRAIN_ARGS:---max-turn-tokens 4096 --token-budget 45056 --num-gener
 echo "=== $FLAVOR | $MODEL | $PACKING | lora=$LORA_RANK | vLLM $VLLM_GPUS (tp=$VLLM_TP dp=$VLLM_DP) | trainer $TRAIN_GPUS"
 echo "=== trl @ $TRL_SHA -> trackio project '$PROJECT', run '$RUN_NAME'"
 
-uvx hf jobs run \
+uvx hf jobs run --name "$RUN_NAME" \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" \
     -v "hf://buckets/${OUT_BUCKET}:/out:rw" \

@@ -21,6 +21,7 @@ MAX_INFLIGHT=${MAX_INFLIGHT:-48}
 TIMEOUT=${TIMEOUT:-4h}
 OUT_BUCKET=${OUT_BUCKET:-aminediroHF/mimo-rl-adapters}
 PROBE_ARGS=${PROBE_ARGS:-}
+RUN_NAME=${RUN_NAME:-probe-$DOMAIN-$(date +%m%d-%H%M)}
 TRL_SHA=${TRL_SHA:-$(git -C "$EXAMPLE_DIR" rev-parse HEAD)}
 MIMOAGENT_SHA=${MIMOAGENT_SHA:-467f0a19016f0ac4d63b8d17a1f0da9ba07f232c}
 OPENENV_SHA=${OPENENV_SHA:-49aa302ba5c6}
@@ -28,7 +29,7 @@ VLLM_TAG=${VLLM_TAG:-v0.27.1}
 
 echo "=== probe $DOMAIN | $MODEL | $FLAVOR | $N_TASKS tasks x $SAMPLES samples"
 
-uvx hf jobs run \
+uvx hf jobs run --name "$RUN_NAME" \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
     -e "TRL_SHA=$TRL_SHA" -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
