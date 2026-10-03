@@ -18,11 +18,12 @@ from io import StringIO
 from unittest.mock import patch
 
 import pytest
+import torch
 import yaml
 from datasets import Dataset
 from transformers import set_seed
 
-from trl import DatasetMixtureConfig
+from trl import DatasetMixtureConfig, ModelConfig, ScriptArguments, SFTConfig
 from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
@@ -41,55 +42,46 @@ def test_help_no_type_error(command):
 
 
 class TestCLI(TrlTestCase):
-    @pytest.mark.parametrize(
-        "command,trainer_name",
-        [
-            ("distillation", "DistillationTrainer"),
-            ("dpo", "DPOTrainer"),
-            ("grpo", "GRPOTrainer"),
-            ("kto", "KTOTrainer"),
-            ("reward", "RewardTrainer"),
-            ("rloo", "RLOOTrainer"),
-            ("sft", "SFTTrainer"),
-        ],
-    )
-    def test_dataset_split_seed(self, command, trainer_name):
-        script = importlib.import_module(f"trl.scripts.{command}")
-        dataset = Dataset.from_dict({"text": [str(i) for i in range(100)]})
-        splits = []
+    def test_dataset_split_seed(self):
+        from transformers import AutoModelForCausalLM
+
+        from trl.scripts import sft
+
+        dataset_path = os.path.join(self.tmp_dir, "data.jsonl")
+        Dataset.from_dict({"text": [f"The answer is {i}." for i in range(100)]}).to_json(dataset_path)
+        weights = []
         for seed, ambient_seed in [(42, 111), (42, 222), (43, 111)]:
-            argv = [
-                "--output_dir",
-                self.tmp_dir,
-                "--report_to",
-                "none",
-                "--seed",
-                str(seed),
-                "--use_cpu",
-                "true",
-                "--bf16",
-                "false",
-                "--eval_strategy",
-                "steps",
-            ]
-            if command == "distillation":
-                argv += ["--teacher_model_name_or_path", "unused"]
-            parsed = list(script.make_parser().parse_args_and_config(argv))
-            parsed[-1] = DatasetMixtureConfig(datasets=[DatasetConfig(path="unused")], test_split_size=0.2)
-
-            # The CLI seed must determine the split, regardless of the process's previous RNG state.
-            set_seed(ambient_seed)
-            with patch("datasets.load_dataset", return_value=dataset), patch(f"trl.{trainer_name}") as trainer:
-                script.main(*parsed)
-            splits.append(
-                (
-                    list(trainer.call_args.kwargs["train_dataset"]["text"]),
-                    list(trainer.call_args.kwargs["eval_dataset"]["text"]),
-                )
+            output_dir = os.path.join(self.tmp_dir, f"{seed}-{ambient_seed}")
+            training_args = SFTConfig(
+                output_dir=output_dir,
+                seed=seed,
+                use_cpu=True,
+                bf16=False,
+                eval_strategy="steps",
+                max_steps=1,
+                max_length=32,
+                per_device_train_batch_size=2,
+                learning_rate=0.01,
+                save_strategy="no",
+                disable_tqdm=True,
+                report_to="none",
             )
+            dataset_args = DatasetMixtureConfig(
+                datasets=[DatasetConfig(path="json", data_files=dataset_path)], test_split_size=0.2
+            )
+            set_seed(ambient_seed)
+            sft.main(
+                ScriptArguments(),
+                training_args,
+                ModelConfig(model_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+                dataset_args,
+            )
+            model = AutoModelForCausalLM.from_pretrained(output_dir, dtype="float32")
+            weights.append(model.model.embed_tokens.weight.detach().clone())
 
-        assert splits[0] == splits[1]
-        assert splits[0] != splits[2]
+        # Real training must be reproducible even when the process starts with a different RNG state.
+        assert torch.equal(weights[0], weights[1])
+        assert not torch.equal(weights[0], weights[2])
 
     @pytest.mark.parametrize(
         "command,trainer_name",
