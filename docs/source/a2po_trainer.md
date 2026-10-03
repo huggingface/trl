@@ -41,13 +41,9 @@ Because `V*` is estimated entirely from reference-policy samples, A\*-PO cannot 
 
 ### Reference model and DeepSpeed
 
-The frozen reference model is loaded from the initial policy's checkpoint using `model_init_kwargs`. If you pass a
-model object, its configuration must point to a checkpoint containing the initial policy weights. Save in-memory
-weight changes to a checkpoint before creating the trainer so that Stage 1 and Stage 2 use the same initial policy.
+The frozen reference model is loaded from the initial policy's checkpoint using `model_init_kwargs`. If you pass a model object, its configuration must point to a checkpoint containing the initial policy weights. Save in-memory weight changes to a checkpoint before creating the trainer so that Stage 1 and Stage 2 use the same initial policy.
 
-With DeepSpeed ZeRO-3, the reference is prepared through the same inference/evaluation helper as GRPO instead of
-deepcopying the partitioned policy. The policy and reference are both sharded. With ZeRO-2, the reference uses ZeRO
-stage 0 and must fit on each device. No separate reference-model argument is required.
+With DeepSpeed ZeRO-3, the reference is prepared through the same inference/evaluation helper as GRPO instead of deepcopying the partitioned policy. The policy and reference are both sharded. With ZeRO-2, the reference uses ZeRO stage 0 and must fit on each device. No separate reference-model argument is required.
 
 ## A2POTrainer
 
