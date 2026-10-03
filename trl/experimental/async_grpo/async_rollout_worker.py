@@ -428,14 +428,15 @@ class _AsyncRolloutLoop:
                 instance = factory()
                 has_reset = False
                 methods = []
-                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         if type(instance) not in self._env_reward_types:
                             self._env_reward_types.append(type(instance))
                     elif not member_name.startswith("_"):
-                        methods.append(member)
+                        methods.append(getattr(instance, member_name))
                 if not has_reset:
                     raise ValueError(
                         "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -588,8 +589,8 @@ class _AsyncRolloutLoop:
                     methods = []
                     if environment is not None:
                         methods = [
-                            member
-                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            getattr(environment, member_name)
+                            for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                             if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                         ]
                     tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
