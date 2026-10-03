@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from transformers.testing_utils import torch_device
 
 from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
+from trl.kernels.chunked_logprob import _addmm_fp32
 
 from .testing_utils import require_torch_accelerator
 
@@ -384,3 +385,16 @@ class TestChunkedLogProbFunction:
         for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
             if expected is not None:
                 torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+    def test_addmm_fp32(self, dtype):
+        # Accumulates the product in fp32, without rounding it to `dtype` first
+        torch.manual_seed(42)
+        a = torch.randn(64, 256, device=torch_device, dtype=dtype)
+        b = torch.randn(256, 32, device=torch_device, dtype=dtype)
+        acc = torch.randn(64, 32, device=torch_device)
+        expected = acc.double() + a.double() @ b.double()
+
+        _addmm_fp32(acc, a, b)
+
+        torch.testing.assert_close(acc.double(), expected, atol=1e-3, rtol=1e-4)
