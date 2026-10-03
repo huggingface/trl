@@ -65,16 +65,20 @@ export HF_HOME=/tmp/hf PYTHONUNBUFFERED=1 TRL_EXPERIMENTAL_SILENCE=1 PYTORCH_CUD
 
 # GitHub rate-limits datacenter IPs, so this may need a retry.
 pip install "https://github.com/huggingface/trl/archive/${TRL_SHA}.tar.gz" \
-    "kernels>=0.16,<0.17" trackio "huggingface_hub>=1.31" pandas pyarrow openai flash-linear-attention \
+    "kernels>=0.16,<0.17" trackio "huggingface_hub>=1.31" pandas pyarrow openai peft flash-linear-attention \
     "https://github.com/XiaomiMiMo/mimoagent/archive/${MIMOAGENT_SHA}.tar.gz" \
     "https://github.com/huggingface/OpenEnv/archive/${OPENENV_SHA}.tar.gz"
 # pip can report success while installing nothing, so check what the trainer actually needs before paying for a
 # vLLM start. A heredoc, not `python -c`: the job body is single-quoted, so a quote in here would end it.
 python3 - <<"PYCHECK"
-import trl, mimoagent, openenv
+# Every third-party module the trainer imports, so a missing one costs seconds here rather than a model load.
+import datasets, huggingface_hub, mimoagent, openai, openenv, pandas, peft, transformers, trl
 from mimoagent.agents.cc import CCAgent
 from mimoagent.environments.datasets import ARVOEnvironment, OpenSourceCodeEnvironment
-print("deps ok:", trl.__version__)
+from openenv.core.harness import ResourceSession
+from peft import LoraConfig
+from trl.experimental.async_grpo import AsyncGRPOConfig
+print("deps ok:", trl.__version__, transformers.__version__, peft.__version__)
 PYCHECK
 
 SERVE_IDS=$(seq -s, "$TRAIN_GPUS" $((TRAIN_GPUS + VLLM_GPUS - 1)))
