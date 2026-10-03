@@ -27,6 +27,18 @@ def completion_parity_reward(completions, **kwargs):
 
 
 class TestA2POTrainer(TrlTestCase):
+    def test_reference_model_preparation(self):
+        trainer = A2POTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=completion_parity_reward,
+            args=A2POConfig(output_dir=self.tmp_dir, use_cpu=True, bf16=False, report_to="none"),
+            train_dataset=Dataset.from_dict({"prompt": ["Hello"]}),
+        )
+
+        assert not trainer.is_fsdp_enabled
+        assert not trainer.ref_model.training
+        assert all(not parameter.requires_grad for parameter in trainer.ref_model.parameters())
+
     def test_trust_remote_code(self):
         dataset = Dataset.from_dict({"prompt": ["The capital of France is", "Two plus two equals"]})
         model_id = "trl-internal-testing/tiny-RemoteForCausalLM"

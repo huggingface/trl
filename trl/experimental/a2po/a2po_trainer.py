@@ -31,7 +31,7 @@ from transformers import (
 )
 
 from ...data_utils import maybe_apply_chat_template
-from ...models import unwrap_model_for_generation
+from ...models import prepare_fsdp, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import selective_log_softmax
 from ..utils import create_reference_model
@@ -184,7 +184,10 @@ class A2POTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
-        self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        if self.is_fsdp_enabled:
+            self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+        else:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
     def _calculate_rewards(self, prompts, completions, **reward_kwargs):
         device = self.accelerator.device
