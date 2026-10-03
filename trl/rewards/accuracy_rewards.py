@@ -14,7 +14,9 @@
 
 import logging
 import math
+import statistics
 import threading
+from collections import defaultdict
 from collections.abc import Callable
 
 from ..import_utils import is_math_verify_available
@@ -348,3 +350,124 @@ def reasoning_accuracy_reward(
         log_extra("answer_parsed", answer_parsed_strs)
 
     return rewards
+
+
+def get_length_scaled_accuracy_reward(
+    alpha: float = 0.5,
+    incorrect_reward: float = -1.0,
+    reasoning_delimiters: list[str] | None = None,
+) -> Callable:
+    r"""
+    Reward function factory that scales [`~rewards.reasoning_accuracy_reward`] by completion length to discourage
+    overthinking. Reference: GRPO-LEAD (https://huggingface.co/papers/2504.09696).
+
+    Within each group of completions sharing the same prompt, the length (in tokens if `completion_ids` is available,
+    otherwise characters) of every *correct* completion is standardized to a z-score `z`. The reward for a correct
+    completion is then `exp(-alpha * z)`, so shorter-than-average correct completions receive a larger reward than
+    longer-than-average ones (the rewards of a group's correct completions have geometric mean `1.0`). Incorrect
+    completions receive `incorrect_reward` (default `-1.0`), shifting the break-even above zero so that guessing only
+    pays off once the model is confident. Unparseable gold solutions are passed through as `None`.
+
+    Unlike [`~rewards.get_cosine_scaled_reward`], which maps an *absolute* token length onto a fixed cosine schedule
+    via a `max_len` hyperparameter, this reward is *group-relative*: it standardizes length against the other correct
+    completions of the same prompt, so it adapts to each prompt's difficulty without a length budget.
+
+    Args:
+        alpha (`float`, *optional*, defaults to `0.5`):
+            Strength of the length modulation for correct completions. Larger values give shorter correct completions
+            disproportionately more reward. `alpha=0` disables scaling and recovers a `{-1, +1}` accuracy reward.
+        incorrect_reward (`float`, *optional*, defaults to `-1.0`):
+            Reward assigned to incorrect completions (including completions with incomplete reasoning).
+        reasoning_delimiters (`list[str]`, *optional*):
+            Forwarded to [`~rewards.reasoning_accuracy_reward`]. List of strings marking the end of the reasoning
+            block; the final answer is assumed to follow the last occurrence. If `None`, defaults to `["</think>"]`.
+
+    Returns:
+        `Callable`:
+            A reward function with the signature expected by [`GRPOTrainer`].
+
+    Example:
+
+    ```python
+    >>> from trl.rewards import get_length_scaled_accuracy_reward
+
+    >>> reward_fn = get_length_scaled_accuracy_reward(alpha=0.5)
+    >>> solution = [r"\frac{1}{3}", r"\frac{1}{3}", r"\frac{1}{3}"]
+    >>> completions = [
+    ...     [{"role": "assistant", "content": r"<think> short </think> \boxed{\frac{1}{3}}"}],
+    ...     [{"role": "assistant", "content": r"<think> long reasoning... </think> \boxed{\frac{1}{3}}"}],
+    ...     [{"role": "assistant", "content": r"<think> reasoning </think> \boxed{\frac{1}{2}}"}],
+    ... ]
+    >>> prompts = ["same prompt"] * 3
+    >>> rewards = reward_fn(completions=completions, solution=solution, prompts=prompts)
+    ```
+    """
+    return _LengthScaledAccuracyReward(alpha, incorrect_reward, reasoning_delimiters)
+
+
+class _LengthScaledAccuracyReward:
+    # Callable class rather than a closure so the reward stays picklable: the async GRPO rollout
+    # worker forwards reward funcs to a spawned child process, and closures can't be pickled.
+    __name__ = "length_scaled_accuracy_reward"
+
+    def __init__(self, alpha: float, incorrect_reward: float, reasoning_delimiters: list[str] | None):
+        self.alpha = alpha
+        self.incorrect_reward = incorrect_reward
+        self.reasoning_delimiters = reasoning_delimiters
+
+    def __call__(
+        self,
+        completions: list[list[dict[str, str]]],
+        solution: list[str],
+        prompts: list,
+        completion_ids: list[list[int]] | None = None,
+        log_extra: Callable[[str, list], None] | None = None,
+        **kwargs,
+    ) -> list[float | None]:
+        base_rewards = reasoning_accuracy_reward(
+            completions=completions,
+            solution=solution,
+            reasoning_delimiters=self.reasoning_delimiters,
+            log_extra=log_extra,
+        )
+
+        if completion_ids is not None:
+            lengths = [len(ids) for ids in completion_ids]
+        else:
+            lengths = [len(completion[0]["content"]) for completion in completions]
+
+        groups: dict[str, list[int]] = defaultdict(list)
+        for idx, prompt in enumerate(prompts):
+            groups[str(prompt)].append(idx)
+
+        rewards: list[float | None] = [None] * len(completions)
+        length_z_scores: list[float | None] = [None] * len(completions)
+
+        for indices in groups.values():
+            correct_indices = [i for i in indices if base_rewards[i] == 1.0]
+            if len(correct_indices) >= 2:
+                correct_lengths = [lengths[i] for i in correct_indices]
+                mean = statistics.mean(correct_lengths)
+                stdev = statistics.stdev(correct_lengths)
+            else:
+                mean, stdev = 0.0, 0.0
+
+            for i in indices:
+                base = base_rewards[i]
+                if base is None:
+                    rewards[i] = None
+                elif base == 1.0:
+                    if len(correct_indices) >= 2 and stdev > 0:
+                        z = (lengths[i] - mean) / stdev
+                        length_z_scores[i] = z
+                        rewards[i] = math.exp(-self.alpha * z)
+                    else:
+                        length_z_scores[i] = 0.0
+                        rewards[i] = 1.0
+                else:
+                    rewards[i] = self.incorrect_reward
+
+        if log_extra is not None:
+            log_extra("length_z", length_z_scores)
+
+        return rewards
