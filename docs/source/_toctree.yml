@@ -117,6 +117,8 @@
     title: GOLD
   - local: iw_opd_trainer
     title: IW-OPD
+  - local: klpo_trainer
+    title: KLPO
   - local: merge_model_callback
     title: MergeModelCallback
   - local: minillm_trainer
