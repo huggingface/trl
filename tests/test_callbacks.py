@@ -16,12 +16,99 @@ import json
 import os
 from unittest.mock import call, patch
 
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
+import pytest
+from accelerate import Accelerator
+from datasets import Dataset, load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    Trainer,
+    TrainingArguments,
+)
 
 from trl import BEMACallback, LogCompletionsCallback
+from trl.trainer.callbacks import _generate_completions
 
 from .testing_utils import TrlTestCase, require_comet, require_wandb
+
+
+class TestCompletionGenerationMode(TrlTestCase):
+    def setup_method(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
+        self.model = AutoModelForCausalLM.from_pretrained(model_id, attention_dropout=0.8, attn_implementation="eager")
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        self.generation_config = GenerationConfig(
+            max_new_tokens=2, do_sample=False, pad_token_id=self.tokenizer.pad_token_id
+        )
+
+    @pytest.mark.parametrize("training", [True, False])
+    @pytest.mark.parametrize("batch_size", [1, 2])
+    def test_generation_disables_dropout_and_restores_mode(self, training, batch_size):
+        self.model.train(training)
+        dropout_modes = []
+        with self.model.model.layers[0].self_attn.register_forward_pre_hook(
+            lambda layer, inputs: dropout_modes.append(layer.training)
+        ):
+            completions = _generate_completions(
+                ["hello world", "hello"],
+                self.model,
+                self.tokenizer,
+                Accelerator(cpu=True),
+                self.generation_config,
+                batch_size=batch_size,
+            )
+        assert len(completions) == 2
+        assert dropout_modes and not any(dropout_modes)
+        assert self.model.training == training
+
+    @pytest.mark.parametrize("training", [True, False])
+    def test_generation_error_restores_mode(self, training):
+        self.model.train(training)
+
+        def fail_forward(layer, inputs):
+            assert not layer.training
+            raise RuntimeError("generation failed")
+
+        with self.model.model.layers[0].self_attn.register_forward_pre_hook(fail_forward):
+            with pytest.raises(RuntimeError, match="generation failed"):
+                _generate_completions(
+                    ["hello world"], self.model, self.tokenizer, Accelerator(cpu=True), self.generation_config
+                )
+        assert self.model.training == training
+
+    def test_logging_after_training_step_uses_eval_mode(self):
+        inputs = self.tokenizer(["hello world"])
+        train_dataset = Dataset.from_dict({**inputs, "labels": inputs["input_ids"]})
+        trainer = Trainer(
+            model=self.model,
+            args=TrainingArguments(
+                output_dir=self.tmp_dir,
+                use_cpu=True,
+                bf16=False,
+                max_steps=1,
+                report_to="none",
+                save_strategy="no",
+                disable_tqdm=True,
+            ),
+            train_dataset=train_dataset,
+            eval_dataset=Dataset.from_dict({"prompt": ["hello world"]}),
+            processing_class=self.tokenizer,
+        )
+        callback = LogCompletionsCallback(trainer, self.generation_config, freq=1)
+        trainer.add_callback(callback)
+        dropout_modes = []
+        with self.model.model.layers[0].self_attn.register_forward_pre_hook(
+            lambda layer, inputs: dropout_modes.append(layer.training)
+        ):
+            trainer.train()
+        # The training forward uses dropout, but completion generation must not.
+        assert len(dropout_modes) > 1
+        assert dropout_modes[0]
+        assert not any(dropout_modes[1:])
+        assert self.model.training
+        assert len(callback.table) == 1
 
 
 class TestLogCompletionsCallback(TrlTestCase):
