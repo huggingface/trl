@@ -67,6 +67,7 @@ from ..data_utils import (
     prepare_multimodal_messages,
 )
 from ..models import enable_selective_activation_checkpointing, get_act_offloading_ctx_manager
+from ..models.utils import freeze_non_language_model_parameters
 from .base_trainer import _BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
@@ -1416,6 +1417,9 @@ class SFTTrainer(_BaseTrainer):
         if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
+        if self._is_vlm and not self._is_vision_dataset:
+            freeze_non_language_model_parameters(model)
 
         # `selective` is a TRL-only key: when set, the SAC wrapper strips it before it reaches
         # `torch.utils.checkpoint`, otherwise it is dropped here (a missing key already means SAC is off)

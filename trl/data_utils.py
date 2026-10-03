@@ -991,3 +991,23 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
 
 def get_dataset_column_names(dataset: Dataset | IterableDataset) -> list[str]:
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
+
+
+def _has_vision_data(dataset: Dataset | IterableDataset) -> bool:
+    # Only freeze vision parameters when the schema establishes that the dataset is text-only.
+    # In particular, do not consume streaming examples or infer a mixed dataset's schema from its first row.
+    if dataset.features is None:
+        return True
+
+    def has_image_feature(feature):
+        if isinstance(feature, dict):
+            return (
+                not {"image", "images"}.isdisjoint(feature)
+                or feature.get("_type") == "Image"
+                or any(has_image_feature(value) for value in feature.values())
+            )
+        if isinstance(feature, list):
+            return any(has_image_feature(value) for value in feature)
+        return False
+
+    return has_image_feature(dataset.features.to_dict())

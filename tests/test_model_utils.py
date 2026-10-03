@@ -16,10 +16,46 @@ import types
 from unittest.mock import patch
 
 import pytest
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers.utils import is_peft_available
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import disable_gradient_checkpointing, freeze_non_language_model_parameters, prepare_deepspeed
+
+
+if is_peft_available():
+    from peft import PromptTuningConfig, TaskType, get_peft_model
+
+
+def test_freeze_non_language_model_parameters_preserves_language_trainability():
+    model = AutoModelForImageTextToText.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
+    language_model = model.model.language_model
+    frozen_parameter = next(language_model.parameters())
+    frozen_parameter.requires_grad_(False)
+
+    freeze_non_language_model_parameters(model)
+
+    assert not any(parameter.requires_grad for parameter in model.model.vision_tower.parameters())
+    assert not any(parameter.requires_grad for parameter in model.model.multi_modal_projector.parameters())
+    assert not frozen_parameter.requires_grad
+    assert all(
+        parameter.requires_grad for parameter in language_model.parameters() if parameter is not frozen_parameter
+    )
+    assert all(parameter.requires_grad for parameter in model.lm_head.parameters())
+
+
+@pytest.mark.skipif(not is_peft_available(), reason="peft is not installed")
+def test_freeze_non_language_model_parameters_preserves_prompt_encoder():
+    base_model = AutoModelForImageTextToText.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
+    model = get_peft_model(
+        base_model,
+        PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+    )
+
+    freeze_non_language_model_parameters(model)
+
+    assert all(parameter.requires_grad for parameter in model.prompt_encoder.parameters())
+    assert not any(parameter.requires_grad for parameter in model.get_base_model().model.vision_tower.parameters())
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
