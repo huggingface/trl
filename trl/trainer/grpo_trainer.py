@@ -983,11 +983,12 @@ class GRPOTrainer(_BaseTrainer):
                 target_model.lm_head = lm_head
 
                 def cast_forward_to_fp32(hidden_states):
-                    return nn.functional.linear(
-                        hidden_states.to(torch.float32),
-                        lm_head.weight.to(torch.float32),
-                        None if lm_head.bias is None else lm_head.bias.to(torch.float32),
-                    )
+                    with torch.autocast(hidden_states.device.type, enabled=False):
+                        return nn.functional.linear(
+                            hidden_states.to(torch.float32),
+                            lm_head.weight.to(torch.float32),
+                            None if lm_head.bias is None else lm_head.bias.to(torch.float32),
+                        )
 
                 lm_head.forward = cast_forward_to_fp32
 
@@ -1082,6 +1083,7 @@ class GRPOTrainer(_BaseTrainer):
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
                 trust_remote_code=args.trust_remote_code,
+                cast_lm_head_to_fp32=args.cast_lm_head_to_fp32,
                 # Generation configuration
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,

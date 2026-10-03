@@ -21,6 +21,9 @@ from functools import wraps
 
 import pytest
 import torch
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
 
 
@@ -300,3 +303,17 @@ def undo_liger_kernel_patching(monkeypatch):
     yield
     for module, snapshot in snapshots.values():
         vars(module).update(snapshot)
+
+
+@pytest.fixture
+def tiny_llama():
+    """Tiny untied Llama model and word-level tokenizer, built locally."""
+    config = LlamaConfig(
+        vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"<pad>": 0, "<eos>": 1, "a": 2}, unk_token="a")),
+        pad_token="<pad>",
+        eos_token="<eos>",
+    )
+    return LlamaForCausalLM(config), tokenizer
