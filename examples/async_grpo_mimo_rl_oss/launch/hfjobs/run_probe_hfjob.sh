@@ -15,9 +15,10 @@ MODEL=${MODEL:-Qwen/Qwen3-8B}
 TOOL_PARSER=${TOOL_PARSER:-hermes}
 REASONING_PARSER=${REASONING_PARSER:-qwen3}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-40960}
-# Qwen3 is trained to 32768 and reaches further only with YaRN, which vLLM takes as a serve flag. Code
-# rollouts sit at a p50 of 58k, so a window below that ends half of them in a 400 rather than an answer.
-ROPE_SCALING=${ROPE_SCALING:-}
+# Qwen3 is trained to 32768 and reaches further only with YaRN, which vLLM takes as an entry in
+# `--hf-overrides` rather than a flag of its own. Code rollouts sit at a p50 of 58k, so a window below
+# that ends half of them in a 400 rather than an answer.
+HF_OVERRIDES=${HF_OVERRIDES:-}
 N_TASKS=${N_TASKS:-16}
 SAMPLES=${SAMPLES:-4}
 MAX_INFLIGHT=${MAX_INFLIGHT:-48}
@@ -41,7 +42,7 @@ uvx hf jobs run --name "$RUN_NAME" \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
     -e "TRL_SHA=$TRL_SHA" -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
-    -e "DOMAIN=$DOMAIN" -e "MODEL=$MODEL" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "ROPE_SCALING=$ROPE_SCALING" \
+    -e "DOMAIN=$DOMAIN" -e "MODEL=$MODEL" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "HF_OVERRIDES=$HF_OVERRIDES" \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "N_TASKS=$N_TASKS" -e "SAMPLES=$SAMPLES" -e "MAX_INFLIGHT=$MAX_INFLIGHT" -e "PROBE_ARGS=$PROBE_ARGS" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
@@ -60,9 +61,9 @@ from mimoagent.environments.datasets import ARVOEnvironment, OpenSourceCodeEnvir
 print("deps ok")
 PYCHECK
 
-ROPE_ARGS=()
-if [ -n "$ROPE_SCALING" ]; then ROPE_ARGS=(--rope-scaling "$ROPE_SCALING"); fi
-vllm serve "$MODEL" --port 8000 --dtype bfloat16 --max-model-len "$MAX_MODEL_LEN" "${ROPE_ARGS[@]}" \
+OVERRIDE_ARGS=()
+if [ -n "$HF_OVERRIDES" ]; then OVERRIDE_ARGS=(--hf-overrides "$HF_OVERRIDES"); fi
+vllm serve "$MODEL" --port 8000 --dtype bfloat16 --max-model-len "$MAX_MODEL_LEN" "${OVERRIDE_ARGS[@]}" \
     --gpu-memory-utilization 0.85 --generation-config vllm \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser "$REASONING_PARSER" \
     > /tmp/vllm.log 2>&1 &
