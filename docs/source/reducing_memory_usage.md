@@ -78,11 +78,11 @@ TRL implements packing using **Best-Fit Decreasing (BFD)** bin packing, which gr
 
 TRL supports three strategies:
 
-* `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
+- `"bfd"` (default): Uses **Best-Fit Decreasing packing**. If a sequence exceeds `max_length`, the overflow tokens are discarded.
 
-* `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
+- `"bfd_split"`: Uses **Best-Fit Decreasing packing**, but long sequences are split into chunks ≤ `max_length` before packing. This preserves all tokens and follows the approach proposed in [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830).
 
-* `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
+- `"wrapped"`: All tokens are concatenated into a stream and split into fixed-length blocks. This minimizes padding but may mix unrelated examples. This strategy corresponds to the *concatenate-then-split* preprocessing described in the literature (e.g., [Fewer Truncations Improve Language Modeling](https://huggingface.co/papers/2404.10830)). It has the downside of breaking sequence continuity for a large fraction of the dataset, which hurts performance, as discussed in the [Qwen3-Coder-Next Technical Report](https://huggingface.co/papers/2603.00729).
 
 > [!NOTE]
 > If all sequences are shorter than `max_length`, **`bfd` and `bfd_split` behave identically**, since no truncation or splitting is required.
@@ -163,18 +163,9 @@ training_args = GRPOConfig(..., use_liger_kernel=True)
 <hfoption id="KTO">
 
 ```python
-from trl.experimental.kto import KTOConfig
+from trl import KTOConfig
 
 training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GKD">
-
-```python
-from trl.experimental.gkd import GKDConfig
-
-training_args = GKDConfig(..., use_liger_kernel=True)
 ```
 
 </hfoption>
@@ -184,16 +175,15 @@ training_args = GKDConfig(..., use_liger_kernel=True)
 
 At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. `loss_type="chunked_nll"` in [`SFTTrainer`] avoids materializing it all at once: positions with `labels == -100` are dropped *before* the `lm_head` matmul, and the cross-entropy is computed in chunks of tokens using gradient checkpointing, so peak activation memory scales with `chunk_size × vocab_size` instead of `(batch × seq_len) × vocab_size`.
 
-Same math as the default loss — this is a memory optimization, not a new loss.
+Same math as the standard `"nll"` loss — this is a memory optimization, not a new loss. It is the **default** in [`SFTTrainer`]; to opt out, set `loss_type="nll"`:
 
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., loss_type="chunked_nll")
+training_args = SFTConfig(..., loss_type="nll")  # opt out of the default chunked path
 ```
 
 Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (measured on `Qwen3-1.7B`, vocab ≈ 151k — ~30 % on single-GPU, up to ~50 % under FSDP2 × 4 GPUs) with wall time typically neutral or slightly faster. See the [PR #5575](https://github.com/huggingface/trl/pull/5575) for the full benchmark across single-GPU, DDP, FSDP2, packing, long-context, and fp32 configurations.
-Under FSDP2, pass `--fsdp_reshard_after_forward false` to `accelerate launch` — the chunked path otherwise re-gathers `lm_head.weight` per chunk during backward, adding noticeable wall-time.
 
 Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
 
@@ -208,6 +198,9 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 
 <hfoptions id="padding-free">
 <hfoption id="DPO">
+
+> [!WARNING]
+> Padding-free is temporarily unavailable in [`DPOTrainer`]: since the DPO refactor, setting `padding_free=True` warns and falls back to standard padding. It is planned to return in a future update.
 
 ```python
 from trl import DPOConfig
@@ -270,6 +263,18 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 </hfoption>
 </hfoptions>
 
+## PyTorch caching allocator
+
+On long runs, especially online RL (GRPO, RLOO, Online DPO), GPU memory can fragment. Setting [`expandable_segments:True`](https://docs.pytorch.org/docs/stable/notes/cuda.html) lets PyTorch's caching allocator grow existing segments instead, which reduces the gap between allocated and reserved memory:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True  # canonical name since PyTorch 2.10
+```
+
+> [!WARNING]
+> With vLLM sleep mode (`vllm_enable_sleep_mode=True`), vLLM only reads `PYTORCH_CUDA_ALLOC_CONF` to work around this setting, so don't set only `PYTORCH_ALLOC_CONF`.
+
 ## Disabling model gathering for generation in online methods
 
 When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).
@@ -292,15 +297,6 @@ training_args = GRPOConfig(..., ds3_gather_for_generation=False)
 from trl.experimental.online_dpo import OnlineDPOConfig
 
 training_args = OnlineDPOConfig(..., ds3_gather_for_generation=False)
-```
-
-</hfoption>
-<hfoption id="PPO">
-
-```python
-from trl.experimental.ppo import PPOConfig
-
-training_args = PPOConfig(..., ds3_gather_for_generation=False)
 ```
 
 </hfoption>
@@ -356,5 +352,19 @@ training_args = SFTConfig(..., gradient_checkpointing=True)
 
 > [!NOTE]
 > Gradient checkpointing is enabled by default in all trainers to optimize memory usage. You can disable it by setting `gradient_checkpointing=False` if needed.
+
+### Selective activation checkpointing
+
+With [`SFTTrainer`], you can save the attention output during the forward pass instead of recomputing it in the backward pass. This recovers most of the checkpointing slowdown at long context, for one extra hidden-state-sized tensor per layer. It forces non-reentrant checkpointing.
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    ...,
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective": True},
+)
+```
 
 For more memory optimization techniques, see the [Transformers Performance Guide](https://huggingface.co/docs/transformers/perf_train_gpu_one#gradient-checkpointing).

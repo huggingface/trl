@@ -1,10 +1,3 @@
-{#- Training variant of the GLM-4-MoE chat template (see glm4moe.jinja for the original).
-    Modifications vs the original:
-    - {%- if '</think>' in content %} → {%- if '<think>' in content and '</think>' in content %}
-      Always check for both tags to avoid edge cases where the model generates only one tag.
-    - Added {% generation %} / {% endgeneration %} around assistant message output to support
-      assistant-only loss masking in SFT training.
--#}
 [gMASK]<sop>
 {%- if tools -%}
 <|system|>
@@ -49,8 +42,9 @@ For each function call, output the function name and arguments within the follow
     {%- endif %}
 {%- endfor %}
 {% for m in messages %}
-{%- if m.role == 'user' -%}<|user|>
-{{ visible_text(m.content) }}
+{%- if m.role == 'user' -%}
+{%- if loop.first or messages[loop.index0 - 1].role != 'assistant' -%}<|user|>{%- endif -%}
+{{ '\n' + visible_text(m.content) }}
 {{- '/nothink' if (enable_thinking is defined and not enable_thinking and not visible_text(m.content).endswith("/nothink")) else '' -}}
 {%- elif m.role == 'assistant' -%}
 <|assistant|>
@@ -59,12 +53,12 @@ For each function call, output the function name and arguments within the follow
 {%- if m.reasoning_content is string %}
     {%- set reasoning_content = m.reasoning_content %}
 {%- else %}
-    {%- if '<think>' in content and '</think>' in content %}
+    {%- if '</think>' in content %}
         {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
         {%- set content = content.split('</think>')[-1].lstrip('\n') %}
     {%- endif %}
 {%- endif %}
-{%- generation %}
+{% generation %}
 {%- if loop.index0 > ns.last_user_index and reasoning_content -%}
 {{ '\n<think>' + reasoning_content.strip() +  '</think>'}}
 {%- else -%}
@@ -84,29 +78,32 @@ For each function call, output the function name and arguments within the follow
 <arg_key>{{ k }}</arg_key>
 <arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>
 {% endfor %}
-</tool_call>{% endfor %}
-{% endif %}
-{%- endgeneration %}
+</tool_call>{% endfor %}<|observation|>
+{%- elif loop.last -%}
+{{- '<|user|>' }}
+{%- elif messages[loop.index0 + 1].role == 'system' -%}
+{{- '<|system|>' }}
+{%- else -%}
+{{- '<|user|>' }}
+{%- endif %}
+{% endgeneration %}
 {%- elif m.role == 'tool' -%}
 {%- if m.content is string -%}
-{%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
-    {{- '<|observation|>' }}
-{%- endif %}
 {{- '\n<tool_response>\n' }}
 {{- m.content }}
 {{- '\n</tool_response>' }}
 {%- else -%}
-<|observation|>{% for tr in m.content %}
+{{- '<|observation|>' if loop.first or messages[loop.index0 - 1].role != 'assistant' }}{% for tr in m.content %}
 
 <tool_response>
 {{ tr.output if tr.output is defined else tr }}
 </tool_response>{% endfor -%}
 {% endif -%}
 {%- elif m.role == 'system' -%}
-<|system|>
-{{ visible_text(m.content) }}
+{%- if loop.first or messages[loop.index0 - 1].role != 'assistant' -%}<|system|>{%- endif -%}
+{{ '\n' + visible_text(m.content) }}
 {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
     <|assistant|>{{- '\n<think></think>' if (enable_thinking is defined and not enable_thinking) else '' -}}
-{%- endif -%}
+{%- endif -%}

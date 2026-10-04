@@ -15,13 +15,12 @@
 import asyncio
 import atexit
 import copy
-import inspect
 import math
 import textwrap
 import time
+import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -32,15 +31,15 @@ import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather, gather_object, is_peft_model, set_seed
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.utils.data import Sampler
+from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -52,6 +51,7 @@ from transformers import (
 from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -61,17 +61,19 @@ from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
 from .utils import (
     RepeatSampler,
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
+    get_callable_name,
     get_config_model_id,
     identity,
+    is_async_callable,
     nanmax,
     nanmin,
     nanstd,
     pad,
     print_prompt_completions_sample,
-    selective_log_softmax,
+    repeat_iterable_dataset,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
@@ -83,14 +85,17 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
+    import peft
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+
+if is_trackio_available():
+    import trackio
 
 
 if is_wandb_available():
     import wandb
-
-if is_trackio_available():
-    import trackio
 
 
 logger = get_logger(__name__)
@@ -111,18 +116,18 @@ class RLOOTrainer(_BaseTrainer):
     Example:
 
     ```python
-    from trl import RLOOTrainer
-    from trl.rewards import accuracy_reward
-    from datasets import load_dataset
+    >>> from trl import RLOOTrainer
+    >>> from trl.rewards import accuracy_reward
+    >>> from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
+    >>> dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
-    trainer = RLOOTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        reward_funcs=accuracy_reward,
-        train_dataset=dataset,
-    )
-    trainer.train()
+    >>> trainer = RLOOTrainer(
+    ...     model="Qwen/Qwen2.5-0.5B-Instruct",
+    ...     reward_funcs=accuracy_reward,
+    ...     train_dataset=dataset,
+    ... )
+    >>> trainer.train()
     ```
 
     Args:
@@ -133,7 +138,10 @@ class RLOOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
+              config) with the keyword arguments in `args.model_init_kwargs`. If `dtype` is not specified in
+              `args.model_init_kwargs`, it defaults to `float32`. This differs from
+              [`~transformers.PreTrainedModel.from_pretrained`], where (since Transformers v5) the dtype is inferred
+              from the model config.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
             - A [`~peft.PeftModel`] object. Only causal language models are supported.
         reward_funcs (`RewardFunc | list[RewardFunc]`):
@@ -170,7 +178,11 @@ class RLOOTrainer(_BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
+
+            When `train_dataset` is an [`~datasets.IterableDataset`] (e.g. a streaming dataset), `max_steps` must be
+            set in the training arguments, since its length cannot be inferred and the total number of training steps
+            is required to bound the training loop and configure the learning rate scheduler.
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], [`~datasets.DatasetDict`], [`~datasets.IterableDatasetDict`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -196,6 +208,9 @@ class RLOOTrainer(_BaseTrainer):
         optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        quantization_config ([`~transformers.BitsAndBytesConfig`], *optional*):
+            Quantization configuration used when loading the model from a model identifier. Combine with `peft_config`
+            for QLoRA training. Ignored if the model is already instantiated.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
@@ -224,11 +239,17 @@ class RLOOTrainer(_BaseTrainer):
         reward_funcs: RewardFunc | list[RewardFunc],
         args: RLOOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
-        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        eval_dataset: Dataset
+        | IterableDataset
+        | DatasetDict
+        | IterableDatasetDict
+        | dict[str, Dataset | IterableDataset]
+        | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
     ):
         # Args
@@ -238,31 +259,52 @@ class RLOOTrainer(_BaseTrainer):
             args = RLOOConfig(f"{model_name}-RLOO")
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-
-        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
-        # Inspect the forward method before we wrap the model with PEFT
-        self.model_kwarg_keys = (
-            inspect.signature(model.forward).parameters.keys()
-            if not hasattr(model, "get_base_model")
-            else inspect.signature(model.get_base_model().forward).parameters.keys()
-        )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. The "
+                    "`quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
+        _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), truncation_side="left", padding_side="left"
+                get_config_model_id(model.config),
+                revision=model_revision,
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
+            )
+
+        if args.use_transformers_continuous_batching and isinstance(processing_class, ProcessorMixin):
+            raise ValueError(
+                "`use_transformers_continuous_batching` does not support multimodal models. Use `use_vllm` instead."
             )
 
         # Handle pad token for processors or tokenizers
@@ -275,6 +317,11 @@ class RLOOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -295,17 +342,69 @@ class RLOOTrainer(_BaseTrainer):
                     "with the new `peft_config` to the trainer."
                 )
             # Create PEFT model
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            get_peft_model_kwargs = {}
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model):
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during the training.
-            model.add_adapter("ref", model.peft_config["default"])
-            for name, param in model.named_parameters():
-                if ".default." in name:
-                    ref_name = name.replace(".default.", ".ref.")
-                    ref_param = model.get_parameter(ref_name)
-                    ref_param.data.copy_(param.data)
+            # of the "default" adapter, so that we can use it as the reference model during RLOO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
+            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
+            default_config = model.peft_config["default"]
+            if (
+                isinstance(default_config, LoraConfig)
+                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
+                and default_config.target_parameters
+            ):
+                logger.warning(
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                )
+            else:
+                model.add_adapter("ref", default_config)
+                for name, param in model.named_parameters():
+                    if ".default." in name:
+                        ref_name = name.replace(".default.", ".ref.")
+                        ref_param = model.get_parameter(ref_name)
+                        ref_param.data.copy_(param.data)
+
+        # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
+        # https://github.com/huggingface/trl/issues/2514#issuecomment-2692152703.
+        # Can be removed once https://github.com/deepspeedai/DeepSpeed/pull/8130 is merged and released.
+        if (
+            is_peft_model(model)
+            and args.deepspeed_plugin is not None
+            and args.deepspeed_plugin.zero_stage == 3
+            and args.gradient_checkpointing
+        ):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            use_reentrant = args.gradient_checkpointing_kwargs.get("use_reentrant")
+            if use_reentrant is False:
+                logger.warning(
+                    "You are using PEFT with DeepSpeed ZeRO-3 and gradient checkpointing with `use_reentrant=False`. "
+                    "`use_reentrant` is forced to `True` in this configuration to ensure correct training. To remove "
+                    "this warning, unset `use_reentrant` in `gradient_checkpointing_kwargs` or set it to `True`."
+                )
+            args.gradient_checkpointing_kwargs["use_reentrant"] = True
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally
         # handles this, but a bug currently prevents it; see https://github.com/huggingface/transformers/issues/42489
@@ -316,32 +415,36 @@ class RLOOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
-        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
-        if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
-            for param in model.parameters():
-                if param.requires_grad:
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
+        if _is_quantized_model:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
+        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 model_init_kwargs = args.model_init_kwargs or {}
                 # Distributed training requires device_map=None ("auto" fails)
                 if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     model_init_kwargs["device_map"] = None
+                model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                reward_model_revisions[i] = model_init_kwargs.get("revision")
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
             if isinstance(reward_funcs[i], nn.Module):  # Use Module over PretrainedModel for compat w/ compiled models
                 self.reward_func_names.append(get_config_model_id(reward_funcs[i].config).split("/")[-1])
             else:
-                self.reward_func_names.append(reward_funcs[i].__name__)
+                self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
-        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        self._has_async_funcs = any(is_async_callable(func) for func in self.reward_funcs)
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
                 name="RLOOTrainer-AsyncRewardLoop"
@@ -377,12 +480,16 @@ class RLOOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
-                    reward_processing_class = AutoTokenizer.from_pretrained(get_config_model_id(reward_func.config))
+                    reward_processing_class = AutoTokenizer.from_pretrained(
+                        get_config_model_id(reward_func.config),
+                        revision=reward_model_revisions[i],
+                        trust_remote_code=args.trust_remote_code,
+                    )
                 if reward_processing_class.pad_token_id is None:
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -397,7 +504,22 @@ class RLOOTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
-        self.use_transformers_paged = args.use_transformers_paged
+        self.use_transformers_continuous_batching = args.use_transformers_continuous_batching
+        if self.use_transformers_continuous_batching:
+            if not Version(transformers.__version__) >= Version("5.8.0"):
+                raise ImportError(
+                    "Using `use_transformers_continuous_batching` requires transformers>=5.8.0. "
+                    "Please upgrade with `pip install --upgrade transformers`."
+                )
+            from transformers.generation import ContinuousBatchingConfig
+
+            cb_kwargs = dict(args.transformers_continuous_batching_config or {})
+            # The transformers default (0.9) leaves almost no VRAM for the training backward pass;
+            # use a training-aware default unless the user has set it explicitly.
+            cb_kwargs.setdefault("max_memory_percent", 0.5)
+            self.continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
+        else:
+            self.continuous_batching_config = None
         self.pad_to_multiple_of = args.pad_to_multiple_of
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
@@ -412,22 +534,64 @@ class RLOOTrainer(_BaseTrainer):
 
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
-        elif (
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
+
+        # Iterable datasets can't be indexed, so the RepeatSampler can't be attached to them. Instead, the sampler's
+        # ordering is reproduced by streaming (see `get_train_dataloader`/`get_eval_dataloader` and
+        # `repeat_iterable_dataset`). This requires `dispatch_batches=False`: with the default dispatch path, batches
+        # are collated on the main process and Accelerate tries to concatenate the string `prompt` column, which fails;
+        # `dispatch_batches=False` also lets each process shard the stream into contiguous slices, as the sampler does.
+        # See https://github.com/huggingface/trl/issues/3213
+        uses_iterable_dataset = (
             isinstance(train_dataset, IterableDataset)
             or isinstance(eval_dataset, IterableDataset)
             or (
                 isinstance(eval_dataset, dict) and any(isinstance(ds, IterableDataset) for ds in eval_dataset.values())
             )
-        ):
-            # See https://github.com/huggingface/trl/issues/3213
-            raise NotImplementedError(
-                "Iterable datasets are not yet supported in RLOOTrainer. Please use a standard dataset instead."
+        )
+        if uses_iterable_dataset:
+            if args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            args.accelerator_config.dispatch_batches = False
+        # An iterable train set bakes prompt repeats into the stream, so it must be read by a single worker: multiple
+        # workers would shard and interleave it, splitting the num_generations groups. Map-style train keeps its workers.
+        if isinstance(train_dataset, IterableDataset) and args.dataloader_num_workers != 0:
+            logger.warning(
+                f"Iterable datasets require `dataloader_num_workers=0` to preserve prompt grouping; overriding the "
+                f"provided value ({args.dataloader_num_workers})."
             )
+            args.dataloader_num_workers = 0
 
         # Multi-step
         self.num_iterations = args.num_iterations
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
+        text_config = model.config.get_text_config()
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -464,10 +628,13 @@ class RLOOTrainer(_BaseTrainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            model_init_kwargs = args.model_init_kwargs or {}
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            if quantization_config is not None:
+                model_init_kwargs["quantization_config"] = quantization_config
             # Distributed training requires device_map=None ("auto" fails)
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
@@ -476,11 +643,37 @@ class RLOOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
+
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        add_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            temperature=self.temperature,
+        )
+        if self.ref_model is not None:
+            add_fused_lm_head(self.ref_model, temperature=self.temperature)
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self._current_train_step_time = 0.0
         self.log_completions = args.log_completions
+        self.log_multimodal = args.log_multimodal
         self.log_unique_prompts = args.log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
@@ -506,13 +699,13 @@ class RLOOTrainer(_BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 # vLLM configuration
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
                 # Server mode configuration
                 server_base_url=args.vllm_server_base_url,
+                server_api_key_env=args.vllm_server_api_key_env,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
                 group_port=args.vllm_group_port,
@@ -526,6 +719,7 @@ class RLOOTrainer(_BaseTrainer):
                 * args.steps_per_generation,
                 enable_sleep_mode=args.vllm_enable_sleep_mode,
                 model_impl=args.vllm_model_impl,
+                trust_remote_code=args.trust_remote_code,
                 # Generation configuration
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
@@ -561,6 +755,7 @@ class RLOOTrainer(_BaseTrainer):
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+        self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -613,14 +808,25 @@ class RLOOTrainer(_BaseTrainer):
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
     # *generation* batch (i.e., `per_device_batch_size × steps_per_generation`). This allows us to generate completions
     # once every steps_per_generation step—rather than once per accumulation step—which is significantly more
-    # efficient. The only change from the original implementation is multiplying the batch size by
-    # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
-    # splitting internally.
-    # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification.
+    # efficient. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the splitting internally.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_train_dataloader` with two changes: the
+    # batch size is multiplied by `steps_per_generation`, and iterable datasets are wrapped (see `repeat_iterable_dataset`).
     def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if isinstance(dataset, IterableDataset):
+            # Iterable datasets can't be indexed, so RepeatSampler can't be attached. Reproduce its ordering by
+            # transforming the stream instead (see `repeat_iterable_dataset`). The full permutation done by
+            # RepeatSampler becomes a buffered shuffle here.
+            if self.shuffle_dataset:
+                dataset = dataset.shuffle(seed=self.args.seed)
+            dataset = repeat_iterable_dataset(
+                dataset,
+                mini_repeat_count=self.num_generations,
+                batch_size=self.args.generation_batch_size // self.num_generations,
+                repeat_count=self.num_iterations * self.args.steps_per_generation,
+            )
         return self._get_dataloader(
-            dataset=self.train_dataset,
+            dataset=dataset,
             description="Training",
             batch_size=self._train_batch_size * self.args.steps_per_generation,  # < this is the change
             sampler_fn=self._get_train_sampler,
@@ -636,8 +842,10 @@ class RLOOTrainer(_BaseTrainer):
         # 2. repeats the batch multiple times to allow reusing generations across multiple updates. Refer to
         #    _prepare_inputs to see how the generations are stored and reused.
 
-        # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
-        # second row shows the second sampled batch, and so on.
+        # In the following figure, the values are the prompt indices. Each row shows the per-step batch
+        # returned by `_prepare_inputs`; rows within a `steps_per_generation` block are slices of the same
+        # generated batch. When `num_iterations > 1`, that block is reused for multiple optimization passes
+        # before regenerating.
         #
         #                                      |   GPU 0  |   GPU 1  |
         #
@@ -671,6 +879,60 @@ class RLOOTrainer(_BaseTrainer):
             seed=self.args.seed,
         )
 
+    # This method overrides `Trainer.get_eval_dataloader` to wrap iterable eval datasets, reproducing the
+    # RepeatSampler ordering that can't be attached to them (see `get_train_dataloader`). Map-style datasets keep the
+    # default path via `_get_eval_sampler`, which shuffles with `seed`, so the iterable wrap shuffles too (buffered)
+    # to walk prompts in a matching order.
+    # Maintenance note: this method is a copy-paste of the original `Trainer.get_eval_dataloader`, with the iterable
+    # wrapping as the only addition.
+    def get_eval_dataloader(self, eval_dataset: str | Dataset | IterableDataset | None = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        # If we have persistent workers, don't do a fork bomb especially as eval datasets
+        # don't change during training
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+            and self.args.dataloader_persistent_workers
+        ):
+            return self._eval_dataloaders[dataloader_key]
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+
+        if isinstance(eval_dataset, IterableDataset):
+            # Apply the `__init__` iterable config here too
+            if self.args.accelerator_config.dispatch_batches:
+                raise ValueError(
+                    "Iterable datasets require `dispatch_batches=False`, but it is set to `True` in "
+                    "`accelerator_config`. Please set it to `False`."
+                )
+            self.accelerator.dataloader_config.dispatch_batches = False
+            eval_dataset = eval_dataset.shuffle(seed=self.args.seed)
+            eval_dataset = repeat_iterable_dataset(eval_dataset, mini_repeat_count=self.num_generations_eval)
+            # Force a single worker for this loader only, without persisting the change
+            num_workers = self.args.dataloader_num_workers
+            self.args.dataloader_num_workers = 0
+
+        try:
+            return self._get_dataloader(
+                dataset=eval_dataset,
+                description="Evaluation",
+                batch_size=self.args.eval_batch_size,
+                sampler_fn=self._get_eval_sampler,
+                dataloader_key=dataloader_key,
+            )
+        finally:
+            if isinstance(eval_dataset, IterableDataset):
+                self.args.dataloader_num_workers = num_workers
+
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
         self,
@@ -680,78 +942,88 @@ class RLOOTrainer(_BaseTrainer):
         logits_to_keep,
         batch_size=None,
         compute_entropy=False,
+        compute_aux_loss=False,
         pixel_values=None,
         image_grid_thw=None,
         num_images=None,
         pixel_attention_mask=None,
+        spatial_shapes=None,
+        num_tiles=None,
         image_sizes=None,
         token_type_ids=None,
         mm_token_type_ids=None,
         image_position_ids=None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Compute log-probs and (optionally) entropies for each token."""
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
+        all_aux_losses = []
         for start in range(0, input_ids.size(0), batch_size):
-            input_ids_batch = input_ids[start : start + batch_size]
-            attention_mask_batch = attention_mask[start : start + batch_size]
+            end = min(start + batch_size, input_ids.size(0))  # the last chunk can be smaller than batch_size
+            input_ids_batch = input_ids[start:end]
+            attention_mask_batch = attention_mask[start:end]
 
             # Build model inputs
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
+            if num_images is not None:
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[end]
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
                 rows_per_sample = torch.split(rows_per_image, num_images)
                 rows_per_sample = torch.stack([s.sum() for s in rows_per_sample])
                 cum_rows = torch.cat([torch.tensor([0], device=rows_per_sample.device), rows_per_sample.cumsum(0)])
-                row_start, row_end = cum_rows[start].item(), cum_rows[start + batch_size].item()
+                row_start, row_end = cum_rows[start].item(), cum_rows[end].item()
                 model_inputs["pixel_values"] = pixel_values[row_start:row_end]
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif image_position_ids is not None and pixel_values is not None:
-                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
-                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
                 model_inputs["pixel_values"] = pixel_values[img_start:img_end]
                 model_inputs["image_position_ids"] = image_position_ids[img_start:img_end]
+            elif spatial_shapes is not None and pixel_values is not None:
+                # LFM2-VL tensors are tile-indexed.
+                cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
+                tile_start, tile_end = cum_tiles[start], cum_tiles[end]
+                model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[tile_start:tile_end]
+                model_inputs["spatial_shapes"] = spatial_shapes[tile_start:tile_end]
+            elif num_tiles is not None and pixel_values is not None:
+                # InternVL tensors are tile-indexed.
+                cum_tiles = torch.tensor([0] + num_tiles).cumsum(0)
+                tile_start, tile_end = cum_tiles[start], cum_tiles[end]
+                model_inputs["pixel_values"] = pixel_values[tile_start:tile_end]
+            elif pixel_values is not None and pixel_values.size(0) == sum(num_images):
+                model_inputs["pixel_values"] = pixel_values[img_start:img_end]
             elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
-            if pixel_attention_mask is not None:
-                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
+                model_inputs["pixel_values"] = pixel_values[start:end]
+            if pixel_attention_mask is not None and spatial_shapes is None:
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start:end]
             if image_sizes is not None:
-                model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+                model_inputs["image_sizes"] = image_sizes[img_start:img_end]
             if token_type_ids is not None:
-                model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
+                model_inputs["token_type_ids"] = token_type_ids[start:end]
             if mm_token_type_ids is not None:
-                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start : start + batch_size]
+                model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
-            # Only add logits_to_keep if the model supports it
-            if "logits_to_keep" in self.model_kwarg_keys:
-                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-                model_inputs["logits_to_keep"] = logits_to_keep + 1
+            # MoE models: request router logits so the model returns the load-balancing loss
+            if compute_aux_loss:
+                model_inputs["output_router_logits"] = True
 
-            model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-            logits = model(**model_inputs).logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits.div_(self.temperature)
-            completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            # Only the completion tokens are scored
+            labels = input_ids_batch.masked_fill(attention_mask_batch == 0, -100)
+            labels[:, :-logits_to_keep] = -100
+            with self.accelerator.autocast():
+                outputs = model(**model_inputs, labels=labels, fused_lm_head=True)
+            all_logps.append(outputs.log_probs[:, -logits_to_keep:])
             if compute_entropy:
-                with torch.no_grad():
-                    entropies = entropy_from_logits(logits)
-                all_entropies.append(entropies)
+                all_entropies.append(outputs.entropy[:, -logits_to_keep:])
+            if compute_aux_loss:
+                all_aux_losses.append(outputs.aux_loss)
 
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
-        return logps, entropies
+        aux_loss = torch.stack(all_aux_losses).mean() if compute_aux_loss else None
+        return logps, entropies, aux_loss
 
     def training_step(self, model, inputs, num_items_in_batch):
         time_before = time.perf_counter()
@@ -846,7 +1118,7 @@ class RLOOTrainer(_BaseTrainer):
         ):
             if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                 with profiling_context(self, reward_func_name):
-                    if is_conversational(inputs[0]):
+                    if is_conversational({"prompt": prompts[0]}):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions, strict=True)]
                         texts = [
                             apply_chat_template(x, reward_processing_class, **self.chat_template_kwargs)["text"]
@@ -860,7 +1132,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif is_async_callable(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
@@ -870,6 +1142,12 @@ class RLOOTrainer(_BaseTrainer):
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                    if len(output_reward_func) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{reward_func_name}' returned {len(output_reward_func)} rewards, but "
+                            f"{len(prompts)} were expected (one per prompt-completion pair). Make sure the reward "
+                            f"function returns exactly one reward per completion."
+                        )
                     rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Execute async custom functions in parallel using asyncio.gather
@@ -881,6 +1159,12 @@ class RLOOTrainer(_BaseTrainer):
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
                     output = [r if r is not None else torch.nan for r in output]
+                    if len(output) != len(prompts):
+                        raise ValueError(
+                            f"The reward function '{func_name}' returned {len(output)} rewards, but {len(prompts)} "
+                            f"were expected (one per prompt-completion pair). Make sure the reward function returns "
+                            f"exactly one reward per completion."
+                        )
                     return index, output
 
             async def _run_async_funcs():
@@ -977,25 +1261,27 @@ class RLOOTrainer(_BaseTrainer):
                 profiler=profiling_context(self, "vLLM.generate"),
             )
 
-        elif self.use_transformers_paged:
+        elif self.use_transformers_continuous_batching:
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
                     self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
             ):
                 # Cast to the appropriate dtype based on training configuration
                 if self.args.bf16:
                     unwrapped_model.to(torch.bfloat16)
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
-                # Continuous batching API expects 'inputs' arg only
                 all_outputs = unwrapped_model.generate_batch(
-                    prompt_ids, generation_config=self.generation_config, progress_bar=False
+                    prompt_ids,
+                    generation_config=self.generation_config,
+                    continuous_batching_config=self.continuous_batching_config,
+                    progress_bar=False,
                 )
-                unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
+                unwrapped_model.train()
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
 
         else:
@@ -1024,7 +1310,7 @@ class RLOOTrainer(_BaseTrainer):
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                self._dist.summon_full_params(self.model_wrapped, recurse=False),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
                     **generate_inputs, generation_config=self.generation_config
@@ -1067,12 +1353,17 @@ class RLOOTrainer(_BaseTrainer):
         completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
         agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         total_prompt_tokens = agg_prompt_lengths.sum()
-        total_completion_tokens = agg_completion_lengths.sum()  # = num_items_in_batch, required for the DAPO loss
 
         # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + agg_completion_lengths.sum()).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
@@ -1157,8 +1448,8 @@ class RLOOTrainer(_BaseTrainer):
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
-            # Mask completion_mask for attention masking
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
@@ -1170,7 +1461,7 @@ class RLOOTrainer(_BaseTrainer):
 
         num_images = [len(img_list) if img_list else 0 for img_list in images] if images is not None else None
 
-        # Get forward_kwargs for models with multimodal inputs
+        # Get forward_kwargs for models with multimodal inputs.
         if images is not None:
             prompts_text = [
                 apply_chat_template({"prompt": prompt}, self.processing_class, **self.chat_template_kwargs)["prompt"]
@@ -1181,6 +1472,27 @@ class RLOOTrainer(_BaseTrainer):
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
         else:
             forward_kwargs = {}
+
+        # Recover LFM2-VL tile counts; the full processor drops row/column metadata.
+        num_tiles = None
+        if images is not None and "spatial_shapes" in forward_kwargs:
+            image_info = self.processing_class.image_processor(
+                images=images, return_tensors="pt", return_row_col_info=True
+            )
+            tiles_per_image = image_info["image_rows"] * image_info["image_cols"]
+            if self.processing_class.image_processor.use_thumbnail:
+                tiles_per_image = tiles_per_image + (tiles_per_image > 1).to(tiles_per_image.dtype)
+            num_tiles = [group.sum().item() for group in torch.split(tiles_per_image, num_images)]
+        # Same for InternVL, whose pixel_values is tile-indexed ([total_tiles, channels, height, width]).
+        elif (
+            images is not None
+            and forward_kwargs["pixel_values"].ndim == 4
+            and forward_kwargs["pixel_values"].size(0) != sum(num_images)
+        ):
+            num_patches = self.processing_class.image_processor(
+                images=images, crop_to_patches=True, return_tensors="pt"
+            )["num_patches"]
+            num_tiles = [group.sum().item() for group in torch.split(num_patches, num_images)]
 
         # If token_type_ids are used, extend them with zeros for the completion part
         if "token_type_ids" in forward_kwargs:
@@ -1215,28 +1527,30 @@ class RLOOTrainer(_BaseTrainer):
         # Temporarily disable checkpointing to avoid this warning during inference.
         with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
             # Compute the per-token log probabilities for the current model
-            old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+            old_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                 self.model,
                 prompt_completion_ids,
                 attention_mask,
                 logits_to_keep,
                 batch_size,
                 num_images=num_images,
-                **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                num_tiles=num_tiles,
+                **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
             )
             old_logps = (old_per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model,
                         prompt_completion_ids,
                         attention_mask,
                         logits_to_keep,
                         batch_size=batch_size,
                         num_images=num_images,
-                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                        num_tiles=num_tiles,
+                        **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                     )
                 else:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
@@ -1244,14 +1558,15 @@ class RLOOTrainer(_BaseTrainer):
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
                     model = self.accelerator.unwrap_model(self.model)
                     with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
                             self.model,
                             prompt_completion_ids,
                             attention_mask,
                             logits_to_keep,
                             batch_size=batch_size,
                             num_images=num_images,
-                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, image_sizes, image_position_ids
+                            num_tiles=num_tiles,
+                            **forward_kwargs,  # may contain pixel_values, image_grid_thw, pixel_attention_mask, spatial_shapes, image_sizes, image_position_ids
                         )
             else:
                 ref_per_token_logps = None
@@ -1281,6 +1596,10 @@ class RLOOTrainer(_BaseTrainer):
 
         # Include the KL penalty in the reward
         if self.beta != 0.0:
+            # RLOO uses the first-order log ratio for the per-token KL estimate, following the original RLOO paper
+            # (Ahmadian et al., 2024, https://huggingface.co/papers/2405.14782). Unlike GRPOTrainer's Schulman
+            # approximation (always >= 0), this can be negative per token. The divergence is intentional: RLOO applies
+            # KL as a reward penalty (summed across tokens per sequence), while GRPO adds it to the per-token loss.
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
             kl = (per_token_kl * completion_mask).sum(-1)
@@ -1325,8 +1644,10 @@ class RLOOTrainer(_BaseTrainer):
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            kl_stats = self.accelerator.reduce(
+                torch.stack([(per_token_kl * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+            )
+            self._metrics[mode]["kl"].append((kl_stats[0] / kl_stats[1].clamp(min=1.0)).item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -1350,21 +1671,22 @@ class RLOOTrainer(_BaseTrainer):
         # Flush user-logged extra columns (from log_extra), gathering across processes.
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
+        for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
+            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.
         # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
         # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
+        for name in sorted(set(gather_object(list(self._pending_metrics)))):
+            values = self._pending_metrics.get(name, [])
+            local_stats = torch.tensor([sum(values), len(values)], dtype=torch.float32, device=device)
+            total, count = self.accelerator.gather(local_stats).view(-1, 2).sum(dim=0).tolist()
+            self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()
 
-        if images is not None:
+        if images is not None and self.log_multimodal:
             self._logs["images"].extend(gather_object(images))
 
         output = {
@@ -1381,6 +1703,8 @@ class RLOOTrainer(_BaseTrainer):
             output["image_grid_thw"] = forward_kwargs["image_grid_thw"]
         if "pixel_attention_mask" in forward_kwargs:
             output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
+        if "spatial_shapes" in forward_kwargs:
+            output["spatial_shapes"] = forward_kwargs["spatial_shapes"]
         if "image_sizes" in forward_kwargs:
             output["image_sizes"] = forward_kwargs["image_sizes"]
         if "token_type_ids" in forward_kwargs:
@@ -1391,6 +1715,8 @@ class RLOOTrainer(_BaseTrainer):
             output["image_position_ids"] = forward_kwargs["image_position_ids"]
         if images is not None:
             output["num_images"] = num_images
+            if num_tiles is not None:
+                output["num_tiles"] = num_tiles
         return output
 
     @profiling_decorator
@@ -1408,16 +1734,19 @@ class RLOOTrainer(_BaseTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # Compute the per_token_logps and the entropy at each position in the completion
-        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+        per_token_logps, entropies, aux_loss = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
             logits_to_keep,
             compute_entropy=True,
+            compute_aux_loss=self.aux_loss_enabled,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
+            spatial_shapes=inputs.get("spatial_shapes"),
+            num_tiles=inputs.get("num_tiles"),
             image_sizes=inputs.get("image_sizes"),
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
@@ -1440,21 +1769,28 @@ class RLOOTrainer(_BaseTrainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
+        # RLOO returns an unscaled loss (the HF Trainer divides by gradient accumulation), so add the aux term unscaled
+        if self.aux_loss_enabled:
+            loss = loss + self.router_aux_loss_coef * aux_loss
+            self._metrics[mode]["aux_loss"].append(self.accelerator.gather_for_metrics(aux_loss).mean().item())
+
         # Entropy
-        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+        entropy_stats = self.accelerator.reduce(
+            torch.stack([(entropies * completion_mask).sum(), completion_mask.sum().float()]), reduction="sum"
+        )
+        self._metrics[mode]["entropy"].append((entropy_stats[0] / entropy_stats[1].clamp(min=1.0)).item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
-        gathered_low_clip = self.accelerator.gather(is_low_clipped.float().mean())
+        gathered_low_clip = self.accelerator.gather(is_low_clipped.float())
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(is_high_clipped.float().mean())
+        gathered_high_clip = self.accelerator.gather(is_high_clipped.float())
         self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float().mean())
+        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float())
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 

@@ -28,7 +28,8 @@ class TestLogCompletionsCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # `Trainer` realigns the configs at train time, so mirror the pad token as the TRL trainers do at init.
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))
 
@@ -121,7 +122,8 @@ class TestBEMACallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # `Trainer` realigns the configs at train time, so mirror the pad token as the TRL trainers do at init.
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
         def tokenize_function(examples, tokenizer):
@@ -211,8 +213,8 @@ class TestBEMACallback(TrlTestCase):
             # BEMA starts after step 3 and updates every 2 steps → updates at 5, 7, 9
             assert mock_update.call_args_list == [call(5), call(7), call(9)]
 
-    def test_no_bema(self):
-        """Test that BEMACallback works without BEMA updates."""
+    def test_bias_power_zero(self):
+        """Test that BEMACallback works with bias_power=0.0 (maximum, undecayed bias-correction)."""
         training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         bema_callback = BEMACallback(update_freq=2, bias_power=0.0)
         trainer = Trainer(

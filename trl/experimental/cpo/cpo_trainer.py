@@ -27,14 +27,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState, logging
-from accelerate.utils import is_peft_model
+from accelerate.logging import get_logger
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -50,7 +51,13 @@ from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ...data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import disable_dropout_in_model, log_table_to_comet_experiment, selective_log_softmax
+from ...trainer.utils import (
+    disable_dropout_in_model,
+    get_config_model_id,
+    global_then_local_main_first,
+    log_table_to_comet_experiment,
+    selective_log_softmax,
+)
 from ..utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
@@ -69,7 +76,7 @@ if is_wandb_available():
     import wandb
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class CPOTrainer(_BaseTrainer):
@@ -167,6 +174,12 @@ class CPOTrainer(_BaseTrainer):
                 model_init_kwargs["dtype"] = dtype
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_revision = model_init_kwargs.get("revision") if isinstance(model, str) else None
+
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
@@ -217,7 +230,23 @@ class CPOTrainer(_BaseTrainer):
                     model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
             # get peft model with the given config
-            model = get_peft_model(model, peft_config)
+            # ZeRO-3 + PEFT for non-quantized models:
+            # - PEFT's default autocast_adapter_dtype=True upcasts LoRA adapter params to fp32 even when the base model is bf16.
+            # - ZeRO-3's _allgather_params_coalesced allocates output buffers using the dtype of the first persistent parameter,
+            #   so mixed-dtype persistent_parameters (bf16 base + fp32 LoRA) cause a TypeError on the first optimizer step.
+            # - Passing autocast_adapter_dtype=False keeps adapter params in the base model dtype (bf16), fixing the mismatch.
+            # - This is safe: the fp32 upcast is a QLoRA-specific concern (low-bit quantized base models), not needed for
+            #   non-quantized bf16 training.
+            # - See:
+            #   - TRL issue: https://github.com/huggingface/trl/issues/6089
+            #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
+            _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
+                model, "is_loaded_in_8bit", False
+            )
+            get_peft_model_kwargs = {}
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
+                get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
             if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
                 peft_module_casting_to_bf16(model)
                 # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
@@ -255,7 +284,9 @@ class CPOTrainer(_BaseTrainer):
             self.pad_token_id = model.config.pad_token_id
 
         if processing_class is None:
-            raise ValueError("processing_class must be specified to tokenize a CPO dataset.")
+            processing_class = AutoTokenizer.from_pretrained(
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
         if args.max_length is None:
             logger.warning(
                 "`max_length` is not set in the CPOConfig's init"
@@ -303,6 +334,10 @@ class CPOTrainer(_BaseTrainer):
 
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
         self.pad_token_id = processing_class.pad_token_id
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
@@ -335,9 +370,7 @@ class CPOTrainer(_BaseTrainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
@@ -517,13 +550,18 @@ class CPOTrainer(_BaseTrainer):
                 self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
-            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
-
             # if combined sequence is too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if len(answer_tokens["prompt_input_ids"]) + len(answer_tokens["input_ids"]) > self.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - longer_response_length]
+                        answer_tokens[k] = answer_tokens[k][
+                            : max(0, self.max_length - len(answer_tokens["prompt_input_ids"]))
+                        ]
+                if len(answer_tokens["input_ids"]) == 0:
+                    logger.warning_once(
+                        "The prompt alone fills `max_length`, so truncation leaves an empty completion. Consider "
+                        "increasing `max_length` or filtering out long prompts."
+                    )
 
             # Create labels
             chosen_sequence_tokens = {

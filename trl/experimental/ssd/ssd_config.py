@@ -23,7 +23,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class SSDConfig(_BaseConfig):
     r"""
-    Configuration class for [`SSDTrainer`].
+    Configuration class for [`experimental.ssd.SSDTrainer`].
 
     Implements Simple Self-Distillation (SSD) from [*Embarrassingly Simple Self-Distillation Improves Code
     Generation*](https://huggingface.co/papers/2604.01193). SSD samples completions from the model at a training-time
@@ -38,7 +38,11 @@ class SSDConfig(_BaseConfig):
         > Parameters that control generation and rollout reuse
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments used when the `model` argument is passed as a string.
+            Keyword arguments used when the `model` argument is passed as a string. The `revision` value is also used
+            when loading the processing class.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum prompt length. Longer prompts are truncated from the left.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
@@ -73,6 +77,9 @@ class SSDConfig(_BaseConfig):
             Model implementation for vLLM: `"vllm"`, `"transformers"`, or `"auto"`.
         vllm_server_base_url (`str` or `None`, *optional*):
             Base URL for the vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
+        vllm_server_api_key_env (`str`, *optional*, defaults to `"VLLM_API_KEY"`):
+            Environment variable containing the vLLM server Bearer API key. Only the variable name is stored in
+            training arguments; the client reads its value when it is created.
         vllm_server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the vLLM server (server mode only).
         vllm_server_port (`int`, *optional*, defaults to `8000`):
@@ -112,7 +119,17 @@ class SSDConfig(_BaseConfig):
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
-        metadata={"help": "Keyword arguments for model initialization when `model` is passed as a string."},
+        metadata={
+            "help": "Keyword arguments for model initialization when `model` is passed as a string. The `revision` "
+            "value is also used when loading the processing class."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
+            "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
+        },
     )
     max_prompt_length: int | None = field(
         default=512,
@@ -179,6 +196,10 @@ class SSDConfig(_BaseConfig):
         metadata={
             "help": "Base URL for the vLLM server. If provided, vllm_server_host and vllm_server_port are ignored."
         },
+    )
+    vllm_server_api_key_env: str = field(
+        default="VLLM_API_KEY",
+        metadata={"help": "Environment variable containing the vLLM server Bearer API key."},
     )
     vllm_server_host: str = field(
         default="127.0.0.1",

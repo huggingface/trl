@@ -24,7 +24,7 @@ git checkout -b release-v{major}.{minor}
 ### 3. Change the version in the following files
 
 - `.github/workflows/tests_latest.yml`:
-  
+
   ```diff
   - with: { ref: v{major}.{minor-1}-release }
   + with: { ref: v{major}.{minor}-release }
@@ -58,7 +58,7 @@ from `release-v{major}.{minor}` to `main`, named `Release: v{major}.{minor}`, wa
 
 ### 6. Once the pull request is approved, merge it into `main`
 
-It will automatically publish the new version of the package on PyPI.
+Merging does not publish anything. The package is published by the tag pushed in the next step.
 
 ### 7. Add a tag in git to mark the release
 
@@ -68,6 +68,8 @@ git pull origin main
 git tag -a v{major}.{minor}.0 -m 'Adds tag v{major}.{minor}.0 for PyPI'
 git push origin v{major}.{minor}.0
 ```
+
+Pushing the tag triggers the publish workflow, which uploads the package to PyPI. It refuses to upload unless `VERSION` in the tagged commit is exactly `{major}.{minor}.0`, so tag the release commit: do this before the dev bump of step 10.
 
 ### 8. Create a branch `v{major}.{minor}-release` for future patch releases
 
@@ -90,24 +92,28 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
 
 1. Create a branch `bump-dev-version-{major}.{minor+1}` from `main` and checkout to it.
 
-  ```shell
-  git checkout -b bump-dev-version-{major}.{minor+1}
-  ```
+   ```shell
+   git checkout main
+   git pull origin main
+   git checkout -b bump-dev-version-{major}.{minor+1}
+   ```
 
 2. Change the version in file `VERSION`:
 
-  ```diff
-  - {major}.{minor}.0
-  + {major}.{minor+1}.0.dev0
-  ```
+   ```diff
+   - {major}.{minor}.0
+   + {major}.{minor+1}.0.dev0
+   ```
+
+   The `.dev0` suffix is mandatory. CI rejects a pull request that replaces a release version with another release version: dropping the suffix here is what published the empty `v1.12.0` to PyPI.
 
 3. Commit and push these changes
 
-  ```shell
-  git add VERSION
-  git commit -m '⬆️ Bump dev version'
-  git push origin bump-dev-version-{major}.{minor+1}
-  ```
+   ```shell
+   git add VERSION
+   git commit -m '⬆️ Bump dev version'
+   git push origin bump-dev-version-{major}.{minor+1}
+   ```
 
 4. Create a pull request from `bump-dev-version-{major}.{minor+1}` to `main`, named `⬆️ Bump dev version`, and request urgent review.
 
@@ -117,11 +123,34 @@ This ensures that future patch releases (`v{major}.{minor}.1`, `v{major}.{minor}
 
 ## Making a patch release
 
+### What goes into a patch release
+
+A patch release is cut from the latest minor release only. Older release branches do not get patches.
+
+A merged PR goes into the next patch release and gets the `🩹 for patch` label when it fixes one of:
+
+- a security issue,
+- silently wrong training (corrupted rollouts, a wrong loss),
+- a crash or hang in a supported configuration (within the dependency ranges declared in `pyproject.toml`),
+- a regression from the previous release,
+
+and the fix is small, tested, and can be cherry-picked cleanly onto the release branch. How long the bug has existed does not matter.
+
+These wait for the next minor release, even when they are fixes:
+
+- new features and public API changes,
+- anything in `trl.experimental`, which makes no stability promise,
+- changes that alter the results of a run that was already correct (for example, a different initialization for the same seed),
+- everything else.
+
+Whether a fix justifies a patch release depends on how severe the bug is: how many users hit it, whether it fails silently, whether there is a workaround, and how soon the next minor release is due. If it does, cut the patch release as soon as the fix is merged, without waiting for other fixes: patch releases are cheap, and a user hitting the bug should not have to wait for an unrelated fix to land. Otherwise, the fix ships with the next minor release.
+
 ### 1. Ensure your local repository is up to date with the upstream repository
 
 ```bash
+git fetch origin
 git checkout v{major}.{minor}-release
-git pull origin main
+git pull origin v{major}.{minor}-release
 ```
 
 ### 2. Cherry-pick the changes you want to include in the patch release
@@ -147,21 +176,19 @@ git commit -m 'Release: {major}.{minor}.{patch}'
 git push origin v{major}.{minor}-release
 ```
 
-### 5. Wait for the CI to pass
-
-The CI will automatically publish the new version of the package on PyPI.
-
-### 6. Add a tag in git to mark the release
+### 5. Add a tag in git to mark the release
 
 ```shell
 git tag -a v{major}.{minor}.{patch} -m 'Adds tag v{major}.{minor}.{patch} for PyPI'
 git push origin v{major}.{minor}.{patch}
 ```
 
-#### 7. Create a GitHub Release
+Pushing the tag triggers the publish workflow, which uploads the package to PyPI. It refuses to upload unless `VERSION` in the tagged commit is exactly `{major}.{minor}.{patch}`.
+
+### 6. Create a GitHub Release
 
 1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
 2. Click **Draft a new release**.
-3. Select the `v{major}.{minor}.{patch}` tag you just created in step 7.
+3. Select the `v{major}.{minor}.{patch}` tag you just created in step 5.
 4. Add a title (`v{major}.{minor}.{patch}`) and a short description of what’s new.
 5. Click **Publish Release**.

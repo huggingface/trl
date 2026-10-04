@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import pytest
-from datasets import Dataset, features, load_dataset
+import torch
+from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
@@ -24,6 +25,7 @@ from ..testing_utils import TrlTestCase, require_peft, require_torch_accelerator
 
 if is_peft_available():
     from peft import LoraConfig
+
 
 if is_vision_available():
     import numpy as np
@@ -43,6 +45,31 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.reward_model_id, num_labels=1)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(self.reward_model_id)
         self.reward_tokenizer.pad_token = self.reward_tokenizer.eos_token
+
+    def test_trust_remote_code(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model_id = "trl-internal-testing/tiny-RemoteForCausalLM"
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+
+        with pytest.raises(ValueError, match="custom code"):
+            OnlineDPOTrainer(
+                model=model_id,
+                reward_funcs=self.reward_model,
+                args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                processing_class=tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+            )
+
+        trainer = OnlineDPOTrainer(
+            model=model_id,
+            reward_funcs=self.reward_model,
+            args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none", trust_remote_code=True),
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train(self, config_name):
@@ -66,6 +93,38 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+    @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
+    def test_init_with_eval_dataset(self, eval_dataset_type):
+        # Streaming datasets are not yet supported in OnlineDPO
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        if eval_dataset_type == "none":
+            eval_dataset = None
+        elif eval_dataset_type == "dataset":
+            eval_dataset = dataset["test"]
+        elif eval_dataset_type == "dataset_dict":
+            eval_dataset = DatasetDict({"data1": dataset["test"], "data2": dataset["test"]})
+        else:  # "dict_of_dataset"
+            eval_dataset = {"data1": dataset["test"], "data2": dataset["test"]}
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=eval_dataset,
+            processing_class=self.tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+
+        if eval_dataset_type == "none":
+            assert trainer.eval_dataset is None
+        elif isinstance(trainer.eval_dataset, dict):
+            assert set(trainer.eval_dataset.keys()) == {"data1", "data2"}
+        else:
+            assert trainer.eval_dataset is eval_dataset
 
     def test_train_model_str(self):
         training_args = OnlineDPOConfig(
@@ -132,6 +191,28 @@ class TestOnlineDPOTrainer(TrlTestCase):
                 processing_class=self.tokenizer,
                 reward_processing_classes=self.reward_tokenizer,
             )
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = OnlineDPOTrainer(
+                model=self.model_id,
+                reward_funcs=self.reward_model,
+                args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @require_peft
     def test_train_with_peft(self):
@@ -302,7 +383,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
         config = OnlineDPOConfig()
         assert config.vllm_mode == "colocate"
         assert config.vllm_server_base_url is None
-        assert config.vllm_server_host == "0.0.0.0"
+        assert config.vllm_server_host == "127.0.0.1"
+        assert config.vllm_server_api_key_env == "VLLM_API_KEY"
         assert config.vllm_server_port == 8000
         assert config.vllm_server_timeout == 240.0
         assert config.vllm_gpu_memory_utilization == 0.55
@@ -381,6 +463,27 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.reward_weights is not None
         assert round(abs(trainer.reward_weights[0].item() - 0.7), 5) == 0
         assert round(abs(trainer.reward_weights[1].item() - 0.3), 5) == 0
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        model_id = "trl-internal-testing/tiny-MistralForCausalLM-0.2"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = OnlineDPOTrainer(
+            model=model_id,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=AutoTokenizer.from_pretrained(model_id),
+            reward_processing_classes=self.reward_tokenizer,
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id
 
 
 @require_vision

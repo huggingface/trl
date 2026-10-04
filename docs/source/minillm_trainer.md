@@ -28,7 +28,7 @@ from trl.experimental.minillm import MiniLLMConfig
 training_args = MiniLLMConfig(
     rkl_advantage=True,
     single_step_decomposition=False,
-    gamma=False
+    gamma=0.0
 )
 ```
 
@@ -49,7 +49,7 @@ training_args = MiniLLMConfig(
 )
 ```
 
-\\( L_{\text{MiniLLM}} \\) becomes the reverse KLD version of the GKD loss as in [GKD Trainer](./gkd_trainer.md):
+\\( L_{\text{MiniLLM}} \\) becomes the reverse KLD version of the GKD loss as in [GKD Trainer](gkd_trainer):
 
 $$
 L_{\text{GKD-RKL}}=\mathbb{E}_{x\sim \pi_{\theta}} \text{KL}\left[\pi_\theta(\cdot|x_{1..t})||\pi_{\text{teacher}}(\cdot | x_{1..t})\right].

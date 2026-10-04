@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import textwrap
 from time import strftime
 
@@ -33,7 +32,6 @@ from trl.data_utils import (
     maybe_unpair_preference_dataset,
     pack_dataset,
     prepare_multimodal_messages,
-    prepare_multimodal_messages_vllm,
     unpair_preference_dataset,
 )
 
@@ -268,98 +266,6 @@ class TestPrepareMultimodalMessages:
         assert messages == expected
 
 
-@require_vision
-class TestPrepareMultimodalMessagesVLLM:
-    def test_single_image_conversion(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                    {"type": "text", "text": "What color is the sky?"},
-                ],
-            }
-        ]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        # Original should remain unchanged (deepcopy test)
-        assert messages[0]["content"][0]["type"] == "image"
-
-        # Converted version should have correct structure
-        assert result[0]["content"][0]["type"] == "image_pil"
-        assert "image_pil" in result[0]["content"][0]
-        assert "image" not in result[0]["content"][0]
-        assert isinstance(result[0]["content"][0]["image_pil"], Image.Image)
-        assert result[0]["content"][1]["type"] == "text"
-
-    def test_mixed_content_conversion(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What color is the sky?"},
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                ],
-            }
-        ]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        # The image part should be converted, text should be unchanged
-        assert result[0]["content"][0]["type"] == "text"
-        assert result[0]["content"][1]["type"] == "image_pil"
-
-    def test_no_images(self):
-        messages = [{"role": "user", "content": [{"type": "text", "text": "What color is the sky?"}]}]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        # Should be identical since there are no images
-        assert result == messages
-        # And a deepcopy — not the same object
-        assert result is not messages
-        assert result[0] is not messages[0]
-
-    def test_multiple_messages(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What color is the sky?"},
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "It is blue."}],
-            },
-        ]
-
-        result = prepare_multimodal_messages_vllm(messages)
-
-        assert result[0]["content"][1]["type"] == "image_pil"
-        assert result[1]["content"][0]["type"] == "text"
-        assert result[1]["content"][0]["text"] == "It is blue."
-
-    def test_deepcopy_integrity(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What color is the sky?"},
-                    {"type": "image", "image": Image.new("RGB", (10, 10), color="blue")},
-                ],
-            },
-        ]
-        original = copy.deepcopy(messages)
-
-        _ = prepare_multimodal_messages_vllm(messages)
-
-        # Original should not be mutated
-        assert messages == original
-
-
 class TestIsConversational(TrlTestCase):
     # fmt: off
     conversational_examples = [
@@ -537,6 +443,14 @@ class TestApplyChatTemplate(TrlTestCase):
                 reason="GLM4 tokenizer requires transformers>=5.0.0",
             ),
         ),
+        "trl-internal-testing/tiny-Lfm2ForCausalLM",
+        pytest.param(
+            "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -563,6 +477,20 @@ class TestApplyChatTemplate(TrlTestCase):
                 reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
             ),
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.3.0"),
+                reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("4.57.0"),
+                reason="Olmo 3 requires transformers>=4.57.0",
+            ),
+        ),
         "trl-internal-testing/tiny-Phi3ForCausalLM-3",
         "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -577,6 +505,13 @@ class TestApplyChatTemplate(TrlTestCase):
         ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+            ),
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
             marks=pytest.mark.skipif(
                 Version(transformers.__version__) < Version("5.0.0"),
                 reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
@@ -704,6 +639,33 @@ class TestApplyChatTemplate(TrlTestCase):
         """)
 
         assert result["prompt"] == expected
+
+    def test_apply_chat_template_preference_round_trips_with_generation_prompt_insertion(self):
+        # Regression test: when the generation prompt inserts extra tokens (e.g. an opening `<think>` tag, as in
+        # DeepSeek-R1-style templates), the prompt is reduced to the common prefix of the rendered prompt+chosen and
+        # prompt+rejected strings. The completions must be sliced against the *final* prompt; slicing `chosen` before
+        # the prompt shrinks again against `rejected` used to silently drop the leading `<think>` tag from `chosen`.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] + '\n' }}"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}{{ 'assistant: <think>' }}{% endif %}"
+        )
+
+        example = {
+            "prompt": [{"role": "user", "content": "What is 2+2?"}],
+            # chosen keeps its reasoning trace, rejected doesn't: the common prefix of the two rendered strings ends
+            # before the `<think>` inserted by the generation prompt
+            "chosen": [{"role": "assistant", "content": "<think>2+2=4</think>It is 4."}],
+            "rejected": [{"role": "assistant", "content": "It is 4."}],
+        }
+        result = apply_chat_template(example, tokenizer)
+
+        expected_chosen = tokenizer.apply_chat_template(example["prompt"] + example["chosen"], tokenize=False)
+        expected_rejected = tokenizer.apply_chat_template(example["prompt"] + example["rejected"], tokenize=False)
+        assert result["prompt"] + result["chosen"] == expected_chosen
+        assert result["prompt"] + result["rejected"] == expected_rejected
 
     def test_apply_chat_template_with_tools(self):
         tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
@@ -987,6 +949,45 @@ class TestUnpairPreferenceDataset(TrlTestCase):
             "The paired dataset should be converted to unpaired."
         )
 
+    def test_unpair_preference_dataset_extra_columns(self):
+        # Test that extra columns are preserved and duplicated for chosen and rejected rows
+        paired_dataset = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        )
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert unpaired_dataset.to_dict() == expected
+
+    def test_unpair_preference_dataset_iterable(self):
+        # Test that an IterableDataset with extra columns is correctly unpaired
+        paired_dataset = self.paired_dataset.to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_dataset)
+        assert list(unpaired_dataset) == [
+            dict(zip(self.unpaired_dataset.column_names, vals, strict=False))
+            for vals in zip(*self.unpaired_dataset.to_dict().values(), strict=False)
+        ]
+
+    def test_unpair_preference_dataset_iterable_extra_columns(self):
+        # Test that an IterableDataset with extra columns preserves and duplicates them
+        paired_iterable = Dataset.from_dict(
+            {
+                "prompt": ["The sky is", "The sun is"],
+                "chosen": [" blue.", " in the sky."],
+                "rejected": [" green.", " in the sea."],
+                "extra": [1, 2],
+            }
+        ).to_iterable_dataset()
+        unpaired_dataset = unpair_preference_dataset(paired_iterable)
+        expected = {**self.unpaired_dataset.to_dict(), "extra": [1, 2, 1, 2]}
+        assert list(unpaired_dataset) == [
+            dict(zip(expected.keys(), vals, strict=False)) for vals in zip(*expected.values(), strict=False)
+        ]
+
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
@@ -1136,6 +1137,21 @@ class TestPackDatasetWrapped(TrlTestCase):
         num_examples = len(examples[next(iter(examples))])
         assert next(iter(dataset.with_format(None).batch(batch_size=num_examples))) == expected_output
         assert formatting == dataset._formatting
+
+    def test_with_multiple_map_batches(self):
+        # `map` passes each batch as a slice, so every batch but the first starts at a non-zero offset
+        examples = {
+            "input_ids": [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12]],
+            "attention_mask": [[0, 1], [1, 0], [0, 1], [1, 0], [0, 1], [1, 0]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [5, 6], [7, 8, 9, 10], [11, 12]],
+            "attention_mask": [[0, 1, 1, 0], [0, 1], [1, 0, 0, 1], [1, 0]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped", map_kwargs={"batch_size": 3})
+        assert dataset.to_dict() == expected_output
 
 
 class TestPackDatasetBfd(TrlTestCase):

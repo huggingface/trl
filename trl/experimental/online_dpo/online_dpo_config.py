@@ -21,7 +21,6 @@ from ...trainer.base_config import _BaseConfig
 
 @dataclass
 class OnlineDPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`experimental.online_dpo.OnlineDPOTrainer`].
 
@@ -38,7 +37,7 @@ class OnlineDPOConfig(_BaseConfig):
             Path to the reward model.
         max_new_tokens (`int`, *optional*, defaults to `64`):
             Maximum number of tokens to generate per completion.
-        max_length (`int`, *optional*, defaults to `256`):
+        max_length (`int`, *optional*, defaults to `512`):
             Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
             sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
             possible.
@@ -97,8 +96,8 @@ class OnlineDPOConfig(_BaseConfig):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 
-            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
-              server is running (start with `trl vllm-serve`).
+            - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a vLLM server
+              is running (start with `vllm serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_structured_outputs_regex (`str`, *optional*):
@@ -109,6 +108,9 @@ class OnlineDPOConfig(_BaseConfig):
         vllm_server_base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
             `vllm_server_port` are ignored.
+        vllm_server_api_key_env (`str`, *optional*, defaults to `"VLLM_API_KEY"`):
+            Environment variable containing the vLLM server Bearer API key. Only the variable name is stored in
+            training arguments; the client reads its value when it is created.
         vllm_server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
@@ -143,7 +145,14 @@ class OnlineDPOConfig(_BaseConfig):
             with vLLM generation.
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
+            string. The `revision` value is also used when loading reward processing classes.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to allow loading models that ship custom Python code from the Hub. Forwarded to
+            [`~transformers.AutoModelForCausalLM.from_pretrained`]. Also applied to reward-model and reward-tokenizer
+            loads.
+        reward_weights (`list[float]`, *optional*):
+            Weights for combining multiple reward functions. Must match the number of reward functions. If `None`, all
+            reward functions are equally weighted.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -288,7 +297,7 @@ class OnlineDPOConfig(_BaseConfig):
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
-            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "a vLLM server is running (start with `vllm serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training.",
         },
@@ -299,6 +308,10 @@ class OnlineDPOConfig(_BaseConfig):
             "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
             "and `vllm_server_port` are ignored.",
         },
+    )
+    vllm_server_api_key_env: str = field(
+        default="VLLM_API_KEY",
+        metadata={"help": "Environment variable containing the vLLM server Bearer API key."},
     )
     vllm_server_host: str = field(
         default="127.0.0.1",
@@ -350,7 +363,14 @@ class OnlineDPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
-            "from a string."
+            "from a string. The `revision` value is also used when loading reward processing classes."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to allow loading models that ship custom Python code from the Hub. Forwarded to "
+            "`AutoModelForCausalLM.from_pretrained`. Also applied to reward-model and reward-tokenizer loads."
         },
     )
     reward_weights: list[float] | None = field(
