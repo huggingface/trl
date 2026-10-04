@@ -79,6 +79,7 @@ test = [
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
+    "pytest-timeout",  # bound readiness regression tests that would otherwise wait through retry backoff
     "pytest-xdist",
     "pytest",
     "tabulate"  # test report rendering in scripts/log_reports.py
@@ -115,6 +116,7 @@ dev = [
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
+    "pytest-timeout",  # bound readiness regression tests that would otherwise wait through retry backoff
     "pytest-xdist",
     "pytest",
     "tabulate",  # test report rendering in scripts/log_reports.py
