@@ -45,6 +45,9 @@ DOMAINS=${DOMAINS:-general}
 PACKING=${PACKING:-tree}
 LORA_RANK=${LORA_RANK:-32}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-40960}
+# Qwen3 is trained to 32768 and reaches further only with YaRN, which vLLM takes as an entry in
+# `--hf-overrides` rather than a flag of its own. Code sits at a p50 of 58k and Cyber 47k.
+HF_OVERRIDES=${HF_OVERRIDES:-}
 TOOL_PARSER=${TOOL_PARSER:-hermes}
 REASONING_PARSER=${REASONING_PARSER:-qwen3}
 # The ablation Space: every arm of this sweep reports here, whichever scheduler ran it.
@@ -64,7 +67,7 @@ uvx hf jobs run --name "$RUN_NAME" \
     -v "$EXAMPLE_DIR:/work" \
     -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
     -e "TRL_SHA=$TRL_SHA" -e "MODEL=$MODEL" -e "DOMAINS=$DOMAINS" -e "PACKING=$PACKING" -e "FLAVOR=$FLAVOR" \
-    -e "LORA_RANK=$LORA_RANK" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" \
+    -e "LORA_RANK=$LORA_RANK" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "HF_OVERRIDES=$HF_OVERRIDES" \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "VLLM_GPUS=$VLLM_GPUS" -e "TRAIN_GPUS=$TRAIN_GPUS" -e "VLLM_TP=$VLLM_TP" -e "VLLM_DP=$VLLM_DP" \
     -e "PROJECT=$PROJECT" -e "RUN_NAME=$RUN_NAME" -e "TRAIN_ARGS=$TRAIN_ARGS" \
@@ -107,6 +110,9 @@ echo "CONFIG train_args=$TRAIN_ARGS"
 
 # The adapter fast path needs a flag vLLM refuses once data parallelism gives the server several API processes;
 # with replicas the trainer merges and streams the full weights instead, which NCCL does in about a second.
+OVERRIDE_ARGS=()
+if [ -n "$HF_OVERRIDES" ]; then OVERRIDE_ARGS=(--hf-overrides "$HF_OVERRIDES"); fi
+
 LORA_ARGS=""; LORA_ENV=()
 if [ "$LORA_RANK" -gt 0 ] && [ "$VLLM_DP" -eq 1 ]; then
     LORA_ARGS="--enable-lora --max-lora-rank $LORA_RANK --max-loras 12 --max-cpu-loras 16"
@@ -115,7 +121,7 @@ fi
 
 CUDA_VISIBLE_DEVICES="$SERVE_IDS" VLLM_SERVER_DEV_MODE=1 \
     env "${LORA_ENV[@]}" vllm serve "$MODEL" \
-        --port 8000 --dtype bfloat16 --max-model-len "$MAX_MODEL_LEN" --gpu-memory-utilization 0.85 \
+        --port 8000 --dtype bfloat16 --max-model-len "$MAX_MODEL_LEN" "${OVERRIDE_ARGS[@]}" --gpu-memory-utilization 0.85 \
         --tensor-parallel-size "$VLLM_TP" --data-parallel-size "$VLLM_DP" \
         --logprobs-mode processed_logprobs --generation-config vllm \
         --weight-transfer-config "{\"backend\":\"nccl\"}" \
