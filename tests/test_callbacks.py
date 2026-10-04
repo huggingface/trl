@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, 
 
 from trl import BEMACallback, LogCompletionsCallback
 
-from .testing_utils import TrlTestCase, require_comet, require_wandb
+from .testing_utils import TrlTestCase, require_comet, require_peft, require_wandb
 
 
 class TestLogCompletionsCallback(TrlTestCase):
@@ -238,3 +238,33 @@ class TestBEMACallback(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+    @require_peft
+    def test_peft_model(self):
+        """Test that BEMACallback works with a PEFT (LoRA) model."""
+        from peft import LoraConfig, get_peft_model
+
+        peft_model = get_peft_model(
+            AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"),
+            LoraConfig(task_type="CAUSAL_LM", r=2, lora_alpha=4, target_modules=["q_proj", "v_proj"]),
+        )
+        peft_model.config.pad_token_id = self.tokenizer.pad_token_id
+
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir, max_steps=4, per_device_train_batch_size=2, report_to="none",
+        )
+        bema_callback = BEMACallback(update_freq=2)
+        trainer = Trainer(
+            model=peft_model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()
+
+        bema_path = os.path.join(self.tmp_dir, "bema")
+        assert os.path.isdir(bema_path), "BEMA directory was not created for PEFT model"
+        assert os.path.isfile(os.path.join(bema_path, "adapter_model.safetensors")), (
+            "BEMA should save the adapter weights"
+        )
