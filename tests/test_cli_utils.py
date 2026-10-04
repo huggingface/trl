@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from unittest.mock import mock_open, patch
 
 import pytest
-from datasets import DatasetDict, load_dataset
+from datasets import DatasetDict, IterableDatasetDict, load_dataset
 
 from trl import DatasetMixtureConfig, DistillationConfig, GRPOConfig, RLOOConfig, SFTConfig, TrlParser, get_dataset
 from trl.scripts.utils import DatasetConfig
@@ -294,6 +294,25 @@ class TestTrlParser(TrlTestCase):
 
 
 class TestGetDataset:
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.parametrize("num_datasets", [1, 2])
+    def test_dataset_mixture_preprocessing(self, streaming, num_datasets):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[
+                DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")
+                for _ in range(num_datasets)
+            ],
+            streaming=streaming,
+        )
+        result = get_dataset(mixture_config)
+        processed = result.map(lambda example: {"length": len(example["text"])})
+        processed = processed.filter(lambda example: example["length"] > 0).shuffle(seed=42)
+        assert isinstance(processed, IterableDatasetDict if streaming else DatasetDict)
+        rows = list(processed["train"])
+        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        assert sorted(row["text"] for row in rows) == sorted(list(expected["text"]) * num_datasets)
+        assert all(row["length"] == len(row["text"]) for row in rows)
+
     def test_single_dataset_with_config(self):
         mixture_config = DatasetMixtureConfig(
             datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")]

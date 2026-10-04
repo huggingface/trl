@@ -30,7 +30,7 @@ from trl.scripts._hf_argparser import DataClass, DataClassType, HfArgumentParser
 
 
 if TYPE_CHECKING:
-    from datasets import DatasetDict
+    from datasets import DatasetDict, IterableDatasetDict
 
 
 logger = logging.getLogger(__name__)
@@ -411,7 +411,7 @@ def get_git_commit_hash(package_name):
         return f"Error: {str(e)}"
 
 
-def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
+def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict | IterableDatasetDict":
     """
     Load a mixture of datasets based on the configuration.
 
@@ -420,9 +420,9 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
             Script arguments containing dataset configuration.
 
     Returns:
-        [`~datasets.DatasetDict`]:
+        [`~datasets.DatasetDict`] or [`~datasets.IterableDatasetDict`]:
             Combined dataset(s) from the mixture configuration, with optional train/test split if `test_split_size` is
-            set.
+            set. Streaming mixtures return an [`~datasets.IterableDatasetDict`].
 
     Example:
     ```python
@@ -485,6 +485,8 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> "DatasetDict":
             combined_dataset = combined_dataset.train_test_split(test_size=mixture_config.test_split_size)
             return combined_dataset
         else:
+            if mixture_config.streaming:
+                return datasets.IterableDatasetDict({"train": combined_dataset})
             return datasets.DatasetDict({"train": combined_dataset})
     else:
         raise ValueError("No datasets were loaded from the mixture configuration")
