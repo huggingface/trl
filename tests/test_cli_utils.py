@@ -58,10 +58,23 @@ class TestTrlParser(TrlTestCase):
         parser = TrlParser(dataclass_types=[MyDataclass])
         assert isinstance(parser, TrlParser)
 
+    @pytest.mark.parametrize(
+        "dataclass_types",
+        [MyDataclass, [MyDataclass], (MyDataclass,), iter([MyDataclass]), (cls for cls in [MyDataclass])],
+        ids=["class", "list", "tuple", "iterator", "generator"],
+    )
+    def test_init_preserves_dataclass_types(self, dataclass_types):
+        parser = TrlParser(dataclass_types=dataclass_types)
+        assert parser.parse_args_and_config(["--arg1", "3", "--arg2", "value"]) == (MyDataclass(3, "value"),)
+
     def test_init_with_config_field(self):
         """Test initialization with a 'config' field in the dataclass (should raise ValueError)."""
         with pytest.raises(ValueError, match="has a field named 'config'"):
             TrlParser(dataclass_types=[InvalidDataclass])
+
+    def test_init_with_config_field_in_generator(self):
+        with pytest.raises(ValueError, match="has a field named 'config'"):
+            TrlParser(dataclass_types=(cls for cls in [MyDataclass, InvalidDataclass]))
 
     @patch("builtins.open", mock_open(read_data="env:\n VAR1: value1\n VAR2: value2\narg1: 2"))
     @patch("yaml.safe_load")

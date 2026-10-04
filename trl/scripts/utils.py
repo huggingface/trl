@@ -238,7 +238,7 @@ class TrlParser(HfArgumentParser):
 
     Args:
         dataclass_types (`DataClassType | Iterable[DataClassType]`, *optional*):
-            Dataclass types to use for argument parsing.
+            Dataclass types to use for argument parsing. One-shot iterables such as generators are supported.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.
 
@@ -289,6 +289,7 @@ class TrlParser(HfArgumentParser):
             dataclass_types = []
         elif not isinstance(dataclass_types, Iterable):
             dataclass_types = [dataclass_types]
+        dataclass_types = list(dataclass_types)
 
         # Check that none of the dataclasses have the "config" field
         for dataclass_type in dataclass_types:
