@@ -31,6 +31,7 @@ from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers.utils import get_json_schema
 from urllib3.util.retry import Retry
+from urllib3.util.timeout import Timeout
 
 from ..import_utils import is_requests_available, is_vllm_available
 
@@ -162,7 +163,7 @@ class VLLMClient:
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
             Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
-            timeout, a `ConnectionError` is raised.
+            timeout, a `ConnectionError` is raised. Zero performs one readiness probe without retries.
         api_key (`str`, *optional*):
             Bearer token sent to the server. If omitted, reads the environment variable named by `api_key_env` when the
             client is created. An empty string disables the Authorization header.
@@ -261,6 +262,8 @@ class VLLMClient:
             self.host = host
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
+        # Readiness owns its retry deadline; do not inherit API request retries and backoff.
+        self.session.mount(f"{self.base_url}/health", HTTPAdapter(max_retries=0))
         self.group_port = group_port
         self.communicator = None
         self._updating_weights = False  # set while inside `weight_update`
@@ -296,39 +299,43 @@ class VLLMClient:
             retry_interval (`float`, *optional*, defaults to `2.0`):
                 Interval in seconds between retries.
             total_timeout (`float`, *optional*, defaults to `0.0`):
-                Total timeout duration in seconds.
+                Readiness retry budget in seconds. Zero performs one probe without retries; positive values also set a
+                connect/read timeout from the remaining budget.
         """
         url = f"{self.base_url}/health"
-        start_time = time.time()  # Record the start time
+        deadline = time.monotonic() + total_timeout
 
         while True:
+            # Zero retains the single-probe behavior. Positive deadlines also bound connect/read waiting.
+            timeout = Timeout(total=max(deadline - time.monotonic(), 1e-6)) if total_timeout > 0 else None
             try:
-                response = self.session.get(url)
+                response = self.session.get(url, timeout=timeout, stream=True)
             except requests.exceptions.RequestException as exc:
-                # Check if the total timeout duration has passed
-                elapsed_time = time.time() - start_time
-                if elapsed_time >= total_timeout:
-                    raise ConnectionError(
-                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} seconds. Make "
-                        "sure the server is running by running `vllm serve`."
-                    ) from exc
+                last_error = exc
             else:
-                if response.status_code in (401, 403):
-                    response.raise_for_status()
-                if response.status_code == 200:
-                    if "X-Forwarded-For" in response.headers:
-                        self.host = response.headers["X-Forwarded-For"]
-                    logger.info("Server is up!")
-                    return
-                if time.time() - start_time >= total_timeout:
-                    raise ConnectionError(
-                        f"The vLLM server at {self.base_url} returned HTTP {response.status_code} "
-                        f"after {total_timeout} seconds."
-                    )
+                # Readiness needs only the status/headers, not the response body.
+                with response:
+                    if response.status_code in (401, 403):
+                        response.raise_for_status()
+                    if response.status_code == 200:
+                        if "X-Forwarded-For" in response.headers:
+                            self.host = response.headers["X-Forwarded-For"]
+                        logger.info("Server is up!")
+                        return
+                    last_error = ConnectionError(f"HTTP {response.status_code}")
 
-            # Retry logic: wait before trying again
-            logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
-            time.sleep(retry_interval)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            delay = min(retry_interval, remaining)
+            logger.info(f"Server is not up yet. Retrying in {delay} seconds...")
+            time.sleep(delay)
+            if time.monotonic() >= deadline:
+                break
+
+        raise ConnectionError(
+            f"The vLLM server at {self.base_url} is not ready after {total_timeout} seconds: {last_error}"
+        ) from last_error
 
     def get_world_size(self) -> int:
         """

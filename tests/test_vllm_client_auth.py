@@ -14,6 +14,8 @@
 
 import importlib
 import json
+import socket
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -32,6 +34,7 @@ class ServerState:
     key: str | None = "test-key"
     requests: list = field(default_factory=list)
     status: dict = field(default_factory=dict)
+    delay: float = 0.0
     protected_health: bool = True
     url: str = ""
     port: int = 0
@@ -55,6 +58,10 @@ def server(monkeypatch):
             state.requests.append((self.command, self.path, authorization))
             needs_key = state.key and (self.path != "/health" or state.protected_health)
             status = state.status.get(self.path, 200)
+            if isinstance(status, list):
+                status = status.pop(0)
+            if self.path == "/health":
+                time.sleep(state.delay)
             if needs_key and authorization != f"Bearer {state.key}":
                 status = 401
             payload = {"data": [{"id": "test-model"}], "world_size": 2, "success": True}
@@ -67,7 +74,10 @@ def server(monkeypatch):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # A timed-out readiness probe can close the connection before the response is sent.
 
         def log_message(self, *args):
             pass
@@ -190,6 +200,57 @@ def test_unready_http_response_obeys_readiness_timeout(server):
     server.status["/health"] = 404
     with pytest.raises(requests.ConnectionError, match="HTTP 404"):
         VLLMClient(base_url=server.url, api_key=server.key, connection_timeout=0)
+
+
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize("timeout", [0, 0.1])
+def test_refused_connection_respects_readiness_budget(timeout):
+    # Close a local listener to exercise the connection-refused path.
+    with socket.socket() as endpoint:
+        endpoint.bind(("127.0.0.1", 0))
+        endpoint.listen()
+        port = endpoint.getsockname()[1]
+    started = time.monotonic()
+    with pytest.raises(requests.ConnectionError):
+        VLLMClient(server_port=port, connection_timeout=timeout, api_key="")
+    assert time.monotonic() - started < 1.0
+
+
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize("timeout", [0, 0.1])
+def test_unready_503_has_no_adapter_retries_or_polling_oversleep(server, timeout):
+    server.status["/health"] = 503
+    started = time.monotonic()
+    with pytest.raises(requests.ConnectionError, match="HTTP 503"):
+        VLLMClient(base_url=server.url, api_key=server.key, connection_timeout=timeout)
+    assert time.monotonic() - started < 1.0
+    assert [path for _, path, _ in server.requests] == ["/health"]
+
+
+@pytest.mark.timeout(5)
+def test_positive_readiness_budget_bounds_stalled_response(server):
+    server.delay = 0.4
+    started = time.monotonic()
+    with pytest.raises(requests.ConnectionError):
+        VLLMClient(base_url=server.url, api_key=server.key, connection_timeout=0.05)
+    assert time.monotonic() - started < 0.3
+
+
+def test_health_can_become_ready_within_budget_and_keeps_authentication(server):
+    client = VLLMClient(base_url=server.url, api_key=server.key)
+    server.requests.clear()
+    server.status["/health"] = [503, 200]
+    with client.session:
+        client.check_server(total_timeout=1, retry_interval=0.01)
+    assert server.requests == [("GET", "/health", "Bearer test-key")] * 2
+
+
+def test_regular_api_requests_keep_their_transient_error_retry(server):
+    server.status["/v1/models"] = [503, 200]
+    client = VLLMClient(base_url=server.url, api_key=server.key)
+    client.session.close()
+    assert client.model == "test-model"
+    assert [path for _, path, _ in server.requests] == ["/health", "/v1/models", "/v1/models"]
 
 
 CONFIGS = [
