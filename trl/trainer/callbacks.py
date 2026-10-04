@@ -18,7 +18,7 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_wandb_available
+from accelerate.utils import gather_object, is_peft_model, is_wandb_available
 from transformers import (
     GenerationConfig,
     PreTrainedModel,
@@ -701,9 +701,24 @@ class BEMACallback(TrainerCallback):
     ):
         model = self._unwrap_model(model)
 
-        # Create a new instance and load state_dict
-        self.running_model = type(model)(model.config).to(self.device)
-        self.running_model.load_state_dict(model.state_dict())
+        if is_peft_model(model):
+            from peft import get_peft_model
+
+            base_model_cls = type(model.get_base_model())
+            running_base = base_model_cls(model.config).to(self.device)
+            active_adapter = model.active_adapters[0]
+            self.running_model = get_peft_model(
+                running_base, model.peft_config[active_adapter], adapter_name=active_adapter
+            )
+            self.running_model.load_state_dict(model.state_dict())
+        else:
+            self.running_model = type(model)(model.config).to(self.device)
+            self.running_model.load_state_dict(model.state_dict())
+
+        # Build a name-to-param lookup for the running model so that _update_bema_weights
+        # can index by name instead of relying on positional alignment with .parameters().
+        # This is required for PEFT models where only adapter parameters are trainable.
+        self._running_params = dict(self.running_model.named_parameters())
 
         # Cache trainable parameters once in a fixed order
         for name, param in model.named_parameters():
@@ -730,10 +745,12 @@ class BEMACallback(TrainerCallback):
         beta = self._ema_beta(step)
         alpha = self._bema_alpha(step)
 
-        # Compute EMA + BEMA in-place and write directly to running_model
-        for thetat, theta0, ema, run_param in zip(
-            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters(), strict=True
+        # Compute EMA + BEMA in-place and write directly to running_model.
+        # Index by name so that only trainable parameters are updated (required for PEFT).
+        for name, thetat, theta0, ema in zip(
+            self.param_names, self.thetat_params, self.theta0_params, self.ema_params, strict=True
         ):
+            run_param = self._running_params[name]
             thetat = thetat.detach().to(self.device)
             ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
             run_param.copy_(ema + alpha * (thetat - theta0))  # BEMA update: run_param = ema + alpha * (θₜ - θ₀)
