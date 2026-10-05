@@ -421,8 +421,15 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
     to `False`, the following key is also returned:
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following key is also returned:
+    If `padding_free` is set to `True`, the following keys are also returned:
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
+    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: 1D `int32` tensors of the cumulative sequence lengths of the flattened
+    batch, starting at 0 (unless `return_flash_attn_kwargs=False`).
+    - `"max_length_q"`, `"max_length_k"`: Length of the longest sequence of the flattened batch, as an `int` (unless
+    `return_flash_attn_kwargs=False`).
+    - `"seq_idx"`: `int32` tensor with the index of the sequence each token belongs to, with the same shape as
+    `"input_ids"` (unless `return_seq_idx=False`). In these boundary keys, trailing padding (see `pad_to_multiple_of`)
+    counts as one more sequence.
 
     Args:
         pad_token_id (`int`):
@@ -438,6 +445,14 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
+        return_flash_attn_kwargs (`bool`, *optional*, defaults to `True`):
+            Only used when `padding_free=True`. Whether to return the sequence boundaries of the flattened batch as
+            `cu_seq_lens_q`, `cu_seq_lens_k`, `max_length_q` and `max_length_k`. Flash attention can infer these from
+            `position_ids`, but linear-attention layers (e.g. the Gated DeltaNet layers of Qwen3.5 and Qwen3-Next) only
+            reset their recurrent state at sequence boundaries when these are passed explicitly.
+        return_seq_idx (`bool`, *optional*, defaults to `True`):
+            Only used when `padding_free=True`. Whether to return `seq_idx`, the index of the sequence each token
+            belongs to. Causal convolution and Mamba kernels use it to keep sequences of the flattened batch apart.
 
     Examples:
     ```python
@@ -470,8 +485,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
+     'labels': tensor([[-100, 2, 3, -100, 5]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[-100, 2, 3, -100, 5]])}
+     'cu_seq_lens_q': tensor([0, 3, 5], dtype=torch.int32),
+     'cu_seq_lens_k': tensor([0, 3, 5], dtype=torch.int32),
+     'max_length_q': 3,
+     'max_length_k': 3,
+     'seq_idx': tensor([[0, 0, 0, 1, 1]], dtype=torch.int32)}
     ```
     """
 
@@ -480,6 +500,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     return_position_ids: bool = False
     pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
+    return_flash_attn_kwargs: bool = True
+    return_seq_idx: bool = True
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         input_ids = [example["input_ids"] for example in examples]
@@ -503,6 +525,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # If padding_free, flatten everything into a single sequence
         output = {}
         if self.padding_free:
+            # Lengths of the individual sequences that end up in the flattened row (a packed example holds several)
+            if batch_seq_lengths is not None:
+                seq_lengths = [length for lengths in batch_seq_lengths for length in lengths]
+            else:
+                seq_lengths = [len(ids) for ids in input_ids]
             input_ids = [torch.cat(input_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
             position_ids = [torch.cat(position_ids, dim=0)]
@@ -522,6 +549,22 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][output["position_ids"] == 0] = -100
+            # Sequence boundaries of the flattened batch, in the format of transformers' `DataCollatorWithFlattening`.
+            # Flash attention can infer them from `position_ids`, but linear-attention layers (e.g. the Gated DeltaNet
+            # layers of Qwen3.5 and Qwen3-Next) and causal convolutions only reset their state between sequences when
+            # they are passed explicitly; otherwise the end of each sequence leaks into the next one. Trailing padding
+            # counts as one more sequence, so that the boundaries span the whole row.
+            num_padding_tokens = output["input_ids"].shape[1] - sum(seq_lengths)
+            if num_padding_tokens > 0:
+                seq_lengths.append(num_padding_tokens)
+            seq_lengths = torch.tensor(seq_lengths, dtype=torch.int32)
+            if self.return_flash_attn_kwargs:
+                cu_seq_lens = F.pad(seq_lengths.cumsum(0, dtype=torch.int32), (1, 0))
+                output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
+                output["max_length_q"] = output["max_length_k"] = int(seq_lengths.max())
+            if self.return_seq_idx:
+                seq_idx = torch.arange(len(seq_lengths), dtype=torch.int32).repeat_interleave(seq_lengths)
+                output["seq_idx"] = seq_idx.unsqueeze(0)
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(
@@ -1478,6 +1521,10 @@ class SFTTrainer(_BaseTrainer):
             and isinstance(self.data_collator, DataCollatorForLanguageModeling)
         ):
             self.data_collator.return_position_ids = True
+            # The sequence-parallel dataloader shards every batch entry along the sequence dimension, which the
+            # per-batch boundary kwargs of padding-free batches (`cu_seq_lens_q`, `max_length_q`, ...) don't have.
+            self.data_collator.return_flash_attn_kwargs = False
+            self.data_collator.return_seq_idx = False
 
         # Initialize activation offloading context
         if self.args.activation_offloading:

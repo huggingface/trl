@@ -196,6 +196,9 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 > [!WARNING]
 > It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.
 
+> [!NOTE]
+> Along with `position_ids`, the SFT collator passes the sequence boundaries of the flattened batch to the model (`cu_seq_lens_q`, `cu_seq_lens_k`, `max_length_q`, `max_length_k` and `seq_idx`). Hybrid models with linear-attention layers (for example Qwen3.5 and Qwen3-Next) need them to reset their recurrent and convolution state between sequences, but only their optimized kernels use them: install `flash-linear-attention` and `causal-conv1d`, as the pure-PyTorch fallbacks ignore the boundaries and let each sequence see the end of the previous one.
+
 <hfoptions id="padding-free">
 <hfoption id="DPO">
 
