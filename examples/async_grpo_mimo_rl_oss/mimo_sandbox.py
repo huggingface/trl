@@ -176,9 +176,9 @@ class ProbeAgent(CCAgent):
         """Say why an `Edit` did not match, when the reason is only whitespace.
 
         `old_string` has to match the file byte for byte, but the model rebuilds it from a `Read` whose every line
-        carries a line-number prefix, and tabs do not survive that transcription: Go is tab-indented and the model
-        sends spaces. The tool answers "The exact string was not found", which is true and says nothing it can act
-        on, so it sends the identical call again -- 74 of the 83 steps of one Code rollout went that way."""
+        carries a line-number prefix, and indentation does not always survive that transcription. The tool answers
+        "The exact string was not found", which is true and says nothing it can act on, so the same call comes
+        back. It is a minority failure -- 7 of 64 Code rollouts -- but a cheap one to answer properly."""
         output = super()._execute_tool(action)
         body = str(output.get("output", ""))
         if action.get("tool") == "Edit" and "exact string was not found" in body:
@@ -199,9 +199,8 @@ class ProbeAgent(CCAgent):
         if str(result.get("output", "")).strip() != "1":
             return ""
         return (
-            "The file does contain this text once whitespace is ignored, so only the indentation differs: it uses "
-            "tab characters where your old_string uses spaces. Copy the lines exactly as Read printed them after "
-            "the line-number prefix, keeping the tabs."
+            "The file does contain this text once whitespace is ignored, so only the indentation or spacing "
+            "differs. Copy the lines exactly as Read printed them after the line-number prefix."
         )
 
     def step(self) -> dict | None:
