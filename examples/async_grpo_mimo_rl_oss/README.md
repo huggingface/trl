@@ -18,7 +18,7 @@ Each task ships its own Docker image, and the agent is [`mimoagent`](https://git
  trainer (AsyncGRPOTrainer, FSDP2)                                vLLM
  ┌────────────────────────────────────────────────┐              ┌──────────────────────────┐
  │ HarnessRolloutWorker                           │  chat        │ MiMo-9B (+ adapter)      │
- │  └ MixedSessionFactory.create()                │  completions │                          │
+ │  └ TrainingSessionFactory.create()             │  completions │                          │
  │      ├ Sandbox.create(the task's image)        ├─────────────▶│                          │
  │      ├ install the task                        │              └──────────────────────────┘
  │      ├ mimoagent CCAgent ──── Bash/Read/... ───┼───┐

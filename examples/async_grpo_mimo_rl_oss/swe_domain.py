@@ -30,10 +30,12 @@ import json
 import os
 import random
 import time
+from collections.abc import Callable
+from typing import Any
 
 import pandas as pd
 from huggingface_hub import Sandbox, hf_hub_download
-from mimo_sandbox import DATASET, HFSandboxEnvironment, ProbeAgent, ProbeModel, docker_image, make_model
+from mimo_sandbox import DATASET, HFSandboxEnvironment, ProbeAgent, docker_image
 
 
 os.environ.setdefault("MIMOAGENT_SILENT_STARTUP", "1")
@@ -194,19 +196,11 @@ class SweTaskSession:
 
 
 class SweTaskSessionFactory:
-    session_class = SweTaskSession
-
     def __init__(
         self,
         *,
         domain: str,
-        base_url: str,
-        api_key: str,
-        model: str,
-        chat_template_kwargs: dict,
-        temperature: float,
-        top_p: float,
-        max_turn_tokens: int,
+        make_model: Callable[[], Any],
         max_observation_length: int,
         agent_timeout: int,
         verify_timeout: int,
@@ -215,13 +209,7 @@ class SweTaskSessionFactory:
     ):
         self.domain = domain
         self.spec = DOMAINS[domain]
-        self.base_url = base_url
-        self.api_key = api_key
-        self.model = model
-        self.chat_template_kwargs = chat_template_kwargs
-        self.temperature = temperature
-        self.top_p = top_p
-        self.max_turn_tokens = max_turn_tokens
+        self.make_model = make_model
         self.max_observation_length = max_observation_length
         self.agent_timeout = agent_timeout
         self.verify_timeout = verify_timeout
@@ -259,18 +247,11 @@ class SweTaskSessionFactory:
         except Exception:
             sandbox.kill()
             raise
-        return self.make_session(task=task, sandbox=sandbox, env=env, dataset_env=dataset_env, agent=agent)
-
-    def make_model(self) -> ProbeModel:
-        return make_model(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            model=self.model,
-            chat_template_kwargs=self.chat_template_kwargs,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            max_turn_tokens=self.max_turn_tokens,
+        return SweTaskSession(
+            task=task,
+            sandbox=sandbox,
+            env=env,
+            dataset_env=dataset_env,
+            agent=agent,
+            verify_timeout=self.verify_timeout,
         )
-
-    def make_session(self, **kwargs) -> SweTaskSession:
-        return self.session_class(verify_timeout=self.verify_timeout, **kwargs)

@@ -56,6 +56,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import general_domain
+import mimo_sandbox
 import swe_domain
 
 
@@ -213,13 +214,15 @@ def make_factory(domain: str, args, transcripts_dir: Path):
         general_domain.AGENT_TIMEOUT if domain == "general" else swe_domain.DOMAINS[domain]["agent_timeout"]
     )
     common = dict(
-        base_url=args.base_url,
-        api_key=args.api_key,
-        model=args.model,
-        chat_template_kwargs={} if args.enable_thinking else {"enable_thinking": False},
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_turn_tokens=args.max_turn_tokens,
+        make_model=lambda: mimo_sandbox.make_model(
+            base_url=args.base_url,
+            api_key=args.api_key,
+            model=args.model,
+            chat_template_kwargs={} if args.enable_thinking else {"enable_thinking": False},
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_turn_tokens=args.max_turn_tokens,
+        ),
         max_observation_length=args.max_observation_length,
         agent_timeout=args.agent_timeout or domain_timeout,
         verify_timeout=args.verify_timeout,

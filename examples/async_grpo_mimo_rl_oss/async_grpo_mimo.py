@@ -159,20 +159,20 @@ def policy_model_name(client: OpenAI, base_model: str) -> str:
     return f"trl-policy-v{max(versions)}" if versions else base_model
 
 
-class TrainingSession:
-    """A probe session as an OpenEnv loop-owning session: `wait_for_completion` runs the agent to its end,
-    `fetch_proxy_trace` returns the model's recorded turns, and `verify` grades the sandbox with the task's
-    verifier. Mixed in front of a domain's session class, which supplies `run`, `grade` and `close`; `ResourceSession`
-    comes last so those are what the abstract methods resolve to."""
+class TrainingSession(ResourceSession):
+    """One rollout, as the OpenEnv harness wants to see it.
 
-    def __init__(self, *, binary_reward: bool, **kwargs):
-        super().__init__(**kwargs)
+    It holds the domain's own session -- which owns the sandbox, the agent and the grader -- and adds only the
+    protocol the harness calls: run the agent to its end, hand back the model's turns, grade the sandbox."""
+
+    def __init__(self, rollout, binary_reward: bool):
+        self.rollout = rollout
         self.binary_reward = binary_reward
         self.exit_status = None
         self.exit_message = ""
 
     def initial_messages(self) -> list[dict]:
-        return [{"role": "user", "content": self.task["problem_statement"]}]
+        return [{"role": "user", "content": self.rollout.task["problem_statement"]}]
 
     def list_tools(self) -> list:
         return []  # the agent owns its tool loop; nothing is exposed to the harness
@@ -184,25 +184,26 @@ class TrainingSession:
         # The agent's own limits (`step_limit`, the deadline) end the run; a rollout the agent could not finish (context
         # overflow, a sandbox that died) is a failed rollout, not a crashed worker.
         try:
-            self.exit_status, self.exit_message = self.run()
+            self.exit_status, self.exit_message = self.rollout.run()
         except Exception as e:
             self.exit_status = type(e).__name__
         return 0 if self.exit_status == "Idle" else 1
 
     def fetch_proxy_trace(self) -> list[TraceEntry]:
-        return self.agent.model.trace
+        return self.rollout.agent.model.trace
 
     def verify(self, transcript: list[dict], final_state: Any | None = None) -> VerifyResult:
-        graded = self.grade(self.exit_message)
+        graded = self.rollout.grade(self.exit_message)
         metrics = {
             "exit_status": self.exit_status,
-            "steps": self.agent._steps_taken,
+            "steps": self.rollout.agent._steps_taken,
             "score": graded["reward"],
             "reward_error": graded["reward_error"],
             "items": graded["items"],
         }
         print(
-            f"[rollout] {self.task['instance_id']} {self.exit_status} steps={metrics['steps']} score={graded['reward']} {graded['reward_error'] or ''}",
+            f"[rollout] {self.rollout.task['instance_id']} {self.exit_status} steps={metrics['steps']} "
+            f"score={graded['reward']} {graded['reward_error'] or ''}",
             flush=True,
         )
         if graded["reward"] is None:
@@ -210,62 +211,23 @@ class TrainingSession:
         reward = float(graded["reward"] >= 1 - 1e-6) if self.binary_reward else graded["reward"]
         return VerifyResult(env_reward=reward, done=True, metrics=metrics)
 
-
-class TrainingFactory:
-    """Mixed in front of a domain's factory: the model it builds records its calls, and the session it builds is a
-    loop-owning OpenEnv session rather than a probe one."""
-
-    session_class: type
-
-    def __init__(self, *, binary_reward: bool, **kwargs):
-        super().__init__(**kwargs)
-        self.binary_reward = binary_reward
-
-    def make_model(self) -> TracingModel:
-        return TracingModel(
-            model_name=policy_model_name(OpenAI(base_url=self.base_url, api_key=self.api_key), self.model),
-            chat_template_kwargs=self.chat_template_kwargs,
-            model_kwargs={
-                "base_url": self.base_url,
-                "api_key": self.api_key,
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "max_tokens": self.max_turn_tokens,
-                "parallel_tool_calls": True,
-            },
-        )
-
-    def make_session(self, **kwargs) -> TrainingSession:
-        return super().make_session(binary_reward=self.binary_reward, **kwargs)
+    def close(self) -> None:
+        self.rollout.close()
 
 
-class GeneralTrainingSession(TrainingSession, general_domain.GeneralTaskSession, ResourceSession):
-    pass
+class TrainingSessionFactory(ResourceSessionFactory):
+    """One domain factory per domain behind one OpenEnv factory. The harness hands back the prompt it was given,
+    which is the task's own problem statement, so the task and with it the domain are recovered from it."""
 
-
-class SweTrainingSession(TrainingSession, swe_domain.SweTaskSession, ResourceSession):
-    pass
-
-
-class GeneralTrainingFactory(TrainingFactory, general_domain.GeneralTaskSessionFactory):
-    session_class = GeneralTrainingSession
-
-
-class SweTrainingFactory(TrainingFactory, swe_domain.SweTaskSessionFactory):
-    session_class = SweTrainingSession
-
-
-class MixedSessionFactory(ResourceSessionFactory):
-    """One factory per domain behind one OpenEnv factory. The harness hands back the prompt it was given, which is
-    the task's own problem statement, so the task and with it the domain are recovered from it."""
-
-    def __init__(self, factories: dict[str, Any], tasks: list[dict]):
+    def __init__(self, factories: dict[str, Any], tasks: list[dict], binary_reward: bool):
         self.factories = factories
         self.tasks = {task["problem_statement"]: task for task in tasks}
+        self.binary_reward = binary_reward
 
     def create(self, task: Any, seed: int | None = None, episode_id: str | None = None) -> TrainingSession:
         instance = self.tasks[task[-1]["content"]]
-        return self.factories[instance["domain"]].create(instance, episode_id[:8])
+        rollout = self.factories[instance["domain"]].create(instance, episode_id[:8])
+        return TrainingSession(rollout, self.binary_reward)
 
 
 class SaveAdapterCallback(TrainerCallback):
@@ -367,15 +329,25 @@ def main() -> None:
     instance_ids = json.load(open(args.instances_file)) if args.instances_file else {}
     transcripts_dir = Path(args.output_dir) / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
+    base_url = f"{args.vllm_url}/v1"
+
+    def make_model() -> TracingModel:
+        """A fresh recording model per rollout, pointed at whichever adapter the trainer has published."""
+        return TracingModel(
+            model_name=policy_model_name(OpenAI(base_url=base_url, api_key="trl"), args.model),
+            chat_template_kwargs={} if args.enable_thinking else {"enable_thinking": False},
+            model_kwargs={
+                "base_url": base_url,
+                "api_key": "trl",
+                "temperature": args.temperature,
+                "top_p": args.top_p,
+                "max_tokens": args.max_turn_tokens,
+                "parallel_tool_calls": True,
+            },
+        )
+
     common = dict(
-        binary_reward=args.reward == "binary",
-        base_url=f"{args.vllm_url}/v1",
-        api_key="trl",
-        model=args.model,
-        chat_template_kwargs={} if args.enable_thinking else {"enable_thinking": False},
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_turn_tokens=args.max_turn_tokens,
+        make_model=make_model,
         max_observation_length=args.max_observation_length,
         verify_timeout=args.verify_timeout,
         flavor=args.sandbox_flavor,
@@ -391,7 +363,7 @@ def main() -> None:
                 language=None if args.language == "all" else args.language,
                 instance_ids=instance_ids.get(domain),
             )
-            factories[domain] = GeneralTrainingFactory(
+            factories[domain] = general_domain.GeneralTaskSessionFactory(
                 agent_timeout=args.agent_timeout or general_domain.AGENT_TIMEOUT,
                 step_limit=args.step_limit,
                 judge_env=general_domain.judge_env(args.judge_url, args.judge_key, args.judge_model),
@@ -399,7 +371,7 @@ def main() -> None:
             )
         else:
             domain_tasks = swe_domain.load_tasks(domain, args.n_prompts, args.seed, instance_ids.get(domain))
-            factories[domain] = SweTrainingFactory(
+            factories[domain] = swe_domain.SweTaskSessionFactory(
                 domain=domain,
                 agent_timeout=args.agent_timeout or swe_domain.DOMAINS[domain]["agent_timeout"],
                 **common,
@@ -412,7 +384,7 @@ def main() -> None:
     dataset = Dataset.from_list(
         [{"prompt": [{"role": "user", "content": task["problem_statement"]}]} for task in tasks]
     )
-    factory = MixedSessionFactory(factories, tasks)
+    factory = TrainingSessionFactory(factories, tasks, binary_reward=args.reward == "binary")
 
     config = AsyncGRPOConfig(
         output_dir=args.output_dir,

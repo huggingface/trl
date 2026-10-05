@@ -29,12 +29,13 @@ import shlex
 import tarfile
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from huggingface_hub import Sandbox, hf_hub_download, snapshot_download
-from mimo_sandbox import DATASET, HFSandboxEnvironment, ProbeAgent, ProbeModel, docker_image, make_model
+from mimo_sandbox import DATASET, HFSandboxEnvironment, ProbeAgent, docker_image
 
 
 os.environ.setdefault("MIMOAGENT_SILENT_STARTUP", "1")
@@ -300,18 +301,10 @@ def judge_env(url: str, key: str, model: str) -> dict[str, str]:
 
 
 class GeneralTaskSessionFactory:
-    session_class = GeneralTaskSession
-
     def __init__(
         self,
         *,
-        base_url: str,
-        api_key: str,
-        model: str,
-        chat_template_kwargs: dict[str, Any],
-        temperature: float,
-        top_p: float,
-        max_turn_tokens: int,
+        make_model: Callable[[], Any],
         max_observation_length: int,
         step_limit: int,
         agent_timeout: int,
@@ -320,13 +313,7 @@ class GeneralTaskSessionFactory:
         flavor: str,
         transcripts_dir: Path,
     ):
-        self.base_url = base_url
-        self.api_key = api_key
-        self.model = model
-        self.chat_template_kwargs = chat_template_kwargs
-        self.temperature = temperature
-        self.top_p = top_p
-        self.max_turn_tokens = max_turn_tokens
+        self.make_model = make_model
         self.max_observation_length = max_observation_length
         self.step_limit = step_limit
         self.agent_timeout = agent_timeout
@@ -369,21 +356,14 @@ class GeneralTaskSessionFactory:
         except Exception:
             sandbox.kill()
             raise
-        return self.make_session(task=task, sandbox=sandbox, env=env, agent=agent)
-
-    def make_model(self) -> ProbeModel:
-        return make_model(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            model=self.model,
-            chat_template_kwargs=self.chat_template_kwargs,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            max_turn_tokens=self.max_turn_tokens,
+        return GeneralTaskSession(
+            task=task,
+            sandbox=sandbox,
+            env=env,
+            agent=agent,
+            judge_env=self.judge_env,
+            verify_timeout=self.verify_timeout,
         )
-
-    def make_session(self, **kwargs) -> GeneralTaskSession:
-        return self.session_class(judge_env=self.judge_env, verify_timeout=self.verify_timeout, **kwargs)
 
     def _install(self, env: HFSandboxEnvironment, task: dict) -> None:
         """Lay the task out as its manifest says, both containers' uploads into the one sandbox, and start the
