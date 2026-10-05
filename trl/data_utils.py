@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 from collections import defaultdict, deque
 from collections.abc import Callable, Sequence
 from itertools import takewhile
@@ -122,39 +121,6 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list | N
             new_messages[i] = {**message, "content": new_content}
 
     return new_messages
-
-
-def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # docstyle-ignore  # because <Image> is not parsable in the code block
-    """
-    Convert structured multimodal messages into a format compatible with vLLM. Replaces `"type": "image"` blocks with
-    `"type": "image_pil"` blocks, and `"image": Image` with `"image_pil": Image`.
-
-    Args:
-        messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content is expected to be a list of structured blocks.
-
-    Returns:
-        `list[dict[str, Any]]`:
-            A deep-copied list of messages compatible with vLLM's expected input format.
-
-    Example:
-    ```python
-    # Input
-    [{"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
-
-    # Output
-    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
-    ```
-    """
-    messages = copy.deepcopy(messages)  # avoid modifying the original messages
-    for message in messages:
-        if isinstance(message["content"], list):
-            for part in message["content"]:
-                if part["type"] == "image":
-                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
-                    part["image_pil"] = part.pop("image")
-    return messages
 
 
 def is_conversational(example: dict[str, Any]) -> bool:

@@ -713,9 +713,11 @@ class DPOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
@@ -921,10 +923,11 @@ class DPOTrainer(_BaseTrainer):
 
         # Reference model
         if ref_model is None:
-            if is_peft_model(self.model) or args.precompute_ref_log_probs:
+            if is_peft_model(self.model) or (args.precompute_ref_log_probs and not self.is_fsdp_enabled):
                 # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
                 # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
-                # memory during training.
+                # memory during training. Under FSDP, the policy isn't sharded until `train`, so the precompute still
+                # loads a reference model, freed once it is done.
                 self.ref_model = None
             else:
                 ref_model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
@@ -964,6 +967,11 @@ class DPOTrainer(_BaseTrainer):
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
+
+        # Hash before the reference model is sharded, since DTensor parameters can't be hashed
+        self._precompute_model_hash = (
+            hash_module(self.ref_model or self.model) if args.precompute_ref_log_probs else None
+        )
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
@@ -1014,6 +1022,8 @@ class DPOTrainer(_BaseTrainer):
                         "eval",
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
+            if self.is_fsdp_enabled and ref_model is None:
+                self.ref_model = None
 
     def _prepare_dataset(
         self,
@@ -1153,7 +1163,7 @@ class DPOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        model_hash = hash_module(self.ref_model or self.model)
+        model_hash = self._precompute_model_hash
         # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
         # value so all ranks share one cache file.
         fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
@@ -1247,6 +1257,13 @@ class DPOTrainer(_BaseTrainer):
         logit_scale = getattr(text_config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(text_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if logit_scale is None:
+            logit_scale = getattr(text_config, "lm_head_multiplier", None)
+        if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+            logits_scaling = text_config.logits_scaling
+            logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
         logit_scale = 1.0 if logit_scale is None else logit_scale
 
         lm_head_weight = lm_head.weight

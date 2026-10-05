@@ -270,6 +270,13 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
     logit_scale = 1.0 if logit_scale is None else logit_scale
     original_forward = model.forward
     lm_head = model.get_output_embeddings()
@@ -593,6 +600,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
             datasets format](dataset_formats#standard).
+        assistant_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the assistant turns. When `True`, the labels for the other tokens are set
+            to -100. It requires a conversational language modeling dataset, `transformers>=5.18.0`, and a chat
+            template with `{% generation %}` markers.
+        chat_template (`str`, *optional*):
+            Chat template used to render the messages. Defaults to the one attached to `processor`.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -639,9 +652,15 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
     pad_to_multiple_of: int | None = None
     dataset_text_field: str = "text"
+    assistant_only_loss: bool = False
+    chat_template: str | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.assistant_only_loss and "messages" not in examples[0]:
+            raise ValueError(
+                "The `assistant_only_loss` argument is only supported for conversational language modeling datasets."
+            )
         if "messages" in examples[0] or self.dataset_text_field in examples[0]:
             if self.completion_only_loss:
                 raise ValueError(
@@ -662,35 +681,40 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if all(img_list == [] for img_list in images):
             images = None
 
+        processor_kwargs = {
+            "padding": True,
+            "padding_side": "right",
+            "pad_to_multiple_of": self.pad_to_multiple_of,
+            "truncation": self.max_length is not None,
+            "max_length": self.max_length,
+            "return_tensors": self.return_tensors,
+            "add_special_tokens": False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        }
         if "messages" in examples[0]:  # conversational case
             messages = [
                 prepare_multimodal_messages(example["messages"], images=example["images"]) for example in examples
             ]
-            texts = self.processor.apply_chat_template(messages)
+            output = self.processor.apply_chat_template(
+                messages,
+                chat_template=self.chat_template,
+                tokenize=True,
+                return_dict=True,
+                return_assistant_tokens_mask=self.assistant_only_loss,
+                **processor_kwargs,
+            )
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
+            output = self.processor(images=images, text=texts, **processor_kwargs)
         else:
             raise KeyError(
                 "The input examples must contain either 'messages' for conversational data or 'text' for standard "
                 "data."
             )
 
-        output = self.processor(
-            images=images,
-            text=texts,
-            padding=True,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            truncation=self.max_length is not None,
-            max_length=self.max_length,
-            return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        )
         labels = output["input_ids"].clone()
         labels[output["attention_mask"] == 0] = -100
-        # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
-        # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
-        # token definitions vary across architectures.
+        if self.assistant_only_loss:
+            labels[output.pop("assistant_masks") == 0] = -100
         output["labels"] = labels
         return output
 
@@ -803,7 +827,8 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     per_token_loss = -logprobs.exp().detach() * logprobs
     if num_items_in_batch is None:
         num_items_in_batch = loss_mask.sum()
-    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
+    loss = (per_token_loss * loss_mask).sum() / torch.as_tensor(num_items_in_batch).clamp(min=1)
     return loss
 
 
@@ -1070,10 +1095,14 @@ class SFTTrainer(_BaseTrainer):
                 "Padding-free training is yet not supported for vision datasets. Please set `padding_free=False` in "
                 "the `SFTConfig`."
             )
-        if self._is_vision_dataset and args.assistant_only_loss:
+        if (
+            self._is_vision_dataset
+            and args.assistant_only_loss
+            and Version(transformers.__version__) < Version("5.18.0.dev0")
+        ):
             raise ValueError(
-                "Assistant-only loss is not yet supported for vision datasets. Please set "
-                "`assistant_only_loss=False` in the `SFTConfig`."
+                "Assistant-only loss for vision datasets requires transformers>=5.18.0. Please upgrade transformers "
+                "or set `assistant_only_loss=False` in the `SFTConfig`."
             )
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
@@ -1172,9 +1201,11 @@ class SFTTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
@@ -1219,6 +1250,32 @@ class SFTTrainer(_BaseTrainer):
                     "to at least 2."
                 )
 
+        if args.assistant_only_loss and not is_conversational(dataset_sample):
+            raise ValueError(
+                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
+                "supported for conversational datasets."
+            )
+
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
+        # if the current template doesn't already have them.
+        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
+
+        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
+        # message, leaving it out of the assistant mask so the model is never trained to stop.
+        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
+            processing_class, chat_template=self.chat_template
+        ):
+            logger.warning(
+                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
+                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
+                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
+                "or edit the chat template so the end-of-turn token falls inside "
+                "`{% generation %}...{% endgeneration %}`."
+            )
+
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
         if args.completion_only_loss is None:
@@ -1248,6 +1305,8 @@ class SFTTrainer(_BaseTrainer):
                     completion_only_loss=self.completion_only_loss,
                     pad_to_multiple_of=args.pad_to_multiple_of,
                     dataset_text_field=args.dataset_text_field,
+                    assistant_only_loss=args.assistant_only_loss,
+                    chat_template=self.chat_template,
                 )
             else:
                 data_collator = DataCollatorForLanguageModeling(
@@ -1264,31 +1323,6 @@ class SFTTrainer(_BaseTrainer):
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
                 "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
                 "to one of these supported options."
-            )
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
-            raise ValueError(
-                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
-                "supported for conversational datasets."
-            )
-
-        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
-        # if the current template doesn't already have them.
-        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
-            self.chat_template = get_training_chat_template(processing_class)
-        else:
-            self.chat_template = None
-
-        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
-        # message, leaving it out of the assistant mask so the model is never trained to stop.
-        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
-            processing_class, chat_template=self.chat_template
-        ):
-            logger.warning(
-                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
-                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
-                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
-                "or edit the chat template so the end-of-turn token falls inside "
-                "`{% generation %}...{% endgeneration %}`."
             )
 
         # Dataset
