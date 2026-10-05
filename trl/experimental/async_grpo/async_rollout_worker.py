@@ -707,7 +707,7 @@ class _AsyncRolloutLoop:
             self._heartbeat_value.value = time.time()
             try:
                 group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             if group is None:
                 return
