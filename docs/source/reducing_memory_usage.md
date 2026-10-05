@@ -124,56 +124,6 @@ trainer = SFTTrainer(
 
 PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
 
-## Liger for reducing peak memory usage
-
-[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
-
-For more information, see [Liger Kernel Integration](liger_kernel_integration).
-
-> [!WARNING]
-> `use_liger_kernel=True` is deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0. These trainers compute the log-probabilities with a fused LM head, so only Liger's layer kernels (`RMSNorm`, `RoPE`, `SwiGLU`) apply. Use the Hub kernels instead, with `model_init_kwargs={"use_kernels": True}`.
-
-To use Liger for reducing peak memory usage, use the following code snippet:
-
-<hfoptions id="liger">
-<hfoption id="SFT">
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="DPO">
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GRPO">
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="KTO">
-
-```python
-from trl import KTOConfig
-
-training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-</hfoptions>
-
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
