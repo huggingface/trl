@@ -34,11 +34,14 @@ _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 _SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0.dev0")
 
 
-def has_generation_markers(chat_template: str) -> bool:
+def has_generation_markers(chat_template: str | dict[str, str]) -> bool:
     """
     Check whether the chat template defines `{% generation %}` markers, accounting for whitespace-trim variants such as
-    `{%- generation %}` and `{%- generation -%}`.
+    `{%- generation %}` and `{%- generation -%}`. For a chat template shipped as named variants, the `default` variant
+    is checked.
     """
+    if isinstance(chat_template, dict):
+        chat_template = chat_template["default"]
     return re.search(r"\{%-?\s*generation\s*-?%\}", chat_template) is not None
 
 
@@ -1125,103 +1128,108 @@ def get_training_chat_template(
     if processing_class is None:
         raise TypeError("get_training_chat_template() missing required argument: 'processing_class'")
 
+    # A chat template shipped as named variants loads as a dict, whose `default` variant is the one stored here
+    chat_template = processing_class.chat_template
+    if isinstance(chat_template, dict):
+        chat_template = chat_template["default"]
+
     # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
     # (the check itself renders a tool message), so skip it otherwise.
     prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
-    if prefix_ok and has_generation_markers(processing_class.chat_template):
+    if prefix_ok and has_generation_markers(chat_template):
         return None  # No patching needed
 
-    if processing_class.chat_template == cohere_chat_template:
+    if chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
-    if processing_class.chat_template == cohere2_chat_template:
+    if chat_template == cohere2_chat_template:
         return cohere2_training_chat_template
 
-    if processing_class.chat_template == deepseek_r1_distill_chat_template:
+    if chat_template == deepseek_r1_distill_chat_template:
         return deepseek_r1_distill_training_chat_template
 
-    if processing_class.chat_template == deepseekv3_chat_template:
+    if chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
-    if processing_class.chat_template == diffusion_gemma_chat_template:
+    if chat_template == diffusion_gemma_chat_template:
         return diffusion_gemma_training_chat_template
 
-    if processing_class.chat_template == gemma_chat_template:
+    if chat_template == gemma_chat_template:
         return gemma_training_chat_template
 
-    if processing_class.chat_template == gemma3_chat_template:
+    if chat_template == gemma3_chat_template:
         return gemma3_training_chat_template
 
-    if processing_class.chat_template == glm4moe_chat_template:
+    if chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
 
-    if processing_class.chat_template == gptoss_chat_template:
+    if chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
 
-    if processing_class.chat_template == idefics3_chat_template:
+    if chat_template == idefics3_chat_template:
         return idefics3_training_chat_template
 
-    if processing_class.chat_template == lfm2_chat_template:
+    if chat_template == lfm2_chat_template:
         return lfm2_training_chat_template
 
-    if processing_class.chat_template == lfm2_v2_chat_template:
+    if chat_template == lfm2_v2_chat_template:
         return lfm2_v2_training_chat_template
 
-    if processing_class.chat_template == llama3_chat_template:
+    if chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
-    if processing_class.chat_template == llava_next_chat_template:
+    if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
 
-    if processing_class.chat_template == muse_glimmer_chat_template:
+    if chat_template == muse_glimmer_chat_template:
         return muse_glimmer_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_nano_chat_template:
+    if chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_super_chat_template:
+    if chat_template == nemotron_3_super_chat_template:
         return nemotron_3_super_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_ultra_chat_template:
+    if chat_template == nemotron_3_ultra_chat_template:
         return nemotron_3_ultra_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_5_lightning_chat_template:
+    if chat_template == nemotron_3_5_lightning_chat_template:
         return nemotron_3_5_lightning_training_chat_template
 
-    if processing_class.chat_template == phi3_chat_template:
+    if chat_template == phi3_chat_template:
         return phi3_training_chat_template
 
-    if processing_class.chat_template == phi3_5_chat_template:
+    if chat_template == phi3_5_chat_template:
         return phi3_5_training_chat_template
 
-    if processing_class.chat_template == qwen2_5_chat_template:
+    if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
-    if processing_class.chat_template == qwen2_5_vl_chat_template:
+    if chat_template == qwen2_5_vl_chat_template:
         return qwen2_5_vl_training_chat_template
 
-    if processing_class.chat_template == qwen3_chat_template:
+    if chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
-    if processing_class.chat_template == qwen3_instruct_2507_chat_template:
+    if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
 
-    if processing_class.chat_template == qwen3_vl_chat_template:
+    if chat_template == qwen3_vl_chat_template:
         return qwen3_vl_training_chat_template
 
-    if processing_class.chat_template == qwen3_5_nothink_chat_template:
+    if chat_template == qwen3_5_nothink_chat_template:
         return qwen3_5_nothink_training_chat_template
 
-    if processing_class.chat_template == qwen3_5_think_chat_template:
+    if chat_template == qwen3_5_think_chat_template:
         return qwen3_5_think_training_chat_template
 
-    if processing_class.chat_template == qwen3_6_chat_template:
+    if chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
 
-    if processing_class.chat_template == qwen3_8_chat_template:
+    if chat_template == qwen3_8_chat_template:
         return qwen3_8_training_chat_template
 
-    if processing_class.chat_template == smolvlm_chat_template:
+    if chat_template == smolvlm_chat_template:
         return smolvlm_training_chat_template
 
     raise ValueError(
