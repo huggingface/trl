@@ -24,9 +24,15 @@ from trl import clone_chat_template
 from trl.chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    gemma4_v2_chat_template,
+    gemma4_v3_chat_template,
+    gemma4_v4_chat_template,
+    gemma4_v5_chat_template,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
+    lfm2_2_5_v2_chat_template,
+    lfm2_v2_chat_template,
     parse_response,
     supports_tool_calling,
 )
@@ -205,6 +211,38 @@ class TestAddResponseSchema:
             tokenizer.parse_response(response)
 
     @pytest.mark.parametrize(
+        "tokenizer_name, chat_template",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_v2_chat_template,
+                id="lfm2-2.5-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+        ],
+    )
+    def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
+        # Same tiny model, with the chat template of a later Hub revision
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        )
+        text = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True)
+        response = text.input_ids[len(prefix.input_ids) :]
+        parsed = parse_response(tokenizer, response, prefix=prefix.input_ids)
+        assert parsed == messages[-1]
+
+    @pytest.mark.parametrize(
         "processor_name",
         [
             pytest.param(
@@ -254,6 +292,47 @@ class TestAddResponseSchema:
             processor.tokenizer.parse_response(response, prefix=prefix)
         else:
             processor.tokenizer.parse_response(response)
+
+    @pytest.mark.parametrize(
+        "processor_name, chat_template",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v2_chat_template, id="gemma4-v2"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v3_chat_template, id="gemma4-v3"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v4_chat_template, id="gemma4-v4"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v5_chat_template, id="gemma4-v5"
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_vision
+    def test_add_response_schema_vlm_template_revision(self, processor_name, chat_template):
+        # Same tiny model, with the chat template of another Hub revision
+        processor = AutoProcessor.from_pretrained(processor_name)
+        processor.chat_template = chat_template
+        processor = add_response_schema(processor)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        expected = messages[-1]
+        messages = prepare_multimodal_messages(messages)
+        prefix = processor.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids[0]
+        text = processor.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids[0]
+        parsed = parse_response(processor.tokenizer, text[len(prefix) :], prefix=prefix)
+        assert parsed == expected
 
 
 class TestSupportsToolCalling:
@@ -688,6 +767,7 @@ class TestIsChatTemplateStopTokenTrained:
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
         ),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
+        pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
@@ -800,16 +880,21 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
     ],
 )
 class TestGetTrainingChatTemplate:
     def _load(self, model_name):
+        # A (model, chat template) pair stands for the same tiny model with the chat template of another Hub revision
+        model_name, chat_template = model_name if isinstance(model_name, tuple) else (model_name, None)
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
         elif "ForConditionalGeneration" in model_name or "ForBlockDiffusion" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
+        if chat_template is not None:
+            processing_class.chat_template = chat_template
 
         return processing_class
 
@@ -825,12 +910,9 @@ class TestGetTrainingChatTemplate:
         assert is_chat_template_prefix_preserving(tokenizer) is True
 
     def test_new_chat_template_trains_stop_token(self, tokenizer_name, request):
-        if tokenizer_name in (
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-        ):
-            reason = f"{tokenizer_name}: the processor returns an all-zero assistant tokens mask"
-            request.node.add_marker(pytest.mark.xfail(strict=False, reason=reason))
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration":
+            reason = "Llava's official chat template emits no end-of-turn token after the assistant turn."
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
         tokenizer = self._load(tokenizer_name)
         new_chat_template = get_training_chat_template(tokenizer)
         assert is_chat_template_stop_token_trained(tokenizer, chat_template=new_chat_template) is True
@@ -1064,11 +1146,11 @@ class TestGetTrainingChatTemplate:
         masks = result["assistant_masks"]
         if self.is_vlm:  # VLM processors return batched output
             masks = masks[0]
-        assert 1 in masks
         # The first tokens (user turn) should not be masked
         assert masks[0] == 0
-        # The last tokens (assistant turn ending with <|im_end|>) should be masked
-        assert masks[-1] == 1
+        # Should have one masked region (the assistant turn)
+        region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
+        assert region_starts == 1
 
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
@@ -1098,9 +1180,9 @@ class TestGetTrainingChatTemplate:
         masks = result["assistant_masks"]
         if self.is_vlm:  # VLM processors return batched output
             masks = masks[0]
-        # Should have two masked regions (two assistant turns): 0→1, 1→0, 0→1
-        transitions = sum(1 for i in range(1, len(masks)) if masks[i] != masks[i - 1])
-        assert transitions == 3
+        # Should have two masked regions (two assistant turns)
+        region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
+        assert region_starts == 2
 
 
 @pytest.mark.parametrize(

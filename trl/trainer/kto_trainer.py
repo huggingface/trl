@@ -40,6 +40,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction, has_length
@@ -84,7 +85,7 @@ if is_peft_available():
 logger = get_logger(__name__)
 
 
-_CHUNKED_LOGPROB_CHUNK_SIZE = 8192
+_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
 
 @dataclass
@@ -610,6 +611,9 @@ class KTOTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -759,9 +763,11 @@ class KTOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Vision dataset detection
@@ -1286,6 +1292,13 @@ class KTOTrainer(_BaseTrainer):
         logit_scale = getattr(text_config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(text_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if logit_scale is None:
+            logit_scale = getattr(text_config, "lm_head_multiplier", None)
+        if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+            logits_scaling = text_config.logits_scaling
+            logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
         logit_scale = 1.0 if logit_scale is None else logit_scale
 
         lm_head_weight = lm_head.weight
