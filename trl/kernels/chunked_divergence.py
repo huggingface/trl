@@ -251,7 +251,6 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
         ctx.set_materialize_grads(False)
         device = student_hidden.device
         N = student_hidden.shape[0]
-        vocab = student_weight.shape[0]
         s_dtype, t_dtype = _compute_dtype(student_hidden), _compute_dtype(teacher_hidden)
         kernel_args = {
             "s_scale": student_logit_scale,
@@ -278,6 +277,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
             maybe_gather_lm_head_ctx(student_weight, student_bias),
             maybe_gather_lm_head_ctx(teacher_weight, teacher_bias),
         ):
+            vocab = student_weight.shape[0]
             for token_start in range(0, N, TOKEN_CHUNK_SIZE):
                 token_end = min(token_start + TOKEN_CHUNK_SIZE, N)
                 n = token_end - token_start
