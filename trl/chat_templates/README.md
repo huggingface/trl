@@ -41,7 +41,23 @@ Original Gemma 3 chat template (as shipped by `google/gemma-3-*` checkpoints). U
 
 ### `gemma4.jinja`
 
-Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` and the other checkpoints in that generation). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
+Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` and the other checkpoints in that generation, at [6b7e72c](https://huggingface.co/google/gemma-4-E2B-it/commit/6b7e72c67d3c4556f42b56d5a68b4b8e864c63b4)). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
+
+### `gemma4_v2.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [4742fe8](https://huggingface.co/google/gemma-4-E2B-it/commit/4742fe843cc01b9aed62122f6e0ddd13ea48b3d3): the revision the model was released with. Unlike `gemma4.jinja`, it does not render reasoning in assistant turns that carry `tool_calls`. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v3.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [b446025](https://huggingface.co/google/gemma-4-E2B-it/commit/b446025c61ecea876162774ee247706056963aba): the revision between the release and `gemma4.jinja`. Unlike `gemma4_v2.jinja`, it renders reasoning in assistant turns that carry `tool_calls`. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v4.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [905e84b](https://huggingface.co/google/gemma-4-E2B-it/commit/905e84b50c4d2a365ebde34e685027578e6728db): the revision after `gemma4.jinja`. Differs from it only in emitting `<|image|>`, `<|audio|>` and `<|video|>` placeholders for multimodal tool responses. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v5.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https://huggingface.co/google/gemma-4-E2B-it/commit/899537982545a3e55ce64d34462b2efa5af85232): the current revision. Unlike the earlier ones, it also renders the reasoning of a final assistant turn. Response parsing reuses `gemma4_template`.
 
 ### `glm4moe.jinja`
 
