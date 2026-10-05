@@ -1612,13 +1612,15 @@ class SFTTrainer(_BaseTrainer):
                         prompt_len = common_prefix_length(prompt_ids, prompt_completion_ids)
                         if prompt_len < len(prompt_ids):
                             logger.warning_once(
-                                "The chat template renders the prompt alone differently from the start of the "
-                                "prompt+completion, so the completion starts where they diverge and this end of the "
-                                "prompt is left out of the training sequence: "
+                                "The tokenized prompt is not a prefix of the tokenized prompt+completion, usually "
+                                "because the chat template renders the prompt alone differently or because tokens "
+                                "merge across the boundary. The completion starts where they diverge, and this end of "
+                                "the prompt is left out of the training sequence: "
                                 f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
                                 ". The model is trained on a context that differs from the one it sees at inference. "
-                                "To avoid it, use a chat template that renders the prompt the same way in both cases."
-                                " This warning is shown once, but it likely applies to every example in the dataset."
+                                "To avoid it, use a chat template that renders the prompt the same way in both cases, "
+                                "or end the prompt on a token boundary. This warning is shown once, but it likely "
+                                "applies to every example in the dataset."
                             )
 
                         # Create completion mask
