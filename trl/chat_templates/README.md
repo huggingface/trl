@@ -9,6 +9,8 @@ Jinja2 chat templates stored here serve two purposes:
 
 **Why generation-tagged?** SFT with `assistant_only_loss=True` requires the chat template to include `{% generation %}` / `{% endgeneration %}` markers around assistant output, so `return_assistant_tokens_mask=True` can produce correct masks. Most model templates don't include these markers natively.
 
+**Why `_v2`?** Identity comparison is exact, so when a model repo changes its chat template, the new revision is stored next to the original as `<name>_v2.jinja` (then `_v3`, ...) and both are recognized. The suffix only orders revisions as they are added; each section below says where the revision comes from.
+
 ## Original templates
 
 Used for identity comparison only.
@@ -60,6 +62,10 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 ### `lfm2_2_5.jinja`
 
 Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` and the other checkpoints in that generation). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
+
+### `lfm2_2_5_v2.jinja`
+
+Later revision of the LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` since [13a5383](https://huggingface.co/LiquidAI/LFM2.5-230M/commit/13a53837c4906b4f7405932532ba85d182bb013b)). Differs from `lfm2_2_5.jinja` only in reading the `<think>` block off `message.thinking`, falling back to `message.reasoning` and `message.reasoning_content`, and rendering it only when it is a non-empty string. Response parsing reuses `lfm2_2_5_template`.
 
 ### `lfm2_2_5_vl.jinja`
 
