@@ -86,6 +86,8 @@ def get_chat_template(api, repo):
             chat_template = json.loads(Path(hf_hub_download(repo, filename)).read_text(encoding="utf-8")).get(
                 "chat_template"
             )
+            if isinstance(chat_template, list):  # named variants: the stored copy is the `default` one
+                chat_template = {variant["name"]: variant["template"] for variant in chat_template}["default"]
             if chat_template is not None:
                 return chat_template
 
