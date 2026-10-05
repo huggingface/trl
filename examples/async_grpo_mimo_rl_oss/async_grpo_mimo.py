@@ -66,6 +66,7 @@ import logging
 import os
 import random
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +158,33 @@ def policy_model_name(client: OpenAI, base_model: str) -> str:
     the current policy; before the first sync there is none and the base model is the policy."""
     versions = [int(m.id.rsplit("-v", 1)[1]) for m in client.models.list().data if m.id.startswith("trl-policy-v")]
     return f"trl-policy-v{max(versions)}" if versions else base_model
+
+
+def make_tracing_model(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    chat_template_kwargs: dict[str, Any],
+    temperature: float,
+    top_p: float,
+    max_turn_tokens: int,
+) -> TracingModel:
+    """A fresh recording model per rollout, pointed at whichever adapter the trainer has published.
+
+    Module level, not a closure: the rollout worker pickles the session factory to hand it to a spawned child."""
+    return TracingModel(
+        model_name=policy_model_name(OpenAI(base_url=base_url, api_key=api_key), model),
+        chat_template_kwargs=chat_template_kwargs,
+        model_kwargs={
+            "base_url": base_url,
+            "api_key": api_key,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_turn_tokens,
+            "parallel_tool_calls": True,
+        },
+    )
 
 
 class TrainingSession(ResourceSession):
@@ -330,25 +358,17 @@ def main() -> None:
     instance_ids = json.load(open(args.instances_file)) if args.instances_file else {}
     transcripts_dir = Path(args.output_dir) / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
-    base_url = f"{args.vllm_url}/v1"
-
-    def make_model() -> TracingModel:
-        """A fresh recording model per rollout, pointed at whichever adapter the trainer has published."""
-        return TracingModel(
-            model_name=policy_model_name(OpenAI(base_url=base_url, api_key="trl"), args.model),
-            chat_template_kwargs={} if args.enable_thinking else {"enable_thinking": False},
-            model_kwargs={
-                "base_url": base_url,
-                "api_key": "trl",
-                "temperature": args.temperature,
-                "top_p": args.top_p,
-                "max_tokens": args.max_turn_tokens,
-                "parallel_tool_calls": True,
-            },
-        )
-
     common = dict(
-        make_model=make_model,
+        make_model=partial(
+            make_tracing_model,
+            base_url=f"{args.vllm_url}/v1",
+            api_key="trl",
+            model=args.model,
+            chat_template_kwargs={} if args.enable_thinking else {"enable_thinking": False},
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_turn_tokens=args.max_turn_tokens,
+        ),
         max_observation_length=args.max_observation_length,
         verify_timeout=args.verify_timeout,
         flavor=args.sandbox_flavor,

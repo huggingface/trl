@@ -53,6 +53,7 @@ import statistics
 import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 
 import general_domain
@@ -214,7 +215,8 @@ def make_factory(domain: str, args, transcripts_dir: Path):
         general_domain.AGENT_TIMEOUT if domain == "general" else swe_domain.DOMAINS[domain]["agent_timeout"]
     )
     common = dict(
-        make_model=lambda: mimo_sandbox.make_model(
+        make_model=partial(
+            mimo_sandbox.make_model,
             base_url=args.base_url,
             api_key=args.api_key,
             model=args.model,
