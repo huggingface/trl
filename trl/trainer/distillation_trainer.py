@@ -1876,9 +1876,23 @@ class DistillationTrainer(_BaseTrainer):
         student_logit_scale = getattr(student_config, "logit_scale", None)
         if student_logit_scale is None:
             student_logit_scale = getattr(student_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if student_logit_scale is None:
+            student_logit_scale = getattr(student_config, "lm_head_multiplier", None)
+        if student_logit_scale is None and getattr(student_config, "logits_scaling", None) is not None:
+            logits_scaling = student_config.logits_scaling
+            student_logit_scale = logits_scaling if student_config.model_type == "hyperclovax" else 1 / logits_scaling
         teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
         if teacher_logit_scale is None:
             teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if teacher_logit_scale is None:
+            teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
+        if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
+            logits_scaling = teacher_config.logits_scaling
+            teacher_logit_scale = logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
         loss, entropy_sum, n_valid = _chunked_divergence_loss(

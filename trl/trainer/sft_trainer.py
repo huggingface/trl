@@ -269,6 +269,13 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
     logit_scale = 1.0 if logit_scale is None else logit_scale
     original_forward = model.forward
     lm_head = model.get_output_embeddings()

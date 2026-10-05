@@ -653,13 +653,14 @@ class GRPOTrainer(_BaseTrainer):
                 has_reset = False
                 has_reward = False
                 methods = []
-                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         has_reward = True
                     elif not member_name.startswith("_"):
-                        methods.append(member)
+                        methods.append(getattr(instance, member_name))
                 if not has_reset:
                     raise ValueError(
                         "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -2269,9 +2270,10 @@ class GRPOTrainer(_BaseTrainer):
             for i in range(len(inputs)):
                 methods = []
                 if self.environments:
+                    environment = self.environments[i]
                     methods = [
-                        member
-                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        getattr(environment, member_name)
+                        for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                         if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
