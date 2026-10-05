@@ -24,11 +24,15 @@ from trl import clone_chat_template
 from trl.chat_template_utils import (
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    cohere2_chat_template,
+    cohere_chat_template,
+    cohere_training_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
     gemma4_v5_chat_template,
     get_training_chat_template,
+    has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
     lfm2_2_5_v2_chat_template,
@@ -737,7 +741,16 @@ class TestIsChatTemplateStopTokenTrained:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+        # Real Cohere checkpoints ship their chat template as named variants, which load as a dict
+        pytest.param(
+            ("trl-internal-testing/tiny-CohereForCausalLM", {"default": cohere_chat_template}),
+            id="cohere-named-variants",
+        ),
         pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Cohere2ForCausalLM", {"default": cohere2_chat_template}),
+            id="cohere2-named-variants",
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param(
@@ -885,7 +898,7 @@ class TestIsChatTemplateStopTokenTrained:
 )
 class TestGetTrainingChatTemplate:
     def _load(self, model_name):
-        # A (model, chat template) pair stands for the same tiny model with the chat template of another Hub revision
+        # A (model, chat template) pair stands for the same tiny model with another form of its chat template
         model_name, chat_template = model_name if isinstance(model_name, tuple) else (model_name, None)
         if "ForCausalLM" in model_name:
             self.is_vlm = False
@@ -1183,6 +1196,19 @@ class TestGetTrainingChatTemplate:
         # Should have two masked regions (two assistant turns)
         region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
         assert region_starts == 2
+
+
+class TestNamedChatTemplateVariants:
+    # A chat template shipped as named variants loads as a dict, e.g. {"default": ..., "tool_use": ..., "rag": ...}
+    def test_has_generation_markers(self):
+        assert has_generation_markers({"default": cohere_training_chat_template}) is True
+        assert has_generation_markers({"default": cohere_chat_template}) is False
+
+    def test_unsupported_default_variant(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-CohereForCausalLM")
+        tokenizer.chat_template = {"default": "{{ messages[0]['content'] }}", "tool_use": cohere_chat_template}
+        with pytest.raises(ValueError, match="not training-compatible"):
+            get_training_chat_template(tokenizer)
 
 
 @pytest.mark.parametrize(
