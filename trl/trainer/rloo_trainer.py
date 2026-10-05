@@ -50,7 +50,7 @@ from transformers import (
 )
 from transformers.utils import is_peft_available, is_rich_available
 
-from ..data_utils import _has_vision_data, apply_chat_template, is_conversational, prepare_multimodal_messages
+from ..data_utils import apply_chat_template, is_conversational, prepare_multimodal_messages
 from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
@@ -606,8 +606,16 @@ class RLOOTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
             args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
 
-        has_vision_data = _has_vision_data(train_dataset)
-        if self._is_vlm and not has_vision_data:
+        # Vision dataset detection
+        dataset_sample = next(iter(train_dataset))
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+
+        if self._is_vlm and not self._is_vision_dataset:
             freeze_non_language_model_parameters(model)
 
         super().__init__(

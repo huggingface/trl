@@ -19,7 +19,7 @@ import torch
 import torch.nn.functional as F
 import transformers
 from accelerate.utils.memory import release_memory
-from datasets import DatasetDict, IterableDatasetDict, load_dataset
+from datasets import DatasetDict, IterableDataset, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.utils import is_peft_available
@@ -1307,12 +1307,18 @@ class TestDistillationTrainerVLM(TrlTestCase):
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
         ],
     )
-    def test_text_only_dataset_freezes_non_language_parameters(self, model_id):
+    @pytest.mark.parametrize("dataset_kind", ["map", "typed_stream", "untyped_stream"])
+    def test_text_only_dataset_freezes_non_language_parameters(self, model_id, dataset_kind):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        if dataset_kind == "typed_stream":
+            dataset = dataset.to_iterable_dataset()
+        elif dataset_kind == "untyped_stream":
+            rows = list(dataset)
+            dataset = IterableDataset.from_generator(lambda: iter(rows))
         trainer = DistillationTrainer(
             model=model_id,
             teacher_model=model_id,
-            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none"),
+            args=DistillationConfig(output_dir=self.tmp_dir, report_to="none", max_steps=1),
             train_dataset=dataset,
         )
 
