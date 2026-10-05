@@ -160,48 +160,19 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-class TestGRPORolloutDispatch:
-    def _make_trainer(self):
-        trainer = object.__new__(GRPOTrainer)
-        trainer.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            is_main_process=True,
-            gather=lambda t: t,
+class TestGRPORolloutDispatch(TrlTestCase):
+    def _make_trainer(self, rollout_func):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        return GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            rollout_func=rollout_func,
         )
-        trainer.args = SimpleNamespace(report_to=[])
-        trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=2, num_input_tokens_seen=0)
-        trainer._last_loaded_step = 1
-        trainer.use_vllm = False
-        trainer.use_transformers_continuous_batching = False
-        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock())
-        trainer.processing_class = SimpleNamespace(
-            batch_decode=MagicMock(return_value=["decoded"]),
-        )
-        trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
-        trainer.tools = None
-        trainer._metrics = {
-            "train": {
-                "num_tokens": [],
-                **{
-                    k: []
-                    for k in [
-                        "completions/mean_length",
-                        "completions/min_length",
-                        "completions/max_length",
-                        "completions/clipped_ratio",
-                        "completions/mean_terminated_length",
-                        "completions/min_terminated_length",
-                        "completions/max_terminated_length",
-                    ]
-                },
-            }
-        }
-        return trainer
 
     def test_generate_prefers_rollout_func(self):
-        trainer = self._make_trainer()
-        trainer.rollout_func = MagicMock(
+        rollout_func = MagicMock(
             return_value={
                 "prompt_ids": [[1]],
                 "completion_ids": [[2]],
@@ -209,6 +180,7 @@ class TestGRPORolloutDispatch:
                 "env_mask": [[1]],
             }
         )
+        trainer = self._make_trainer(rollout_func)
 
         result = trainer._generate(["prompt"])
 
@@ -218,11 +190,12 @@ class TestGRPORolloutDispatch:
         trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
 
     def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
-        trainer = self._make_trainer()
+        rollout_func = MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]], "logprobs": [[0.0]]})
+        trainer = self._make_trainer(rollout_func)
+        # Stand in for the vLLM server, which cannot run here, and start from the step __init__ sets with use_vllm=True
         trainer.use_vllm = True
-        trainer.rollout_func = MagicMock(
-            return_value={"prompt_ids": [[1]], "completion_ids": [[2]], "logprobs": [[0.0]]}
-        )
+        trainer.vllm_generation = MagicMock()
+        trainer._last_loaded_step = -1
 
         trainer._generate(["prompt"])
 
@@ -231,8 +204,7 @@ class TestGRPORolloutDispatch:
         trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
 
     def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
-        trainer = self._make_trainer()
-        trainer.rollout_func = MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]]})
+        trainer = self._make_trainer(MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]]}))
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
             trainer._generate(["prompt"])
