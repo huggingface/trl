@@ -305,6 +305,7 @@ def main() -> None:
     p.add_argument("--learning-rate", type=float, default=3e-6)  # MiMo technical report, 5.1
     p.add_argument("--lora-rank", type=int, default=0)  # 0: full fine-tuning
     p.add_argument("--optim", default="adamw_torch")
+    p.add_argument("--weight-decay", type=float, default=0.0)
     # MiMo's own RL settings (technical report, 5.1): no weight decay, no warmup, a gradient clip of 1.0, and
     # betas at 0.95/0.95 for the Adam component of their Muon variant. Their learning rate is 3e-6.
     p.add_argument("--adam-beta1", type=float, default=0.95)
@@ -423,6 +424,10 @@ def main() -> None:
         packing=args.packing,
         token_budget=args.token_budget,
         learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        # `lr_decay_style: constant` of the upstream recipe; the Trainer's default decays to zero
+        # over `max_steps`, which a run that stops early never reaches.
+        lr_scheduler_type="constant",
         optim=args.optim,
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
