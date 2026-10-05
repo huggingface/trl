@@ -36,6 +36,7 @@ from trl.trainer.utils import (
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -262,6 +263,29 @@ class TestHashModule(TrlTestCase):
             model.lm_head.weight.add_(0.01)
         h2 = hash_module(model)
         assert h1 != h2
+
+
+class TestCreateModelFromPath(TrlTestCase):
+    @pytest.mark.parametrize(("device_type", "expected_device_map"), [("cpu", None), ("mps", None), ("cuda", "auto")])
+    def test_default_device_map(self, device_type, expected_device_map):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = device_type
+            create_model_from_path("trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM)
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == expected_device_map
+
+    def test_explicit_device_map_is_kept(self):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = "mps"
+            create_model_from_path(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
+            )
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
 
 @require_peft
@@ -686,6 +710,28 @@ class TestEntropyFromLogits(TrlTestCase):
 
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_tool_only_assistant_with_null_content(self, mock_stdout):
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the data.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
+                        }
+                    ],
+                }
+            ]
+        ]
+        print_prompt_completions_sample(["Find the table"], completions, {"reward": [0.0]}, None, 0)
+        assert "Inspect the data." in mock_stdout.getvalue()
+        assert "None" not in mock_stdout.getvalue()
+
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
@@ -1420,6 +1466,51 @@ class TestAddFusedLMHead:
         model.config.output_multiplier = 0.5
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_type, config_kwargs",
+        [
+            ("granite", {"logits_scaling": 8.0}),
+            pytest.param(
+                "minicpm3",
+                {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.13.0"),
+                    reason="MiniCPM3 was introduced in transformers>=5.13.0",
+                ),
+            ),
+            pytest.param(
+                "hyperclovax",
+                {"logits_scaling": 4.0},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.9.0"),
+                    reason="HyperCLOVA X was introduced in transformers>=5.9.0",
+                ),
+            ),
+            ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
+        ],
+    )
+    def test_logits_scaling(self, model_type, config_kwargs):
+        """Models that rescale the logits around the LM head get the same log-probabilities as their own forward."""
+        config = AutoConfig.for_model(
+            model_type,
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            **config_kwargs,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, config.vocab_size, (2, 16), device=torch_device)
+        logps = model(input_ids=input_ids).logits[:, :-1].log_softmax(-1)
         expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
 
         add_fused_lm_head(model)

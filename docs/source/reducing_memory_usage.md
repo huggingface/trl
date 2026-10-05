@@ -263,6 +263,18 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 </hfoption>
 </hfoptions>
 
+## PyTorch caching allocator
+
+On long runs, especially online RL (GRPO, RLOO, Online DPO), GPU memory can fragment. Setting [`expandable_segments:True`](https://docs.pytorch.org/docs/stable/notes/cuda.html) lets PyTorch's caching allocator grow existing segments instead, which reduces the gap between allocated and reserved memory:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True  # canonical name since PyTorch 2.10
+```
+
+> [!WARNING]
+> With vLLM sleep mode (`vllm_enable_sleep_mode=True`), vLLM only reads `PYTORCH_CUDA_ALLOC_CONF` to work around this setting, so don't set only `PYTORCH_ALLOC_CONF`.
+
 ## Disabling model gathering for generation in online methods
 
 When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Online methods involve generating completions from the model as part of the training process. During this step, the model weights are temporarily gathered on a single GPU for generation. For very large models, this gathering can lead to OOM errors, as described in this issue: [#2250](https://github.com/huggingface/trl/issues/2250#issue-2598304204).

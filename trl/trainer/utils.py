@@ -775,7 +775,8 @@ def print_prompt_completions_sample(
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
                     if "content" in msg:
-                        t.append(msg["content"])
+                        # Tool-only assistant messages may have null content.
+                        t.append(msg["content"] or "")
                 elif "name" in msg and "args" in msg:
                     # Tool call
                     t.append(f"{role.upper()}\n", style="bold red")
@@ -1305,8 +1306,9 @@ def create_model_from_path(
         )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
     if "device_map" not in kwargs:
-        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
+        kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
@@ -1517,6 +1519,13 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
     logit_scale = 1.0 if logit_scale is None else logit_scale
     # Before transformers 5, vision-language models expose their language backbone as `model` rather than through
     # `base_model_prefix`.
