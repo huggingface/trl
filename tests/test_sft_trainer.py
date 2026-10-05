@@ -1308,6 +1308,9 @@ class TestSFTTrainer(TrlTestCase):
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
         assert len(trainer.eval_dataset["input_ids"]) == 2  # w/ this dataset, we end up with 6 seqs
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"), reason="Olmo 3 requires transformers>=4.57.0"
+    )
     def test_tokenize_prompt_not_prefix_of_conversation(self):
         # The Olmo-3 Think template ends the generation prompt with `<think>`, which the full conversation doesn't
         # have, so the tokenized prompt is not a prefix of the tokenized prompt+completion
