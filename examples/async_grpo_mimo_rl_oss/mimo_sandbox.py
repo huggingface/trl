@@ -152,6 +152,14 @@ def _unparseable_hint(content: str) -> str:
     return 'Your tool call was valid JSON but carried no usable "name" field. Send it again with the tool name.'
 
 
+# Does the file contain `old_string` once runs of whitespace are flattened? Answered inside the sandbox, where
+# the file is; the arguments arrive as argv so nothing has to be escaped into the snippet.
+_EDIT_WHITESPACE_PROBE = """import re, sys
+norm = lambda s: re.sub(r"\\s+", " ", s).strip()
+print(1 if norm(sys.argv[2]) in norm(open(sys.argv[1], errors="replace").read()) else 0)
+"""
+
+
 class ProbeAgent(CCAgent):
     """The upstream agent plus the wall-clock limit verl's loop imposes on it from outside."""
 
@@ -163,6 +171,38 @@ class ProbeAgent(CCAgent):
         if time.monotonic() > self.deadline:
             raise LimitsExceeded("Trajectory timed out")
         return super().query()
+
+    def _execute_tool(self, action: dict) -> dict:
+        """Say why an `Edit` did not match, when the reason is only whitespace.
+
+        `old_string` has to match the file byte for byte, but the model rebuilds it from a `Read` whose every line
+        carries a line-number prefix, and tabs do not survive that transcription: Go is tab-indented and the model
+        sends spaces. The tool answers "The exact string was not found", which is true and says nothing it can act
+        on, so it sends the identical call again -- 74 of the 83 steps of one Code rollout went that way."""
+        output = super()._execute_tool(action)
+        body = str(output.get("output", ""))
+        if action.get("tool") == "Edit" and "exact string was not found" in body:
+            hint = self._edit_whitespace_hint(action.get("params") or {})
+            if hint:
+                output["output"] = body + " " + hint
+        return output
+
+    def _edit_whitespace_hint(self, params: dict) -> str:
+        old, path = params.get("old_string") or "", params.get("file_path") or ""
+        if not old or not path:
+            return ""
+        command = f"python3 -c {shlex.quote(_EDIT_WHITESPACE_PROBE)} {shlex.quote(path)} {shlex.quote(old)}"
+        try:
+            result = self.env.execute(command, timeout=30)
+        except Exception:
+            return ""
+        if str(result.get("output", "")).strip() != "1":
+            return ""
+        return (
+            "The file does contain this text once whitespace is ignored, so only the indentation differs: it uses "
+            "tab characters where your old_string uses spaces. Copy the lines exactly as Read printed them after "
+            "the line-number prefix, keeping the tabs."
+        )
 
     def step(self) -> dict | None:
         """Say what was wrong with a tool call the parser rejected.
