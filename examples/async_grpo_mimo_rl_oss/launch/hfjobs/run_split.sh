@@ -109,6 +109,11 @@ echo \"waiting for \$VLLM_HOST:8000 to serve\"
 until curl -sf \"http://\$VLLM_HOST:8000/health\" >/dev/null; do sleep 10; done
 echo \"vLLM ready at \$VLLM_HOST:8000\"
 
+# The trainer opens the NCCL weight-transfer group on an address it advertises to the server, and the address it
+# picks by itself is the container's, which the server cannot route to. Hand it the one the network group resolves.
+export VLLM_HOST_IP=\$(getent hosts \"\${HF_NETWORK_GROUP_PREFIX}trainer\" | awk '{print \$1}' | head -1)
+echo \"advertising \$VLLM_HOST_IP for the weight-transfer group\"
+
 echo \"CONFIG model=\$MODEL\"
 echo \"CONFIG domains=\$DOMAINS\"
 echo \"CONFIG packing=\$PACKING\"
