@@ -200,6 +200,7 @@ class TrainingSession(ResourceSession):
             "score": graded["reward"],
             "reward_error": graded["reward_error"],
             "items": graded["items"],
+            "judges": graded.get("judges"),
         }
         print(
             f"[rollout] {self.rollout.task['instance_id']} {self.exit_status} steps={metrics['steps']} "

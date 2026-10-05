@@ -29,6 +29,7 @@ import shlex
 import tarfile
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -78,8 +79,12 @@ SIDECAR_PATHS = r"/work/(system|tools|_setup)|/installed-agent|/opt/openai-agent
 # sequential, being CPU-bound and already cached per set of files.
 PARALLEL_JUDGE = '''
 
+_JUDGES_USED = []
+
+
 def _run_llm_sc(items, ws, votes=1):
     """Judge the rubric items concurrently (appended by TRL's async_grpo_mimo_rl_oss example)."""
+    import json as _json
     import statistics
     from concurrent.futures import ThreadPoolExecutor
 
@@ -100,7 +105,14 @@ def _run_llm_sc(items, ws, votes=1):
         for _ in range(max(1, votes)):
             j = None
             for _p in range(2):
-                j = _extract_json_sc(_chat_judge_sc(prompt))
+                out = _chat_judge_sc(prompt)
+                # The chain is sticky: two consecutive failures move `_JUDGE_ACTIVE` on and it stays there, so a
+                # rollout that rate-limits can be judged end to end by a fallback. Record who actually answered.
+                try:
+                    _JUDGES_USED.append(_JUDGE_CHAIN[_JUDGE_ACTIVE[0]].get("model"))
+                except Exception:
+                    pass
+                j = _extract_json_sc(out)
                 if j is not None:
                     break
             sc = (((j or {}).get("results") or {}).get(it["id"]) or {}).get("score")
@@ -110,8 +122,15 @@ def _run_llm_sc(items, ws, votes=1):
             raise _JudgeUnavailable("no usable verdict for item " + str(it.get("id")))
         return it["id"], {"score": round(statistics.median(vals), 4), "detail": "llm " + str(len(vals)) + "票"}
 
-    with ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
-        return dict(pool.map(_one, items))
+    try:
+        with ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
+            return dict(pool.map(_one, items))
+    finally:
+        try:
+            with open("/tmp/agent_output/judges_used.json", "w") as fh:
+                _json.dump(_JUDGES_USED, fh)
+        except Exception:
+            pass
 '''
 
 # ============================================================================================================
@@ -270,11 +289,20 @@ class GeneralTaskSession:
         detail = (
             json.loads(self.sandbox.files.read_text(detail_file)) if self.sandbox.files.exists(detail_file) else {}
         )
+        # Which judge of the fallback chain answered. The chain is sticky, so a rollout that rate-limits on the
+        # primary is judged by a reasoning model whose verdicts the 4000-token cap truncates -- the failure the
+        # primary was chosen to avoid. Counting them is the only way to see it happen.
+        judges = (
+            json.loads(self.sandbox.files.read_text("/tmp/agent_output/judges_used.json"))
+            if self.sandbox.files.exists("/tmp/agent_output/judges_used.json")
+            else []
+        )
         return {
             "reward": reward.get("reward"),
             "reward_error": reward.get("reward_error") or ("verifier_timed_out" if result["reason"] != "ok" else None),
             "judge_error": (detail.get("detail") or {}).get("judge_error"),
             "items": {item["id"]: item["score"] for item in detail.get("results", [])},
+            "judges": dict(Counter(judges)),
             "verifier_output": result["output"][-2000:],
         }
 
