@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import tarfile
 import tempfile
@@ -30,7 +31,7 @@ from huggingface_hub import Sandbox, hf_hub_download
 
 
 os.environ.setdefault("MIMOAGENT_SILENT_STARTUP", "1")
-from mimoagent.agents.base import LimitsExceeded  # noqa: E402
+from mimoagent.agents.base import FormatError, LimitsExceeded  # noqa: E402
 from mimoagent.agents.cc import CCAgent  # noqa: E402
 from mimoagent.environments import TransportError  # noqa: E402
 from mimoagent.models.openai_chat import OpenAIChatModel  # noqa: E402
@@ -127,6 +128,30 @@ class ProbeModel(OpenAIChatModel):
         self.calls.append((token_count.input_tokens, token_count.output_tokens))
 
 
+_TOOL_CALL_BLOCK = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
+def _unparseable_hint(content: str) -> str:
+    """What was wrong with a `<tool_call>` block, phrased as something the model can act on."""
+    match = _TOOL_CALL_BLOCK.search(content)
+    if not match:
+        return (
+            "Your tool call could not be read: no complete <tool_call>...</tool_call> block was found. "
+            "Send the whole block in one message."
+        )
+    body = match.group(1)
+    try:
+        json.loads(body)
+    except json.JSONDecodeError as error:
+        near = body[max(0, error.pos - 60) : error.pos + 20]
+        return (
+            f"Your tool call was not valid JSON: {error.msg} at line {error.lineno} column {error.colno}, "
+            f'near {near!r}. Every double quote inside a JSON string has to be escaped as \\", including the '
+            "ones in source you are editing. Send the call again with that fixed."
+        )
+    return 'Your tool call was valid JSON but carried no usable "name" field. Send it again with the tool name.'
+
+
 class ProbeAgent(CCAgent):
     """The upstream agent plus the wall-clock limit verl's loop imposes on it from outside."""
 
@@ -138,6 +163,21 @@ class ProbeAgent(CCAgent):
         if time.monotonic() > self.deadline:
             raise LimitsExceeded("Trajectory timed out")
         return super().query()
+
+    def step(self) -> dict | None:
+        """Say what was wrong with a tool call the parser rejected.
+
+        Upstream answers an unparsed `<tool_call>` with "Unknown tool '<unparseable>'", which names a problem the
+        model does not have: the tool exists, the JSON around it does not parse. Editing a Go file sends struct
+        tags through that JSON, and one `json:"x"` left unescaped among correctly escaped siblings voids the whole
+        call -- 27% of the steps of a Code rollout. Told where the quote is, the model can fix it; told the tool is
+        unknown, it repeats itself."""
+        try:
+            return super().step()
+        except FormatError as error:
+            if "<unparseable>" not in str(error):
+                raise
+            raise FormatError(_unparseable_hint(self.messages[-1].get("content") or "")) from error
 
 
 # ============================================================================================================
