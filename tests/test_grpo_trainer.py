@@ -180,6 +180,7 @@ class TestGRPORolloutDispatch:
             batch_decode=MagicMock(return_value=["decoded"]),
         )
         trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
+        trainer.eos_token_ids = [2]
         trainer.tools = None
         trainer._metrics = {
             "train": {
