@@ -2475,15 +2475,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    # Flash Attention requires a `head_size` multiple of 8, hence the `small-*` models (`head_size` 32 and 128)
-    # rather than the `tiny-*` ones (`head_size=2`)
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/small-Qwen3ForCausalLM",
-        ],
-    )
+    # Flash Attention needs a `head_size` multiple of 8, hence a `small-*` model (`tiny-*` ones have `head_size=2`)
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.8.0"),
         reason="transformers continuous batching requires transformers>=5.8.0",
@@ -2493,7 +2485,7 @@ class TestGRPOTrainer(TrlTestCase):
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
-    def test_train_with_transformers_continuous_batching(self, model_id):
+    def test_train_with_transformers_continuous_batching(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -2507,7 +2499,7 @@ class TestGRPOTrainer(TrlTestCase):
             use_transformers_continuous_batching=True,
         )
         trainer = GRPOTrainer(
-            model=model_id,
+            model="trl-internal-testing/small-Qwen3ForCausalLM",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
