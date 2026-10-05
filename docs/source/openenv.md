@@ -687,7 +687,7 @@ Return a `float`, or return `None` to mark the rollout unscorable so it is dropp
 
 For example, prompt `[10, 11]`, completion `[20, 21, 22]` and mask `[0, 0, 1, 0, 1]` train on tokens 20 and 22. Token 21 remains context. A wholly masked completion is retained for context and usage accounting.
 
-The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. `verify()` remains independent of token eligibility.
+The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. The task's verifier remains independent of token eligibility.
 
 Malformed captures fail at the OpenEnv boundary and stop the worker. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
