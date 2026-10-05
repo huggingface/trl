@@ -13,11 +13,9 @@
 # limitations under the License.
 
 import contextlib
-import queue
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterator
 
 import torch
 from accelerate.logging import get_logger
@@ -42,76 +40,26 @@ elif is_vllm_available(min_version="0.22.0"):
 
 logger = get_logger(__name__)
 
-# Rank 0 keeps at most this many gathered tensors between `full_tensor()` and the NCCL send thread.
-_WEIGHT_SEND_QUEUE_MAXSIZE = 2
 
+def _cast_stream_to_manifest(iterator, weight_update_info):
+    """Yield the streamed weights in the dtype and shape declared to vLLM.
 
-def _iter_from_send_queue(send_queue: queue.Queue):
-    """Yield `(name, tensor)` from `send_queue` until a `None` sentinel. Consumed by the NCCL send thread."""
-    while True:
-        item = send_queue.get()
-        if item is None:
-            return
-        yield item
-
-
-def _send_full_tensors_lockstep(
-    accelerator, weight_transfer, gathered_params: Iterator[tuple[str, torch.Tensor]]
-) -> None:
-    """All-gather on the training thread; NCCL-send from a bounded queue.
-
-    [`WeightTransferClient.send_weights`] pulls its iterator on a daemon thread while the caller blocks on HTTP
-    `/update_weights`. Driving `full_tensor()` from that iterator therefore all-gathers on rank 0's NCCL thread and on
-    every other rank's training thread, and non-0 ranks start the next gather while rank 0 is still sending.
-
-    Every rank iterates `gathered_params` here (so `full_tensor()` stays on the training thread). Rank 0 `put`s into a
-    bounded queue that the send thread only `get`s. `wait_for_everyone()` after every put — and after the sentinel —
-    keeps non-0 ranks from running ahead when the queue is full.
+    The manifest is collected before FSDP2 upcasts low-precision parameters to fp32. vLLM sizes each packed broadcast
+    from that manifest, so a later fp32 payload crosses chunk boundaries the server does not receive.
     """
-    send_queue: queue.Queue | None = None
-    send_thread: threading.Thread | None = None
-    send_error: list[BaseException] = []
-    send_done = threading.Event()
-    do_send = accelerator.is_main_process
-
-    if do_send:
-        send_queue = queue.Queue(maxsize=_WEIGHT_SEND_QUEUE_MAXSIZE)
-
-        def _run_send():
-            try:
-                weight_transfer.send_weights(_iter_from_send_queue(send_queue))
-            except BaseException as exc:  # noqa: BLE001
-                send_error.append(exc)
-            finally:
-                # Also set when `send_weights` returns without draining the queue (a no-op transfer, or one that syncs
-                # out of band), so rank 0 stops putting instead of blocking on a full queue.
-                send_done.set()
-
-        send_thread = threading.Thread(target=_run_send, daemon=True)
-        send_thread.start()
-
-    for name, full in gathered_params:
-        # Rank 0 keeps iterating after the send side is done: `full_tensor()` is collective.
-        while do_send and not send_done.is_set():
-            try:
-                send_queue.put((name, full), timeout=1.0)
-                break
-            except queue.Full:
-                pass
-        accelerator.wait_for_everyone()
-
-    while do_send and not send_done.is_set():
-        try:
-            send_queue.put(None, timeout=1.0)
-            break
-        except queue.Full:
-            pass
-    accelerator.wait_for_everyone()
-
-    if send_thread is not None:
-        send_thread.join()
-    if send_error:
-        raise send_error[0]
+    expected = zip(
+        weight_update_info["names"], weight_update_info["dtype_names"], weight_update_info["shapes"], strict=True
+    )
+    for (name, tensor), (expected_name, dtype_name, shape) in zip(iterator, expected, strict=True):
+        if name != expected_name or list(tensor.shape) != list(shape):
+            raise ValueError(
+                f"Weight {name} {tuple(tensor.shape)} does not match the vLLM manifest entry "
+                f"{expected_name} {tuple(shape)}."
+            )
+        dtype = getattr(torch, dtype_name)
+        if tensor.dtype != dtype:
+            tensor = tensor.to(dtype=dtype)
+        yield name, tensor
 
 
 class WeightTransferClient:
@@ -209,6 +157,7 @@ class WeightTransferClient:
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
         self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        iterator = _cast_stream_to_manifest(iterator, self._weight_update_info)
 
         error: list[BaseException] = []
 
@@ -230,7 +179,11 @@ class WeightTransferClient:
         thread.start()
         try:
             self.vllm.update_weights(self._weight_update_info, timeout=self.weight_sync_timeout)
-            thread.join()
+            thread.join(timeout=self._CONTROL_TIMEOUT)
+            if thread.is_alive():
+                raise RuntimeError(
+                    "vLLM finished receiving the manifest while the trainer was still sending parameters."
+                )
             if error:
                 raise error[0]
         except Exception as exc:

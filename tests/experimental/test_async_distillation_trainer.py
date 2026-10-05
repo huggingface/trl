@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-from accelerate import Accelerator
+from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 from transformers.testing_utils import torch_device
@@ -50,13 +50,12 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
 )
-from trl.experimental.async_distillation.weight_transfer import _send_full_tensors_lockstep
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_vllm
 
 
 TEACHER_TOP_K = 4
@@ -1018,36 +1017,129 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer._trained_prompts == set()
 
 
-class _RecordingWeightTransfer:
-    # Stands in for the remote vLLM server side of the weight transfer.
-    def __init__(self, fail=False):
-        self.sent = []
-        self.fail = fail
+def _packed_broadcast_nbytes(byte_sizes, buffer_size):
+    """Byte length of each packed broadcast.
 
-    def send_weights(self, iterator):
-        for name, _ in iterator:
-            if self.fail:
-                raise RuntimeError("transfer blew up")
-            self.sent.append(name)
+    vLLM's producer groups the bytes of the tensors it is given, and its consumer groups `prod(shape) *
+    manifest_dtype.itemsize`. A tensor is added first, and the buffer is broadcast once the running total exceeds
+    `buffer_size`. The default buffer is 1GiB; the cutoff is what decides the boundary, not that particular size.
+    """
+    chunks = []
+    running = 0
+    for nbytes in byte_sizes:
+        running += nbytes
+        if running > buffer_size:
+            chunks.append(running)
+            running = 0
+    if running:
+        chunks.append(running)
+    return chunks
 
 
-class TestLockstepWeightSend:
-    def test_forwards_every_item(self):
-        weight_transfer = _RecordingWeightTransfer()
-        items = [("embed", torch.ones(2)), ("lm_head", torch.ones(3))]
-        _send_full_tensors_lockstep(Accelerator(), weight_transfer, iter(items))
-        assert weight_transfer.sent == ["embed", "lm_head"]
+def _tensors_handed_to_producer(weight_transfer_module, client_cls, info, stream):
+    """Return the tensors `send_weights` passes to the packed NCCL producer.
 
-    def test_propagates_send_failure(self):
-        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
-        with pytest.raises(RuntimeError, match="transfer blew up"):
-            _send_full_tensors_lockstep(Accelerator(), _RecordingWeightTransfer(fail=True), iter(items))
+    The producer itself is replaced so the test does not open an NCCL group. `model_update_group` is set only so
+    `send_weights` does not return before touching the iterator.
+    """
+    # `send_weights` logs through accelerate, which raises until a state exists, even for a debug record.
+    PartialState()
 
-    def test_returns_when_send_does_not_drain(self):
-        # A transfer that syncs out of band and never reads the iterator, like a no-op implementation
-        class _OutOfBandWeightTransfer:
-            def send_weights(self, iterator):
-                pass
+    class _Server:
+        server_url = "http://127.0.0.1:9"
 
-        items = [(f"p{i}", torch.zeros(1)) for i in range(8)]
-        _send_full_tensors_lockstep(Accelerator(), _OutOfBandWeightTransfer(), iter(items))
+        def start_weight_update(self, timeout):
+            return None
+
+        def update_weights(self, update_info, timeout):
+            return None
+
+        def finish_weight_update(self, timeout):
+            return None
+
+    client = client_cls(_Server(), info)
+    client.model_update_group = object()
+    sent = []
+
+    def capture_iterator(*, iterator, trainer_args):
+        sent.extend(iterator)
+
+    def capture_packed(*, iterator, group, src, post_iter_func):
+        sent.extend((name, post_iter_func((name, tensor))) for name, tensor in iterator)
+
+    if weight_transfer_module._HAS_STATEFUL_TRAINER_ENGINE:
+        patcher = patch.object(weight_transfer_module, "packed_nccl_broadcast_producer", capture_packed)
+    else:
+        patcher = patch.object(
+            weight_transfer_module.NCCLWeightTransferEngine, "trainer_send_weights", capture_iterator
+        )
+    with patcher:
+        client.send_weights(iter(stream))
+    return sent
+
+
+@require_vllm  # WeightTransferClient's constructor requires vLLM
+class TestManifestWeightStream:
+    def test_send_weights_streams_in_the_manifest_dtype(self):
+        # Two parameters of 3 elements. At an 8-byte buffer their bf16 payloads (6 bytes each) share one broadcast.
+        # After the fp32 upcast each is 12 bytes, so the unfixed stream takes one broadcast per parameter.
+        from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
+        from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
+
+        model = torch.nn.Sequential(
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+        )
+        original = [(name, param.detach().clone()) for name, param in model.named_parameters() if param.requires_grad]
+        info = {
+            "names": [name for name, _ in original],
+            "dtype_names": [str(tensor.dtype).split(".")[-1] for _, tensor in original],
+            "shapes": [list(tensor.shape) for _, tensor in original],
+        }
+        # Accelerate upcasts low-precision FSDP2 parameters to fp32 after the manifest is collected.
+        model.to(dtype=torch.float32)
+        streamed = [(name, param.detach()) for name, param in model.named_parameters() if param.requires_grad]
+        assert [tensor.dtype for _, tensor in streamed] == [torch.float32, torch.float32]
+
+        sent = _tensors_handed_to_producer(weight_transfer_module, WeightTransferClient, info, streamed)
+        assert [(name, tensor.dtype, list(tensor.shape)) for name, tensor in sent] == [
+            (name, torch.bfloat16, list(tensor.shape)) for name, tensor in original
+        ]
+        for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
+            assert torch.equal(sent_tensor, original_tensor)
+        # The upcast stream would have packed into different broadcasts than the ones the server sizes from the
+        # manifest, which is the mismatch that wedges the transfer.
+        manifest_bytes = [tensor.numel() * tensor.element_size() for _, tensor in original]
+        upcast_bytes = [tensor.numel() * tensor.element_size() for _, tensor in streamed]
+        sent_bytes = [tensor.numel() * tensor.element_size() for _, tensor in sent]
+        assert _packed_broadcast_nbytes(upcast_bytes, 8) != _packed_broadcast_nbytes(manifest_bytes, 8)
+        assert _packed_broadcast_nbytes(sent_bytes, 8) == _packed_broadcast_nbytes(manifest_bytes, 8)
+
+    def test_send_weights_rejects_a_shape_mismatch(self):
+        from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
+        from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
+
+        info = {"names": ["embed"], "dtype_names": ["float32"], "shapes": [[3]]}
+        with pytest.raises(RuntimeError, match="Weight sync") as exc_info:
+            _tensors_handed_to_producer(weight_transfer_module, WeightTransferClient, info, [("embed", torch.ones(2))])
+        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert "does not match" in str(exc_info.value.__cause__)
+
+    def test_send_weights_rejects_an_extra_parameter(self):
+        from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
+        from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
+
+        info = {"names": ["embed"], "dtype_names": ["float32"], "shapes": [[2]]}
+        stream = [("embed", torch.ones(2)), ("extra", torch.ones(2))]
+        with pytest.raises(RuntimeError, match="Weight sync") as exc_info:
+            _tensors_handed_to_producer(weight_transfer_module, WeightTransferClient, info, stream)
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    def test_send_weights_rejects_a_short_stream(self):
+        from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
+        from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
+
+        info = {"names": ["embed", "head"], "dtype_names": ["float32", "float32"], "shapes": [[2], [2]]}
+        with pytest.raises(RuntimeError, match="Weight sync") as exc_info:
+            _tensors_handed_to_producer(weight_transfer_module, WeightTransferClient, info, [("embed", torch.ones(2))])
+        assert isinstance(exc_info.value.__cause__, ValueError)
