@@ -42,8 +42,7 @@ class _BaseConfig(TrainingArguments):
             the documentation of each scheduler for possible values.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
             Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations: transformers patches the
-            model's layers with Liger's Triton kernels. See the [Liger Kernel Integration](liger_kernel_integration)
-            guide.
+            model's layers with Liger's Triton kernels.
         torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
             will not be emptied. This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of
