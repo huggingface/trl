@@ -270,7 +270,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     @require_vllm
-    @pytest.mark.slow
     def test_train_with_vllm_server(self, config_name):
         def cleanup_vllm_communicator(trainer):
             """Clean up vLLM communicator to avoid conflicts between test runs"""
