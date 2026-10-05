@@ -41,6 +41,11 @@ DATASET = "XiaomiMiMo/MiMo-V2.6-RL-oss"
 
 @cache
 def _image_map() -> dict[str, str]:
+    """The dataset's image table, read once per process rather than once per rollout.
+
+    `hf_hub_download` still asks the Hub for the file's revision even when it is already on disk, which costs about
+    130 ms; a step has up to a few hundred rollouts in flight and every one of them resolves an image. A plain
+    module constant would do instead, but it would reach the Hub at import, which `--help` and the tests should not."""
     path = hf_hub_download(DATASET, "image-mapping.jsonl", repo_type="dataset")
     return {row["dataset_image"]: row["dockerhub_image"] for row in map(json.loads, open(path))}
 
