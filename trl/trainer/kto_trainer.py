@@ -763,9 +763,11 @@ class KTOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Vision dataset detection
@@ -1290,6 +1292,13 @@ class KTOTrainer(_BaseTrainer):
         logit_scale = getattr(text_config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(text_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if logit_scale is None:
+            logit_scale = getattr(text_config, "lm_head_multiplier", None)
+        if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+            logits_scaling = text_config.logits_scaling
+            logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
         logit_scale = 1.0 if logit_scale is None else logit_scale
 
         lm_head_weight = lm_head.weight

@@ -767,6 +767,35 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         finally:
             loop._loop.close()
 
+    def test_tool_discovery_does_not_evaluate_properties(self):
+        # The init-time probe lists an environment's tool methods. `inspect.getmembers` calls `getattr` on every name
+        # before applying the predicate, so listing the instance would evaluate this property; listing the class
+        # leaves it inert.
+        class PropertyEnvironment:
+            def reset(self, **kwargs): ...
+
+            @property
+            def reward(self) -> float:
+                raise RuntimeError("`reward` must not be evaluated while discovering tools")
+
+            def echo(self, text: str) -> str:
+                """Echo the text back.
+
+                Args:
+                    text: Text to echo.
+
+                Returns:
+                    The text, unchanged.
+                """
+                return text
+
+        loop = self._make_loop(PropertyEnvironment)
+        try:
+            assert [tool.__name__ for tool in loop._env_tools[None]] == ["echo"]
+            assert [tool.__name__ for tool in loop.tools] == ["echo"]
+        finally:
+            loop._loop.close()
+
     def test_unknown_environment_raises(self):
         # An example whose `environment` field doesn't match any configured environment should fail with a clear error
         # rather than a bare KeyError mid-rollout. The check fires before any generation, so no vLLM is needed here.
