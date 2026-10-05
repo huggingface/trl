@@ -167,7 +167,7 @@ spec = OpenRewardSpec("Eigent/SETA", indices=list(range(50, 100)))      # range
 
 ## How tool binding works
 
-At construction the spec calls the env's `/tools` endpoint to fetch a list of tool specs (each with a name, description, and JSON Schema for arguments). For each tool it generates a Python method on the per-rollout adapter with a typed signature and a docstring derived from the schema. So `transformers.utils.get_json_schema` and TRL's `inspect.getmembers(env, ismethod)` both produce the right tool schema for the model with no per-env wrapper code.
+At construction the spec calls the env's `/tools` endpoint to fetch a list of tool specs (each with a name, description, and JSON Schema for arguments). For each tool it generates a Python method on the per-rollout adapter with a typed signature and a docstring derived from the schema. The methods are set on the adapter's class, where TRL's tool collector finds them, so `transformers.utils.get_json_schema` and TRL's `inspect.getmembers(type(env), isfunction)` both produce the right tool schema for the model with no per-env wrapper code.
 
 If a tool description contains characters that aren't safe to splice into Python source, the binder falls back to a sanitized form so binding never fails on real envs.
 

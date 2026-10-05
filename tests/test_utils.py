@@ -1484,6 +1484,51 @@ class TestAddFusedLMHead:
 
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
+    @pytest.mark.parametrize(
+        "model_type, config_kwargs",
+        [
+            ("granite", {"logits_scaling": 8.0}),
+            pytest.param(
+                "minicpm3",
+                {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.13.0"),
+                    reason="MiniCPM3 was introduced in transformers>=5.13.0",
+                ),
+            ),
+            pytest.param(
+                "hyperclovax",
+                {"logits_scaling": 4.0},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.9.0"),
+                    reason="HyperCLOVA X was introduced in transformers>=5.9.0",
+                ),
+            ),
+            ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
+        ],
+    )
+    def test_logits_scaling(self, model_type, config_kwargs):
+        """Models that rescale the logits around the LM head get the same log-probabilities as their own forward."""
+        config = AutoConfig.for_model(
+            model_type,
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            **config_kwargs,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, config.vocab_size, (2, 16), device=torch_device)
+        logps = model(input_ids=input_ids).logits[:, :-1].log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
     def test_cast_lm_head_to_fp32(self):
         """Under bf16 autocast, the projection runs in fp32 and matches an fp32 projection of the same hidden states."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
