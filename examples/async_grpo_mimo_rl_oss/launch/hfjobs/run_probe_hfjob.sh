@@ -10,6 +10,10 @@ cd "$(dirname "$0")"
 EXAMPLE_DIR=$(cd ../.. && pwd)
 
 FLAVOR=${FLAVOR:-h200}
+# A model too large for one card is sharded rather than replicated: a probe has one server.
+VLLM_TP=${VLLM_TP:-1}
+# `bfloat16` is wrong for a checkpoint that ships quantized; `auto` takes what the config says.
+VLLM_DTYPE=${VLLM_DTYPE:-bfloat16}
 DOMAIN=${DOMAIN:-code}
 MODEL=${MODEL:-Qwen/Qwen3-8B}
 TOOL_PARSER=${TOOL_PARSER:-hermes}
@@ -42,7 +46,7 @@ uvx hf jobs run --name "$RUN_NAME" \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
     -e "TRL_SHA=$TRL_SHA" -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
-    -e "DOMAIN=$DOMAIN" -e "MODEL=$MODEL" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "HF_OVERRIDES=$HF_OVERRIDES" \
+    -e "VLLM_TP=$VLLM_TP" -e "VLLM_DTYPE=$VLLM_DTYPE" -e "DOMAIN=$DOMAIN" -e "MODEL=$MODEL" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "HF_OVERRIDES=$HF_OVERRIDES" \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "N_TASKS=$N_TASKS" -e "SAMPLES=$SAMPLES" -e "MAX_INFLIGHT=$MAX_INFLIGHT" -e "PROBE_ARGS=$PROBE_ARGS" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
@@ -63,7 +67,8 @@ PYCHECK
 
 OVERRIDE_ARGS=()
 if [ -n "$HF_OVERRIDES" ]; then OVERRIDE_ARGS=(--hf-overrides "$HF_OVERRIDES"); fi
-vllm serve "$MODEL" --port 8000 --dtype bfloat16 --max-model-len "$MAX_MODEL_LEN" "${OVERRIDE_ARGS[@]}" \
+vllm serve "$MODEL" --port 8000 --dtype "$VLLM_DTYPE" --tensor-parallel-size "$VLLM_TP" \
+    --max-model-len "$MAX_MODEL_LEN" "${OVERRIDE_ARGS[@]}" \
     --gpu-memory-utilization 0.85 --generation-config vllm \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser "$REASONING_PARSER" \
     > /tmp/vllm.log 2>&1 &
