@@ -580,6 +580,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             dataset=dataset,
             reward_funcs=[dummy_reward_func],
             processing_class=MagicMock(),
+            eos_token_ids=[0],
             rollout_buffer=ctx.Queue(),
             metrics_queue=ctx.Queue(),
             model_version_value=ctx.Value("i", 0),
@@ -713,6 +714,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             dataset=dataset,
             reward_funcs=[dummy_reward_func],
             processing_class=AutoTokenizer.from_pretrained(model_id),
+            eos_token_ids=[0],
             rollout_buffer=mp.Queue(),
             model_version_value=mp.Value("i", 0),
             heartbeat_value=mp.Value("d", 0.0),
@@ -1224,6 +1226,7 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
 
     loop = object.__new__(_AsyncRolloutLoop)  # skip the heavy __init__; set only what _generate_one reads
     loop.tokenizer = _StubTokenizer()
+    loop.eos_token_ids = [loop.tokenizer.eos_token_id]
     loop.tools = []
     loop.chat_template = None
     loop.chat_template_kwargs = {}

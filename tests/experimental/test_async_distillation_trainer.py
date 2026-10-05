@@ -336,6 +336,7 @@ def _bare_loop(tokenizer, teacher_server_urls):
     # AsyncGRPOTrainer's own `_bare_loop` test helper.
     loop = object.__new__(_AsyncRolloutLoop)
     loop.tokenizer = tokenizer
+    loop.eos_token_ids = [tokenizer.eos_token_id]
     loop.chat_template_kwargs = {}
     loop.teacher_server_urls = teacher_server_urls
     # Normally resolved from each teacher's /v1/models in _run_loops, which no bare loop ever reaches.
@@ -366,6 +367,7 @@ class TestWorkerMetrics:
         loop._rates = defaultdict(lambda: [0.0, 0.0])
         loop.teacher_server_urls = teacher_server_urls
         loop.tokenizer = types.SimpleNamespace(eos_token_id=0, pad_token_id=0)
+        loop.eos_token_ids = [0]
         return loop
 
     def test_counters_and_rates_ride_along_and_reset(self):
@@ -979,6 +981,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             model_name="test",
             dataset=Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]}),
             processing_class=MagicMock(),
+            eos_token_ids=[0],
             rollout_buffer=ctx.Queue(),
             model_version_value=ctx.Value("i", 0),
             heartbeat_value=ctx.Value("d", 0.0),
