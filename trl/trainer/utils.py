@@ -1519,6 +1519,13 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
     logit_scale = 1.0 if logit_scale is None else logit_scale
     # Before transformers 5, vision-language models expose their language backbone as `model` rather than through
     # `base_model_prefix`.
@@ -1552,13 +1559,16 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
         else:
             hidden_states = outputs.last_hidden_state
             labels = shift_labels
+        lm_head = self.get_output_embeddings()
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        hidden_states = hidden_states.to(lm_head.weight.device)
+        labels = labels.to(lm_head.weight.device)
         mask = labels != -100
         autocast_ctx = nullcontext()
         if cast_lm_head_to_fp32:
             hidden_states = hidden_states.float()
             autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
 
-        lm_head = self.get_output_embeddings()
         weight, bias = lm_head.weight, lm_head.bias
         # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
         # head once before splitting tokens so every projection uses compatible tensor types.
