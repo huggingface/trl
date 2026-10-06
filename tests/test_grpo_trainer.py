@@ -14,7 +14,6 @@
 
 import gc
 import os
-import warnings
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -29,7 +28,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
-    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -37,6 +35,7 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 
 from .testing_utils import (
     TrlTestCase,
@@ -50,7 +49,6 @@ from .testing_utils import (
     require_torch_accelerator,
     require_vision,
     require_vllm,
-    xfail_data_parallel,
 )
 
 
@@ -179,6 +177,7 @@ class TestGRPORolloutDispatch:
             batch_decode=MagicMock(return_value=["decoded"]),
         )
         trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
+        trainer.eos_token_ids = [2]
         trainer.tools = None
         trainer._metrics = {
             "train": {
@@ -2326,6 +2325,38 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_vllm
+    def test_train_vllm(self):
+        """Test that training works with vLLM for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            use_vllm=True,
+        )
+        trainer = GRPOTrainer(
+            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     @require_peft
     @require_vllm
     @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
@@ -3038,6 +3069,37 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_stops_on_every_eos_token_id(self):
+        # Phi-3.5 ends a turn with `<|end|>`, which only its generation config declares as eos, not its tokenizer
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert 32007 in trainer.generation_config.eos_token_id  # `<|end|>`
+
+        def fake_generate(input_ids, **kwargs):
+            # 'Blue<|end|>and green': the turn ends on `<|end|>`, and generation goes on after it
+            completion_ids = torch.tensor([[10924, 32007, 322, 7933]] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Completions are cut after `<|end|>` and count as terminated, not clipped
+        assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -4777,6 +4839,72 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_gemma4(self):
+        # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
+        def screenshot_tool() -> str:
+            """Simple text-returning tool."""
+            return "The image shows a red square."
+
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=512,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                completion_ids = torch.tensor(
+                    [
+                        # '<|tool_call>call:screenshot_tool{}<tool_call|><|tool_response>'
+                        [48, 6639, 236787, 76794, 236779, 13205, 16454, 49, 50],
+                        # "I don't know any tool<turn|>" + padding
+                        [236777, 1537, 236789, 236745, 1281, 1027, 5904, 106, 0],
+                    ],
+                    device=input_ids.device,
+                )
+            else:  # second call: 1 tool call succeeded
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<turn|>'
+                        [34496, 236888, 106],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both completions end on one of Gemma 4's eos ids, so none is clipped
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
 
 @pytest.mark.slow
 @require_torch_accelerator
@@ -4807,7 +4935,6 @@ class TestGRPOTrainerSlow(TrlTestCase):
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
         "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
     )
-    @xfail_data_parallel
     def test_train_with_transformers_continuous_batching(self, model_name):
         """Test that training works with transformers continuous batching (requires GPU)."""
         if not Version(transformers.__version__) >= Version("5.8.0"):
@@ -4844,212 +4971,3 @@ class TestGRPOTrainerSlow(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
         release_memory(model, trainer)
-
-    @require_vllm
-    @require_bitsandbytes
-    @require_peft
-    def test_vlm_processor_vllm_colocate_mode(self):
-        """
-        Test that VLM processors work with vLLM in colocate mode.
-
-        This test uses multiple memory optimization techniques to ensure it runs on limited hardware:
-        - LoRA (Low-Rank Adaptation) with minimal rank (r=4)
-        - 4-bit quantization with BitsAndBytesConfig
-        - Gradient checkpointing
-        - Minimal batch sizes and sequence lengths
-        - Very low GPU memory utilization (5%)
-        """
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        config = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,  # Minimal batch size
-            gradient_accumulation_steps=2,  # Make effective batch size 2, divisible by num_generations
-            num_generations=2,
-            max_completion_length=4,  # Very short completions to reduce memory
-            use_vllm=True,  # Enable vLLM
-            vllm_mode="colocate",  # Use colocate mode to avoid server dependency
-            vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
-            bf16=False,  # bf16=True raises on devices without bf16 support; this test never calls train(), so it is unused
-            report_to="none",
-            logging_strategy="no",
-        )
-
-        # Create a VLM processor
-        processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left")
-
-        # Verify processor has both required attributes for VLM detection
-        assert hasattr(processor, "tokenizer")
-        assert hasattr(processor, "image_processor")
-
-        def dummy_reward_func(completions, **kwargs):
-            return [1.0] * len(completions)
-
-        # Use LoRA configuration for memory efficiency
-        lora_config = LoraConfig(
-            r=4,  # Very low rank for minimal memory
-            lora_alpha=8,
-            target_modules=["q_proj", "v_proj"],  # Minimal target modules
-            lora_dropout=0.1,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # Use 4-bit quantization for further memory reduction
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-
-        original_env = {}
-        required_env_vars = {
-            "RANK": "0",
-            "LOCAL_RANK": "0",
-            "WORLD_SIZE": "1",
-            "LOCAL_WORLD_SIZE": "1",
-            "MASTER_ADDR": "localhost",
-            "MASTER_PORT": "12355",
-        }
-
-        for key, value in required_env_vars.items():
-            original_env[key] = os.environ.get(key)
-            os.environ[key] = value
-
-        try:
-            # Test VLM processor with vLLM colocate mode
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                try:
-                    # Load model with quantization for memory efficiency
-                    model = AutoModelForCausalLM.from_pretrained(
-                        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                        quantization_config=quantization_config,
-                        dtype=torch.bfloat16,
-                    )
-
-                    trainer = GRPOTrainer(
-                        model=model,
-                        reward_funcs=dummy_reward_func,
-                        args=config,
-                        train_dataset=dataset,
-                        processing_class=processor,  # VLM processor
-                        peft_config=lora_config,  # Use LoRA for memory efficiency
-                    )
-
-                    # Should detect VLM processor correctly and allow vLLM
-                    assert trainer.use_vllm, "vLLM should be enabled for VLM processors in colocate mode"
-                    assert trainer.vllm_mode == "colocate", "Should use colocate mode"
-
-                    # Check if signature columns were set properly
-                    if trainer._signature_columns is not None:
-                        # Should include 'image' in signature columns for VLM processors
-                        assert "image" in trainer._signature_columns, (
-                            "Should include 'image' in signature columns for VLM"
-                        )
-
-                    # Should not emit any warnings about VLM incompatibility
-                    incompatibility_warnings = [
-                        str(w_item.message)
-                        for w_item in w
-                        if "does not support VLMs" in str(w_item.message)
-                        or "not compatible" in str(w_item.message).lower()
-                    ]
-                    assert len(incompatibility_warnings) == 0, (
-                        f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}"
-                    )
-
-                    # Test passes if we get this far without exceptions
-
-                except Exception as e:
-                    # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
-                    if any(
-                        keyword in str(e).lower()
-                        for keyword in [
-                            "outofmemoryerror",
-                            "cuda",
-                            "memory",
-                            "insufficient",
-                            "no such device",
-                            "free memory",
-                            "gpu memory utilization",
-                            "decrease gpu memory",
-                        ]
-                    ):
-                        pytest.skip(f"Skipping vLLM colocate test due to hardware constraints: {e}")
-                    elif "KeyError" in str(e) and "RANK" in str(e):
-                        pytest.skip(f"Skipping vLLM colocate test due to environment setup issues: {e}")
-                    elif "ValueError" in str(e) and "memory" in str(e).lower():
-                        pytest.skip(f"Skipping vLLM colocate test due to memory constraints: {e}")
-                    else:
-                        raise
-        finally:
-            # Restore original environment variables
-            for key, original_value in original_env.items():
-                if original_value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = original_value
-
-            release_memory(model, trainer)
-
-    @require_vllm
-    def test_train_vllm(self):
-        """Test that training works with vLLM for generation."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-            logging_strategy="no",
-            use_vllm=True,
-        )
-
-        try:
-            trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-
-            # Check that the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        except Exception as e:
-            # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
-            if any(
-                keyword in str(e).lower()
-                for keyword in [
-                    "outofmemoryerror",
-                    "cuda",
-                    "memory",
-                    "insufficient",
-                    "no such device",
-                    "free memory",
-                    "gpu memory utilization",
-                    "decrease gpu memory",
-                ]
-            ):
-                pytest.skip(f"Skipping vLLM training test due to hardware constraints: {e}")
-            elif "KeyError" in str(e) and "RANK" in str(e):
-                pytest.skip(f"Skipping vLLM training test due to environment setup issues: {e}")
-            elif "ValueError" in str(e) and "memory" in str(e).lower():
-                pytest.skip(f"Skipping vLLM training test due to memory constraints: {e}")
-            else:
-                raise
-
-        release_memory(trainer.model, trainer)

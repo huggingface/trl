@@ -103,7 +103,6 @@ def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teach
         assert sorted(k for group in teacher_groups for k in group) == list(range(len(t_answer)))
 
 
-@pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokenizer, openr1_examples):
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
     batch = collator(openr1_examples)
@@ -150,7 +149,6 @@ def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokeni
     assert torch.isfinite(loss)
 
 
-@pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, qwen_tokenizer, countdown_examples):
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
     batch = collator(countdown_examples)
@@ -197,7 +195,6 @@ def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, q
     assert torch.isfinite(loss)
 
 
-@pytest.mark.slow
 def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_tokenizer, openr1_examples):
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=512)
     batch = collator(openr1_examples)
@@ -1524,7 +1521,6 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
     assert sizes == [3, 3, 0]
 
 
-@pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = llama_tokenizer
@@ -1702,7 +1698,6 @@ def test_decode_completion_texts_from_labels_keeps_eos_when_pad_equals_eos():
     assert captured["ids"] == [[21, 22, eos_id]]
 
 
-@pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = smollm_tokenizer
@@ -2188,7 +2183,6 @@ def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
-@pytest.mark.slow
 def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     collator = DataCollatorForVisionLanguageChatML(processor=qwen3_vl_processor, max_length=2048)
     batch = collator(vlm_examples)
@@ -3531,7 +3525,6 @@ _TINY_SMOLVLM = "trl-internal-testing/tiny-SmolVLMForConditionalGeneration"
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
-@pytest.mark.slow
 def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with a finite loss."""
     try:
@@ -3579,7 +3572,6 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
-@pytest.mark.slow
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
 
