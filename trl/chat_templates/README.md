@@ -9,6 +9,10 @@ Jinja2 chat templates stored here serve two purposes:
 
 **Why generation-tagged?** SFT with `assistant_only_loss=True` requires the chat template to include `{% generation %}` / `{% endgeneration %}` markers around assistant output, so `return_assistant_tokens_mask=True` can produce correct masks. Most model templates don't include these markers natively.
 
+**Why `_v2`?** Identity comparison is exact, so when a model repo changes its chat template, the new revision is stored next to the original as `<name>_v2.jinja` (then `_v3`, ...) and both are recognized. The suffix only orders revisions as they are added; each section below says where the revision comes from.
+
+**How is drift detected?** A weekly CI job runs `scripts/check_chat_templates.py`, which fails when one of its reference Hub repos ships a chat template that is not stored here. When adding a template for a new model, add the repo it comes from to `REPOS` in that script.
+
 ## Original templates
 
 Used for identity comparison only.
@@ -43,7 +47,23 @@ Original Gemma 3 chat template (as shipped by `google/gemma-3-*` checkpoints). U
 
 ### `gemma4.jinja`
 
-Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` and the other checkpoints in that generation). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
+Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` and the other checkpoints in that generation, at [6b7e72c](https://huggingface.co/google/gemma-4-E2B-it/commit/6b7e72c67d3c4556f42b56d5a68b4b8e864c63b4)). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
+
+### `gemma4_v2.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [4742fe8](https://huggingface.co/google/gemma-4-E2B-it/commit/4742fe843cc01b9aed62122f6e0ddd13ea48b3d3): the revision the model was released with. Unlike `gemma4.jinja`, it does not render reasoning in assistant turns that carry `tool_calls`. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v3.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [b446025](https://huggingface.co/google/gemma-4-E2B-it/commit/b446025c61ecea876162774ee247706056963aba): the revision between the release and `gemma4.jinja`. Unlike `gemma4_v2.jinja`, it renders reasoning in assistant turns that carry `tool_calls`. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v4.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [905e84b](https://huggingface.co/google/gemma-4-E2B-it/commit/905e84b50c4d2a365ebde34e685027578e6728db): the revision after `gemma4.jinja`. Differs from it only in emitting `<|image|>`, `<|audio|>` and `<|video|>` placeholders for multimodal tool responses. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v5.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https://huggingface.co/google/gemma-4-E2B-it/commit/899537982545a3e55ce64d34462b2efa5af85232): the current revision. Unlike the earlier ones, it also renders the reasoning of a final assistant turn. Response parsing reuses `gemma4_template`.
 
 ### `glm4moe.jinja`
 
@@ -61,9 +81,17 @@ Original Idefics3 chat template (as shipped by `HuggingFaceM4/Idefics3-8B-Llama3
 
 Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatML-style. Renders `tools` into the system prompt wrapped in `<|tool_list_start|>` / `<|tool_list_end|>`, and wraps `tool` message content in `<|tool_response_start|>` / `<|tool_response_end|>`. It never reads `message['tool_calls']` though, so assistant tool calls are silently dropped: the model is trained to emit `<|tool_call_start|>` / `<|tool_call_end|>` as plain text inside `content`.
 
+### `lfm2_v2.jinja`
+
+Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them.
+
 ### `lfm2_2_5.jinja`
 
 Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` and the other checkpoints in that generation). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
+
+### `lfm2_2_5_v2.jinja`
+
+Later revision of the LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` since [13a5383](https://huggingface.co/LiquidAI/LFM2.5-230M/commit/13a53837c4906b4f7405932532ba85d182bb013b)). Differs from `lfm2_2_5.jinja` only in reading the `<think>` block off `message.thinking`, falling back to `message.reasoning` and `message.reasoning_content`, and rendering it only when it is a non-empty string. Response parsing reuses `lfm2_2_5_template`.
 
 ### `lfm2_2_5_vl.jinja`
 
@@ -144,6 +172,10 @@ Original Qwen3.6 chat template (shared across `Qwen3.6-27B`, `Qwen3.6-35B-A3B`, 
 
 Original Qwen3.8 chat template (as shipped by `Qwen/Qwen3.8-27B` and its FP8 variant). Differs from `qwen3_6.jinja` by adding a `reasoning_effort` flag (`xhigh` — the default — `medium` or `low`) that prepends a reasoning-effort instruction to the system prompt, and by defaulting `preserve_thinking` to enabled. Tool calls use the same Hermes-style format, so it also reuses `qwen3_5_schema` for response parsing.
 
+### `smolvlm.jinja`
+
+Original SmolVLM chat template. Also matches SmolVLM2, which ships a byte-identical template. Does not support tool calling.
+
 ## Training templates
 
 Patched templates that fix training-specific issues. Swapped in at init when tools are enabled (GRPO) or when `assistant_only_loss=True` (SFT).
@@ -220,6 +252,12 @@ Split the assistant message into its own branch so the `{% generation %}` / `{% 
 Patched LFM2 template. Diff vs `lfm2.jinja`:
 
 Split the unified message output line into role-specific branches, so the `<|im_start|>assistant\n` prompt cue sits outside the generation block (it is not generated by the model), while the assistant's content and `<|im_end|>\n` (which the model must learn to produce and to stop on) sit inside. Wrap the assistant content with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `lfm2_v2_training.jinja`
+
+Patched LFM2 template, later revision. Diff vs `lfm2_v2.jinja`:
+
+Wrap the assistant output with `{% generation %}` / `{% endgeneration %}`, in both the branch that renders `tool_calls` and the plain-content branch, so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The `<|im_start|>assistant\n` prompt cue stays outside the generation block, while the content, the tool calls and `<|im_end|>\n` sit inside.
 
 ### `llama3_training.jinja`
 
@@ -338,3 +376,9 @@ Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<th
 ### `qwen3_8_training.jinja`
 
 Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss.
+
+### `smolvlm_training.jinja`
+
+Patched SmolVLM template (also used for SmolVLM2, which ships a byte-identical template). Diff vs `smolvlm.jinja`:
+
+Split the assistant message into its own branch so the `{% generation %}` / `{% endgeneration %}` markers wrap the assistant content. This enables `return_assistant_tokens_mask=True` to produce correct masks for SFT assistant-only loss.

@@ -27,9 +27,15 @@ from trl.chat_template_utils import (
     _CHAT_TEMPLATES_DIR,
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    gemma4_v2_chat_template,
+    gemma4_v3_chat_template,
+    gemma4_v4_chat_template,
+    gemma4_v5_chat_template,
     get_training_chat_template,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
+    lfm2_2_5_v2_chat_template,
+    lfm2_v2_chat_template,
     parse_response,
     supports_tool_calling,
 )
@@ -208,6 +214,38 @@ class TestAddResponseSchema:
             tokenizer.parse_response(response)
 
     @pytest.mark.parametrize(
+        "tokenizer_name, chat_template",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_v2_chat_template,
+                id="lfm2-2.5-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+        ],
+    )
+    def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
+        # Same tiny model, with the chat template of a later Hub revision
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        )
+        text = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True)
+        response = text.input_ids[len(prefix.input_ids) :]
+        parsed = parse_response(tokenizer, response, prefix=prefix.input_ids)
+        assert parsed == messages[-1]
+
+    @pytest.mark.parametrize(
         "processor_name",
         [
             pytest.param(
@@ -257,6 +295,47 @@ class TestAddResponseSchema:
             processor.tokenizer.parse_response(response, prefix=prefix)
         else:
             processor.tokenizer.parse_response(response)
+
+    @pytest.mark.parametrize(
+        "processor_name, chat_template",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v2_chat_template, id="gemma4-v2"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v3_chat_template, id="gemma4-v3"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v4_chat_template, id="gemma4-v4"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration", gemma4_v5_chat_template, id="gemma4-v5"
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_vision
+    def test_add_response_schema_vlm_template_revision(self, processor_name, chat_template):
+        # Same tiny model, with the chat template of another Hub revision
+        processor = AutoProcessor.from_pretrained(processor_name)
+        processor.chat_template = chat_template
+        processor = add_response_schema(processor)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        messages = [
+            {"role": "user", "content": "What is 3*4?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        expected = messages[-1]
+        messages = prepare_multimodal_messages(messages)
+        prefix = processor.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids[0]
+        text = processor.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids[0]
+        parsed = parse_response(processor.tokenizer, text[len(prefix) :], prefix=prefix)
+        assert parsed == expected
 
 
 class TestSupportsToolCalling:
@@ -390,6 +469,7 @@ class TestSupportsToolCalling:
                     reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
                 ),
             ),
+            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
         ],
     )
     def test_supports_tool_calling(self, model_id):
@@ -435,10 +515,6 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3", id="phi3"),
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
-            # LFM2 renders `tools` into the system prompt and wraps tool message content in
-            # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
-            # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
-            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
             # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
             # turn with `<｜tool▁calls▁end｜>`.
@@ -691,6 +767,7 @@ class TestIsChatTemplateStopTokenTrained:
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
         ),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
+        pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
@@ -803,16 +880,21 @@ class TestIsChatTemplateStopTokenTrained:
                 ),
             ],
         ),
+        pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
     ],
 )
 class TestGetTrainingChatTemplate:
     def _load(self, model_name):
+        # A (model, chat template) pair stands for the same tiny model with the chat template of another Hub revision
+        model_name, chat_template = model_name if isinstance(model_name, tuple) else (model_name, None)
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
         elif "ForConditionalGeneration" in model_name or "ForBlockDiffusion" in model_name:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
+        if chat_template is not None:
+            processing_class.chat_template = chat_template
 
         return processing_class
 
