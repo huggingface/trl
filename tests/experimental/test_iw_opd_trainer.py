@@ -811,6 +811,45 @@ class TestIWOPDTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_vllm_sync_on_resume_mid_cycle(self):
+        # Regression test: `VLLMGeneration` only loads weights from disk once, at construction time, so
+        # resuming from a checkpoint leaves it holding the initial model weights until the next `sync_weights()`
+        # call. `_last_vllm_sync_step` must be initialized the same way as `GOLDTrainer`'s (`-vllm_sync_frequency`,
+        # checked with `>=`) so that first call happens unconditionally, instead of only when the resumed
+        # `global_step` happens to be a multiple of `vllm_sync_frequency`.
+        trainer = self._make_local_trainer(distillation_objective="jsd", vllm_sync_frequency=5)
+        batch = self._make_batch(trainer)
+
+        class RecordingVLLMGeneration:
+            def __init__(self, eos_token_id):
+                self.sync_calls = 0
+                self.eos_token_id = eos_token_id
+
+            def sync_weights(self):
+                self.sync_calls += 1
+
+            def generate(self, prompts, images, num_generations):
+                assert images is None
+                assert num_generations == 1
+                return None, [[self.eos_token_id] for _ in prompts], None, None
+
+        trainer.use_vllm = True
+        trainer.num_generations = 1
+        trainer.vllm_sync_frequency = trainer.args.vllm_sync_frequency
+        trainer.vllm_generation = RecordingVLLMGeneration(trainer.processing_class.eos_token_id)
+        trainer._buffered_inputs = [None]
+        trainer._buffered_text_logs = [None]
+        trainer.log_completions = False
+
+        # Simulate resuming training at a step that is not a multiple of `vllm_sync_frequency`.
+        trainer.state.global_step = 37
+        trainer._last_vllm_sync_step = -trainer.vllm_sync_frequency
+
+        trainer._generate_student_completions([batch], [0])
+
+        assert trainer.vllm_generation.sync_calls == 1
+        assert trainer._last_vllm_sync_step == 37
+
 
 class TestIWOPDTrainerServerPath(TrlTestCase):
     @classmethod
