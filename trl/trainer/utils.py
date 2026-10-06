@@ -1559,13 +1559,16 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
         else:
             hidden_states = outputs.last_hidden_state
             labels = shift_labels
+        lm_head = self.get_output_embeddings()
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        hidden_states = hidden_states.to(lm_head.weight.device)
+        labels = labels.to(lm_head.weight.device)
         mask = labels != -100
         autocast_ctx = nullcontext()
         if cast_lm_head_to_fp32:
             hidden_states = hidden_states.float()
             autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
 
-        lm_head = self.get_output_embeddings()
         weight, bias = lm_head.weight, lm_head.bias
         # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
         # head once before splitting tokens so every projection uses compatible tensor types.
