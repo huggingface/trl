@@ -1130,12 +1130,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         completion_mask = completion_mask[:, 1:]
         old_log_probs = old_log_probs[:, 1:]
         advantages = advantages[:, 1:]
-        # A NaN generator logprob (a token vLLM could not score, surfaced as JSON null and mapped back to NaN in
-        # the rollout worker) would otherwise poison the ratio and turn the whole loss NaN, which the logger's
-        # nan/inf filter then hides. Fall back to the current policy's logprob, the same convention GRPOTrainer
-        # uses when old logprobs are unavailable: the ratio becomes exactly 1 with the gradient intact, so the
-        # token trains as plain policy gradient and the KL and clip metrics stay finite.
-        # The token is treated as on-policy even when the rollout is stale; this bias is deliberate.
+        # A NaN generator logprob (a step the rollout worker received as JSON null) would otherwise poison the
+        # ratio and turn the whole loss NaN, which the logger's nan/inf filter then hides. Fall back to the current
+        # policy's logprob, the same convention GRPOTrainer uses when old logprobs are unavailable: the ratio
+        # becomes exactly 1 with the gradient intact, so the token trains as plain policy gradient and the KL and
+        # clip metrics stay finite. The token is treated as on-policy even when the rollout is stale; this bias is
+        # deliberate.
         old_log_probs = torch.where(torch.isnan(old_log_probs), log_probs.detach(), old_log_probs)
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
