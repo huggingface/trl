@@ -269,6 +269,13 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
     logit_scale = 1.0 if logit_scale is None else logit_scale
     original_forward = model.forward
     lm_head = model.get_output_embeddings()
@@ -819,7 +826,8 @@ def dft_loss(outputs, labels, num_items_in_batch=None):
     per_token_loss = -logprobs.exp().detach() * logprobs
     if num_items_in_batch is None:
         num_items_in_batch = loss_mask.sum()
-    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
+    loss = (per_token_loss * loss_mask).sum() / torch.as_tensor(num_items_in_batch).clamp(min=1)
     return loss
 
 
@@ -1192,9 +1200,11 @@ class SFTTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
@@ -1438,6 +1448,16 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
 
         # Context parallelism can only express full causal attention: the per-layer attention mask is dropped
         # and replaced by `is_causal=True`. Packed sequences rely on a block-diagonal mask to keep documents
