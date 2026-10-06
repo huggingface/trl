@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl>=1.13.0",  # num_tokens counted once under tensor parallelism
-#     "transformers @ git+https://github.com/huggingface/transformers.git@ep-trainer",
+#     "transformers @ git+https://github.com/huggingface/transformers.git@main",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
 #     "trackio",
@@ -48,7 +48,7 @@ MODEL = "REDACTED"
 if Version(transformers.__version__) < Version("5.19.0.dev0"):
     raise RuntimeError(
         f"This example needs expert parallelism, which is not in a released transformers yet. Install "
-        f"transformers from the ep-trainer branch (#48873). Got {transformers.__version__}."
+        f"transformers from main (expert parallelism merged in #48873). Got {transformers.__version__}."
     )
 
 # Read the dataset before loading the model: 64 GPUs holding a loaded model is the most expensive place to wait
