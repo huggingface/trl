@@ -14,6 +14,9 @@ FLAVOR=${FLAVOR:-h200}
 VLLM_TP=${VLLM_TP:-1}
 # `bfloat16` is wrong for a checkpoint that ships quantized; `auto` takes what the config says.
 VLLM_DTYPE=${VLLM_DTYPE:-bfloat16}
+# A checkpoint can ship custom modelling code even when vLLM registers its architecture, and vLLM
+# refuses to load it without this rather than falling back.
+TRUST_REMOTE_CODE=${TRUST_REMOTE_CODE:-}
 DOMAIN=${DOMAIN:-code}
 MODEL=${MODEL:-Qwen/Qwen3-8B}
 TOOL_PARSER=${TOOL_PARSER:-hermes}
@@ -46,7 +49,7 @@ uvx hf jobs run --name "$RUN_NAME" \
     --flavor "$FLAVOR" --timeout "$TIMEOUT" --detach --secrets HF_TOKEN \
     -v "$EXAMPLE_DIR:/work" -v "hf://buckets/${OUT_BUCKET}:/out:rw" \
     -e "TRL_SHA=$TRL_SHA" -e "MIMOAGENT_SHA=$MIMOAGENT_SHA" -e "OPENENV_SHA=$OPENENV_SHA" \
-    -e "VLLM_TP=$VLLM_TP" -e "VLLM_DTYPE=$VLLM_DTYPE" -e "DOMAIN=$DOMAIN" -e "MODEL=$MODEL" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "HF_OVERRIDES=$HF_OVERRIDES" \
+    -e "VLLM_TP=$VLLM_TP" -e "VLLM_DTYPE=$VLLM_DTYPE" -e "TRUST_REMOTE_CODE=$TRUST_REMOTE_CODE" -e "DOMAIN=$DOMAIN" -e "MODEL=$MODEL" -e "MAX_MODEL_LEN=$MAX_MODEL_LEN" -e "HF_OVERRIDES=$HF_OVERRIDES" \
     -e "TOOL_PARSER=$TOOL_PARSER" -e "REASONING_PARSER=$REASONING_PARSER" \
     -e "N_TASKS=$N_TASKS" -e "SAMPLES=$SAMPLES" -e "MAX_INFLIGHT=$MAX_INFLIGHT" -e "PROBE_ARGS=$PROBE_ARGS" \
     -- "vllm/vllm-openai:${VLLM_TAG}" bash -c '
@@ -67,6 +70,7 @@ PYCHECK
 
 OVERRIDE_ARGS=()
 if [ -n "$HF_OVERRIDES" ]; then OVERRIDE_ARGS=(--hf-overrides "$HF_OVERRIDES"); fi
+if [ -n "$TRUST_REMOTE_CODE" ]; then OVERRIDE_ARGS+=(--trust-remote-code); fi
 vllm serve "$MODEL" --port 8000 --dtype "$VLLM_DTYPE" --tensor-parallel-size "$VLLM_TP" \
     --max-model-len "$MAX_MODEL_LEN" "${OVERRIDE_ARGS[@]}" \
     --gpu-memory-utilization 0.85 --generation-config vllm \
