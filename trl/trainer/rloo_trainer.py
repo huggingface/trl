@@ -627,6 +627,16 @@ class RLOOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:

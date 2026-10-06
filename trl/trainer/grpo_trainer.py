@@ -949,6 +949,16 @@ class GRPOTrainer(_BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
@@ -2979,7 +2989,7 @@ class GRPOTrainer(_BaseTrainer):
         # Compute the loss
         advantages = inputs["advantages"]
         # In the base GRPO implementation, advantages are expected to have shape (B,). To support subclasses that
-        # provide advantages with shape (B, T) (e.g., MiniLLM), we *conditionally* unsqueeze the tensor.
+        # provide advantages with shape (B, T), we *conditionally* unsqueeze the tensor.
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
         # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
