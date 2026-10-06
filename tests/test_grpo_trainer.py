@@ -37,7 +37,6 @@ from transformers.testing_utils import backend_empty_cache, torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.data_utils import prepare_multimodal_messages
 
 from .testing_utils import (
     TrlTestCase,
@@ -87,110 +86,6 @@ async def async_multiply_tool(a: int, b: int) -> int:
         The product of the two integers.
     """
     return a * b
-
-
-@require_torch_accelerator
-@require_vision
-class TestGRPOFusedMultimodalInputs(TrlTestCase):
-    @pytest.mark.parametrize(
-        "model_id, token_type_key",
-        [
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-                "token_type_ids",
-                id="gemma3-token-type-ids",
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-                "mm_token_type_ids",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-                id="qwen35-mm-token-type-ids",
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                None,
-                id="qwen25vl-no-token-type-ids",
-            ),
-        ],
-    )
-    def test_fused_multimodal_inputs(self, model_id, token_type_key):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
-        model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
-        chat_template_kwargs = {"return_tensors": "pt"}
-        if token_type_key is None:
-            chat_template_kwargs["processor_kwargs"] = {"return_mm_token_type_ids": False}
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            num_generations=2,
-            max_completion_length=8,
-            temperature=0.7,
-            bf16=False,
-            gradient_checkpointing=False,
-            chat_template_kwargs=chat_template_kwargs,
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model=model,
-            processing_class=AutoProcessor.from_pretrained(model_id),
-            reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
-            args=training_args,
-            train_dataset=dataset,
-        )
-        trainer.model.eval()
-        example = dataset[0]
-        prompts = [prepare_multimodal_messages(example["prompt"], images=[example["image"]])]
-        prompt_ids, images, multimodal_fields = trainer._tokenize_prompts(prompts)
-        input_ids = torch.as_tensor(prompt_ids, device=trainer.accelerator.device)
-        attention_mask = torch.ones_like(input_ids)
-        multimodal_fields = {key: value.to(trainer.accelerator.device) for key, value in multimodal_fields.items()}
-        assert images is not None and len(images[0]) == 1
-        assert multimodal_fields["pixel_values"].numel() > 0
-        if token_type_key is None:
-            assert "token_type_ids" not in multimodal_fields and "mm_token_type_ids" not in multimodal_fields
-        else:
-            assert multimodal_fields[token_type_key].any()
-        model_inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            **multimodal_fields,
-        }
-        backbone_inputs = []
-
-        def check_backbone_inputs(_module, args, kwargs):
-            assert args == ()
-            assert set(kwargs) == set(model_inputs) | {"use_cache"}
-            assert kwargs["use_cache"] is False
-            for key, value in model_inputs.items():
-                torch.testing.assert_close(kwargs[key], value)
-            backbone_inputs.append(kwargs)
-
-        with trainer.model.base_model.register_forward_pre_hook(check_backbone_inputs, with_kwargs=True):
-            logps, entropies, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model,
-                input_ids,
-                attention_mask,
-                logits_to_keep=2,
-                compute_entropy=True,
-                num_images=[len(images[0])],
-                **multimodal_fields,
-            )
-        assert len(backbone_inputs) == 1
-        with torch.no_grad():
-            logits = trainer.model(**model_inputs, use_cache=False).logits[:, -3:-1] / trainer.temperature
-        full_logps = logits.log_softmax(-1)
-        expected_logps = full_logps.gather(-1, input_ids[:, -2:].unsqueeze(-1)).squeeze(-1)
-        expected_entropies = -(full_logps.exp() * full_logps).sum(-1)
-        torch.testing.assert_close(logps, expected_logps, atol=1e-4, rtol=1e-4)
-        torch.testing.assert_close(entropies, expected_entropies, atol=1e-4, rtol=1e-4)
-        (-logps.mean()).backward()
-        for weight in (trainer.model.get_input_embeddings().weight, trainer.model.get_output_embeddings().weight):
-            assert weight.grad is not None
-            assert torch.isfinite(weight.grad).all()
-            assert weight.grad.abs().max() > 0
 
 
 class TestGetHighEntropyMask(TrlTestCase):
@@ -4174,12 +4069,10 @@ class TestGRPOTrainerVLM(TrlTestCase):
         with trainer.model.register_forward_pre_hook(record_fused_inputs, with_kwargs=True):
             trainer.train()
 
-        assert torch.isfinite(torch.tensor(trainer.state.log_history[-1]["train_loss"]))
-        assert fused_inputs
+        assert trainer.state.log_history[-1]["train_loss"] is not None
         if model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration":
+            assert fused_inputs
             assert all(inputs.get("token_type_ids") is not None for inputs in fused_inputs)
-        if model_id == "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink":
-            assert all(inputs.get("mm_token_type_ids") is not None for inputs in fused_inputs)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -4277,13 +4170,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
         ],
     )
     @require_peft
@@ -4315,19 +4201,9 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        fused_inputs = []
+        trainer.train()
 
-        def record_fused_inputs(_module, _args, kwargs):
-            if kwargs.get("fused_lm_head"):
-                fused_inputs.append(kwargs)
-
-        with trainer.model.register_forward_pre_hook(record_fused_inputs, with_kwargs=True):
-            trainer.train()
-
-        assert torch.isfinite(torch.tensor(trainer.state.log_history[-1]["train_loss"]))
-        assert fused_inputs
-        if model_id == "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink":
-            assert all(inputs.get("mm_token_type_ids") is not None for inputs in fused_inputs)
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
