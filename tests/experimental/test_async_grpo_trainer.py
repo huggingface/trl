@@ -63,7 +63,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
-from trl.experimental.async_grpo.training_client import ForwardBackwardOutput, GRPOLoss, LocalTrainingClient
+from trl.experimental.async_grpo.training_client import ForwardBackwardOutput, GRPOLoss
 from trl.trainer.base_trainer import _BaseTrainer
 from trl.trainer.utils import add_fused_lm_head, get_callable_name
 
@@ -169,7 +169,7 @@ class _FixedLogProbsTrainingClient:
     def __init__(self, log_probs):
         self.log_probs = log_probs
 
-    def forward_backward(self, model, input_ids, position_ids, completion_mask, loss, aux_loss_coef=0.0):
+    def forward_backward(self, input_ids, position_ids, completion_mask, loss):
         log_probs = self.log_probs.to(input_ids.device).requires_grad_(True)
         return ForwardBackwardOutput(
             loss=loss(log_probs), log_probs=log_probs.detach(), entropy=torch.zeros_like(log_probs)
@@ -340,43 +340,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             weight_transfer=_StubWeightTransfer(),
         )
-
-    def test_compute_loss_uses_training_client(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        trainer = AsyncGRPOTrainer(
-            model=model_id,
-            reward_funcs=dummy_reward_func,
-            args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
-            train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
-            training_client=_FixedLogProbsTrainingClient(torch.tensor([[0.0, -1.0, 0.0, 1.0, 0.0]])),
-        )
-        # Two packed completions: tokens 0-2 and 3-5. Shifted to target tokens, the completion mask keeps one token of
-        # the first and two of the second; each completion has one clipped token.
-        inputs = {
-            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6]]),
-            "attention_mask": torch.ones(1, 6, dtype=torch.long),
-            "completion_mask": torch.tensor([[0, 0, 1, 0, 1, 1]]),
-            "old_log_probs": torch.zeros(1, 6),
-            "position_ids": torch.tensor([[0, 1, 2, 0, 1, 2]]),
-            "advantages": torch.tensor([[0.0, 0.0, -1.0, 0.0, 1.0, 1.0]]),
-            "global_n_tokens": torch.tensor([3]),
-            "global_n_forward_tokens": torch.tensor([6]),
-            "mean_seq_len": torch.tensor([3.0]),
-        }
-        inputs = {key: value.to(trainer.accelerator.device) for key, value in inputs.items()}
-        trainer.current_gradient_accumulation_steps = 1  # set by `Trainer`'s training loop
-
-        loss = trainer.compute_loss(trainer.model, inputs)
-
-        assert loss.ndim == 0 and loss.requires_grad
-        metrics = trainer._metrics["train"]
-        assert metrics["clip_ratio/low_mean"] == [pytest.approx(1 / 3)]
-        assert metrics["clip_ratio/high_mean"] == [pytest.approx(1 / 3)]
-        assert metrics["clip_ratio/low_min"] == [0.0]
-        assert metrics["clip_ratio/high_max"] == [0.5]
 
     def test_train(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
@@ -2074,7 +2037,7 @@ class _RemoteStyleTrainingClient:
             fused_lm_head=True,
         )
 
-    def forward_backward(self, model, input_ids, position_ids, completion_mask, loss, aux_loss_coef=0.0):
+    def forward_backward(self, input_ids, position_ids, completion_mask, loss):
         with torch.no_grad():
             outputs = self._score(input_ids, position_ids, completion_mask)
 
@@ -2138,19 +2101,15 @@ class TestTrainingClient(TrlTestCase):
     def _grads(self):
         return {n: p.grad.detach().clone() for n, p in self.model.named_parameters() if p.grad is not None}
 
-    def _client(self, client_type):
-        return LocalTrainingClient() if client_type == "local" else _RemoteStyleTrainingClient(self.model)
-
     def _inline_grads(self, loss_scale):
-        """Gradients from computing the loss on the live graph, i.e. the behavior before the client existed."""
+        """Gradients from computing the loss on the live graph, as the trainer does without a client."""
         self.model.zero_grad(set_to_none=True)
         (self.loss(self._model_outputs().log_probs) * loss_scale).backward()
         return self._grads()
 
-    def _client_grads(self, client, loss_scale):
+    def _client_grads(self, loss_scale):
         self.model.zero_grad(set_to_none=True)
-        outputs = client.forward_backward(
-            self.model,
+        outputs = _RemoteStyleTrainingClient(self.model).forward_backward(
             input_ids=self.input_ids,
             position_ids=self.position_ids,
             completion_mask=self.completion_mask,
@@ -2159,35 +2118,17 @@ class TestTrainingClient(TrlTestCase):
         (outputs.loss * loss_scale).backward()
         return self._grads()
 
-    @pytest.mark.parametrize("client_type", ["local", "remote"])
     @pytest.mark.parametrize("loss_scale", [1.0, pytest.param(0.25, id="accumulation-scaled")])
-    def test_gradients_match_inline_loss(self, client_type, loss_scale):
+    def test_gradients_match_inline_loss(self, loss_scale):
         expected = self._inline_grads(loss_scale)
-        actual = self._client_grads(self._client(client_type), loss_scale)
+        actual = self._client_grads(loss_scale)
 
         assert set(actual) == set(expected)
         for name in expected:
             torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
 
-    def test_loss_stays_attached_in_process(self):
-        outputs = LocalTrainingClient().forward_backward(
-            self.model,
-            input_ids=self.input_ids,
-            position_ids=self.position_ids,
-            completion_mask=self.completion_mask,
-            loss=self.loss,
-        )
-        # Attached rather than a leaf: the trainer's backward reaches the model without a second forward.
-        assert outputs.loss.requires_grad
-        assert not outputs.loss.is_leaf
-        assert not outputs.log_probs.requires_grad
-        assert not outputs.entropy.requires_grad
-        assert outputs.aux_loss is None
-
-    @pytest.mark.parametrize("client_type", ["local", "remote"])
-    def test_reported_outputs_match_the_model(self, client_type):
-        outputs = self._client(client_type).forward_backward(
-            self.model,
+    def test_reported_outputs_match_the_model(self):
+        outputs = _RemoteStyleTrainingClient(self.model).forward_backward(
             input_ids=self.input_ids,
             position_ids=self.position_ids,
             completion_mask=self.completion_mask,
@@ -2215,7 +2156,7 @@ class _InProcessRemoteTrainingClient:
         logits = self.model(input_ids=input_ids, position_ids=position_ids).logits[:, :-1]
         return torch.gather(logits.log_softmax(-1), 2, input_ids[:, 1:, None]).squeeze(-1)
 
-    def forward_backward(self, model, input_ids, position_ids, completion_mask, loss, aux_loss_coef=0.0):
+    def forward_backward(self, input_ids, position_ids, completion_mask, loss):
         self.model.to(input_ids.device)
         with torch.no_grad():
             log_probs = self._log_probs(input_ids, position_ids)
@@ -2312,7 +2253,37 @@ class TestRemoteTrainingClient(TrlTestCase):
         trainer.save_model(self.tmp_dir)
         assert client.saved == [self.tmp_dir]
         assert os.path.isfile(os.path.join(self.tmp_dir, "model.safetensors"))
+        assert os.path.isfile(os.path.join(self.tmp_dir, "config.json"))
         assert os.path.isfile(os.path.join(self.tmp_dir, "tokenizer_config.json"))
+
+    def test_compute_loss_uses_training_client(self):
+        trainer = self._trainer(
+            _FixedLogProbsTrainingClient(torch.tensor([[0.0, -1.0, 0.0, 1.0, 0.0]])), _StubWeightTransfer()
+        )
+        # Two packed completions: tokens 0-2 and 3-5. Shifted to target tokens, the completion mask keeps one token of
+        # the first and two of the second; each completion has one clipped token.
+        inputs = {
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6]]),
+            "attention_mask": torch.ones(1, 6, dtype=torch.long),
+            "completion_mask": torch.tensor([[0, 0, 1, 0, 1, 1]]),
+            "old_log_probs": torch.zeros(1, 6),
+            "position_ids": torch.tensor([[0, 1, 2, 0, 1, 2]]),
+            "advantages": torch.tensor([[0.0, 0.0, -1.0, 0.0, 1.0, 1.0]]),
+            "global_n_tokens": torch.tensor([3]),
+            "global_n_forward_tokens": torch.tensor([6]),
+            "mean_seq_len": torch.tensor([3.0]),
+        }
+        inputs = {key: value.to(trainer.accelerator.device) for key, value in inputs.items()}
+        trainer.current_gradient_accumulation_steps = 1  # set by `Trainer`'s training loop
+
+        loss = trainer.compute_loss(trainer.model, inputs)
+
+        assert loss.ndim == 0 and loss.requires_grad
+        metrics = trainer._metrics["train"]
+        assert metrics["clip_ratio/low_mean"] == [pytest.approx(1 / 3)]
+        assert metrics["clip_ratio/high_mean"] == [pytest.approx(1 / 3)]
+        assert metrics["clip_ratio/low_min"] == [0.0]
+        assert metrics["clip_ratio/high_max"] == [0.5]
 
     def test_resume_loads_through_client(self):
         trainer = self._trainer(

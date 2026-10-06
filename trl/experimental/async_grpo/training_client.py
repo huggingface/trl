@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training-compute backend for [`~experimental.async_grpo.AsyncGRPOTrainer`].
+"""Training backend for [`~experimental.async_grpo.AsyncGRPOTrainer`] that owns the model.
 
-The trainer keeps the RL algorithm (advantages, masks, the loss itself, the metrics) and delegates only the model
-compute. It hands its loss to the backend as a [`GRPOLoss`], which is both data and a function of the per-token log
-probs, so a backend can use it either way:
+The trainer keeps the RL algorithm (advantages, masks, the loss, the learning-rate schedule, the metrics) and hands its
+loss to the backend as a [`GRPOLoss`], which is both data and a function of the per-token log probs, so a backend can
+use it either way:
 
-* Call it. A backend that owns the model in the trainer's own process runs one forward, calls the loss on the log
-  probs, and returns a loss still connected to the graph. A backend that runs the model elsewhere evaluates the loss
-  locally on the log probs the remote side sent back, takes `d(loss)/d(log_probs)`, and ships that gradient over the
-  wire; the remote side back-propagates `sum(grad_log_probs * log_probs)`, a first-order surrogate whose gradient with
-  respect to every parameter equals the gradient of the real loss. Neither needs to know what GRPO is.
+* Call it. A backend that runs the model elsewhere evaluates the loss locally on the log probs the remote side sent
+  back, takes `d(loss)/d(log_probs)`, and ships that gradient over the wire; the remote side back-propagates
+  `sum(grad_log_probs * log_probs)`, a first-order surrogate whose gradient with respect to every parameter equals the
+  gradient of the real loss. The backend never needs to know what GRPO is.
 * Read it. A backend that computes the loss next to the model reads the advantages, old log probs, mask and clipping
   bounds from its fields and runs the same objective there, avoiding the extra round trip of the surrogate.
 
@@ -62,6 +61,10 @@ class GRPOLoss:
             gradients over ranks, every token in the batch carries the same weight.
         gradient_accumulation_steps (`int`):
             Micro-batches per optimizer step. The loss is divided by it, since HF auto-scaling is off for this trainer.
+        aux_loss_coef (`float`, *optional*, defaults to `0.0`):
+            Coefficient of the mixture-of-experts router load-balancing loss, which the model produces rather than the
+            log probs, so calling this loss does not include it. The backend adds `aux_loss_coef * aux_loss /
+            gradient_accumulation_steps` to what it back-propagates. `0.0` disables it.
     """
 
     old_log_probs: torch.Tensor
@@ -71,6 +74,7 @@ class GRPOLoss:
     epsilon_high: float
     num_tokens_per_rank: torch.Tensor
     gradient_accumulation_steps: int
+    aux_loss_coef: float = 0.0
 
     def __call__(self, log_probs: torch.Tensor) -> torch.Tensor:
         coef_1 = torch.exp(log_probs - self.old_log_probs)
@@ -91,9 +95,8 @@ class ForwardBackwardOutput:
 
     Args:
         loss (`torch.Tensor`):
-            The scalar the trainer passes to `accelerator.backward`. For an in-process backend this is still attached
-            to the model's graph. For an off-process backend it is a leaf carrying a hook, so back-propagating it
-            triggers the remote backward instead.
+            The scalar the trainer passes to `accelerator.backward`: a detached leaf carrying a hook, so
+            back-propagating it triggers the backend's backward.
         log_probs (`torch.Tensor`):
             Log probability of each target token, shape `(batch_size, sequence_length - 1)`. Detached, and provided for
             metrics.
@@ -102,7 +105,7 @@ class ForwardBackwardOutput:
             reported as a metric and never differentiated.
         aux_loss (`torch.Tensor`, *optional*):
             Mixture-of-experts router load-balancing loss, if the model produces one. Detached, and reported for
-            logging only: `aux_loss_coef * aux_loss` is already part of what the backend back-propagates.
+            logging only: the backend already back-propagates it, weighted as [`GRPOLoss`] describes.
     """
 
     loss: torch.Tensor
@@ -111,49 +114,8 @@ class ForwardBackwardOutput:
     aux_loss: torch.Tensor | None = None
 
 
-class LocalTrainingClient:
-    """Runs the trainer's own model in this process.
-
-    Used when no `training_client` is passed. The trainer then owns the optimizer and the checkpoints itself, so this
-    client only implements `forward_backward`: one forward pass, with the returned loss still attached to it, so the
-    trainer's backward reaches the model directly. Gradients are bit-identical to computing the loss inline.
-    """
-
-    def forward_backward(
-        self,
-        model: torch.nn.Module,
-        input_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        completion_mask: torch.Tensor,
-        loss: GRPOLoss,
-        aux_loss_coef: float = 0.0,
-    ) -> ForwardBackwardOutput:
-        # MoE models: request router logits so the forward returns the load-balancing loss
-        router_kwargs = {"output_router_logits": True} if aux_loss_coef else {}
-        outputs = model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            labels=input_ids.masked_fill(completion_mask == 0, -100),
-            fused_lm_head=True,
-            **router_kwargs,
-        )
-        log_probs = outputs.log_probs
-        total = loss(log_probs)
-
-        aux_loss = outputs.aux_loss if aux_loss_coef else None
-        if aux_loss is not None:
-            total = total + aux_loss_coef * aux_loss
-
-        return ForwardBackwardOutput(
-            loss=total,
-            log_probs=log_probs.detach(),
-            entropy=outputs.entropy.detach(),
-            aux_loss=aux_loss.detach() if aux_loss is not None else None,
-        )
-
-
 class _RemoteModel(nn.Module):
-    """Stands in for a model whose weights live with a custom training client.
+    """Stands in for a model whose weights live with the training client.
 
     Carries the model's config, which the trainer still reads (MoE and VLM detection, the pad token, the served model
     name), and a single placeholder parameter for `Trainer` and `accelerate` to place and wrap. It has no forward: the

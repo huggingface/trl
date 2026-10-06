@@ -48,12 +48,12 @@ The number of concurrent requests sent to the vLLM server is controlled by `max_
 
 In addition to making rollout generation and weight transfer pluggable, [`AsyncGRPOTrainer`] accepts a
 `training_client` implementing [`TrainingClientProtocol`]. The client owns the model: its weights, optimizer state, and
-checkpoints, typically on another set of GPUs or a remote service. The trainer then loads only the model's config and
-keeps the GRPO objective, advantages, masks, metrics, and the learning-rate schedule. Without a client, the trainer loads
-the model and runs it in its own process through [`LocalTrainingClient`].
+checkpoints, typically on another set of GPUs or a remote service. The trainer then loads only the model's config, runs
+as a single process, and keeps the GRPO objective, advantages, masks, metrics, and the learning-rate schedule. Without a
+client, the trainer loads the model and runs it in its own process.
 
 The trainer passes the packed token row, position IDs, completion mask, and its loss as a [`GRPOLoss`] to
-`training_client.forward_backward(...)`. The loss is both data and a function of the per-token log probs, so a backend
+`training_client.forward_backward(input_ids, position_ids, completion_mask, loss)`. The loss is both data and a function of the per-token log probs, so a backend
 can use it either way:
 
 - **Call it.** An off-process backend can score the tokens remotely, call the loss on the returned log probs in the
@@ -65,10 +65,10 @@ can use it either way:
 Transport, serialization, and remote lifecycle are the responsibility of the backend adapter.
 
 A mixture-of-experts router loss is the one term that surrogate does not carry, because it is produced by the model
-rather than from its log probs. It stays with the backend, which adds `aux_loss_coef * aux_loss` to the objective it
-back-propagates and reports the same total back. For an off-process backend that means adding it to the remote
-backward, alongside the log-prob surrogate: adding it only to the returned scalar would report the term while dropping
-the router's gradients.
+rather than from its log probs. It stays with the backend, which adds `loss.aux_loss_coef * aux_loss /
+loss.gradient_accumulation_steps` to what it back-propagates. For an off-process backend that means adding it to the
+remote backward, alongside the log-prob surrogate: adding it only to the returned scalar would report the term while
+dropping the router's gradients.
 
 The training client is independent of the other two extension points:
 
@@ -83,7 +83,7 @@ Every step that touches the weights goes through the client:
 | Trainer step | Client call |
 |---|---|
 | Forward and backward of each micro-batch | `forward_backward(...)` |
-| Optimizer step, at the scheduled learning rate | `optimizer_step(learning_rate)`, whose returned metrics (e.g. `grad_norm`) are logged |
+| Optimizer step, at the scheduled learning rate | `optimizer_step(learning_rate)`, whose returned metrics (e.g. `grad_norm`) are logged; gradient clipping is the backend's own setting |
 | `save_model` and checkpoints | `save(output_dir)` |
 | `train(resume_from_checkpoint=...)` | `load(checkpoint_dir)` |
 
@@ -93,8 +93,6 @@ rather than through `peft_config`.
 
 > [!IMPORTANT]
 > This is an experimental Python extension point for [`AsyncGRPOTrainer`], not a standardized HTTP training API.
-> Every Accelerate rank calls its own `training_client`, and `save` is called on the main process only. Backend
-> implementations must support that rank topology or reject unsupported configurations before training.
 
 TRL does not bundle vendor clients or add their dependencies. For example, the
 [Arctic Platform](https://github.com/Snowflake-AI-Research/Arctic-Platform) adapter is maintained in Arctic Platform.
@@ -410,6 +408,3 @@ MFU is reported only when peak compute capacity is known for the local training 
 
 [[autodoc]] trl.experimental.async_grpo.training_client.ForwardBackwardOutput
 
-## LocalTrainingClient
-
-[[autodoc]] trl.experimental.async_grpo.training_client.LocalTrainingClient

@@ -57,7 +57,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .training_client import ForwardBackwardOutput, GRPOLoss, LocalTrainingClient, _RemoteModel, _RemoteOptimizer
+from .training_client import ForwardBackwardOutput, GRPOLoss, _RemoteModel, _RemoteOptimizer
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -184,35 +184,29 @@ class WeightTransferProtocol(Protocol):
 
 
 class TrainingClientProtocol(Protocol):
-    """Interface a training-compute backend must implement to be passed as `training_client` to
+    """Interface a training backend must implement to be passed as `training_client` to
     [`experimental.async_grpo.AsyncGRPOTrainer`].
 
-    Without a client, the trainer loads the model and runs it in this process through [`LocalTrainingClient`]. A client
-    passed to the trainer owns the model instead (its weights, optimizer state, and checkpoints), somewhere else:
-    another process, another set of GPUs, or a remote service. The trainer then loads only the model's config, keeps
-    owning the loss and the learning-rate schedule, and calls the client for every step that touches the weights. Every
-    rank calls its own client.
+    The client owns the model (its weights, optimizer state, and checkpoints) somewhere other than the trainer's
+    process: another set of GPUs, or a remote service. The trainer then loads only the model's config, runs as a single
+    process, keeps owning the loss and the learning-rate schedule, and calls the client for every step that touches the
+    weights.
     """
 
     def forward_backward(
         self,
-        model: torch.nn.Module,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         completion_mask: torch.Tensor,
         loss: GRPOLoss,
-        aux_loss_coef: float = 0.0,
     ) -> ForwardBackwardOutput:
         """Run the forward pass, build the trainer's loss on it, and prepare the backward.
 
-        The backward itself is left to the trainer, which calls `accelerator.backward` on the returned loss. Keeping it
-        there is what preserves gradient accumulation, the grad scaler, and the `no_sync` context that DDP relies on.
-        An off-process backend returns a detached loss carrying a hook and does its remote backward from inside that
-        hook. Grad mode is off there, so anything the hook recomputes must re-enable it explicitly.
+        The backward itself is left to the trainer, which calls `accelerator.backward` on the returned loss, so
+        gradient accumulation behaves as usual. Return a detached loss carrying a hook and do the backward from inside
+        that hook. Grad mode is off there, so anything the hook recomputes must re-enable it explicitly.
 
         Args:
-            model (`torch.nn.Module`):
-                The trainer's prepared model. In-process backends run it; off-process backends ignore it.
             input_ids (`torch.Tensor`):
                 Token ids, shape `(batch_size, sequence_length)`.
             position_ids (`torch.Tensor`):
@@ -223,18 +217,15 @@ class TrainingClientProtocol(Protocol):
             loss ([`GRPOLoss`]):
                 The trainer's loss for this micro-batch. Call it on log probs of shape `(batch_size, sequence_length -
                 1)`, or read its fields to compute the same objective next to the model.
-            aux_loss_coef (`float`, *optional*, defaults to `0.0`):
-                Coefficient for the mixture-of-experts auxiliary loss, already scaled for gradient accumulation. The
-                backend adds `aux_loss_coef * aux_loss` to the objective it back-propagates and reports the same total
-                as `loss`. `0.0` disables it.
         """
         ...
 
     def optimizer_step(self, learning_rate: float) -> dict[str, float]:
-        """Clip the accumulated gradients, step the optimizer at `learning_rate`, and clear the gradients.
+        """Step the optimizer at `learning_rate` and clear the gradients.
 
         Called once per optimizer step, after every micro-batch's `forward_backward`. `learning_rate` is the trainer's
-        scheduled rate for this step. Returns metrics to log, e.g. `{"grad_norm": ...}`.
+        scheduled rate for this step. Gradient clipping is the backend's own setting. Returns metrics to log, e.g.
+        `{"grad_norm": ...}`.
         """
         ...
 
@@ -1090,9 +1081,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             implementation to disable trainer-side weight sync.
         training_client (`TrainingClientProtocol`, *optional*):
             Custom training backend implementing [`TrainingClientProtocol`], which owns the model: its weights,
-            optimizer state, and checkpoints. The trainer then loads only the model's config and requires a
-            `weight_transfer` that syncs the weights from the client. If `None`, the trainer loads the model and runs
-            it in this process.
+            optimizer state, and checkpoints. The trainer then loads only the model's config, runs as a single process,
+            and requires a `weight_transfer` that syncs the weights from the client. If `None`, the trainer loads the
+            model and runs it in this process.
     """
 
     _tag_names = ["trl", "async-grpo"]
@@ -1299,6 +1290,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
+        if self._remote_model and self.accelerator.num_processes > 1:
+            raise ValueError(
+                f"A `training_client` owns the model, so the trainer runs as a single process, but "
+                f"{self.accelerator.num_processes} were launched."
+            )
+
         # MFU measures the local device, which does no model compute when a training client owns the model
         self._peak_flops_per_device = None
         if not self._remote_model:
@@ -1371,9 +1368,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._step_samples = 0.0
         self._last_groups_trained = 0
         self.model_version = 0
-        # Unlike the rollout and weight-sync backends, this one sits in the forward/backward path, so every rank
-        # needs it.
-        self.training_client = training_client if training_client is not None else LocalTrainingClient()
+        self.training_client = training_client
         # Adapter-only vLLM sync is derived from a PEFT model plus a server started with `--enable-lora`, rather
         # than configured. Rank 0 probes and broadcasts the answer below.
         self._lora_sync = False
@@ -1583,27 +1578,35 @@ class AsyncGRPOTrainer(_BaseTrainer):
             epsilon_high=self.epsilon_high,
             num_tokens_per_rank=tokens_per_rank,
             gradient_accumulation_steps=self.current_gradient_accumulation_steps,
+            aux_loss_coef=self.router_aux_loss_coef if self.aux_loss_enabled else 0.0,
         )
 
         forward_start = time.time()
-        outputs = self.training_client.forward_backward(
-            model,
-            input_ids=input_ids,
-            position_ids=position_ids,
-            completion_mask=completion_mask,
-            loss=grpo_loss,
-            # The policy loss is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too.
-            # The client adds `aux_loss_coef * aux_loss` to what it back-propagates and reports the same total.
-            aux_loss_coef=self.router_aux_loss_coef / self.current_gradient_accumulation_steps
-            if self.aux_loss_enabled
-            else 0.0,
-        )
+        if self._remote_model:
+            outputs = self.training_client.forward_backward(
+                input_ids=input_ids, position_ids=position_ids, completion_mask=completion_mask, loss=grpo_loss
+            )
+            loss = outputs.loss
+        else:
+            # MoE models: request router logits so the forward returns the load-balancing loss
+            router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
+            outputs = model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                labels=input_ids.masked_fill(completion_mask == 0, -100),
+                fused_lm_head=True,
+                **router_kwargs,
+            )
+            loss = grpo_loss(outputs.log_probs)
+            # The policy loss is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+            if self.aux_loss_enabled:
+                loss = loss + grpo_loss.aux_loss_coef * outputs.aux_loss / grpo_loss.gradient_accumulation_steps
         self._last_forward_time_s = time.time() - forward_start
-        loss, log_probs, entropy = outputs.loss, outputs.log_probs, outputs.entropy
+        log_probs, entropy = outputs.log_probs, outputs.entropy
 
         with torch.no_grad():
-            # Recomputed from the detached log probs rather than threaded out of the loss, which keeps it a plain
-            # function of its input. Two elementwise ops on a tensor that is already resident.
+            # Recomputed from the log probs rather than threaded out of the loss, which keeps it a plain function of
+            # its input. Two elementwise ops on a tensor that is already resident.
             log_ratio = log_probs - shifted_old_log_probs
             coef_1 = torch.exp(log_ratio)
 
@@ -1672,7 +1675,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/high_max"].append(nanmax(gathered_high_max).item())
 
             if self.aux_loss_enabled:
-                gathered_aux = self.accelerator.reduce(outputs.aux_loss.to(torch.float32), reduction="sum")
+                gathered_aux = self.accelerator.reduce(outputs.aux_loss.detach().to(torch.float32), reduction="sum")
                 self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
         # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
@@ -1956,6 +1959,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # The training client holds the weights; the trainer only adds what it owns
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
+        self.model.config.save_pretrained(output_dir)
         self.training_client.save(output_dir)
         self.processing_class.save_pretrained(output_dir)
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
