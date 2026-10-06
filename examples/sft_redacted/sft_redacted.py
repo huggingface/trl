@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl>=1.13.0",  # num_tokens counted once under tensor parallelism
+#     "trl>=1.14.0",  # adds the MoE aux loss only when the config declares a coefficient
 #     "transformers @ git+https://github.com/huggingface/transformers.git@main",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
