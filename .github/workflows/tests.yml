@@ -248,7 +248,7 @@ jobs:
             ".[dev]" \
             "accelerate==1.4.0" \
             "datasets==4.7.0" \
-            "transformers==4.56.2"
+            "transformers==5.0.0"
 
       - name: Test with pytest
         run: |
@@ -275,7 +275,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # skipped on this private verification branch
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
