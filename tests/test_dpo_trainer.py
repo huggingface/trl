@@ -1143,6 +1143,7 @@ class TestDPOTrainer(TrlTestCase):
         # forward must enter through that wrapper even though the loss itself operates on the unwrapped model.
         assert redirected
 
+    @require_liger_kernel
     @require_peft
     def test_train_with_liger_kernel_and_peft(self):
         # A LoRA adapter that does not target lm_head leaves the head as a plain Linear, so Liger reads the real
