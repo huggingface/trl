@@ -56,7 +56,7 @@ from ...trainer.utils import (
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .packing import PackingProtocol, SequencePacking, SequenceRow, TrainingRow, TreePacking, TreeRow
-from .tree import register_tree_attention
+from .tree import TREE_ATTENTION, register_tree_attention
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -1141,6 +1141,23 @@ class AsyncGRPOTrainer(_BaseTrainer):
             attn_implementation=self.packing.attn_implementation,
             **model_init_kwargs,
         )
+
+        # Tree packing shares a prefix between rows and tells attention who may see what through a block mask. A
+        # layer that is not attention never reads that mask: a recurrent or convolutional layer scans the row in
+        # order, and a row is a prefix forest flattened depth-first, so state would run from the end of one branch
+        # into the start of its sibling. Transformers cannot catch this -- `_supports_flex_attn` answers whether
+        # attention can be swapped, and a name registered through `AttentionInterface` skips that check anyway --
+        # so the loss would be wrong rather than refused.
+        layer_types = getattr(model.config.get_text_config(), "layer_types", None)
+        if self.packing.attn_implementation == TREE_ATTENTION and layer_types is not None:
+            other = sorted({t for t in layer_types if t != "full_attention"})
+            if other:
+                raise ValueError(
+                    f"`packing='tree'` needs every layer to be attention, but {model.config.model_type} has "
+                    f"{len(layer_types) - sum(t == 'full_attention' for t in layer_types)} of {len(layer_types)} "
+                    f"layers of type {other}. Those layers ignore the tree block mask and would read across the "
+                    f"forest's branches. Use `packing='sequence'`."
+                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
