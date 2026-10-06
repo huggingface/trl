@@ -1862,6 +1862,28 @@ Expected dataset columns:
 
 For more details, see the [SSD Trainer documentation](ssd_trainer).
 
+## Recurrent kernels
+
+Papers relating to TRL's tree-packed recurrent kernels.
+
+### Gated Delta Networks: Improving Mamba2 with Delta Rule
+
+**📜 Paper**: https://huggingface.co/papers/2412.06464
+
+Gated DeltaNet combines state decay with delta-rule memory updates. TRL's experimental tree executor vendors FLA's
+optimized Triton chunk kernels and adapts their forward and reverse state scans. Each segment starts from its parent's
+final state; the reverse scan sums gradients from all children. The tree execution extension is not proposed in this
+paper, and the kernel does not require FLA at runtime.
+
+```python
+from trl.kernels.tree_gated_delta_rule import TreeGDNPlan, tree_chunk_gated_delta_rule
+
+# Illustrative tree topology, not hyperparameters from the paper:
+# a 4096-token prefix shared by two 1024-token continuations.
+plan = TreeGDNPlan.build((0, 4096, 5120, 6144), (-1, 0, 0), device="cuda")
+output = tree_chunk_gated_delta_rule(q, k, v, g, beta, plan)
+```
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models

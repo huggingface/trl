@@ -51,6 +51,10 @@ class TrainingRow:
             `tree_leave` they are the whole attention mask.
         tree_leave (`torch.Tensor`, *optional*):
             DFS exit clock of each forwarded token, shape `(N,)`.
+        tree_segment_lengths (`torch.Tensor`, *optional*):
+            Length of each linear tree segment, shape `(S,)`.
+        tree_segment_parents (`torch.Tensor`, *optional*):
+            Parent segment indices, `-1` for roots, shape `(S,)`.
     """
 
     input_ids: torch.Tensor
@@ -62,6 +66,8 @@ class TrainingRow:
     segment_id: torch.Tensor
     tree_enter: torch.Tensor | None = None
     tree_leave: torch.Tensor | None = None
+    tree_segment_lengths: torch.Tensor | None = None
+    tree_segment_parents: torch.Tensor | None = None
 
 
 class PackingProtocol(Protocol):
@@ -251,6 +257,9 @@ class TreePacking:
 
     attn_implementation = TREE_ATTENTION
 
+    def __init__(self, gdn_conv_kernel_size: int | None = None):
+        self.gdn_conv_kernel_size = gdn_conv_kernel_size
+
     def atoms(self, samples: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         """One atom per `group_id`: its samples have to stay together, or they share nothing."""
         groups: dict[Any, list[dict[str, Any]]] = {}
@@ -279,7 +288,23 @@ class TreePacking:
 
     def forward_kwargs(self, inputs: dict[str, torch.Tensor], tokens: torch.Tensor) -> dict[str, Any]:
         enter, leave = inputs["tree_enter"][tokens], inputs["tree_leave"][tokens]
-        return {"tree_block_mask": build_tree_block_mask(enter, leave)}
+        kwargs = {"tree_block_mask": build_tree_block_mask(enter, leave)}
+        if self.gdn_conv_kernel_size is not None:
+            from ...kernels.tree_gated_delta_rule import TreeGDNPlan
+
+            offsets, parents = [0], []
+            for row_lengths, row_parents in zip(
+                inputs["tree_segment_lengths"].tolist(), inputs["tree_segment_parents"].tolist(), strict=True
+            ):
+                base = len(parents)
+                for length, parent in zip(row_lengths, row_parents, strict=True):
+                    if length == 0:  # Collator padding, not a recurrent segment.
+                        break
+                    offsets.append(offsets[-1] + length)
+                    parents.append(-1 if parent == -1 else base + parent)
+            kwargs["tree_gdn_plan"] = TreeGDNPlan.build(offsets, parents, enter.device, self.gdn_conv_kernel_size)
+            kwargs["use_cache"] = False
+        return kwargs
 
     def pack(self, samples: list[dict[str, Any]]) -> TrainingRow:
         forest = PrefixForest()
@@ -298,5 +323,7 @@ class TreePacking:
             position_ids=layout.position_ids,
             tree_enter=torch.tensor(enter, dtype=torch.int32),
             tree_leave=torch.tensor(leave, dtype=torch.int32),
+            tree_segment_lengths=torch.tensor(layout.offsets[1:]) - torch.tensor(layout.offsets[:-1]),
+            tree_segment_parents=torch.tensor(layout.parents),
             **loss_terms,
         )

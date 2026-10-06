@@ -1,0 +1,20 @@
+{
+  "before": "a1ae2ef4976df67234ca401daae0c4b947ea260f",
+  "world_size": 1,
+  "rank": 0,
+  "checkpointing": true,
+  "steps": [
+    {
+      "step": 0,
+      "loss": 8.490745544433594,
+      "exact_gradients": true,
+      "exact_weights": true
+    },
+    {
+      "step": 1,
+      "loss": 6.870057106018066,
+      "exact_gradients": true,
+      "exact_weights": true
+    }
+  ]
+}
