@@ -17,7 +17,6 @@ import base64
 import copy
 import logging
 import math
-import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -27,10 +26,8 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 import torch
-from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers.utils import get_json_schema
-from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_available
 
@@ -38,6 +35,8 @@ from ..import_utils import is_requests_available, is_vllm_available
 if is_requests_available():
     import requests
     from requests import ConnectionError
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
 
 
 if is_vllm_available():
@@ -244,7 +243,7 @@ class VLLMClient:
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
-            self.host = socket.gethostbyname(parsed_url.hostname)
+            self.host = parsed_url.hostname
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
