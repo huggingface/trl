@@ -37,6 +37,23 @@ class InvalidDataclass:
 
 
 class TestTrlParser(TrlTestCase):
+    @pytest.mark.parametrize("use_equals", [False, True])
+    def test_config_argument_spellings(self, tmp_path, use_equals):
+        config_path = tmp_path / "training run=1.yaml"
+        config_path.write_text("arg1: 23\narg2: from_config\nlauncher_setting: yaml\n", encoding="utf-8")
+        config_args = [f"--config={config_path}"] if use_equals else ["--config", str(config_path)]
+        parser = TrlParser(dataclass_types=[MyDataclass])
+
+        config, config_remaining, cli_remaining = parser.parse_args_and_config(
+            config_args + ["--arg2", "from_cli", "--launcher_flag=cli"],
+            return_remaining_strings=True,
+            separate_remaining_strings=True,
+        )
+
+        assert config == MyDataclass(arg1=23, arg2="from_cli")
+        assert config_remaining == ["--launcher_setting", "yaml"]
+        assert cli_remaining == ["--launcher_flag=cli"]
+
     @pytest.mark.parametrize(
         ("config_cls", "field_name", "value", "expected"),
         [

@@ -311,13 +311,17 @@ class TrlParser(HfArgumentParser):
         Parse command-line args and config file into instances of the specified dataclass types.
 
         This method wraps [`transformers.HfArgumentParser.parse_args_into_dataclasses`] and also parses the config file
-        specified with the `--config` flag. The config file (in YAML format) provides argument values that replace the
-        default values in the dataclasses. Command line arguments can override values set by the config file. The
-        method also sets any environment variables specified in the `env` field of the config file.
+        specified with `--config path` or `--config=path`. The config file (in YAML format) provides values that
+        replace the default values in the dataclasses. Command line arguments can override values set by the config
+        file. The method also sets any environment variables specified in the `env` field of the config file.
         """
         import yaml
 
         args = list(args) if args is not None else sys.argv[1:]
+        for index, arg in enumerate(args):
+            if arg.startswith("--config="):
+                args[index : index + 1] = arg.split("=", 1)
+                break
         if "--config" in args:
             # Get the config file path from
             config_index = args.index("--config")
