@@ -18,8 +18,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import requests
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from transformers.testing_utils import torch_device
+from transformers.testing_utils import backend_device_count, torch_device
 
 from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
@@ -38,6 +39,19 @@ from .testing_utils import (
 if is_vllm_available():
     from vllm import LLM, SamplingParams
 
+# The `vllm serve` settings required by TRL, as documented in the vLLM integration guide.
+VLLM_SERVE_TRL_ARGS = [
+    "--weight-transfer-config",
+    '{"backend": "nccl"}',
+    "--logprobs-mode",
+    "processed_logprobs",
+    "--max-logprobs",
+    "-1",
+]
+# From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
+if is_vllm_available(min_version="0.30.0"):
+    VLLM_SERVE_TRL_ARGS.append("--enable-scale-out")
+
 
 class TestConnectionPoolSize(TrlTestCase):
     @pytest.mark.parametrize("scheme", ["http", "https"])
@@ -55,6 +69,26 @@ class TestConnectionPoolSize(TrlTestCase):
             pool = adapter.poolmanager.connection_from_url(url)
             # Retain enough connections for the default generation concurrency.
             assert pool.pool.maxsize >= _DEFAULT_GENERATION_CONCURRENCY
+
+
+class TestResetPrefixCache(TrlTestCase):
+    def test_empty_response_body(self):
+        # Before vLLM 0.26.0 (vllm-project/vllm#46893), `/reset_prefix_cache` answers with an empty body.
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b""
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            client = VLLMClient(host="127.0.0.1")
+
+        with (
+            patch("trl.generation.vllm_client._HAS_RESET_PREFIX_CACHE_SUCCESS", False),
+            patch.object(client.session, "post", return_value=response),
+        ):
+            client.reset_prefix_cache()
 
 
 class TestParseLogprobs(TrlTestCase):
@@ -146,9 +180,9 @@ class TestExtractLogprobs(TrlTestCase):
         assert all_token_ids is None
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -158,11 +192,10 @@ class TestVLLMClientServer(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
 
         # Initialize the client
         cls.client = VLLMClient(connection_timeout=240, host="localhost")
@@ -391,9 +424,9 @@ class TestVLLMClientServer(TrlTestCase):
 
 
 # Same as above but using base_url to instantiate the client.
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -403,11 +436,10 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
 
         # Initialize the client
         cls.client = VLLMClient(base_url="http://localhost:8000", connection_timeout=240)
@@ -554,9 +586,9 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_3_accelerators
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -566,12 +598,11 @@ class TestVLLMClientServerTP(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1,2"  # Restrict to accelerator 1 and 2
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            ["vllm", "serve", cls.model_id, "--tensor-parallel-size", "2", *VLLM_SERVE_TRL_ARGS],
             env=env,
         )
 
@@ -720,9 +751,9 @@ class TestVLLMClientServerTP(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerDeviceParameter(TrlTestCase):
     """Test the device parameter functionality in init_communicator."""
 
@@ -734,11 +765,10 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+        env["VLLM_SERVER_DEV_MODE"] = "1"
 
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
 
     def test_init_communicator_with_device_int(self):
         """Test init_communicator with integer device parameter."""
@@ -793,18 +823,22 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_vllm
 @require_vision
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerVLM(TrlTestCase):
     model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
 
     @classmethod
     def setup_class(cls):
+        # Run the server on the last visible accelerator, since the test process may hold memory on the first one
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = str(backend_device_count(torch_device) - 1)
+        env["VLLM_SERVER_DEV_MODE"] = "1"
+
         # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
 
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")

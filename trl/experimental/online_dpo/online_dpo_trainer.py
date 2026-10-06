@@ -26,7 +26,7 @@ import torch.nn.functional as F
 import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils import broadcast_object_list, gather_object, is_peft_model, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -271,6 +271,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         if processing_class is None:
             raise ValueError("`processing_class` must be provided.")
 
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model

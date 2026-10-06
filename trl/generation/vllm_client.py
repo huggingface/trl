@@ -17,7 +17,6 @@ import base64
 import copy
 import logging
 import math
-import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -56,6 +55,10 @@ elif is_vllm_available():
 # `/start_weight_update` and `/finish_weight_update` were introduced in vLLM 0.21.0. Before that, `/update_weights`
 # ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
 _HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
+
+# vLLM 0.26.0 (vllm-project/vllm#46893) made `/reset_prefix_cache` return `{"success": bool}`. Before that, it answered
+# with an empty body.
+_HAS_RESET_PREFIX_CACHE_SUCCESS = is_vllm_available(min_version="0.26.0")
 
 _DEFAULT_GENERATION_CONCURRENCY = 64
 
@@ -240,7 +243,7 @@ class VLLMClient:
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
-            self.host = socket.gethostbyname(parsed_url.hostname)
+            self.host = parsed_url.hostname
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
@@ -848,7 +851,12 @@ class VLLMClient:
         """
         Resets the prefix cache for the model.
         """
-        self._post(f"{self.base_url}/reset_prefix_cache")
+        if _HAS_RESET_PREFIX_CACHE_SUCCESS:
+            self._post(f"{self.base_url}/reset_prefix_cache")
+        else:
+            response = self.session.post(f"{self.base_url}/reset_prefix_cache")
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
     def close_communicator(self):
         """

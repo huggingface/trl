@@ -5,8 +5,9 @@
 #  - out of memory, STATUS_ALLOC_FAILED: GPU memory pressure, matched on the message since the raising type varies
 rerun_errors := (OSError|Timeout|HTTPError.*502|HTTPError.*504|out of memory|STATUS_ALLOC_FAILED)
 
+# `--dist loadgroup` keeps the vLLM server tests (`xdist_group("vllm_server")`) on one worker, since they share a port
 test:
-	pytest -n auto -m "not slow and not low_priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' tests
+	pytest -n auto --dist loadgroup -m "not slow and not low_priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' tests
 
 precommit:
 	python scripts/add_copyrights.py
