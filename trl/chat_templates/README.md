@@ -11,7 +11,7 @@ Jinja2 chat templates stored here serve two purposes:
 
 **Why `_v2`?** Identity comparison is exact, so when a model repo changes its chat template, the new revision is stored next to the original as `<name>_v2.jinja` (then `_v3`, ...) and both are recognized. The suffix only orders revisions as they are added; each section below says where the revision comes from.
 
-**How is drift detected?** `scripts/check_chat_templates.py` fails when one of its reference Hub repos ships a chat template that is not stored here. When adding a template for a new model, add the repo it comes from to `REPOS` in that script.
+**How is drift detected?** A weekly CI job runs `scripts/check_chat_templates.py`, which fails when one of its reference Hub repos ships a chat template that is not stored here. When adding a template for a new model, add the repo it comes from to `REPOS` in that script.
 
 ## Original templates
 
