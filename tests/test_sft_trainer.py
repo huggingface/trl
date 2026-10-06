@@ -81,8 +81,7 @@ class TestDFTLoss(TrlTestCase):
         vocab_size = 2
         # All tokens have the same probability
         logits = torch.fill(torch.empty(batch_size, seq_len, vocab_size), torch.rand(1).item())
-        outputs = MagicMock()
-        outputs.logits = logits
+        outputs = CausalLMOutputWithPast(logits=logits)
         labels = torch.tensor([[1, 0, 0], [0, 1, -100]])
         ce_loss = torch.nn.functional.cross_entropy(
             logits.view(-1, vocab_size), labels.view(-1), ignore_index=-100, reduction="mean"
