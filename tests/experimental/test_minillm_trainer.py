@@ -21,7 +21,6 @@ from trl.experimental.minillm import MiniLLMConfig, MiniLLMTrainer
 from ..testing_utils import TrlTestCase
 
 
-@pytest.mark.low_priority
 class TestMiniLLMTrainer(TrlTestCase):
     def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
