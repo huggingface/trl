@@ -59,6 +59,7 @@ from ..chat_template_utils import (
 from ..data_utils import (
     _tokenize,
     apply_chat_template,
+    common_prefix_length,
     get_dataset_column_names,
     is_conversational,
     is_conversational_from_value,
@@ -1650,16 +1651,24 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template=chat_template,
                             )["input_ids"]
 
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            logger.warning(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
+                        # The completion starts where the tokenized prompt and prompt+completion diverge, which is not
+                        # always after the prompt (see `common_prefix_length`)
+                        prompt_len = common_prefix_length(prompt_ids, prompt_completion_ids)
+                        if prompt_len < len(prompt_ids):
+                            logger.warning_once(
+                                "The tokenized prompt is not a prefix of the tokenized prompt+completion, usually "
+                                "because the chat template renders the prompt alone differently or because tokens "
+                                "merge across the boundary. The completion starts where they diverge, and this end of "
+                                "the prompt is left out of the training sequence: "
+                                f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
+                                ". The model is trained on a context that differs from the one it sees at inference. "
+                                "To avoid it, use a chat template that renders the prompt the same way in both cases, "
+                                "or end the prompt on a token boundary. This warning is shown once, but it likely "
+                                "applies to every example in the dataset."
                             )
 
                         # Create completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        completion_mask = [0] * prompt_len + [1] * (len(prompt_completion_ids) - prompt_len)
                         output["input_ids"] = prompt_completion_ids
                         output["completion_mask"] = completion_mask
 

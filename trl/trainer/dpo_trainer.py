@@ -47,7 +47,14 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
+from ..data_utils import (
+    _tokenize,
+    apply_chat_template,
+    common_prefix_length,
+    extract_prompt,
+    is_conversational,
+    prepare_multimodal_messages,
+)
 from ..import_utils import is_liger_kernel_available
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
@@ -1096,23 +1103,28 @@ class DPOTrainer(_BaseTrainer):
                         "input_ids"
                     ]
 
-                # Check if the tokenized prompt starts with the tokenized prompt+completion
-                if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
-                    )
-                if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
+                # The completion starts where the tokenized prompt and prompt+completion diverge, which is not always
+                # after the prompt (see `common_prefix_length`)
+                prompt_len = min(
+                    common_prefix_length(prompt_ids, prompt_chosen_ids),
+                    common_prefix_length(prompt_ids, prompt_rejected_ids),
+                )
+                if prompt_len < len(prompt_ids):
+                    logger.warning_once(
+                        "The tokenized prompt is not a prefix of the tokenized prompt+completion, usually because the "
+                        "chat template renders the prompt alone differently or because tokens merge across the "
+                        "boundary. The completion starts where they diverge, and this end of the prompt is left out "
+                        "of the training sequence: "
+                        f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
+                        ". The model is trained on a context that differs from the one it sees at inference. To avoid "
+                        "it, use a chat template that renders the prompt the same way in both cases, or end the "
+                        "prompt on a token boundary. This warning is shown once, but it likely applies to every "
+                        "example in the dataset."
                     )
 
-                output["prompt_ids"] = prompt_ids
-                output["chosen_ids"] = prompt_chosen_ids[len(prompt_ids) :]
-                output["rejected_ids"] = prompt_rejected_ids[len(prompt_ids) :]
+                output["prompt_ids"] = prompt_ids[:prompt_len]
+                output["chosen_ids"] = prompt_chosen_ids[prompt_len:]
+                output["rejected_ids"] = prompt_rejected_ids[prompt_len:]
                 return output
 
             dataset = dataset.map(
