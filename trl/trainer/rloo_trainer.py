@@ -15,10 +15,10 @@
 import asyncio
 import atexit
 import copy
-import inspect
 import math
 import textwrap
 import time
+import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from pathlib import Path
@@ -61,24 +61,25 @@ from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
 from .utils import (
     RepeatSampler,
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     get_callable_name,
     get_config_model_id,
     identity,
+    is_async_callable,
     nanmax,
     nanmin,
     nanstd,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
-    selective_log_softmax,
     shuffle_sequence_dict,
     shutdown_event_loop_in_daemon,
     split_pixel_values_by_grid,
     split_tensor_dict,
     start_event_loop_in_daemon,
+    strip_images_from_messages,
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
@@ -87,6 +88,7 @@ from .utils import (
 if is_peft_available():
     import peft
     from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 if is_trackio_available():
@@ -258,6 +260,9 @@ class RLOOTrainer(_BaseTrainer):
             args = RLOOConfig(f"{model_name}-RLOO")
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -288,14 +293,6 @@ class RLOOTrainer(_BaseTrainer):
         # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do
         _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
-        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
-        # Inspect the forward method before we wrap the model with PEFT
-        self.model_kwarg_keys = (
-            inspect.signature(model.forward).parameters.keys()
-            if not hasattr(model, "get_base_model")
-            else inspect.signature(model.get_base_model().forward).parameters.keys()
-        )
-
         # Processing class
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -324,8 +321,18 @@ class RLOOTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # PEFT
         if peft_config is not None:
@@ -419,9 +426,11 @@ class RLOOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
@@ -446,7 +455,7 @@ class RLOOTrainer(_BaseTrainer):
                 self.reward_func_names.append(get_callable_name(reward_funcs[i]))
         self.reward_funcs = reward_funcs
 
-        self._has_async_funcs = any(inspect.iscoroutinefunction(func) for func in self.reward_funcs)
+        self._has_async_funcs = any(is_async_callable(func) for func in self.reward_funcs)
         if self._has_async_funcs:
             self.async_loop_thread, self.async_loop, self.async_loop_ready_event = start_event_loop_in_daemon(
                 name="RLOOTrainer-AsyncRewardLoop"
@@ -491,7 +500,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_processing_class.pad_token = reward_processing_class.eos_token
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
 
         self.reward_processing_classes = reward_processing_classes
@@ -575,11 +584,25 @@ class RLOOTrainer(_BaseTrainer):
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -604,6 +627,16 @@ class RLOOTrainer(_BaseTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
 
         # Reference model
         self.beta = args.beta
@@ -630,6 +663,31 @@ class RLOOTrainer(_BaseTrainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
+
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        add_fused_lm_head(
+            self.model.get_base_model() if is_peft_model(self.model) else self.model,
+            temperature=self.temperature,
+        )
+        if self.ref_model is not None:
+            add_fused_lm_head(self.ref_model, temperature=self.temperature)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -699,7 +757,7 @@ class RLOOTrainer(_BaseTrainer):
                 "do_sample": True,
                 "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": self.eos_token_ids,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -967,36 +1025,18 @@ class RLOOTrainer(_BaseTrainer):
             if mm_token_type_ids is not None:
                 model_inputs["mm_token_type_ids"] = mm_token_type_ids[start:end]
 
-            # Only add logits_to_keep if the model supports it
-            if "logits_to_keep" in self.model_kwarg_keys:
-                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-                model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-            model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-            # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
-            # as a forward kwarg (not from the model config), so it must be passed here.
+            # MoE models: request router logits so the model returns the load-balancing loss
             if compute_aux_loss:
                 model_inputs["output_router_logits"] = True
 
-            outputs = model(**model_inputs)
-            logits = outputs.logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-            completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
-            all_logps.append(logps)
-
+            # Only the completion tokens are scored
+            labels = input_ids_batch.masked_fill(attention_mask_batch == 0, -100)
+            labels[:, :-logits_to_keep] = -100
+            with self.accelerator.autocast():
+                outputs = model(**model_inputs, labels=labels, fused_lm_head=True)
+            all_logps.append(outputs.log_probs[:, -logits_to_keep:])
             if compute_entropy:
-                with torch.no_grad():
-                    entropies = entropy_from_logits(logits)
-                all_entropies.append(entropies)
-
+                all_entropies.append(outputs.entropy[:, -logits_to_keep:])
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
 
@@ -1112,7 +1152,7 @@ class RLOOTrainer(_BaseTrainer):
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
-            elif inspect.iscoroutinefunction(reward_func):  # Separate async reward funcs to run them in parallel later
+            elif is_async_callable(reward_func):  # Separate async reward funcs to run them in parallel later
                 async_funcs_info.append((i, reward_func, reward_func_name))
             else:
                 # Run synchronous reward function
@@ -1300,7 +1340,7 @@ class RLOOTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self._tokenizer.eos_token_id
+            is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1352,7 +1392,7 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1427,7 +1467,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+            eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
@@ -1551,10 +1591,6 @@ class RLOOTrainer(_BaseTrainer):
             else:
                 ref_per_token_logps = None
 
-        # Decode
-        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
@@ -1641,9 +1677,9 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
-        # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        # Log prompts and completions
+        self._logs["prompt"].extend(gather_object(prompts))
+        self._logs["completion"].extend(gather_object(completions))
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
@@ -1651,18 +1687,19 @@ class RLOOTrainer(_BaseTrainer):
         # Flush user-logged extra columns (from log_extra), gathering across processes.
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
-        for column in sorted(self._pending_extra_logs):
-            self._logs["extra"][column].extend(gather_object(self._pending_extra_logs[column]))
+        for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
+            values = self._pending_extra_logs.get(column, [None] * len(prompts))
+            self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
         # Flush user-logged metrics (from log_metric), averaging across processes.
         # Keys must be sorted so that all ranks call accelerator.gather in the same order, otherwise values
         # get mis-attributed across metrics (dict insertion order may differ between processes).
-        for name in sorted(self._pending_metrics):
-            values = self._pending_metrics[name]
-            local_mean = sum(values) / len(values)
-            global_mean = self.accelerator.gather(torch.tensor(local_mean, device=device)).mean().item()
-            self._metrics[mode][name].append(global_mean)
+        for name in sorted(set(gather_object(list(self._pending_metrics)))):
+            values = self._pending_metrics.get(name, [])
+            local_stats = torch.tensor([sum(values), len(values)], dtype=torch.float32, device=device)
+            total, count = self.accelerator.gather(local_stats).view(-1, 2).sum(dim=0).tolist()
+            self._metrics[mode][name].append(total / count)
         self._pending_metrics.clear()
 
         if images is not None and self.log_multimodal:
@@ -1824,8 +1861,8 @@ class RLOOTrainer(_BaseTrainer):
 
             table = {
                 "step": [self.state.global_step] * len(self._logs["prompt"]),
-                "prompt": self._logs["prompt"],
-                "completion": self._logs["completion"],
+                "prompt": [strip_images_from_messages(messages) for messages in self._logs["prompt"]],
+                "completion": [strip_images_from_messages(messages) for messages in self._logs["completion"]],
                 **self._logs["rewards"],
                 **self._logs["extra"],
                 "advantage": self._logs["advantages"],
@@ -1848,7 +1885,8 @@ class RLOOTrainer(_BaseTrainer):
                     df = df_base
 
                 if self.log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
+                    # Prompts are conversations (lists of dicts), so compare them by their text
+                    df = df[~df["prompt"].astype(str).duplicated()]
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 

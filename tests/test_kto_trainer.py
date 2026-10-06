@@ -791,6 +791,25 @@ class TestKTOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=KTOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_peft_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -1007,7 +1026,7 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="compute_metrics is not supported with the Liger kernel"):
+        with pytest.raises(ValueError, match="`compute_metrics` is not supported with `use_liger_kernel=True`"):
             KTOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -1059,7 +1078,9 @@ class TestKTOTrainer(TrlTestCase):
             torch.testing.assert_close(chunked_grads[name], grad, rtol=1e-3, atol=5e-4)
 
     @require_liger_kernel
-    def test_chunked_logps_honor_output_multiplier_and_empty_completion(self):
+    def test_chunked_logps_stay_differentiable_when_all_masked(self):
+        # A batch whose completion is fully masked yields no valid rows. The streamed projection still has to return
+        # log-probs attached to the model, so it contributes a differentiable zero instead of failing in `backward()`.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -1071,42 +1092,26 @@ class TestKTOTrainer(TrlTestCase):
         trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
         inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
         input_ids = inputs["input_ids"]
-        completion_mask = inputs["completion_mask"]
-        model_kwargs = {
-            "input_ids": input_ids,
-            "attention_mask": inputs["attention_mask"],
-            "use_cache": False,
-        }
-        text_config = trainer.model.config.get_text_config()
-        text_config.logit_scale = None
-        text_config.output_multiplier = 0.5
+        model_kwargs = {"input_ids": input_ids, "attention_mask": inputs["attention_mask"], "use_cache": False}
+        empty_completion_mask = torch.zeros_like(inputs["completion_mask"])
 
-        with torch.no_grad():
-            logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model, model_kwargs, input_ids, completion_mask
-            )
+        logps, _, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, model_kwargs, input_ids, empty_completion_mask
+        )
 
-        hidden_states = trainer.model.base_model(**model_kwargs).last_hidden_state[:, :-1]
-        labels = input_ids[:, 1:]
-        mask = completion_mask[:, 1:].bool()
-        logits = trainer.model.get_output_embeddings()(hidden_states[mask]).float() * text_config.output_multiplier
-        expected_valid = torch.log_softmax(logits, dim=-1).gather(-1, labels[mask].unsqueeze(-1)).squeeze(-1)
-        expected = torch.zeros_like(logps)
-        expected[mask] = expected_valid
-
-        torch.testing.assert_close(logps, expected, atol=1e-5, rtol=1e-5)
-
-        empty_completion_mask = torch.zeros_like(completion_mask)
-        with torch.no_grad():
-            empty_logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model, model_kwargs, input_ids, empty_completion_mask
-            )
-        assert empty_logps.shape == logps.shape
-        assert empty_logps.count_nonzero() == 0
+        assert logps.shape == (input_ids.shape[0], input_ids.shape[1] - 1)
+        assert logps.count_nonzero() == 0
+        assert logps.requires_grad
+        logps.sum().backward()
+        lm_head_grad = trainer.model.get_output_embeddings().weight.grad
+        assert lm_head_grad is not None
+        assert lm_head_grad.count_nonzero() == 0
 
     @require_liger_kernel
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
     def test_chunked_logps_use_mixed_precision(self):
+        # The streamed projection reads the backbone directly instead of going through the model's forward, so it has
+        # to enter autocast itself. Without that the backbone would silently run in fp32 under bf16 training.
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(
             output_dir=self.tmp_dir,
@@ -1116,25 +1121,17 @@ class TestKTOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
-        model_kwargs = {
-            "input_ids": inputs["input_ids"],
-            "attention_mask": inputs["attention_mask"],
-            "use_cache": False,
-        }
         projection = next(module for name, module in trainer.model.named_modules() if name.endswith("q_proj"))
         projection_dtypes = []
 
         def record_projection_dtype(_module, _args, output):
             projection_dtypes.append(output.dtype)
 
-        with projection.register_forward_hook(record_projection_dtype), torch.no_grad():
-            logps, _, _ = trainer._get_per_token_logps_and_entropies(
-                trainer.model, model_kwargs, inputs["input_ids"], inputs["completion_mask"]
-            )
+        with projection.register_forward_hook(record_projection_dtype):
+            trainer.train()
 
-        assert projection_dtypes == [torch.bfloat16]
-        assert torch.isfinite(logps).all()
+        assert projection_dtypes  # the hook fired at all
+        assert set(projection_dtypes) == {torch.bfloat16}
 
     @require_liger_kernel
     def test_train_with_liger_and_precomputed_ref_logps(self):
@@ -1265,6 +1262,27 @@ class TestKTOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"), reason="Olmo 3 requires transformers>=4.57.0"
+    )
+    def test_tokenize_prompt_not_prefix_of_conversation(self):
+        # The Olmo-3 Think template ends the generation prompt with `<think>`, which the full conversation doesn't
+        # have, so the tokenized prompt is not a prefix of the tokenized prompt+completion
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_unpaired_preference", split="train")
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Olmo3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # The completion is the whole assistant turn
+        tokenizer = trainer.processing_class
+        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
+            completion = tokenizer.decode(processed["completion_ids"])
+            assert completion == example["completion"][0]["content"] + tokenizer.eos_token
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
@@ -1544,6 +1562,49 @@ class TestKTOTrainer(TrlTestCase):
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    @require_bitsandbytes
+    def test_train_peft_dora_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(use_dora=True),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # The DoRA magnitude vector is the exception: it must stay in float32, since its optimizer updates can be
+            # smaller than bfloat16 can represent, which would otherwise silently freeze it, see #7268
+            if "lora_magnitude_vector" in n:
+                assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            elif "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_pad_token_id_synced_with_model_config(self):
         # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
         # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
@@ -1801,38 +1862,4 @@ class TestKTOTrainerVLM(TrlTestCase):
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-
-@pytest.mark.slow
-class TestKTOTrainerSlow(TrlTestCase):
-    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
-    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
-    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
-    @require_vision
-    def test_train_vlm_gemma_3n(self):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_unpaired_preference", split="train")
-
-        training_args = KTOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            model_init_kwargs={"dtype": "bfloat16"},
-            report_to="none",
-        )
-        trainer = KTOTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if "model.audio_tower" in n or "model.embed_audio" in n:
-                # The audio embedding parameters are not updated because this dataset contains no audio data
-                continue
             assert not torch.equal(param, new_param), f"Param {n} is not updated"

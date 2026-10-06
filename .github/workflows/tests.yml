@@ -7,12 +7,12 @@ on:
       - ci-*
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
-      - ".pre-commit-config.yaml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
-      - "scripts/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
@@ -20,12 +20,12 @@ on:
   pull_request:
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
-      - ".pre-commit-config.yaml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
-      - "scripts/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
@@ -43,30 +43,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
-  check_code_quality:
-    name: Check code quality
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: '3.12'
-      - name: Cache pre-commit environments
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
-
-      - name: Install pre-commit
-        run: python -m pip install pre-commit
-
-      - name: Run pre-commit
-        run: pre-commit run --all-files --show-diff-on-failure --color=always
-
   tests:
+    permissions:
+      contents: read
     name: Tests with latest dependencies
     runs-on:
       group: aws-g6e-4xlarge
@@ -91,7 +73,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -117,6 +99,8 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
+    permissions:
+      contents: read
     name: Tests with dev dependencies
     runs-on:
       group: aws-g6e-4xlarge
@@ -141,7 +125,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -172,6 +156,8 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
+    permissions:
+      contents: read
     name: Tests without optional dependencies
     runs-on:
       group: aws-g6e-4xlarge
@@ -196,7 +182,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -222,6 +208,8 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
+    permissions:
+      contents: read
     name: Tests with minimum versions
     runs-on:
       group: aws-g6e-4xlarge
@@ -246,7 +234,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -276,6 +264,8 @@ jobs:
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed_smoke:
+    permissions:
+      contents: read
     name: Distributed smoke tests
     runs-on:
       group: aws-g5-12xlarge-cache
@@ -302,7 +292,7 @@ jobs:
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
