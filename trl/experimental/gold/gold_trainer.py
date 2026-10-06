@@ -1904,7 +1904,7 @@ class GOLDTrainer(SFTTrainer):
             skip_special_tokens=False,
         )
 
-        completion_ids, logprobs = self._generate_single_turn(prompt_ids_list, None, {})
+        completion_ids, logprobs = self._generate_single_turn(prompt_ids_list, None, {}, self.num_generations)
 
         # Decode completions with `parse_response`, which handles tool calls (tools require transformers >= 5.0.0 and
         # a response schema, both enforced at init).
@@ -1948,7 +1948,7 @@ class GOLDTrainer(SFTTrainer):
             tool_masks=tool_mask,
         )
 
-    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields, num_generations):
         device = self.accelerator.device
 
         # Generate completions using either vLLM or regular generation
@@ -1965,7 +1965,7 @@ class GOLDTrainer(SFTTrainer):
             _, completion_ids, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
-                num_generations=self.num_generations,
+                num_generations=num_generations,
             )
             logprobs = None  # GOLD does not use sampling logprobs
 
@@ -2220,7 +2220,10 @@ class GOLDTrainer(SFTTrainer):
 
             # Generate new completions after tool execution (using concatenated IDs, no re-tokenization)
             post_tool_ids, post_tool_logprobs = self._generate_single_turn(
-                prompt_completion_tool_ids, loop_images, loop_multimodal_fields
+                prompt_completion_tool_ids,
+                loop_images,
+                loop_multimodal_fields,
+                num_generations=1,  # each sample has its own history, so generate one completion per sample
             )
 
             # Truncate so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length.
