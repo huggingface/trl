@@ -66,7 +66,16 @@ def server(monkeypatch):
                 status = 401
             payload = {"data": [{"id": "test-model"}], "world_size": 2, "success": True}
             if self.path == "/v1/completions":
-                payload = {"choices": [{"prompt_token_ids": [1], "token_ids": [2], "logprobs": None}]}
+                payload = {
+                    "choices": [
+                        {
+                            "prompt_token_ids": [1],
+                            "token_ids": [2],
+                            "logprobs": None,
+                            "prompt_logprobs": [None, {"2": {"rank": 1, "logprob": -0.5}}],
+                        }
+                    ]
+                }
             if status != 200:
                 payload = {"error": "response-body-must-not-appear-in-auth-errors"}
             body = json.dumps(payload).encode()
@@ -293,6 +302,24 @@ def test_config_parses_env_name_without_serializing_key(server, monkeypatch, tmp
     client.session.close()
     assert client.model == "test-model"
     assert server.requests[-1][2] == "Bearer private-test-credential"
+
+
+@pytest.mark.parametrize("name", ["sdft", "sdpo"])
+@pytest.mark.parametrize("key_env", ["VLLM_API_KEY", "TRAINING_VLLM_API_KEY"])
+def test_teacher_scoring_with_configured_api_key(server, monkeypatch, tmp_path, name, key_env):
+    config_type = getattr(importlib.import_module(f"trl.experimental.{name}"), f"{name.upper()}Config")
+    config = config_type(
+        output_dir=str(tmp_path), use_cpu=True, bf16=False, report_to="none", vllm_server_api_key_env=key_env
+    )
+    server.protected_health = False
+    monkeypatch.setenv("VLLM_API_KEY", "wrong-default-key")
+    monkeypatch.setenv(key_env, server.key)
+    client = VLLMClient(base_url=server.url, api_key_env=config.vllm_server_api_key_env)
+    with client.session:
+        scores = client.get_sequence_logprobs([[1, 2]], prompt_lengths=[1], top_logprobs=1)
+    assert scores["actual_logprobs"] == [[[-0.5]]]
+    assert scores["actual_token_ids"] == [[[2]]]
+    assert server.requests[-1] == ("POST", "/v1/completions", "Bearer test-key")
 
 
 def test_wrapper_defaults_to_loopback_and_preserves_explicit_native_arguments():
