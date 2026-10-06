@@ -2762,7 +2762,7 @@ class GRPOTrainer(_BaseTrainer):
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
         for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
-            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            values = self._pending_extra_logs.get(column, [None] * len(prompts))
             self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
