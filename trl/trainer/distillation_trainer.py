@@ -413,6 +413,9 @@ class DistillationTrainer(_BaseTrainer):
             args = DistillationConfig(f"{model_name}-Distillation")
 
         # Student model loading
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
         # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
         model_init_kwargs = dict(args.model_init_kwargs or {})
@@ -481,8 +484,18 @@ class DistillationTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
@@ -608,9 +621,11 @@ class DistillationTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # The chunked JSD loss reads `lm_head.weight` directly and runs the backbone via
@@ -708,6 +723,16 @@ class DistillationTrainer(_BaseTrainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
@@ -772,7 +797,7 @@ class DistillationTrainer(_BaseTrainer):
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
             "bos_token_id": self._tokenizer.bos_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "eos_token_id": self.eos_token_ids,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
@@ -1100,7 +1125,7 @@ class DistillationTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self._tokenizer.eos_token_id
+            is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1448,7 +1473,7 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1880,9 +1905,23 @@ class DistillationTrainer(_BaseTrainer):
         student_logit_scale = getattr(student_config, "logit_scale", None)
         if student_logit_scale is None:
             student_logit_scale = getattr(student_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if student_logit_scale is None:
+            student_logit_scale = getattr(student_config, "lm_head_multiplier", None)
+        if student_logit_scale is None and getattr(student_config, "logits_scaling", None) is not None:
+            logits_scaling = student_config.logits_scaling
+            student_logit_scale = logits_scaling if student_config.model_type == "hyperclovax" else 1 / logits_scaling
         teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
         if teacher_logit_scale is None:
             teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if teacher_logit_scale is None:
+            teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
+        if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
+            logits_scaling = teacher_config.logits_scaling
+            teacher_logit_scale = logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
         loss, entropy_sum, n_valid = _chunked_divergence_loss(

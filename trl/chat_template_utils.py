@@ -102,7 +102,7 @@ def clone_chat_template(
 
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
-    model.config.eos_token_id = tokenizer.eos_token_id
+    model.config.get_text_config().eos_token_id = tokenizer.eos_token_id
     if model.can_generate():  # Non-generative models (e.g. SequenceClassification) may not have a generation_config
         model.generation_config.eos_token_id = tokenizer.eos_token_id
 
@@ -594,6 +594,14 @@ gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding
 
 gemma4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4.jinja").read_text(encoding="utf-8")
 
+gemma4_v2_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v2.jinja").read_text(encoding="utf-8")
+
+gemma4_v3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v3.jinja").read_text(encoding="utf-8")
+
+gemma4_v4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v4.jinja").read_text(encoding="utf-8")
+
+gemma4_v5_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5.jinja").read_text(encoding="utf-8")
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
@@ -602,7 +610,11 @@ idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(enco
 
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
+lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
+
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
+
+lfm2_2_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v2.jinja").read_text(encoding="utf-8")
 
 lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
 
@@ -648,6 +660,9 @@ qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
 
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
+
+# Also matches SmolVLM2, which ships a byte-identical chat template.
+smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
@@ -721,11 +736,17 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_5_lightning_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
-    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_vl_chat_template]:
+    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_v2_chat_template, lfm2_2_5_vl_chat_template]:
         # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
         # tokenizer already requires transformers >= 5.0.0.
         schema, template = None, lfm2_2_5_template
-    elif chat_template == gemma4_chat_template:
+    elif chat_template in [
+        gemma4_chat_template,
+        gemma4_v2_chat_template,
+        gemma4_v3_chat_template,
+        gemma4_v4_chat_template,
+        gemma4_v5_chat_template,
+    ]:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
         schema, template = None, gemma4_template
@@ -978,6 +999,8 @@ idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinj
 
 lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read_text(encoding="utf-8")
 
+lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
@@ -1028,6 +1051,8 @@ qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja"
 
 qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja").read_text(encoding="utf-8")
 
+smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja").read_text(encoding="utf-8")
+
 
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -1038,9 +1063,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
-    Idefics3, LFM2, LLaMA 3, Muse Glimmer, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the
-    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
+    The supported templates are listed in [Training templates](chat_templates#training-templates).
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1139,6 +1162,9 @@ def get_training_chat_template(
     if processing_class.chat_template == lfm2_chat_template:
         return lfm2_training_chat_template
 
+    if processing_class.chat_template == lfm2_v2_chat_template:
+        return lfm2_v2_training_chat_template
+
     if processing_class.chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
@@ -1192,6 +1218,9 @@ def get_training_chat_template(
 
     if processing_class.chat_template == qwen3_8_chat_template:
         return qwen3_8_training_chat_template
+
+    if processing_class.chat_template == smolvlm_chat_template:
+        return smolvlm_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
