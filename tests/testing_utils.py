@@ -41,6 +41,7 @@ from trl.import_utils import (
     is_math_verify_available,
     is_mergekit_available,
     is_openreward_available,
+    is_requests_available,
     is_vllm_available,
 )
 
@@ -63,6 +64,7 @@ require_peft_target_parameters = pytest.mark.skipif(
     not is_peft_available() or Version(peft.__version__) < Version("0.17.0"),
     reason="test requires peft>=0.17.0 for `LoraConfig.target_parameters`",
 )
+require_requests = pytest.mark.skipif(not is_requests_available(), reason="test requires requests")
 # Response parsing needs jmespath only on transformers < 5.13, which ships the legacy `response_schema` parser; the
 # new-style `response_template` parser doesn't use it. See `_SUPPORTS_RESPONSE_TEMPLATE`.
 require_response_parsing = pytest.mark.skipif(
