@@ -204,6 +204,9 @@ trainer.train()
 > [!TIP]
 > Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 
+> [!WARNING]
+> With a text-only conversational prompt-completion dataset, tokens the chat template prefills in the generation prompt and drops once the turn is complete are left out of the training sequence, so the training context differs from inference; the trainer warns. The Gemma 4 12B-it, 26B-A4B-it and 31B-it template ends the generation prompt with an empty thought block, `<|channel>thought\n<channel|>`, when thinking is not enabled. To avoid it, pass a chat template that renders the prompt the same way with and without the completion via `chat_template_path` in the [`SFTConfig`].
+
 ### Train adapters with PEFT
 
 We support tight integration with 🤗 PEFT library, allowing any user to conveniently train adapters and share them on the Hub, rather than training the entire model.
