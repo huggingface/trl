@@ -57,7 +57,6 @@ from .testing_utils import (
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
-    xfail_data_parallel,
 )
 
 
@@ -81,8 +80,7 @@ class TestDFTLoss(TrlTestCase):
         vocab_size = 2
         # All tokens have the same probability
         logits = torch.fill(torch.empty(batch_size, seq_len, vocab_size), torch.rand(1).item())
-        outputs = MagicMock()
-        outputs.logits = logits
+        outputs = CausalLMOutputWithPast(logits=logits)
         labels = torch.tensor([[1, 0, 0], [0, 1, -100]])
         ce_loss = torch.nn.functional.cross_entropy(
             logits.view(-1, vocab_size), labels.view(-1), ignore_index=-100, reduction="mean"
@@ -1317,6 +1315,27 @@ class TestSFTTrainer(TrlTestCase):
         # Check the number of sequences in train and eval datasets
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
         assert len(trainer.eval_dataset["input_ids"]) == 2  # w/ this dataset, we end up with 6 seqs
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"), reason="Olmo 3 requires transformers>=4.57.0"
+    )
+    def test_tokenize_prompt_not_prefix_of_conversation(self):
+        # The Olmo-3 Think template ends the generation prompt with `<think>`, which the full conversation doesn't
+        # have, so the tokenized prompt is not a prefix of the tokenized prompt+completion
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Olmo3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # The completion is the whole assistant turn
+        tokenizer = trainer.processing_class
+        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
+            completion_ids = [label for label in processed["labels"] if label != -100]
+            assert tokenizer.decode(completion_ids) == example["completion"][0]["content"] + tokenizer.eos_token
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -2575,7 +2594,7 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
+    @pytest.mark.parametrize("packing", [True, False])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2618,7 +2637,7 @@ class TestSFTTrainerSlow(TrlTestCase):
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
     )
-    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
+    @pytest.mark.parametrize("packing", [True, False])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2762,7 +2781,7 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
+    @pytest.mark.parametrize("packing", [True, False])
     @pytest.mark.parametrize(
         "model_name",
         [
