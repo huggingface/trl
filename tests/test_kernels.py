@@ -19,6 +19,9 @@ import torch
 import torch.nn.functional as F
 from transformers.testing_utils import torch_device
 
+
+pytest.importorskip("triton")  # Triton ships with PyTorch on Linux only
+
 from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
 
 from .testing_utils import require_torch_accelerator
