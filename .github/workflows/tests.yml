@@ -250,6 +250,11 @@ jobs:
             "datasets==4.7.0" \
             "transformers==5.3.0"
 
+      - name: Uninstall kernels
+        run: |
+          source .venv/bin/activate
+          uv pip uninstall kernels
+
       - name: Test with pytest
         run: |
           source .venv/bin/activate
