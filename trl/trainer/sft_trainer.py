@@ -1052,7 +1052,7 @@ class SFTTrainer(_BaseTrainer):
             warnings.warn(
                 "`label_smoothing_factor` is deprecated in `SFTTrainer` and will be removed in v2.0.0. Label smoothing "
                 "needs the full logits, so the loss is computed from a forward pass that does not use the fused LM "
-                "head.",
+                "head. Expect slower training meanwhile: each step runs an extra forward pass.",
                 FutureWarning,
                 stacklevel=2,
             )
