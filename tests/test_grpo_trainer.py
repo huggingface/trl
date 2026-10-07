@@ -159,6 +159,15 @@ class TestGetHighEntropyMask(TrlTestCase):
 
 
 class TestGRPORolloutDispatch(TrlTestCase):
+    def _make_rollout_func(self, **output):
+        # A plain callable, as a user passes, recording the calls it gets
+        def rollout_func(prompts, trainer):
+            rollout_func.calls.append((prompts, trainer))
+            return output
+
+        rollout_func.calls = []
+        return rollout_func
+
     def _make_trainer(self, rollout_func):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         return GRPOTrainer(
@@ -170,13 +179,8 @@ class TestGRPORolloutDispatch(TrlTestCase):
         )
 
     def test_generate_prefers_rollout_func(self):
-        rollout_func = MagicMock(
-            return_value={
-                "prompt_ids": [[1]],
-                "completion_ids": [[2]],
-                "logprobs": [[-0.1]],
-                "env_mask": [[1]],
-            }
+        rollout_func = self._make_rollout_func(
+            prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[-0.1]], env_mask=[[1]]
         )
         trainer = self._make_trainer(rollout_func)
 
@@ -185,10 +189,10 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert result[0] == [[1]]  # prompt_ids
         assert result[1] == [[2]]  # completion_ids
         assert result[2] == [[1]]  # tool_mask (from env_mask)
-        trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
+        assert rollout_func.calls == [(["prompt"], trainer)]
 
     def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
-        rollout_func = MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]], "logprobs": [[0.0]]})
+        rollout_func = self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[0.0]])
         trainer = self._make_trainer(rollout_func)
         # Stand in for the vLLM server, which cannot run here, and start from the step __init__ sets with use_vllm=True
         trainer.use_vllm = True
@@ -199,10 +203,10 @@ class TestGRPORolloutDispatch(TrlTestCase):
 
         trainer.vllm_generation.sync_weights.assert_called_once()
         assert trainer._last_loaded_step == trainer.state.global_step
-        trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
+        assert rollout_func.calls == [(["prompt"], trainer)]
 
     def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
-        trainer = self._make_trainer(MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]]}))
+        trainer = self._make_trainer(self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]]))
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
             trainer._generate(["prompt"])
