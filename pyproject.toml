@@ -21,13 +21,12 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14"
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
@@ -62,7 +61,7 @@ math_verify = [
     "math-verify>=0.5.2",
 ]
 openreward = [
-    "openreward>=0.1.109; python_version >= '3.11'",  # openreward requires Python 3.11+
+    "openreward>=0.1.109",
 ]
 peft = [
     "peft>=0.13.0"
@@ -84,7 +83,7 @@ test = [
     "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
-    "vllm>=0.20.1,<=0.30.0",
+    "vllm>=0.20.2,<=0.30.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -101,8 +100,8 @@ dev = [
     "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
     "liger-kernel>=0.8.2",
-    # openreward (requires Python 3.11+)
-    "openreward>=0.1.109; python_version >= '3.11'",
+    # openreward
+    "openreward>=0.1.109",
     # peft
     "peft>=0.13.0",
     # quality
@@ -137,7 +136,7 @@ version = { file = "VERSION" }
 branch = true
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 119
 src = ["trl"]
 
