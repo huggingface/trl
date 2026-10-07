@@ -17,7 +17,7 @@ import copy
 import gc
 import json
 import pathlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -35,7 +35,7 @@ from transformers import (
 )
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.testing_utils import backend_empty_cache, torch_device
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import (
@@ -71,6 +71,9 @@ if is_peft_available():
         TaskType,
         get_peft_model,
     )
+
+if is_liger_kernel_available():
+    from liger_kernel.transformers.model.output_classes import LigerCausalLMOutputWithPast
 
 
 class TestDFTLoss(TrlTestCase):
@@ -1017,9 +1020,9 @@ class TestSFTTrainer(TrlTestCase):
         def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
             captured["skip_logits"] = inputs.get("skip_logits")
             dummy_loss = torch.tensor(1.0, requires_grad=True)
-            dummy_outputs = MagicMock()
-            dummy_outputs.token_accuracy = torch.tensor(0.5)
-            dummy_outputs.logits = torch.randn(1, 5, trainer.model.config.vocab_size)
+            dummy_outputs = LigerCausalLMOutputWithPast(
+                logits=torch.randn(1, 5, trainer.model.config.vocab_size), token_accuracy=torch.tensor(0.5)
+            )
             return (dummy_loss, dummy_outputs)
 
         inputs = {
