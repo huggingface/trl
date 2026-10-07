@@ -129,6 +129,11 @@ class TracingModel(OpenAIChatModel):
             model=self.config.model_name,
             messages=messages,
             logprobs=True,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so generations of the same prompt spread across engines can decode the same text. A unique
+            # seed per request keeps them independent. The agent owns this call, so the trainer's own fix does not
+            # reach it.
+            seed=random.getrandbits(63),
             extra_body={"return_token_ids": True, "chat_template_kwargs": self.chat_template_kwargs},
             **_route_unknown_kwargs(call_kwargs),
         )

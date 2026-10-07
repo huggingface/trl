@@ -78,6 +78,7 @@ VLLM_SERVER_DEV_MODE=1 env \"\${LORA_ENV[@]}\" vllm serve \"\$MODEL\" \\
     --host 0.0.0.0 --port 8000 --dtype bfloat16 --max-model-len \"\$MAX_MODEL_LEN\" \"\${OVERRIDE_ARGS[@]}\" \\
     --gpu-memory-utilization 0.85 --tensor-parallel-size \"\$VLLM_TP\" --data-parallel-size \"\$VLLM_DP\" \\
     --logprobs-mode processed_logprobs --generation-config vllm \\
+    --enable-prefix-caching \\
     --weight-transfer-config '{\"backend\":\"nccl\"}' \$LORA_ARGS \\
     --enable-auto-tool-choice --tool-call-parser \"\$TOOL_PARSER\" --reasoning-parser \"\$REASONING_PARSER\"
 "
