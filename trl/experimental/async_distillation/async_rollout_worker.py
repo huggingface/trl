@@ -18,6 +18,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -567,6 +568,10 @@ class _AsyncRolloutLoop:
             "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
