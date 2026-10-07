@@ -908,8 +908,22 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             [{"role": "user", "content": "What is the weather in London?"}],
         ]
         completions = [
-            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
-            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_temperature", "arguments": {"location": "Paris"}}}],
+                },
+                {"role": "tool", "content": "22 degrees"},
+                {"role": "assistant", "content": "The temperature in Paris is 22 degrees."},
+            ],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_weather", "arguments": {"location": "London"}}}],
+                },
+                {"role": "tool", "content": "Cloudy"},
+                {"role": "assistant", "content": "The weather in London is cloudy."},
+            ],
         ]
         rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
         advantages = [0.987, 0.654]
@@ -925,15 +939,26 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
         │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
         │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ USER              │ ASSISTANT         │        0.12 │   0.79 │      0.99 │ │
         │ │ What is the       │ get_temperature(… │             │        │           │ │
-        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
-        │ │ Paris?            │                   │             │        │           │ │
+        │ │ temperature in    │                   │             │        │           │ │
+        │ │ Paris?            │ TOOL              │             │        │           │ │
+        │ │                   │ 22 degrees        │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The temperature   │             │        │           │ │
+        │ │                   │ in Paris is 22    │             │        │           │ │
+        │ │                   │ degrees.          │             │        │           │ │
         │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
-        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
-        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
-        │ │ weather in        │ 'London'})        │             │        │           │ │
-        │ │ London?           │                   │             │        │           │ │
+        │ │ USER              │ ASSISTANT         │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather(loca… │             │        │           │ │
+        │ │ weather in        │                   │             │        │           │ │
+        │ │ London?           │ TOOL              │             │        │           │ │
+        │ │                   │ Cloudy            │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The weather in    │             │        │           │ │
+        │ │                   │ London is cloudy. │             │        │           │ │
         │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────────────────╯
         """)
@@ -1490,6 +1515,51 @@ class TestAddFusedLMHead:
         model.config.output_multiplier = 0.5
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_type, config_kwargs",
+        [
+            ("granite", {"logits_scaling": 8.0}),
+            pytest.param(
+                "minicpm3",
+                {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.13.0"),
+                    reason="MiniCPM3 was introduced in transformers>=5.13.0",
+                ),
+            ),
+            pytest.param(
+                "hyperclovax",
+                {"logits_scaling": 4.0},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.9.0"),
+                    reason="HyperCLOVA X was introduced in transformers>=5.9.0",
+                ),
+            ),
+            ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
+        ],
+    )
+    def test_logits_scaling(self, model_type, config_kwargs):
+        """Models that rescale the logits around the LM head get the same log-probabilities as their own forward."""
+        config = AutoConfig.for_model(
+            model_type,
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            **config_kwargs,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, config.vocab_size, (2, 16), device=torch_device)
+        logps = model(input_ids=input_ids).logits[:, :-1].log_softmax(-1)
         expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
 
         add_fused_lm_head(model)
