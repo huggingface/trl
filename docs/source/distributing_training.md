@@ -83,6 +83,18 @@ Measured configurations (H100 nodes, sequence length 2048, bf16, per-device batc
 
 These are real training runs, not just "it fits": GLM-5.2 goes from loss 3.3 to 2.3 in 50 steps on tulu-3 chat data, GLM-4.5-Air full fine-tuning from 3.9 to 1.2 in 20.
 
+Token dispatch, measured on GLM-4.5-Air (110B) with LoRA r16 on 4 H100s (`fsdp_size=4, ep_size=4`, packed sequences, 20 steps, transformers main of 2026-10-06):
+
+| per-device batch | grad. accum. | max_length | step time | tokens/s (4 GPUs) | peak GPU memory |
+|---|---|---|---|---|---|
+| 1 | 1 | 2048 | 1.9 s | 4.2k | 54 GB |
+| 2 | 1 | 2048 | 3.1 s | 5.3k | 56 GB |
+| 2 | 4 | 2048 | 11.5 s | 5.7k | 57 GB |
+| 1 | 1 | 4096 | 3.0 s | 5.5k | 56 GB |
+| 4 | 1 | 2048 | 6.9 s | 4.7k | 61 GB |
+
+On the same 4 GPUs and per-rank batch, the earlier masked implementation moves 2.9k tokens/s: every rank ran the whole group's batch, so its step time was spent on 4x fewer distinct tokens. Splitting the experts across all the GPUs (`ep_size` equal to the GPU count) was also the fastest and the leanest choice here; `ep_size=2` and `ep_size=1` cost 20% more per step and up to 10 GB more.
+
 What to expect operationally at this scale:
 
 1. **Loading is the slow part, and it is filesystem-bound.** A cold multi-node load reads the checkpoint at well under 1 GiB/s per node (every node reads the full checkpoint, and the loader's access pattern defeats readahead), 13 to 31 minutes for the models above. The same load from a warm page cache runs at over 10 GiB/s. If your nodes have the RAM, warming the page cache first with large sequential reads recovers most of that gap: with [transformers#48227](https://github.com/huggingface/transformers/pull/48227), set `HF_SHARD_PREFETCH=4` and the loader does it before reading. Measured on GLM-4.6 (665 GiB, 8 nodes, cold): 17–52 minutes → 465 s prefetch + 63 s load. The floor is the filesystem's aggregate bandwidth shared across nodes (~10 GiB/s on our Lustre): `checkpoint_bytes × nodes / aggregate`.
