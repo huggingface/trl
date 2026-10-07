@@ -20,6 +20,9 @@ import pytest
 import torch
 import transformers
 from packaging.version import Version
+from transformers import AutoModelForCausalLM
+
+from trl.trainer.utils import add_fused_lm_head
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
@@ -166,6 +169,7 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
+            "fsdp2",
         ],
     )
     def test_dpo_precompute_ref_log_probs(self, config, get_config_path):
@@ -180,6 +184,43 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 "--dataset_name", "trl-internal-testing/zen",
                 "--dataset_config", "standard_preference",
+                "--precompute_ref_log_probs",
+                "--eval_strategy", "epoch",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+        ],
+    )
+    def test_kto_precompute_ref_log_probs(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/kto.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                "--dataset_name", "trl-internal-testing/zen",
+                "--dataset_config", "standard_unpaired_preference",
                 "--precompute_ref_log_probs",
                 "--eval_strategy", "epoch",
             ],
@@ -206,14 +247,7 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param(
-                "fsdp2",
-                marks=pytest.mark.xfail(
-                    reason="Liger DPO loss reads `lm_head.weight` and runs the backbone directly, which is "
-                    "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
-                    strict=True,
-                ),
-            ),
+            "fsdp2",
         ],
     )
     def test_dpo_liger(self, config, get_config_path):
@@ -250,14 +284,7 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            pytest.param(
-                "fsdp2",
-                marks=pytest.mark.xfail(
-                    reason="Liger KTO loss reads `lm_head.weight` and runs the backbone directly, which is "
-                    "incompatible with FSDP2's DTensor-sharded parameters (mixed Tensor/DTensor ops).",
-                    strict=True,
-                ),
-            ),
+            "fsdp2",
         ],
     )
     def test_kto_liger(self, config, get_config_path):
@@ -503,3 +530,33 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+
+@require_torch_multi_accelerator
+class TestModelParallel:
+    def test_fused_lm_head(self):
+        """With the model split across two devices, the fused LM head matches the model on a single device."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, device_map={"": 0})
+        model_split = AutoModelForCausalLM.from_pretrained(model_id, device_map=device_map)
+        add_fused_lm_head(model)
+        add_fused_lm_head(model_split)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=model.device)
+        labels = input_ids.masked_fill(torch.arange(16, device=model.device) < 4, -100)
+
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+        out_split = model_split(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out_split["log_probs"], out["log_probs"])
+        torch.testing.assert_close(out_split["entropy"], out["entropy"])
+        out_split["loss"].backward()
+        assert all(param.grad is not None for param in model_split.parameters())

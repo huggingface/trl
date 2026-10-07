@@ -111,6 +111,24 @@ class TestCPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_cpo_trainer_truncation(self):
+        # Each response is truncated to `max_length` minus the prompt length. The prompt is never truncated, so a prompt
+        # longer than `max_length` is kept whole with an empty completion.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = CPOConfig(output_dir=self.tmp_dir, report_to="none")
+        full = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+        training_args = CPOConfig(output_dir=self.tmp_dir, max_length=8, report_to="none")
+        truncated = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+
+        for full_row, truncated_row in zip(full, truncated, strict=True):
+            length = max(8, len(full_row["prompt_input_ids"]))
+            assert truncated_row["chosen_input_ids"] == full_row["chosen_input_ids"][:length]
+            assert truncated_row["rejected_input_ids"] == full_row["rejected_input_ids"][:length]
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
@@ -171,6 +189,28 @@ class TestCPOTrainer(TrlTestCase):
         assert trainer.processing_class is not None
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        from peft import LoraConfig
+
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = CPOTrainer(
+                model=self.model_id,
+                args=CPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=self.tokenizer,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @pytest.mark.parametrize(
         "config_name",
@@ -296,3 +336,18 @@ class TestCPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
                 assert not torch.equal(param, new_param)
+
+    def test_pad_token_id_synced_with_model_config(self):
+        # This model's tokenizer has no pad token, so the trainer falls back to the eos token. The model configs must
+        # follow: otherwise `Trainer` realigns them at train time and reports it as a change the user did not make.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = CPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = CPOTrainer(
+            model="trl-internal-testing/tiny-MistralForCausalLM-0.2", args=training_args, train_dataset=dataset
+        )
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        assert pad_token_id is not None
+        assert trainer.model.config.pad_token_id == pad_token_id
+        assert trainer.model.generation_config.pad_token_id == pad_token_id

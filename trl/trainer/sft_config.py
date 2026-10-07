@@ -37,14 +37,15 @@ class SFTConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string.
+            argument of the [`SFTTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -147,15 +148,8 @@ class SFTConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string."
-        },
-    )
-    router_aux_loss_coef: float = field(
-        default=0.001,
-        metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "the `SFTTrainer` is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
@@ -163,6 +157,14 @@ class SFTConfig(_BaseConfig):
         metadata={
             "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
+        },
+    )
+    router_aux_loss_coef: float | None = field(
+        default=None,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     chat_template_path: str | None = field(

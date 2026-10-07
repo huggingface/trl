@@ -43,6 +43,7 @@ from ...trainer.utils import (
     compute_flops_per_token,
     compute_mfu,
     get_config_model_id,
+    get_peak_flops_per_device,
     is_trackio_available,
     pad,
 )
@@ -427,7 +428,8 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
 
 
 class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to [`AsyncDistillationTrainer`].
+    """Interface a rollout worker must implement to be passed as `rollout_worker` to
+    [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol`].
 
@@ -454,7 +456,7 @@ class RolloutWorkerProtocol(Protocol):
 
 class WeightTransferProtocol(Protocol):
     """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`AsyncDistillationTrainer`].
+    [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.WeightTransferProtocol`]. The default
     [`WeightTransferClient`] streams the student's weights into its vLLM server over NCCL; pass a no-op implementation
@@ -904,7 +906,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
             [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the student
             model on its vLLM server.
-        args ([`AsyncDistillationConfig`], *optional*):
+        args ([`experimental.async_distillation.AsyncDistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. Must include a `"prompt"` column
@@ -964,12 +966,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
-        # AsyncGRPOTrainer, the student's own lm_head is NOT patched (via `patch_chunked_lm_head`) to a chunked
+        # AsyncGRPOTrainer, the student's own lm_head is NOT given a fused head (via `add_fused_lm_head`), a chunked
         # realized-token-only head at load time: the divergence loss needs the student's log-probs at several
         # candidate token ids per position (the teacher's top-k + tail), not just the realized token's logprob, which
-        # is all that patch supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
+        # is all that head supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
         # a different mechanism that does support multiple candidate ids per position.
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -983,9 +986,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_name, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoTokenizer.from_pretrained(
+                model_name, revision=model_revision, trust_remote_code=args.trust_remote_code
+            )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
+        model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # Initialize the Trainer
         super().__init__(
@@ -1001,6 +1010,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # the model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
+
+        precision = self.accelerator.mixed_precision
+        dtype = {
+            "bf16": "bfloat16",
+            "fp16": "float16",
+            "no": str(self.model.dtype).removeprefix("torch."),
+        }.get(precision, precision)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
@@ -1106,7 +1123,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                         "names": weight_names,
                         "dtype_names": weight_dtype_names,
                         "shapes": weight_shapes,
-                        "packed": True,
                     },
                     weight_sync_timeout=self.args.weight_sync_timeout,
                 )
@@ -1311,7 +1327,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             lm_head_weight = lm_head_weight.full_tensor()
             if lm_head_bias is not None:
                 lm_head_bias = lm_head_bias.full_tensor()
-        # NOTE(@aminediro): supporting Cohere2 models (mirrors `patch_chunked_lm_head`'s own handling).
+        # NOTE(@aminediro): supporting Cohere2 models (mirrors `add_fused_lm_head`'s own handling).
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         config = unwrapped_model.config.get_text_config()
         # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is kept
@@ -1320,6 +1336,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
         logit_scale = getattr(config, "logit_scale", None)
         if logit_scale is None:
             logit_scale = getattr(config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if logit_scale is None:
+            logit_scale = getattr(config, "lm_head_multiplier", None)
+        if logit_scale is None and getattr(config, "logits_scaling", None) is not None:
+            logits_scaling = config.logits_scaling
+            logit_scale = logits_scaling if config.model_type == "hyperclovax" else 1 / logits_scaling
         logit_scale = 1.0 if logit_scale is None else logit_scale
         final_logit_softcapping = getattr(config, "final_logit_softcapping", None)
 
@@ -1398,6 +1421,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 per_teacher_stats = self.accelerator.reduce(local_per_teacher_stats, reduction="sum")
                 for i, teacher_id in enumerate(self._teacher_ids):
                     t_count, t_jsd_sum, t_teacher_entropy_sum = per_teacher_stats[3 * i : 3 * i + 3]
+                    # Logged as a `(numerator, denominator)` rate so the window reduces to the true share of tokens
+                    # each teacher scored, rather than a mean of per-step shares that micro-batches of unequal size
+                    # would skew. A teacher that scored nothing this step gets a real 0 share, not the NaN the
+                    # averages below use, since zero tokens is itself the answer here.
+                    self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                        (t_count.item(), global_count.item())
+                    )
                     if t_count > 0:
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(
@@ -1461,15 +1491,24 @@ class AsyncDistillationTrainer(_BaseTrainer):
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            metrics["perf/mfu_fwd_bwd"].append(
-                compute_mfu(flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size)
-            )
+            if self._peak_flops_per_device is not None:
+                metrics["perf/mfu_fwd_bwd"].append(
+                    compute_mfu(
+                        flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
+                    )
+                )
             if step_s is not None:
                 metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
                 metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                metrics["perf/mfu_wall_clock"].append(
-                    compute_mfu(flops_per_token, self._step_forward_tokens / step_s, world_size)
-                )
+                if self._peak_flops_per_device is not None:
+                    metrics["perf/mfu_wall_clock"].append(
+                        compute_mfu(
+                            flops_per_token,
+                            self._step_forward_tokens / step_s,
+                            world_size,
+                            self._peak_flops_per_device,
+                        )
+                    )
 
         self._last_step_end_time = time_after
         self._current_train_step_time = 0.0
