@@ -119,11 +119,13 @@ if [ "$LORA_RANK" -gt 0 ] && [ "$VLLM_DP" -eq 1 ]; then
     LORA_ENV=(VLLM_ALLOW_RUNTIME_LORA_UPDATING=1)
 fi
 
+# `--enable-prefix-caching`: a multi-turn agent resends the whole conversation each turn, so every turn is a pure
+# prefix of the next. Without it the server re-prefills the entire transcript every turn and decode starves.
 CUDA_VISIBLE_DEVICES="$SERVE_IDS" VLLM_SERVER_DEV_MODE=1 \
     env "${LORA_ENV[@]}" vllm serve "$MODEL" \
         --port 8000 --dtype bfloat16 --max-model-len "$MAX_MODEL_LEN" "${OVERRIDE_ARGS[@]}" --gpu-memory-utilization 0.85 \
         --tensor-parallel-size "$VLLM_TP" --data-parallel-size "$VLLM_DP" \
-        --logprobs-mode processed_logprobs --generation-config vllm \
+        --logprobs-mode processed_logprobs --generation-config vllm --enable-prefix-caching \
         --weight-transfer-config "{\"backend\":\"nccl\"}" \
         $LORA_ARGS \
         --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser "$REASONING_PARSER" \
