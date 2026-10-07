@@ -575,7 +575,7 @@ class TestModelParallel:
             "model.rotary_emb": 1,
             "lm_head": 0,
         }
-        model = AutoModelForCausalLM.from_pretrained(model_id, device_map=device_map)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=str(tmp_path), report_to="none")
