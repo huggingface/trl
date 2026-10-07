@@ -1361,6 +1361,9 @@ def create_model_from_path(
             else:
                 architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
+    # transformers 5.3.0 skips tying remote-code tied embeddings, leaving them on meta (transformers#44469)
+    if Version(transformers.__version__) == Version("5.3.0"):
+        model.tie_weights()
     return model
 
 
