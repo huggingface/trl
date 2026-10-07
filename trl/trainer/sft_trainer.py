@@ -687,24 +687,29 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             "pad_to_multiple_of": self.pad_to_multiple_of,
             "truncation": self.max_length is not None,
             "max_length": self.max_length,
-            "return_tensors": self.return_tensors,
             "add_special_tokens": False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         }
         if "messages" in examples[0]:  # conversational case
             messages = [
                 prepare_multimodal_messages(example["messages"], images=example["images"]) for example in examples
             ]
+            # transformers 5.4.0 moved processor kwargs to the `processor_kwargs` argument (transformers#44881)
+            if Version(transformers.__version__) >= Version("5.4.0"):
+                template_kwargs = {"processor_kwargs": processor_kwargs}
+            else:
+                template_kwargs = processor_kwargs
             output = self.processor.apply_chat_template(
                 messages,
                 chat_template=self.chat_template,
                 tokenize=True,
                 return_dict=True,
+                return_tensors=self.return_tensors,
                 return_assistant_tokens_mask=self.assistant_only_loss,
-                **processor_kwargs,
+                **template_kwargs,
             )
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
-            output = self.processor(images=images, text=texts, **processor_kwargs)
+            output = self.processor(images=images, text=texts, return_tensors=self.return_tensors, **processor_kwargs)
         else:
             raise KeyError(
                 "The input examples must contain either 'messages' for conversational data or 'text' for standard "
