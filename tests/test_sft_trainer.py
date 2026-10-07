@@ -1769,7 +1769,7 @@ class TestSFTTrainer(TrlTestCase):
             return torch.nn.functional.cross_entropy(logits, labels[:, 1:].flatten(), ignore_index=-100)
 
         training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=2, logging_steps=1, report_to="none")
-        with pytest.warns(FutureWarning, match="`compute_loss_func` receives the model's own outputs"):
+        with pytest.warns(FutureWarning, match="`compute_loss_func` is deprecated"):
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,

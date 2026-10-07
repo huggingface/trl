@@ -570,9 +570,8 @@ class SFTTrainer(_BaseTrainer):
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
         compute_loss_func (`Callable`, *optional*):
             A function that accepts the model outputs, the labels, and the number of items in the entire accumulated
-            batch (batch_size * gradient_accumulation_steps) and returns the loss. The outputs, with the full logits,
-            come from a forward pass that does not use the fused LM head. This is deprecated: from v2.0.0, it will
-            receive the fused LM head's outputs ([`~trainer.utils.FusedCausalLMOutput`]) instead.
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. This is deprecated and will be
+            removed in v2.0.0: subclass [`SFTTrainer`] and override `compute_loss` instead.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
@@ -1043,9 +1042,9 @@ class SFTTrainer(_BaseTrainer):
             )
         if compute_loss_func is not None:
             warnings.warn(
-                "`compute_loss_func` receives the model's own outputs, with the full logits, from a forward pass that "
-                "does not use the fused LM head. This is deprecated: from v2.0.0, it will receive the fused LM head's "
-                "outputs (`FusedCausalLMOutput`, with per-token log-probabilities) instead.",
+                "`compute_loss_func` is deprecated and will be removed in v2.0.0. Subclass `SFTTrainer` and override "
+                "`compute_loss` instead. Expect slower training meanwhile: the loss needs the full logits, so each "
+                "step runs an extra forward pass.",
                 FutureWarning,
                 stacklevel=2,
             )
