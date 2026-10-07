@@ -1169,6 +1169,21 @@ class SFTTrainer(_BaseTrainer):
         ):
             self.data_collator.return_position_ids = True
 
+        # Under DeepSpeed sequence parallelism (Ulysses/ALST), `Trainer` reduces the model's own loss across ranks,
+        # which is the fused LM head's negative log-likelihood
+        if (
+            Version(accelerate.__version__) >= Version("1.12.0")
+            and self.accelerator.parallelism_config is not None
+            and self.accelerator.parallelism_config.sp_backend == "deepspeed"
+            and self.accelerator.parallelism_config.sp_enabled
+            and (args.loss_type == "dft" or self.compute_loss_func is not None or args.label_smoothing_factor > 0)
+        ):
+            raise ValueError(
+                "`loss_type='dft'`, `compute_loss_func` and `label_smoothing_factor` are not supported with DeepSpeed "
+                "sequence parallelism (Ulysses/ALST): the loss is the model's own negative log-likelihood, reduced "
+                "across ranks by `Trainer`."
+            )
+
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
