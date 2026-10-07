@@ -12,25 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl>=1.14.0",  # adds the MoE aux loss only when the config declares a coefficient
+#     "transformers @ git+https://github.com/huggingface/transformers.git@main",
+#     "peft>=0.21.0",
+# ]
+# ///
+
 """
-LoRA fine-tune GLM-5.2 (753B) on 64 H100s across 8 nodes.
+LoRA fine-tune GLM-5.2 (753B) on 64 H100s across 8 nodes: the experts are split 8 ways with token dispatch,
+everything else is sharded across all 64, and each rank trains on its own slice of the batch. The model loads
+directly onto the mesh, no rank ever materializes it whole, and the adapter saves in seconds.
 
-`DistributedConfig(tp_size=32, fsdp_size=2, enable_expert_parallel=True)` shards the experts across
-32 GPUs and everything else across 2, so the model loads directly onto the mesh — no rank ever
-materializes it whole. Measured: 3.1 s/step at sequence length 2048, 56 GB peak per GPU, loss
-3.3 -> 2.3 in 50 steps on tulu-3 chat data; the adapter saves in seconds.
-
-This config reproduces the measured run above as-is. For the throughput levers on top of it
-(packing, gradient accumulation, batch sizing), see "Making it fast" in
-docs/source/distributing_training.md.
+For the throughput levers on top of this config (packing, gradient accumulation, batch sizing), see "Making it
+fast" in docs/source/distributing_training.md.
 
 Launch from this directory:
 
-sbatch sft_glm_5_2_expert_parallel.slurm
+    sbatch sft_glm_5_2_expert_parallel.slurm
 """
 
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM
 from transformers.distributed import DistributedConfig
@@ -38,10 +44,21 @@ from transformers.distributed import DistributedConfig
 from trl import SFTConfig, SFTTrainer
 
 
+# `ep_size` is not in a released transformers yet. Checked before the dataset is read, so 64 ranks fail in a second
+# rather than after preprocessing. Temporary: once it ships, pin `transformers>=5.19.0` in the header above and drop
+# this.
+if Version(transformers.__version__) < Version("5.19.0.dev0"):
+    raise RuntimeError(
+        f"This example needs expert parallelism, which is not in a released transformers yet. Install transformers "
+        f"from main (expert parallelism merged in #48873). Got {transformers.__version__}."
+    )
+
+
 model = AutoModelForCausalLM.from_pretrained(
     "zai-org/GLM-5.2",
     dtype=torch.bfloat16,
-    distributed_config=DistributedConfig(tp_size=32, fsdp_size=2, enable_expert_parallel=True),
+    # The model's own expert plan selects token dispatch, so the sizes are the whole configuration.
+    distributed_config=DistributedConfig(fsdp_size=64, ep_size=8),
 )
 
 training_args = SFTConfig(

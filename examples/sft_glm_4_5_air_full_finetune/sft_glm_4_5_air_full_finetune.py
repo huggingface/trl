@@ -12,36 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl>=1.14.0",  # adds the MoE aux loss only when the config declares a coefficient
+#     "transformers @ git+https://github.com/huggingface/transformers.git@main",
+# ]
+# ///
+
 """
-Full fine-tune GLM-4.5-Air (110B) — every parameter, no LoRA — on 64 H100s across 8 nodes.
+Full fine-tune GLM-4.5-Air (110B) on 64 H100s across 8 nodes, every parameter, no LoRA: the experts are split 8 ways
+with token dispatch, everything else is sharded across all 64, and each rank trains on its own slice of the batch.
+Parameters, gradients and optimizer state all divide by the mesh, which is what makes full fine-tuning of a 110B
+model fit. The final `save_model` gathers and writes the full 206 GiB checkpoint in standard HF format.
 
-`DistributedConfig(tp_size=32, fsdp_size=2, enable_expert_parallel=True)` shards the experts across
-32 GPUs and everything else across 2; parameters, gradients, and optimizer state all divide by the
-mesh, which is what makes full fine-tuning of a 110B model peak at 41 GB per GPU. Measured:
-3.0 s/step at sequence length 2048, loss 3.9 -> 1.2 in 20 steps on tulu-3 chat data; the final
-`save_model` gathers and writes the full 206 GiB checkpoint in standard HF format (~15 minutes).
-
-This config reproduces the measured run above as-is. For the throughput levers on top of it
-(packing, gradient accumulation, batch sizing), see "Making it fast" in
-docs/source/distributing_training.md.
+For the throughput levers on top of this config (packing, gradient accumulation, batch sizing), see "Making it
+fast" in docs/source/distributing_training.md.
 
 Launch from this directory:
 
-sbatch sft_glm_4_5_air_full_finetune.slurm
+    sbatch sft_glm_4_5_air_full_finetune.slurm
 """
 
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM
 from transformers.distributed import DistributedConfig
 
 from trl import SFTConfig, SFTTrainer
 
 
+# `ep_size` is not in a released transformers yet. Checked before the dataset is read, so 64 ranks fail in a second
+# rather than after preprocessing. Temporary: once it ships, pin `transformers>=5.19.0` in the header above and drop
+# this.
+if Version(transformers.__version__) < Version("5.19.0.dev0"):
+    raise RuntimeError(
+        f"This example needs expert parallelism, which is not in a released transformers yet. Install transformers "
+        f"from main (expert parallelism merged in #48873). Got {transformers.__version__}."
+    )
+
+
 model = AutoModelForCausalLM.from_pretrained(
     "zai-org/GLM-4.5-Air",
     dtype=torch.bfloat16,
-    distributed_config=DistributedConfig(tp_size=32, fsdp_size=2, enable_expert_parallel=True),
+    # The model's own expert plan selects token dispatch, so the sizes are the whole configuration.
+    distributed_config=DistributedConfig(fsdp_size=64, ep_size=8),
 )
 
 training_args = SFTConfig(
