@@ -1595,10 +1595,9 @@ class SFTTrainer(_BaseTrainer):
                     if self.args.loss_type == "dft":
                         # DFT: https://huggingface.co/papers/2508.05629
                         per_token_loss = per_token_loss * outputs.log_probs.exp().detach()
-                    if num_items_in_batch is None:
-                        loss = per_token_loss.sum() / outputs.label_mask.sum().clamp(min=1)
-                    else:
-                        loss = per_token_loss.sum() / num_items_in_batch
+                    num_tokens = outputs.label_mask.sum() if num_items_in_batch is None else num_items_in_batch
+                    # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
+                    loss = per_token_loss.sum() / torch.as_tensor(num_tokens).clamp(min=1)
                     if self.aux_loss_enabled:
                         loss = loss + self.router_aux_loss_coef * outputs.aux_loss
                 # Like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages

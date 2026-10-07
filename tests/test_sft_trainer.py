@@ -423,6 +423,26 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.parametrize("num_items_in_batch", [None, 0])
+    def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.model.device)
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "labels": torch.full_like(input_ids, -100),
+        }
+
+        loss = trainer.compute_loss(trainer.model, inputs, num_items_in_batch=num_items_in_batch)
+        loss.backward()
+
+        assert loss.item() == 0.0
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+
     def test_train_dft_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
