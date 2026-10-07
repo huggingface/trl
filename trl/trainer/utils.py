@@ -18,8 +18,10 @@ import functools
 import hashlib
 import importlib.resources as pkg_resources
 import inspect
+import json
 import os
 import random
+import re
 import socket
 import threading
 import types
@@ -35,7 +37,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
+from accelerate import Accelerator, PartialState
 from accelerate.logging import get_logger
 from datasets import IterableDataset
 from huggingface_hub import ModelCard, ModelCardData
@@ -643,6 +645,32 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     return entropies.reshape(original_shape)
 
 
+def strip_images_from_messages(messages):
+    """
+    Drop the image objects from a conversation, keeping its structure.
+
+    Each `{"type": "image", "image": <PIL.Image>}` content block becomes `{"type": "image"}`, so the conversation can
+    be logged or serialized. Messages with string content are returned unchanged.
+
+    Args:
+        messages (`list[dict]` or `str`):
+            Conversation to strip. Anything other than a list is returned as is.
+
+    Returns:
+        `list[dict]` or `str`: The conversation without the image objects.
+    """
+    if not isinstance(messages, list):
+        return messages
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = [{"type": block["type"]} if block.get("type") == "image" else block for block in content]
+            msg = {**msg, "content": content}
+        result.append(msg)
+    return result
+
+
 def selective_log_softmax_and_entropy(
     logits: torch.Tensor,
     index: torch.Tensor,
@@ -766,22 +794,33 @@ def print_prompt_completions_sample(
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                if "content" in msg or "reasoning_content" in msg or "thinking" in msg:
-                    # Chat message
-                    t.append(f"{role.upper()}\n", style="bold red")
+                t.append(f"{role.upper()}\n", style="bold red")
+                if "reasoning_content" in msg or "thinking" in msg:
                     reasoning = msg.get("reasoning_content") or msg.get("thinking")
                     if reasoning:
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
-                    if "content" in msg:
-                        t.append(msg["content"])
-                elif "name" in msg and "args" in msg:
-                    # Tool call
-                    t.append(f"{role.upper()}\n", style="bold red")
-                    t.append(f"{msg['name']}({msg['args']})")
-                else:
-                    # Fallback
-                    t.append(str(msg))
+                if "content" in msg:
+                    content = msg["content"]
+                    if isinstance(content, list):
+                        # VLM format: content is a list of typed blocks, e.g.
+                        # [{"type": "image", ...}, {"type": "text", "text": "..."}]
+                        for block in content:
+                            if block.get("type") == "text":
+                                t.append(block["text"])
+                            elif block.get("type") == "image":
+                                t.append("[IMAGE]", style="bold cyan")
+                    elif isinstance(content, str):
+                        t.append(content)
+                if "tool_calls" in msg:
+                    for k, tc in enumerate(msg["tool_calls"]):
+                        if k > 0:
+                            t.append("\n")
+                        fn = tc.get("function", {})
+                        raw = fn.get("arguments", {})
+                        args = raw if isinstance(raw, dict) else json.loads(raw)
+                        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                        t.append(f"{fn.get('name', '?')}({args_str})")
                 if j < len(entry) - 1:
                     t.append("\n\n")
         else:
@@ -1304,8 +1343,9 @@ def create_model_from_path(
         )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
+    # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
     if "device_map" not in kwargs:
-        kwargs["device_map"] = None if PartialState().device.type == "cpu" else "auto"
+        kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
         config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
@@ -1463,8 +1503,8 @@ _CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 @dataclass
 class FusedCausalLMOutput(ModelOutput):
     """
-    Output of a model patched with [`patch_fused_lm_head`] and called with `fused_lm_head=True`. Every per-token field
-    is zero where the label is `-100`.
+    Output of a model given a fused LM head with [`add_fused_lm_head`] and called with `fused_lm_head=True`. Every
+    per-token field is zero where the label is `-100`.
 
     Args:
         loss (`torch.Tensor`):
@@ -1490,15 +1530,15 @@ class FusedCausalLMOutput(ModelOutput):
     aux_loss: torch.Tensor | None = None
 
 
-def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
+def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
     """
     Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
     instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
 
-    With `fused_lm_head=True`, the patched forward runs the backbone and projects through the LM head, in tiles, only
-    the positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted
-    `shift_labels`, as passed under context or sequence parallelism, are scored without shifting. Without it, the
-    forward is the original one, so generation is unchanged. Patch the model before wrapping it with PEFT.
+    With `fused_lm_head=True`, the forward runs the backbone and projects through the LM head, in tiles, only the
+    positions whose next-token label is not `-100`, and returns a [`FusedCausalLMOutput`]. Pre-shifted `shift_labels`,
+    as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
+    original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
@@ -1516,6 +1556,13 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
     logit_scale = getattr(text_config, "logit_scale", None)
     if logit_scale is None:
         logit_scale = getattr(text_config, "output_multiplier", None)
+    # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+    # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+    if logit_scale is None:
+        logit_scale = getattr(text_config, "lm_head_multiplier", None)
+    if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
+        logits_scaling = text_config.logits_scaling
+        logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
     logit_scale = 1.0 if logit_scale is None else logit_scale
     # Before transformers 5, vision-language models expose their language backbone as `model` rather than through
     # `base_model_prefix`.
@@ -1549,13 +1596,16 @@ def patch_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_l
         else:
             hidden_states = outputs.last_hidden_state
             labels = shift_labels
+        lm_head = self.get_output_embeddings()
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        hidden_states = hidden_states.to(lm_head.weight.device)
+        labels = labels.to(lm_head.weight.device)
         mask = labels != -100
         autocast_ctx = nullcontext()
         if cast_lm_head_to_fp32:
             hidden_states = hidden_states.float()
             autocast_ctx = torch.autocast(hidden_states.device.type, enabled=False)
 
-        lm_head = self.get_output_embeddings()
         weight, bias = lm_head.weight, lm_head.bias
         # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
         # head once before splitting tokens so every projection uses compatible tensor types.
@@ -1660,18 +1710,91 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
             attn_flops + (moe_mlp_flops if layer_idx % sparse_step == 0 else dense_mlp_flops) for layer_idx in range(L)
         )
 
-    embed_flops = 2 * V * h
-    lm_head_flops = 0 if config.tie_word_embeddings else 2 * V * h
+    # Embedding is a lookup (no FLOPs); lm_head is a 2*V*h matmul, tied or not.
+    lm_head_flops = 2 * V * h
 
-    forward_flops = total_layer_flops + embed_flops + lm_head_flops
+    forward_flops = total_layer_flops + lm_head_flops
     return 3 * forward_flops
+
+
+# Theoretical dense accelerator throughput. Values and sources follow TorchTitan's BF16 peak-FLOPs lookup, extended
+# with the additional NVIDIA GPUs offered by Hugging Face Jobs. More specific names must precede their prefixes.
+_PEAK_FLOPS_BY_DEVICE = (
+    # NVIDIA
+    ("GB300", {"bfloat16": 2.5e15}),
+    ("GB200", {"bfloat16": 2.5e15}),
+    ("B300", {"bfloat16": 2.25e15}),
+    ("B200", {"bfloat16": 2.25e15}),
+    ("H100 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H100 PCIe", {"float16": 756e12, "bfloat16": 756e12}),
+    ("H100", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H200 NVL", {"float16": 835e12, "bfloat16": 835e12}),
+    ("H200", {"float16": 989e12, "bfloat16": 989e12}),
+    ("H20", {"float16": 148e12, "bfloat16": 148e12}),
+    ("RTX PRO 6000", {"float16": 500e12, "bfloat16": 500e12}),
+    ("A100", {"float16": 312e12, "bfloat16": 312e12}),
+    ("A6000", {"float16": 154.85e12, "bfloat16": 154.85e12}),
+    ("A10G", {"float16": 125e12, "bfloat16": 125e12}),
+    ("A10", {"float16": 125e12, "bfloat16": 125e12}),
+    ("L40S", {"float16": 362e12, "bfloat16": 362e12}),
+    ("L4", {"float16": 121e12, "bfloat16": 121e12}),
+    ("T4", {"float16": 65e12}),
+    # AMD
+    ("MI355X", {"bfloat16": 2500e12}),
+    ("MI325X", {"bfloat16": 1300e12}),
+    ("MI300X", {"bfloat16": 1300e12}),
+    ("MI250X", {"bfloat16": 191.5e12}),
+)
+
+
+def get_peak_flops(device_name: str, dtype: str) -> float | None:
+    """
+    Get the theoretical dense accelerator peak FLOPs for a device and dtype.
+
+    Args:
+        device_name (`str`):
+            Device name as returned by the accelerator runtime.
+        dtype (`str`):
+            Floating-point dtype used by the model's matrix multiplications.
+
+    Returns:
+        `float` or `None`: Peak FLOPs, or `None` when the device or dtype is not in the lookup table.
+    """
+    device_name = device_name.casefold()
+    for model_name, peak_flops_by_dtype in _PEAK_FLOPS_BY_DEVICE:
+        if re.search(rf"\b{re.escape(model_name.casefold())}\b", device_name):
+            return peak_flops_by_dtype.get(dtype)
+    return None
+
+
+def get_peak_flops_per_device(accelerator: Accelerator, dtype: str) -> float | None:
+    """
+    Resolve the theoretical dense peak FLOPs for the local training device.
+
+    Args:
+        accelerator ([`~accelerate.Accelerator`]):
+            Accelerator managing the training devices.
+        dtype (`str`):
+            Configured model dtype.
+
+    Returns:
+        `float` or `None`: Local device peak FLOPs, or `None` if the device or precision is unsupported.
+    """
+    device_name = torch.cuda.get_device_name(accelerator.device)
+    peak_flops = get_peak_flops(device_name, dtype)
+    if peak_flops is None:
+        logger.info(
+            "MFU metrics are disabled because the peak FLOPs are unknown for the local training device or "
+            "precision. Throughput and timing metrics are still reported."
+        )
+    return peak_flops
 
 
 def compute_mfu(
     flops_per_token: int,
     tokens_per_second: float,
     world_size: int,
-    peak_flops_per_device: float = 989.5e12,
+    peak_flops_per_device: float,
 ) -> float:
     """
     Compute Model FLOPs Utilization (MFU) as a percentage.
@@ -1687,8 +1810,8 @@ def compute_mfu(
             Aggregate tokens per second across all devices, after any parallelism corrections.
         world_size (`int`):
             Number of devices (GPUs).
-        peak_flops_per_device (`float`, *optional*, defaults to `989.5e12`):
-            Theoretical peak FLOPs per device in bf16. Defaults to H100 SXM5.
+        peak_flops_per_device (`float`):
+            Theoretical dense peak FLOPs per device for the training precision.
 
     Returns:
         `float`: MFU as a percentage (0-100).

@@ -66,13 +66,14 @@ def _to_spec(task) -> dict[str, Any]:
     return task.task_spec
 
 
-def _outcome_only_reward_func(environments, **_):
+def _outcome_only_reward_func(environments, **_) -> list[float | None]:
     """Default reward function: last non-null reward in each rollout's trajectory.
 
     Suitable for sparse-outcome envs (e.g. SETA, where only `submit_solution` returns a non-null reward). Override by
-    passing a different callable to ``reward_funcs=``.
+    passing a different callable to ``reward_funcs=``. Returns `None` when no non-null reward was observed, so an
+    unscored rollout is not treated as a scored zero.
     """
-    return [env.reward for env in environments]
+    return [env.reward if any(reward is not None for reward in env.rewards) else None for env in environments]
 
 
 class OpenRewardSpec:
@@ -240,11 +241,11 @@ class OpenRewardSpec:
         return _make
 
     @property
-    def reward_funcs(self) -> Callable[..., list[float]]:
+    def reward_funcs(self) -> Callable[..., list[float | None]]:
         """Default outcome-only reward function (last non-null reward per rollout).
 
         Plugs directly into TRL's ``reward_funcs=`` slot. Stable identity — module-level function, picklable for
-        multi-process workers.
+        multi-process workers. Returns `None` for rollouts with no observed non-null reward.
         """
         return _outcome_only_reward_func
 
