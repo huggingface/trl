@@ -1552,6 +1552,9 @@ class SFTTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             inputs["output_router_logits"] = True
 
+        # The forwards that build the full logits leave the loss to the caller, like in `Trainer.compute_loss`
+        logits_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+
         try:
             parallelism_config = (
                 self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
@@ -1574,7 +1577,7 @@ class SFTTrainer(_BaseTrainer):
                     # `compute_loss_func` receives the model's own outputs, with the logits; the fused outputs only feed
                     # the metrics
                     loss = self.compute_loss_func(
-                        model(**inputs), inputs.get("labels"), num_items_in_batch=num_items_in_batch
+                        model(**logits_inputs), inputs.get("labels"), num_items_in_batch=num_items_in_batch
                     )
                     with torch.no_grad():
                         outputs = model(**inputs, fused_lm_head=True)
@@ -1584,7 +1587,7 @@ class SFTTrainer(_BaseTrainer):
                     kwargs = {}
                     if Version(transformers.__version__) >= Version("5.15.0"):
                         kwargs["num_items_in_batch"] = num_items_in_batch
-                    loss = self.label_smoother(model(**inputs), inputs["labels"], shift_labels=True, **kwargs)
+                    loss = self.label_smoother(model(**logits_inputs), inputs["labels"], shift_labels=True, **kwargs)
                     with torch.no_grad():
                         outputs = model(**inputs, fused_lm_head=True)
                 else:
@@ -1647,7 +1650,7 @@ class SFTTrainer(_BaseTrainer):
                 stacklevel=2,
             )
             with torch.no_grad():
-                outputs = model(**inputs)
+                outputs = model(**logits_inputs)
         return (loss, outputs) if return_outputs else loss
 
     # During eval, Trainer calls prediction_step, which asks `compute_loss` for the outputs even when only the loss is
