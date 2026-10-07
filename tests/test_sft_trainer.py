@@ -423,6 +423,27 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_dft_loss_matches_reference(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.model.device)
+        labels = input_ids.masked_fill(torch.arange(8, device=input_ids.device) < 3, -100)
+        inputs = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids), "labels": labels}
+
+        loss = trainer.compute_loss(trainer.model, dict(inputs))
+
+        # DFT (https://huggingface.co/papers/2508.05629) weighs each token's NLL by its detached probability
+        with torch.no_grad():
+            logits = trainer.model(input_ids=input_ids, attention_mask=inputs["attention_mask"]).logits[:, :-1]
+        shift_labels = labels[:, 1:]
+        mask = shift_labels != -100
+        logprobs = logits.float().log_softmax(-1).gather(-1, shift_labels.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        expected = (-logprobs.exp() * logprobs)[mask].sum() / mask.sum()
+        torch.testing.assert_close(loss, expected, atol=1e-4, rtol=1e-4)
+
     @pytest.mark.parametrize("num_items_in_batch", [None, 0])
     def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
