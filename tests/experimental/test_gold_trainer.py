@@ -242,22 +242,7 @@ def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_toke
 
 
 def build_config(**overrides):
-    base = dict(
-        uld_crossentropy_weight=0.0,
-        uld_distillation_weight=1.0,
-        uld_student_temperature=1.0,
-        uld_teacher_temperature=1.0,
-        uld_skip_student_eos=False,
-        uld_skip_teacher_eos=False,
-        use_extended_uld=True,
-        uld_token_merge_strategy="observed",
-        uld_use_hybrid_loss=False,
-        uld_hybrid_matched_weight=None,
-        uld_hybrid_unmatched_weight=None,
-        beta=0.5,
-    )
-    base.update(overrides)
-    return SimpleNamespace(**base)
+    return GOLDConfig(uld_skip_student_eos=False, uld_skip_teacher_eos=False, **overrides)
 
 
 @pytest.fixture(scope="session")
@@ -964,14 +949,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
     )
 
     max_length = 64
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=max_length,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=max_length, max_completion_length=16, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
@@ -1019,14 +997,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
     dataset = Dataset.from_dict({"prompt": [short_prompt], "completion": [long_completion]})
 
     max_length = 32
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=max_length,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=max_length, max_completion_length=16, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
@@ -1055,14 +1026,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         {"role": "assistant", "content": "Two."},
     ]
     dataset = Dataset.from_dict({"messages": [messages]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=512,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=512, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1091,14 +1055,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
 
 def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=64,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     row = trainer._prepare_dataset_with_original_text(
@@ -1134,14 +1091,7 @@ def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
 
 def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=64,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=False,
-    )
+    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1218,14 +1168,7 @@ def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gem
 def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
     slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=64,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=False,
-    )
+    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     row = trainer._prepare_dataset_with_original_text(
