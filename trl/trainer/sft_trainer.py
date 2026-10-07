@@ -324,6 +324,13 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
         )
         hidden_states = outputs.last_hidden_state
 
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        hidden_states = hidden_states.to(lm_head.weight.device)
+        if labels is not None:
+            labels = labels.to(lm_head.weight.device)
+        if shift_labels is not None:
+            shift_labels = shift_labels.to(lm_head.weight.device)
+
         lm_head_weight = lm_head.weight
         lm_head_bias = lm_head.bias
         # Under FSDP2, lm_head.weight is a DTensor (Shard(0) or Replicate). Passing it directly
@@ -391,8 +398,9 @@ def _patch_chunked_ce_lm_head(model: torch.nn.Module, chunk_size: int, is_vlm: b
 
     # Keep the original forward signature so `generate`'s `_validate_model_kwargs` still sees the
     # model's real inputs (e.g. VLM `pixel_values`, `spatial_shapes`) and doesn't reject them. The
-    # unbound `__func__` signature makes `MethodType`'s `self`-stripping land correctly.
-    _chunked_ce_forward.__signature__ = inspect.signature(original_forward.__func__)
+    # unbound signature makes `MethodType`'s `self`-stripping land correctly. Read off the class, since accelerate
+    # hooks (`device_map` across devices) replace `model.forward` with a `functools.partial`.
+    _chunked_ce_forward.__signature__ = inspect.signature(type(model).forward)
     model.forward = types.MethodType(_chunked_ce_forward, model)
 
 
