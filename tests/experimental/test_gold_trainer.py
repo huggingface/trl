@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -1489,9 +1489,7 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
             assert torch.equal(attention_mask, prompt_mask)
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
-    )
+    generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
@@ -1549,7 +1547,7 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos():
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(eos_token_id=eos_id)
+    generation_config = GenerationConfig(eos_token_id=eos_id)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
     _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
         DummyModel(), inputs, generation_config
@@ -1587,7 +1585,7 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion():
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(eos_token_id=None)
+    generation_config = GenerationConfig()
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
     _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
         DummyModel(), inputs, generation_config
@@ -1654,9 +1652,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
             return SimpleNamespace(sequences=batch["input_ids"])
 
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
-    )
+    generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
