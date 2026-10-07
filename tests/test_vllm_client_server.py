@@ -18,22 +18,26 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-import requests
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import backend_device_count, torch_device
 
 from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
 from trl.generation.vllm_generation import extract_logprobs
-from trl.import_utils import is_vllm_available
+from trl.import_utils import is_requests_available, is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
     kill_process,
     require_3_accelerators,
+    require_requests,
     require_torch_multi_accelerator,
     require_vision,
     require_vllm,
 )
+
+
+if is_requests_available():
+    import requests
 
 
 if is_vllm_available():
@@ -53,6 +57,7 @@ if is_vllm_available(min_version="0.30.0"):
     VLLM_SERVE_TRL_ARGS.append("--enable-scale-out")
 
 
+@require_requests
 class TestConnectionPoolSize(TrlTestCase):
     @pytest.mark.parametrize("scheme", ["http", "https"])
     def test_pool_capacity_covers_default_concurrency(self, scheme):
@@ -71,6 +76,7 @@ class TestConnectionPoolSize(TrlTestCase):
             assert pool.pool.maxsize >= _DEFAULT_GENERATION_CONCURRENCY
 
 
+@require_requests
 class TestResetPrefixCache(TrlTestCase):
     def test_empty_response_body(self):
         # Before vLLM 0.26.0 (vllm-project/vllm#46893), `/reset_prefix_cache` answers with an empty body.
@@ -180,9 +186,9 @@ class TestExtractLogprobs(TrlTestCase):
         assert all_token_ids is None
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -424,9 +430,9 @@ class TestVLLMClientServer(TrlTestCase):
 
 
 # Same as above but using base_url to instantiate the client.
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -586,9 +592,9 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_3_accelerators
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -751,9 +757,9 @@ class TestVLLMClientServerTP(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerDeviceParameter(TrlTestCase):
     """Test the device parameter functionality in init_communicator."""
 
@@ -823,9 +829,9 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_vllm
 @require_vision
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerVLM(TrlTestCase):
     model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
 
