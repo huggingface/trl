@@ -549,7 +549,7 @@ class TestWorkerMetrics:
     @pytest.mark.parametrize(
         ("teacher_server_urls", "completion_ids", "clipped", "per_teacher"),
         [
-            (ONE_TEACHER, [7, 8, 0], 0.0, False),  # ends on eos: the model stopped on its own
+            (ONE_TEACHER, [7, 8, 151645], 0.0, False),  # ends on eos (<|im_end|>): the model stopped on its own
             (TWO_TEACHERS, [7, 8, 9], 1.0, True),  # ends mid-sentence: cut off by max_completion_length
         ],
     )
