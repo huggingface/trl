@@ -1765,7 +1765,8 @@ class TestSFTTrainer(TrlTestCase):
         def compute_loss_func(outputs, labels, num_items_in_batch=None):
             # The outputs are the model's own, with the full logits, as before the fused LM head
             vocab_sizes.append(outputs.logits.shape[-1])
-            return outputs.loss
+            logits = outputs.logits[:, :-1].flatten(0, 1)
+            return torch.nn.functional.cross_entropy(logits, labels[:, 1:].flatten(), ignore_index=-100)
 
         training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=2, logging_steps=1, report_to="none")
         with pytest.warns(FutureWarning, match="`compute_loss_func` receives the model's own outputs"):
