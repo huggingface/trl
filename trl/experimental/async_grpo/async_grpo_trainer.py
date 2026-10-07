@@ -1109,7 +1109,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature)
+        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
         # Processing class
         if processing_class is None:
