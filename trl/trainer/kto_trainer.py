@@ -1331,6 +1331,7 @@ class KTOTrainer(_BaseTrainer):
             KL_model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
             KL_model_kwargs["input_ids"] = KL_model_kwargs.pop("KL_input_ids")
             KL_model_kwargs["attention_mask"] = KL_model_kwargs.pop("KL_attention_mask")
+            KL_model_kwargs["use_cache"] = False
             # KL sequences have different widths from the main completion after flush_left; override token-type
             # tensors with the KL-specific ones the collator built for exactly this purpose.
             if "KL_token_type_ids" in batch:
@@ -1368,6 +1369,7 @@ class KTOTrainer(_BaseTrainer):
             "ref_KL_logps",
         }
         model_kwargs = {k: v for k, v in batch.items() if k not in _non_model_keys}
+        model_kwargs["use_cache"] = False
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
         completion_labels = batch["input_ids"].masked_fill(batch["completion_mask"] == 0, -100)
