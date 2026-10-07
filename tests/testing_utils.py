@@ -46,6 +46,7 @@ from trl.import_utils import (
     is_math_verify_available,
     is_mergekit_available,
     is_openreward_available,
+    is_requests_available,
     is_vllm_available,
 )
 
@@ -68,6 +69,7 @@ require_peft_target_parameters = pytest.mark.skipif(
     not is_peft_available() or Version(peft.__version__) < Version("0.17.0"),
     reason="test requires peft>=0.17.0 for `LoraConfig.target_parameters`",
 )
+require_requests = pytest.mark.skipif(not is_requests_available(), reason="test requires requests")
 # Response parsing needs jmespath only on transformers < 5.13, which ships the legacy `response_schema` parser; the
 # new-style `response_template` parser doesn't use it. See `_SUPPORTS_RESPONSE_TEMPLATE`.
 require_response_parsing = pytest.mark.skipif(
@@ -88,13 +90,6 @@ require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test require
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
-)
-# `Trainer` wraps the model in `nn.DataParallel` whenever more than one accelerator is visible and no distributed
-# launcher is used. TRL trainers don't support it: they rewire `forward` on a single module instance, which
-# `DataParallel` breaks by replicating the module and scattering the inputs across devices.
-xfail_data_parallel = pytest.mark.xfail(
-    is_torch_available() and backend_device_count(torch_device) > 1,
-    reason="TRL trainers do not support nn.DataParallel (https://github.com/huggingface/trl/issues/6836)",
 )
 
 

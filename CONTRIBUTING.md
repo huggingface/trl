@@ -14,6 +14,8 @@ We encourage using AI tools to help with contributions — they can be a great w
 
 That said, **we will not review fully AI-generated PRs from first-time contributors.** Our review resources are limited, and reviewing agent-generated code is especially costly when the contributor cannot engage meaningfully in the discussion or vouch for the correctness of the changes. We want to make sure that every PR we spend time on reflects a genuine understanding of what is being proposed.
 
+This applies to issues too. A report produced by automated analysis, with no account of how a user would hit the problem, costs us more than it saves: it stays open as an apparently unclaimed task and draws near-identical pull requests from others. Tell us what you hit in real use, and say so when you did not.
+
 ## Ways to contribute
 
 There are several ways you can contribute to TRL:
@@ -48,6 +50,8 @@ Do your best to follow these guidelines when submitting a bug-related issue or a
 The TRL library is robust and reliable thanks to users who report the problems they encounter.
 
 Before you report an issue, we would really appreciate it if you could **make sure the bug was not already reported** (use the search bar on GitHub under Issues). Your issue should also be related to bugs in the library itself, and not your code.
+
+We also need to know that the bug matters in practice. Tell us how you hit it: what you were training, with which configuration, and what it cost you. A report showing only that a function can be made to fail, with no plausible path by which a user would get there, is not something we will act on, however clean the reproduction.
 
 Once you've confirmed the bug hasn't already been reported, please include the following information in your issue so we can quickly resolve it:
 
@@ -252,6 +256,18 @@ You can specify a smaller set of tests to test only the feature you're working o
 5. **Opt-in for new features**:  
 
     Do not enable new features or improvements (e.g., novel loss functions) by default. Users should explicitly opt-in to use these.
+
+### Input validation guidelines
+
+Not every invalid value deserves a check. Before adding one, answer two questions.
+
+1. **Would a real user reach this state?** Describe the training run that produces it. A value nobody would choose on purpose, or a report from an automated code-analysis pass rather than a real run, is not a case we handle.
+
+2. **How does it fail today?** If it fails loudly at the point of use, with a traceback on the line responsible, a guard only rewords an error the user already gets. If it hangs, fails silently, produces wrong training, or raises far from the setting that caused it, that is worth a guard.
+
+Avoid guards that encode what merely looks reasonable today. A plausible bound on a hyperparameter can rule out a configuration that later turns out to be useful, and TRL is used for research. Guard states that are definitely wrong, such as mismatched shapes or incompatible features, not values that merely look unusual.
+
+Trainers in TRL are self-contained, so a guard added to one trainer must be added to every trainer sharing that logic, each with its own test. Validation costs more here than in a library built on a shared base class.
 
 ### Writing documentation
 
