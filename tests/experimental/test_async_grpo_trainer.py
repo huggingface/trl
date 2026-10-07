@@ -580,6 +580,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             dataset=dataset,
             reward_funcs=[dummy_reward_func],
             processing_class=MagicMock(),
+            eos_token_ids=[0],
             rollout_buffer=ctx.Queue(),
             metrics_queue=ctx.Queue(),
             model_version_value=ctx.Value("i", 0),
@@ -713,6 +714,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             dataset=dataset,
             reward_funcs=[dummy_reward_func],
             processing_class=AutoTokenizer.from_pretrained(model_id),
+            eos_token_ids=[0],
             rollout_buffer=mp.Queue(),
             model_version_value=mp.Value("i", 0),
             heartbeat_value=mp.Value("d", 0.0),
@@ -1253,6 +1255,7 @@ def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max
 
     loop = object.__new__(_AsyncRolloutLoop)  # skip the heavy __init__; set only what _generate_one reads
     loop.tokenizer = _StubTokenizer()
+    loop.eos_token_ids = [loop.tokenizer.eos_token_id]
     loop.tools = []
     loop.chat_template = None
     loop.chat_template_kwargs = {}
@@ -1878,6 +1881,12 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         )
         assert trainer._lora_sync is False
         assert fake_vllm.requests == []
+
+    def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
+        # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
+        # would leave the other ranks waiting in the collective that shares the sync mode.
+        with pytest.raises(ValueError, match="--max-lora-rank"):
+            self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
