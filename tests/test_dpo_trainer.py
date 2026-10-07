@@ -1106,6 +1106,27 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"), reason="Olmo 3 requires transformers>=4.57.0"
+    )
+    def test_tokenize_prompt_not_prefix_of_conversation(self):
+        # The Olmo-3 Think template ends the generation prompt with `<think>`, which the full conversation doesn't
+        # have, so the tokenized prompt is not a prefix of the tokenized prompt+completion
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Olmo3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # The chosen and rejected completions are the whole assistant turns
+        tokenizer = trainer.processing_class
+        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
+            for key in ("chosen", "rejected"):
+                assert tokenizer.decode(processed[f"{key}_ids"]) == example[key][0]["content"] + tokenizer.eos_token
+
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
