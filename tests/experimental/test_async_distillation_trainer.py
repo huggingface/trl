@@ -482,26 +482,36 @@ class TestParseTeacherLogprobs:
         assert logprobs == pytest.approx(expected_logprobs)
 
 
-def _bare_loop(tokenizer, teacher_server_urls):
-    # _generate_and_score_one/_score_with_teacher only read the attributes set below off self, so we skip the heavy
-    # __init__ (mp.Queue/mp.Value/mp.Event, child-process bookkeeping) and set just those, mirroring
-    # AsyncGRPOTrainer's own `_bare_loop` test helper.
-    loop = object.__new__(_AsyncRolloutLoop)
-    loop.tokenizer = tokenizer
-    loop.eos_token_ids = [tokenizer.eos_token_id]
-    loop.chat_template_kwargs = {}
-    loop.teacher_server_urls = teacher_server_urls
-    # Normally resolved from each teacher's /v1/models in _run_loops, which no bare loop ever reaches.
+def _rollout_loop(**kwargs):
+    # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM or teacher connection happens here).
+    tokenizer = kwargs.get("processing_class") or AutoTokenizer.from_pretrained(
+        "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    )
+    kwargs = {
+        "model_name": "test",
+        "dataset": Dataset.from_dict({"prompt": ["hi"]}),
+        "processing_class": tokenizer,
+        "eos_token_ids": [tokenizer.eos_token_id],
+        "rollout_buffer": mp.Queue(),
+        "model_version_value": mp.Value("i", 0),
+        "heartbeat_value": mp.Value("d", 0.0),
+        "failed_event": mp.Event(),
+        "exception_info_queue": mp.Queue(),
+        "metrics_queue": mp.Queue(),
+        **kwargs,
+    }
+    return _AsyncRolloutLoop(**kwargs)
+
+
+def _scoring_loop(tokenizer, teacher_server_urls):
+    loop = _rollout_loop(
+        processing_class=tokenizer,
+        teacher_server_urls=teacher_server_urls,
+        teacher_top_k=TEACHER_TOP_K,
+        request_timeout=30,
+    )
+    # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
-    loop.teacher_top_k = TEACHER_TOP_K
-    loop.teacher_temperature = 1.0
-    loop.request_timeout = 30
-    loop._model_version_value = types.SimpleNamespace(value=0)
-    # `_generate_and_score_one` pushes its rollout metrics; collect them instead of sending them to a queue.
-    loop._pushed_metrics = []
-    loop._counters = defaultdict(float)
-    loop._rates = defaultdict(lambda: [0.0, 0.0])
-    loop._push_metrics = loop._pushed_metrics.append
     return loop
 
 
@@ -513,14 +523,7 @@ class TestWorkerMetrics:
     """The worker's payload has the same shape as the trainer's sink, so draining it in `log()` is an append."""
 
     def _loop(self, teacher_server_urls=ONE_TEACHER, maxsize=0):
-        loop = object.__new__(_AsyncRolloutLoop)
-        loop._metrics_queue = mp.Queue(maxsize=maxsize)
-        loop._counters = defaultdict(float)
-        loop._rates = defaultdict(lambda: [0.0, 0.0])
-        loop.teacher_server_urls = teacher_server_urls
-        loop.tokenizer = types.SimpleNamespace(eos_token_id=0, pad_token_id=0)
-        loop.eos_token_ids = [0]
-        return loop
+        return _rollout_loop(teacher_server_urls=teacher_server_urls, metrics_queue=mp.Queue(maxsize=maxsize))
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = self._loop()
@@ -578,7 +581,7 @@ class TestMultiTeacherRouting:
     def _run(self, teacher_server_urls, *teacher_ids):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-        loop = _bare_loop(tokenizer, teacher_server_urls)
+        loop = _scoring_loop(tokenizer, teacher_server_urls)
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
