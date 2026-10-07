@@ -497,9 +497,11 @@ class GRPOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Reward functions
@@ -649,13 +651,14 @@ class GRPOTrainer(_BaseTrainer):
                 has_reset = False
                 has_reward = False
                 methods = []
-                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         has_reward = True
                     elif not member_name.startswith("_"):
-                        methods.append(member)
+                        methods.append(getattr(instance, member_name))
                 if not has_reset:
                     raise ValueError(
                         "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -2277,9 +2280,10 @@ class GRPOTrainer(_BaseTrainer):
             for i in range(len(inputs)):
                 methods = []
                 if self.environments:
+                    environment = self.environments[i]
                     methods = [
-                        member
-                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        getattr(environment, member_name)
+                        for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                         if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}

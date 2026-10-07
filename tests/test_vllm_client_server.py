@@ -180,9 +180,9 @@ class TestExtractLogprobs(TrlTestCase):
         assert all_token_ids is None
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -424,9 +424,9 @@ class TestVLLMClientServer(TrlTestCase):
 
 
 # Same as above but using base_url to instantiate the client.
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -586,9 +586,9 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_3_accelerators
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
@@ -751,9 +751,9 @@ class TestVLLMClientServerTP(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_torch_multi_accelerator
 @require_vllm
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerDeviceParameter(TrlTestCase):
     """Test the device parameter functionality in init_communicator."""
 
@@ -823,9 +823,9 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         kill_process(cls.server_process)
 
 
-@pytest.mark.slow
 @require_vllm
 @require_vision
+@pytest.mark.xdist_group("vllm_server")
 class TestVLLMClientServerVLM(TrlTestCase):
     model_id = "Qwen/Qwen2.5-VL-3B-Instruct"
 
