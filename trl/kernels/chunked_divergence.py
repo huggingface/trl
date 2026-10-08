@@ -19,7 +19,7 @@ import triton
 import triton.language as tl
 
 from ..trainer.utils import maybe_gather_lm_head_ctx
-from .chunked_logprob import _BLOCK_SIZE, _addmm_fp32, _transform
+from .chunked_logprob import _BLOCK_SIZE, _MM_OUT_DTYPE, _addmm_fp32, _transform
 
 
 # The projections run on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles, so neither model's logits exist in full
@@ -218,8 +218,11 @@ def _compute_dtype(hidden: torch.Tensor) -> torch.dtype:
 
 def _project(tile, hidden_chunk, weight, bias, start, end, dtype):
     # FP32 projection output avoids rounding logits before computing the divergence.
-    tile.zero_()
-    _addmm_fp32(tile, hidden_chunk, weight[start:end].to(dtype).t())
+    w = weight[start:end].to(dtype).t()
+    if _MM_OUT_DTYPE and tile.device.type == "cuda" and dtype in (torch.float16, torch.bfloat16):
+        torch.mm(hidden_chunk, w, out_dtype=torch.float32, out=tile)
+    else:
+        torch.mm(hidden_chunk.float(), w.float(), out=tile)
     if bias is not None:
         tile.add_(bias[start:end].float())
 
