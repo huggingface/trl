@@ -44,6 +44,61 @@ The number of concurrent requests sent to the vLLM server is controlled by `max_
 
 **Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
 
+## External training compute
+
+In addition to making rollout generation and weight transfer pluggable, [`AsyncGRPOTrainer`] accepts a
+`training_client` implementing [`TrainingClientProtocol`]. The client owns the model: its weights, optimizer state, and
+checkpoints, typically on another set of GPUs or a remote service. The trainer then loads only the model's config, runs
+as a single process, and keeps the GRPO objective, advantages, masks, metrics, and the learning-rate schedule. Without a
+client, the trainer loads the model and runs it in its own process.
+
+The trainer passes the packed token row, position IDs, completion mask, and its loss as a [`GRPOLoss`] to
+`training_client.forward_backward(input_ids, position_ids, completion_mask, loss)`. The loss is both data and a function of the per-token log probs, so a backend
+can use it either way:
+
+- **Call it.** An off-process backend can score the tokens remotely, call the loss on the returned log probs in the
+  trainer process, and send `d(loss) / d(log_probs)` back to the service, which applies the equivalent first-order
+  surrogate to its model. The backend never needs to know what GRPO is.
+- **Read it.** A backend that computes the loss next to the model reads the advantages, old log probs, mask, and
+  clipping bounds from its fields and runs the same objective there, saving the surrogate's extra round trip.
+
+Transport, serialization, and remote lifecycle are the responsibility of the backend adapter.
+
+A mixture-of-experts router loss is the one term that surrogate does not carry, because it is produced by the model
+rather than from its log probs. It stays with the backend, which adds `loss.aux_loss_coef * aux_loss /
+loss.gradient_accumulation_steps` to what it back-propagates. For an off-process backend that means adding it to the
+remote backward, alongside the log-prob surrogate: adding it only to the returned scalar would report the term while
+dropping the router's gradients.
+
+The training client is independent of the other two extension points:
+
+| Extension point | Responsibility |
+|---|---|
+| `rollout_worker` | Generate and score rollouts |
+| `weight_transfer` | Synchronize the trained policy with the rollout engine |
+| `training_client` | Own the policy model: forward and backward, optimizer step, checkpoints |
+
+Every step that touches the weights goes through the client:
+
+| Trainer step | Client call |
+|---|---|
+| Forward and backward of each micro-batch | `forward_backward(...)` |
+| Optimizer step, at the scheduled learning rate | `optimizer_step(learning_rate)`, whose returned metrics (e.g. `grad_norm`) are logged; gradient clipping is the backend's own setting |
+| `save_model` and checkpoints | `save(output_dir)` |
+| `train(resume_from_checkpoint=...)` | `load(checkpoint_dir)` |
+
+Since the trainer holds no weights to stream, a `weight_transfer` that syncs the weights from the client to the
+rollout engine is required, and its `send_weights` receives an empty iterator. PEFT is configured on the backend
+rather than through `peft_config`.
+
+> [!IMPORTANT]
+> This is an experimental Python extension point for [`AsyncGRPOTrainer`], not a standardized HTTP training API.
+
+TRL does not bundle vendor clients or add their dependencies. For example, the
+[Arctic Platform](https://github.com/Snowflake-AI-Research/Arctic-Platform) adapter is maintained in Arctic Platform.
+Follow the backend's documentation for installation, configuration, supported rank topology, and optimizer/checkpoint
+limitations.
+
 ## Quick start
 
 ```python
@@ -340,3 +395,16 @@ MFU is reported only when peak compute capacity is known for the local training 
 ## RolloutWorkerProtocol
 
 [[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol
+
+## TrainingClientProtocol
+
+[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.TrainingClientProtocol
+
+## GRPOLoss
+
+[[autodoc]] trl.experimental.async_grpo.training_client.GRPOLoss
+
+## ForwardBackwardOutput
+
+[[autodoc]] trl.experimental.async_grpo.training_client.ForwardBackwardOutput
+
