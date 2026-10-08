@@ -736,9 +736,14 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_5_lightning_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
-    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_v2_chat_template, lfm2_2_5_vl_chat_template]:
-        # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
-        # tokenizer already requires transformers >= 5.0.0.
+    elif chat_template in [
+        lfm2_v2_chat_template,
+        lfm2_2_5_chat_template,
+        lfm2_2_5_v2_chat_template,
+        lfm2_2_5_vl_chat_template,
+    ]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
         schema, template = None, lfm2_2_5_template
     elif chat_template in [
         gemma4_chat_template,
@@ -1063,9 +1068,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
-    Idefics3, LFM2, LLaMA 3, Muse Glimmer, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the
-    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, and SmolVLM (including SmolVLM2) are supported.
+    The supported templates are listed in [Training templates](chat_templates#training-templates).
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):

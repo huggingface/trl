@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import copy
+import re
 import textwrap
+from pathlib import Path
 
 import pytest
 import transformers
@@ -22,6 +24,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import clone_chat_template
 from trl.chat_template_utils import (
+    _CHAT_TEMPLATES_DIR,
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
     gemma4_v2_chat_template,
@@ -32,6 +35,7 @@ from trl.chat_template_utils import (
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
     lfm2_2_5_v2_chat_template,
+    lfm2_chat_template,
     lfm2_v2_chat_template,
     parse_response,
     supports_tool_calling,
@@ -213,6 +217,15 @@ class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "tokenizer_name, chat_template",
         [
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM",
+                lfm2_v2_chat_template,
+                id="lfm2-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2 reuses the new-style response template of LFM2.5, which requires transformers>=5.13",
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 lfm2_2_5_v2_chat_template,
@@ -513,6 +526,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            # The earlier LFM2 revision renders `tools` into the system prompt and wraps tool message content in
+            # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
+            # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
+            pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
             # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
             # turn with `<｜tool▁calls▁end｜>`.
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
@@ -521,7 +538,11 @@ class TestSupportsToolCalling:
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):
+        # A (model, chat template) pair stands for the same tiny model with the chat template of another Hub revision
+        model_id, chat_template = model_id if isinstance(model_id, tuple) else (model_id, None)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if chat_template is not None:
+            tokenizer.chat_template = chat_template
         assert supports_tool_calling(tokenizer) is False
 
 
@@ -764,6 +785,7 @@ class TestIsChatTemplateStopTokenTrained:
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
         ),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
+        pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
@@ -1569,3 +1591,22 @@ class TestParseResponse:
         # Truncate the response mid-tool-call and just check that parsing doesn't crash.
         for end in range(1, len(response)):
             parse_response(tokenizer, response[:end])
+
+
+class TestChatTemplatesDocumentation:
+    def _documented(self, path):
+        # Templates documented in a `### ` heading, which may list several of them
+        headings = [line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("### ")]
+        return set(re.findall(r"`([\w.]+\.jinja)`", "\n".join(headings)))
+
+    def test_every_template_in_readme(self):
+        documented = self._documented(_CHAT_TEMPLATES_DIR / "README.md")
+        missing = sorted(path.name for path in _CHAT_TEMPLATES_DIR.glob("*.jinja") if path.name not in documented)
+        assert missing == []
+
+    def test_every_training_template_in_docs(self):
+        documented = self._documented(Path(__file__).parents[1] / "docs" / "source" / "chat_templates.md")
+        missing = sorted(
+            path.name for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja") if path.name not in documented
+        )
+        assert missing == []

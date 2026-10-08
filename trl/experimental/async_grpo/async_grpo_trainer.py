@@ -1188,7 +1188,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             model.get_output_embeddings().requires_grad_(True)
 
         if not self._remote_model:
-            add_fused_lm_head(model, temperature=self.temperature)
+            add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
         # Processing class
         if processing_class is None:
@@ -1201,6 +1201,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # configs.
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
@@ -1229,7 +1239,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
-        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
             from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -1378,19 +1388,35 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._lora_dir = os.path.abspath(os.path.join(self.args.output_dir, ".vllm_lora"))
         # Captured once, so a trainer that later activates another adapter does not ship that one as the policy.
         self._adapter_name = model.active_adapters[0] if is_peft_model(model) else None
+        # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
+        # place that talks to it, independent of how rollouts are produced.
+        self.vllm_client = (
+            VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
+            if self.accelerator.is_main_process
+            else None
+        )
+        # Rank 0 probes the server for the sync mode, which every rank must agree on: one arm runs a collective
+        # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
+        # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
+        # alone would leave the others waiting in this collective.
+        if weight_transfer is None and is_peft_model(model):
+            lora_sync = None
+            if self.accelerator.is_main_process:
+                try:
+                    lora_sync = self._init_lora_sync(model)
+                except Exception as error:
+                    lora_sync = error
+            lora_sync = broadcast_object_list([lora_sync], from_process=0)[0]
+            if isinstance(lora_sync, Exception):
+                raise lora_sync
+            self._lora_sync = lora_sync
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
-            # place that talks to it, independent of how rollouts are produced.
-            self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
-
             if weight_transfer is not None:
                 # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
                 # entirely, so the server is not probed and adapter sync stays off.
                 self.weight_transfer = weight_transfer
             else:
-                if is_peft_model(model):
-                    self._lora_sync = self._init_lora_sync(model)
                 if self._lora_sync:
                     # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
                     # group to build and no manifest to collect.
@@ -1423,6 +1449,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
+                    eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
@@ -1447,12 +1474,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             self.rollout_queue = None
             self.rollout_worker = None
-            self.vllm_client = None
             self.weight_transfer = None
-
-        # Every rank must agree on the sync mode: one arm runs a collective adapter save, the other a collective
-        # parameter gather, and a split decision hangs both.
-        self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
 
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
