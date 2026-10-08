@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import importlib.util
 import json
 import pathlib
 
@@ -135,10 +136,23 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5], dtype=torch.int32))
+        torch.testing.assert_close(result["cu_seq_lens_k"], torch.tensor([0, 3, 5], dtype=torch.int32))
+        assert result["max_length_q"] == result["max_length_k"] == 3
+        torch.testing.assert_close(result["seq_idx"], torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.int32))
 
     def test_padding_free_without_labels(self):
         """Padding-free mode without labels: labels default to the input IDs (document starts masked)."""
@@ -147,7 +161,16 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
@@ -164,10 +187,25 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, 6, -100, 8, 9, 10, -100]]))
+        # Boundaries come from `seq_lengths`, i.e. the documents inside each packed example
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 6, 10, 11], dtype=torch.int32))
+        assert result["max_length_q"] == 4
+        torch.testing.assert_close(
+            result["seq_idx"], torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 3]], dtype=torch.int32)
+        )
 
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
@@ -188,10 +226,52 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 0, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, -100, -100, -100]]))
+        # The trailing padding is an extra sequence, so that the boundaries cover the whole row
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5, 8], dtype=torch.int32))
+        assert result["max_length_q"] == 3
+        torch.testing.assert_close(result["seq_idx"], torch.tensor([[0, 0, 0, 1, 1, 2, 2, 2]], dtype=torch.int32))
+
+    def test_padding_free_without_sequence_boundaries(self):
+        """The boundary kwargs can be disabled, e.g. for models whose forward doesn't accept them."""
+        collator = DataCollatorForLanguageModeling(
+            pad_token_id=0, padding_free=True, return_flash_attn_kwargs=False, return_seq_idx=False
+        )
+        examples = [{"input_ids": [1, 2, 3], "labels": [1, 2, 3]}, {"input_ids": [4, 5], "labels": [4, 5]}]
+
+        result = collator(examples)
+
+        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+
+    def test_padding_free_sequence_boundaries_match_position_ids(self):
+        """`cu_seq_lens_q` and `seq_idx` describe the same sequences as the `position_ids` resets."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+        examples = [
+            {"input_ids": list(range(1, 8)), "seq_lengths": [1, 4, 2]},
+            {"input_ids": list(range(1, 6)), "seq_lengths": [5]},
+            {"input_ids": list(range(1, 4)), "seq_lengths": [2, 1]},
+        ]
+
+        result = collator(examples)
+
+        position_ids = result["position_ids"][0]
+        starts = torch.nonzero(position_ids == 0).flatten()
+        expected_cu_seq_lens = torch.cat([starts, torch.tensor([position_ids.numel()])]).to(torch.int32)
+        torch.testing.assert_close(result["cu_seq_lens_q"], expected_cu_seq_lens)
+        torch.testing.assert_close(result["seq_idx"][0], (torch.cumsum(position_ids == 0, 0) - 1).to(torch.int32))
+        assert result["max_length_q"] == int(expected_cu_seq_lens.diff().max())
 
     def test_custom_position_ids_but_no_padding_free(self):
         """Test that custom position_ids are ignored if padding_free is False."""
@@ -207,6 +287,37 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    @require_torch_accelerator
+    @pytest.mark.skipif(
+        importlib.util.find_spec("fla") is None or importlib.util.find_spec("causal_conv1d") is None,
+        reason="The torch fallbacks of the gated delta rule and of the causal conv1d ignore sequence boundaries",
+    )
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+    )
+    def test_padding_free_matches_unpacked_on_linear_attention_model(self):
+        """On a hybrid linear-attention model, a padding-free batch gives the same logits as each sequence alone."""
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16, attn_implementation="sdpa")
+        model = model.to(torch_device).eval()
+        generator = torch.Generator().manual_seed(0)
+        lengths = [37, 5, 70, 1, 64]  # below the conv width, and around the 64-token chunk size of the kernels
+        sequences = [torch.randint(10, 1000, (length,), generator=generator).tolist() for length in lengths]
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+        batch = collator([{"input_ids": ids} for ids in sequences])
+        batch.pop("labels")
+        batch = {k: v.to(torch_device) if torch.is_tensor(v) else v for k, v in batch.items()}
+
+        with torch.no_grad():
+            packed_logits = model(**batch, use_cache=False).logits[0].float()
+            alone_logits = [
+                model(input_ids=torch.tensor([ids], device=torch_device), use_cache=False).logits[0].float()
+                for ids in sequences
+            ]
+
+        torch.testing.assert_close(packed_logits, torch.cat(alone_logits), atol=2e-2, rtol=2e-2)
 
     def test_single_example(self):
         """Test collator with a single example."""
@@ -1030,6 +1141,45 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
+    def test_train_packing_passes_sequence_boundaries(self, model_id):
+        # Linear-attention layers (e.g. Qwen3.5's Gated DeltaNet) only respect the boundaries of a padding-free batch
+        # when they are passed explicitly, so they must reach the model forward, consistent with `position_ids`.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, packing=True, max_length=32, max_steps=2, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        forward_kwargs = []
+        trainer.model.register_forward_pre_hook(
+            lambda module, args, kwargs: forward_kwargs.append(dict(kwargs)), with_kwargs=True
+        )
+        trainer.train()
+
+        assert len(forward_kwargs) > 0
+        for kwargs in forward_kwargs:
+            position_ids = kwargs["position_ids"][0]
+            starts = torch.nonzero(position_ids == 0).flatten().cpu()
+            expected_cu_seq_lens = torch.cat([starts, torch.tensor([position_ids.numel()])]).to(torch.int32)
+            torch.testing.assert_close(kwargs["cu_seq_lens_q"].cpu(), expected_cu_seq_lens)
+            torch.testing.assert_close(kwargs["cu_seq_lens_k"].cpu(), expected_cu_seq_lens)
+            assert kwargs["max_length_q"] == kwargs["max_length_k"] == int(expected_cu_seq_lens.diff().max())
+            assert kwargs["seq_idx"].shape == kwargs["input_ids"].shape
+            assert int(kwargs["seq_idx"].max()) == len(starts) - 1
 
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
