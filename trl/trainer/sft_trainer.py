@@ -758,7 +758,8 @@ class SFTTrainer(_BaseTrainer):
             )
         # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
         # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
-        # this by default without gradient checkpointing, which TRL turns on by default.
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443).
         if self._is_vlm and args.ddp_find_unused_parameters is None:
             args.ddp_find_unused_parameters = True
 
