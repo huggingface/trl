@@ -22,6 +22,7 @@ from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import DistillationConfig, DistillationTrainer
@@ -111,25 +112,34 @@ def _reference_chunked_divergence(
     return per_token.sum() / denom
 
 
+@require_torch_accelerator
 class TestChunkedDivergenceLoss(TrlTestCase):
     """Unit tests for the memory-efficient chunked JSD loss (`_chunked_divergence_loss`)."""
 
+    @pytest.fixture(autouse=True)
+    def small_chunks(self):
+        # Small tiles so every test crosses token and vocabulary chunk boundaries
+        with (
+            patch("trl.kernels.chunked_divergence.TOKEN_CHUNK_SIZE", 4),
+            patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", 5),
+        ):
+            yield
+
     def _inputs(self, B=2, K=6, H=8, V=17, n_masked=3, seed=0):
-        g = torch.Generator().manual_seed(seed)
-        student_hidden = torch.randn(B, K, H, generator=g)
-        teacher_hidden = torch.randn(B, K, H, generator=g)
-        student_w = torch.randn(V, H, generator=g)
-        teacher_w = torch.randn(V, H, generator=g)
-        completion_mask = torch.ones(B, K)
+        g = torch.Generator(torch_device).manual_seed(seed)
+        student_hidden = torch.randn(B, K, H, generator=g, device=torch_device)
+        teacher_hidden = torch.randn(B, K, H, generator=g, device=torch_device)
+        student_w = torch.randn(V, H, generator=g, device=torch_device)
+        teacher_w = torch.randn(V, H, generator=g, device=torch_device)
+        completion_mask = torch.ones(B, K, device=torch_device)
         # Mask a few scattered positions so the packed masked tail is exercised.
-        completion_mask.reshape(-1)[torch.randperm(B * K, generator=g)[:n_masked]] = 0
+        completion_mask.reshape(-1)[torch.randperm(B * K, generator=g, device=torch_device)[:n_masked]] = 0
         return student_hidden, teacher_hidden, student_w, teacher_w, completion_mask
 
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
-    @pytest.mark.parametrize("chunk_size", [3, 4, 100])  # divides / doesn't divide / exceeds n_valid (= 9)
-    def test_matches_naive_full_vocab(self, beta, chunk_size):
+    def test_matches_naive_full_vocab(self, beta):
         sh, th, sw, tw, mask = self._inputs()
-        loss, _, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta, chunk_size)
+        loss, _, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta)
         expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta)
         torch.testing.assert_close(loss, expected)
         assert n_valid.item() == int(mask.sum().item())
@@ -137,19 +147,25 @@ class TestChunkedDivergenceLoss(TrlTestCase):
     def test_bf16_hidden_fp32_weight(self):
         """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
         sh, th, sw, tw, mask = self._inputs()
-        loss, _, _ = _chunked_divergence_loss(sh.bfloat16(), th.bfloat16(), sw, tw, mask, beta=0.5, chunk_size=4)
+        loss, _, _ = _chunked_divergence_loss(sh.bfloat16(), th.bfloat16(), sw, tw, mask, beta=0.5)
         expected = _reference_chunked_divergence(sh.bfloat16().float(), th.bfloat16().float(), sw, tw, mask, beta=0.5)
         torch.testing.assert_close(loss, expected, atol=2e-2, rtol=2e-2)
 
     def test_different_teacher_student_hidden_sizes(self):
         # Teacher and student may have different hidden widths; only the vocabulary must match.
-        g = torch.Generator().manual_seed(2)
+        g = torch.Generator(torch_device).manual_seed(2)
         B, K, V = 2, 5, 13
-        sh, th = torch.randn(B, K, 8, generator=g), torch.randn(B, K, 12, generator=g)
-        sw, tw = torch.randn(V, 8, generator=g), torch.randn(V, 12, generator=g)
-        mask = torch.ones(B, K)
+        sh, th = (
+            torch.randn(B, K, 8, generator=g, device=torch_device),
+            torch.randn(B, K, 12, generator=g, device=torch_device),
+        )
+        sw, tw = (
+            torch.randn(V, 8, generator=g, device=torch_device),
+            torch.randn(V, 12, generator=g, device=torch_device),
+        )
+        mask = torch.ones(B, K, device=torch_device)
         mask[1, -1] = 0
-        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5)
         expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta=0.5)
         torch.testing.assert_close(loss, expected)
 
@@ -164,7 +180,6 @@ class TestChunkedDivergenceLoss(TrlTestCase):
             tw,
             mask,
             beta,
-            chunk_size=4,
             student_logit_scale=0.7,
             teacher_logit_scale=1.3,
             student_final_logit_softcapping=50.0,
@@ -179,7 +194,7 @@ class TestChunkedDivergenceLoss(TrlTestCase):
     def test_applies_temperature(self, beta):
         # Softmax temperature softens both distributions before the divergence.
         sh, th, sw, tw, mask = self._inputs()
-        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta, chunk_size=4, temperature=2.0)
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta, temperature=2.0)
         expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta, temperature=2.0)
         torch.testing.assert_close(loss, expected)
 
@@ -187,18 +202,18 @@ class TestChunkedDivergenceLoss(TrlTestCase):
     def test_applies_lm_head_bias(self, beta):
         # An `lm_head` bias must be added to each chunk's logits (after the projection, before the softmax).
         sh, th, sw, tw, mask = self._inputs()
-        g = torch.Generator().manual_seed(3)
-        s_bias = torch.randn(sw.size(0), generator=g)
-        t_bias = torch.randn(tw.size(0), generator=g)
+        g = torch.Generator(torch_device).manual_seed(3)
+        s_bias = torch.randn(sw.size(0), generator=g, device=torch_device)
+        t_bias = torch.randn(tw.size(0), generator=g, device=torch_device)
         loss, _, _ = _chunked_divergence_loss(
-            sh, th, sw, tw, mask, beta, chunk_size=4, student_lm_head_bias=s_bias, teacher_lm_head_bias=t_bias
+            sh, th, sw, tw, mask, beta, student_lm_head_bias=s_bias, teacher_lm_head_bias=t_bias
         )
         expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta, s_bias=s_bias, t_bias=t_bias)
         torch.testing.assert_close(loss, expected)
 
     def test_beta_1_is_reverse_kl(self):
         sh, th, sw, tw, mask = self._inputs()
-        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=1.0, chunk_size=4)
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=1.0)
         # Hand-rolled reverse KL: sum_x p_s * (log p_s - log p_t) over valid positions, normalized by n_valid.
         student_log_probs = torch.log_softmax(sh @ sw.t(), dim=-1)
         teacher_log_probs = torch.log_softmax(th @ tw.t(), dim=-1)
@@ -210,15 +225,15 @@ class TestChunkedDivergenceLoss(TrlTestCase):
     def test_parity_with_gkd(self, beta):
         # Identity lm_head so hidden states are the logits, then compare against GKD's full-vocab JSD (sum reduction).
         B, K, V = 2, 5, 11
-        g = torch.Generator().manual_seed(1)
-        student_logits = torch.randn(B, K, V, generator=g)
-        teacher_logits = torch.randn(B, K, V, generator=g)
-        eye = torch.eye(V)
-        mask = torch.ones(B, K)
+        g = torch.Generator(torch_device).manual_seed(1)
+        student_logits = torch.randn(B, K, V, generator=g, device=torch_device)
+        teacher_logits = torch.randn(B, K, V, generator=g, device=torch_device)
+        eye = torch.eye(V, device=torch_device)
+        mask = torch.ones(B, K, device=torch_device)
         mask[0, -1] = 0
         labels = torch.where(mask.bool(), torch.ones_like(mask, dtype=torch.long), torch.full_like(mask, -100).long())
         loss, _, _ = _chunked_divergence_loss(
-            student_logits, teacher_logits, eye, eye, mask, beta, chunk_size=4, num_items_in_batch=1
+            student_logits, teacher_logits, eye, eye, mask, beta, num_items_in_batch=1
         )
         gkd = GKDTrainer.generalized_jsd_loss(
             student_logits, teacher_logits, labels=labels, beta=beta, reduction="sum"
@@ -227,35 +242,52 @@ class TestChunkedDivergenceLoss(TrlTestCase):
 
     def test_masked_positions_ignored(self):
         sh, th, sw, tw, mask = self._inputs()
-        loss_a, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+        loss_a, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5)
         # Perturbing the hidden states at masked positions only must not change the loss.
         masked = mask.reshape(-1) == 0
         sh2, th2 = sh.clone().reshape(-1, sh.size(-1)), th.clone().reshape(-1, th.size(-1))
         sh2[masked] += 5.0
         th2[masked] += 5.0
-        loss_b, _, _ = _chunked_divergence_loss(sh2.view_as(sh), th2.view_as(th), sw, tw, mask, beta=0.5, chunk_size=4)
+        loss_b, _, _ = _chunked_divergence_loss(sh2.view_as(sh), th2.view_as(th), sw, tw, mask, beta=0.5)
         torch.testing.assert_close(loss_a, loss_b)
 
     def test_grads_flow_and_zero_at_masked(self):
         sh, th, sw, tw, mask = self._inputs()
         sh = sh.clone().requires_grad_(True)
-        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, chunk_size=4)
+        loss, _, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5)
         loss.backward()
         grad = sh.grad.reshape(-1, sh.size(-1))
         valid = mask.reshape(-1) != 0
         assert (grad[valid].abs().sum(dim=-1) > 0).all()  # valid positions receive gradient
         assert torch.equal(grad[~valid], torch.zeros_like(grad[~valid]))  # masked positions get none
 
-    def test_backward_matches_reference(self):
-        # The chunked (checkpointed) backward must match a naive full-vocab autograd backward, not merely be non-null.
-        # Only the student carries gradient (the teacher is a fixed target), so compare the student hidden + lm_head.
+    @pytest.mark.parametrize("beta", [0.0, 0.3, 0.5, 1.0])
+    @pytest.mark.parametrize(
+        ("temperature", "scale", "softcap"), [(1.0, 1.0, None), (0.7, 1.0, None), (1.0, 0.5, 3.0), (2.0, 1.0, 3.0)]
+    )
+    def test_backward_matches_reference(self, beta, temperature, scale, softcap):
+        # The chunked backward must match a naive full-vocab autograd backward, not merely be non-null. Only the student
+        # carries gradient (the teacher is a fixed target), so compare the student hidden + lm_head.
         sh, th, sw, tw, mask = self._inputs()
+        kwargs = {"temperature": temperature}
         sh_c, sw_c = sh.clone().requires_grad_(True), sw.clone().requires_grad_(True)
-        loss_c, _, _ = _chunked_divergence_loss(sh_c, th, sw_c, tw, mask, beta=0.5, chunk_size=4)
+        loss_c, _, _ = _chunked_divergence_loss(
+            sh_c,
+            th,
+            sw_c,
+            tw,
+            mask,
+            beta,
+            student_logit_scale=scale,
+            student_final_logit_softcapping=softcap,
+            **kwargs,
+        )
         loss_c.backward()
 
         sh_r, sw_r = sh.clone().requires_grad_(True), sw.clone().requires_grad_(True)
-        loss_r = _reference_chunked_divergence(sh_r, th, sw_r, tw, mask, beta=0.5)
+        loss_r = _reference_chunked_divergence(
+            sh_r, th, sw_r, tw, mask, beta, s_scale=scale, s_softcap=softcap, **kwargs
+        )
         loss_r.backward()
 
         torch.testing.assert_close(sh_c.grad, sh_r.grad, atol=1e-5, rtol=1e-5)
@@ -266,11 +298,9 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         # (hidden states, lm_head weight and bias) — otherwise DDP/FSDP synchronization hangs at the all-reduce.
         sh, th, sw, tw, _ = self._inputs()
         sh, sw = sh.clone().requires_grad_(True), sw.clone().requires_grad_(True)
-        s_bias = torch.zeros(sw.size(0), requires_grad=True)
-        mask = torch.zeros(sh.size(0), sh.size(1))
-        loss, _, n_valid = _chunked_divergence_loss(
-            sh, th, sw, tw, mask, beta=0.5, chunk_size=4, student_lm_head_bias=s_bias
-        )
+        s_bias = torch.zeros(sw.size(0), device=torch_device, requires_grad=True)
+        mask = torch.zeros(sh.size(0), sh.size(1), device=torch_device)
+        loss, _, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5, student_lm_head_bias=s_bias)
         assert n_valid.item() == 0
         assert torch.isfinite(loss)
         loss.backward()  # must not raise: the graph stays connected through the student hidden states + lm_head
