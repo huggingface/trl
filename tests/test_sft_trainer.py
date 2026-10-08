@@ -728,6 +728,35 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.router_aux_loss_coef == 0.5
         assert trainer.aux_loss_enabled
 
+    def test_aux_loss_does_not_scale_with_gradient_accumulation(self):
+        # Four copies of one example: every micro-batch has the same aux loss as the full batch
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train").select([0] * 4)
+
+        def router_update(batch_size, gradient_accumulation_steps, router_aux_loss_coef):
+            training_args = SFTConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=batch_size,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                max_steps=1,
+                optim="sgd",
+                learning_rate=1.0,  # with plain SGD and no clipping, the update is the gradient
+                max_grad_norm=0.0,
+                router_aux_loss_coef=router_aux_loss_coef,
+                report_to="none",
+            )
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+            )
+            router = trainer.model.model.layers[0].mlp.gate.weight
+            previous = router.detach().clone()
+            trainer.train()
+            return router.detach() - previous
+
+        # The update is linear in the gradient, so the difference is the aux loss's own contribution
+        aux_update = router_update(4, 1, 1.0) - router_update(4, 1, 0.0)
+        accumulated_aux_update = router_update(2, 2, 1.0) - router_update(2, 2, 0.0)
+        torch.testing.assert_close(accumulated_aux_update, aux_update, rtol=1e-3, atol=1e-6)
+
     @require_peft
     def test_train_peft_model(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
