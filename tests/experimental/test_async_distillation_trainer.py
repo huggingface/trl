@@ -547,16 +547,17 @@ class TestWorkerMetrics:
             loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
 
     @pytest.mark.parametrize(
-        ("teacher_server_urls", "completion_ids", "clipped", "per_teacher"),
+        ("teacher_server_urls", "ends_on_eos", "clipped", "per_teacher"),
         [
-            (ONE_TEACHER, [7, 8, 151645], 0.0, False),  # ends on eos (<|im_end|>): the model stopped on its own
-            (TWO_TEACHERS, [7, 8, 9], 1.0, True),  # ends mid-sentence: cut off by max_completion_length
+            (ONE_TEACHER, True, 0.0, False),  # ends on eos: the model stopped on its own
+            (TWO_TEACHERS, False, 1.0, True),  # ends mid-sentence: cut off by max_completion_length
         ],
     )
     def test_rollout_push_reports_the_completion_and_the_teacher_call(
-        self, teacher_server_urls, completion_ids, clipped, per_teacher
+        self, teacher_server_urls, ends_on_eos, clipped, per_teacher
     ):
         loop = self._loop(teacher_server_urls)
+        completion_ids = [7, 8, loop.eos_token_ids[0] if ends_on_eos else 9]
         loop._push_rollout_metrics(completion_ids=completion_ids, teacher_id="math", score_s=0.25, duration_s=1.5)
         payload = loop._metrics_queue.get(timeout=5)
 
