@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from transformers.testing_utils import torch_device
 
 from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
+from trl.kernels.chunked_logprob import _addmm_fp32
 
 from .testing_utils import require_torch_accelerator
 
@@ -195,6 +196,37 @@ class TestChunkedLogProbFunction:
         _, _, _, mean_logits, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
 
         torch.testing.assert_close(mean_logits, (hidden @ weight.t()).mean(-1) / 0.7, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        ("temperature", "logit_scale", "final_logit_softcapping"),
+        [(1.0, 1.0, None), (0.7, 0.5, None), (0.7, 1.0, 3.0)],
+    )
+    @pytest.mark.parametrize("entropy_weight", [0.0, 0.5])
+    def test_backward_frozen_head(self, temperature, logit_scale, final_logit_softcapping, entropy_weight):
+        # Only the hidden states need a gradient, as with a PEFT adapter
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, device=torch_device, requires_grad=True)
+        weight = torch.randn(self.V, self.H, device=torch_device)
+        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+
+        logprobs, entropy, *_ = ChunkedLogProbFunction.apply(
+            hidden, weight, None, labels, temperature, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
+        )
+        (2.0 * logprobs + entropy_weight * entropy).sum().backward()
+        grad = hidden.grad.clone()
+
+        hidden.grad = None
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
+            hidden,
+            weight,
+            labels,
+            temperature,
+            logit_scale=logit_scale,
+            final_logit_softcapping=final_logit_softcapping,
+        )
+        (2.0 * logprobs_ref + entropy_weight * entropy_ref).sum().backward()
+
+        torch.testing.assert_close(grad, hidden.grad, atol=1e-4, rtol=1e-4)
 
     def test_is_top1_matches_argmax_with_ties(self):
         # Duplicated head rows make exact ties; `argmax` picks the first one, and so must `is_top1`
@@ -447,3 +479,16 @@ class TestChunkedLogProbFunction:
         for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
             if expected is not None:
                 torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+    def test_addmm_fp32(self, dtype):
+        # Accumulates the product in fp32, without rounding it to `dtype` first
+        torch.manual_seed(42)
+        a = torch.randn(64, 256, device=torch_device, dtype=dtype)
+        b = torch.randn(256, 32, device=torch_device, dtype=dtype)
+        acc = torch.randn(64, 32, device=torch_device)
+        expected = acc.double() + a.double() @ b.double()
+
+        _addmm_fp32(acc, a, b)
+
+        torch.testing.assert_close(acc.double(), expected, atol=1e-3, rtol=1e-4)
