@@ -1897,6 +1897,11 @@ class DistillationTrainer(_BaseTrainer):
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        student_hidden_states = student_hidden_states.to(student_lm_head.weight.device)
+        teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
+        loss_mask = loss_mask.to(student_lm_head.weight.device)
+
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()
         teacher_config = unwrapped_teacher.config.get_text_config()

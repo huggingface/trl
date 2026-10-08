@@ -19,9 +19,11 @@ from pathlib import Path
 import pytest
 import torch
 import transformers
+from datasets import load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM
 
+from trl import DistillationConfig, DistillationTrainer
 from trl.trainer.utils import add_fused_lm_head
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
@@ -560,3 +562,44 @@ class TestModelParallel:
         torch.testing.assert_close(out_split["entropy"], out["entropy"])
         out_split["loss"].backward()
         assert all(param.grad is not None for param in model_split.parameters())
+
+    def test_train_distillation(self, tmp_path):
+        """A student and a teacher split across two devices train with the chunked divergence loss."""
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+        )
+        teacher_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/small-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model, teacher_model=teacher_model, args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
