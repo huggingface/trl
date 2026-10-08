@@ -1204,11 +1204,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
 class TestRolloutRequestModel(TrlTestCase):
     def _loop(self, lora_name):
-        loop = _AsyncRolloutLoop.__new__(_AsyncRolloutLoop)
-        loop.model_name = "Qwen/Qwen3-4B"
-        loop.lora_name = lora_name
-        loop._model_version_value = mp.Value("i", 0)
-        return loop
+        return _rollout_loop(model_name="Qwen/Qwen3-4B", lora_name=lora_name)
 
     def test_dense_runs_request_the_base_model(self):
         assert self._loop(None)._request_model == "Qwen/Qwen3-4B"
