@@ -567,48 +567,50 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
+def _checkpoint_trainer(output_dir, dataset_start_index=0):
+    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+    trainer = AsyncGRPOTrainer(
+        model=model_id,
+        reward_funcs=dummy_reward_func,
+        args=AsyncGRPOConfig(output_dir=output_dir, report_to="none"),
+        train_dataset=dataset,
+        rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+        weight_transfer=_StubWeightTransfer(),
+    )
+    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
+    trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+    trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    return trainer
+
+
+class TestRolloutStartIndex(TrlTestCase):
+    def test_rollout_loop_skips_to_start_index(self):
+        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
+        loop = _rollout_loop(dataset=dataset, num_generations=2, dataset_start_index=3)
+        it = loop._repeat_iterator()
+        _group_id, row = next(it)
+        assert row["prompt"] == "row_3"
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
 class TestRolloutStateCheckpoint(TrlTestCase):
-    """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
+    """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
 
-    def _make_rollout_loop(self, dataset, dataset_start_index=0, num_generations=2):
-        ctx = mp.get_context("spawn")
-        kwargs = dict(
-            model_name="test",
-            dataset=dataset,
-            reward_funcs=[dummy_reward_func],
-            processing_class=MagicMock(),
-            eos_token_ids=[0],
-            rollout_buffer=ctx.Queue(),
-            metrics_queue=ctx.Queue(),
-            model_version_value=ctx.Value("i", 0),
-            heartbeat_value=ctx.Value("d", 0.0),
-            failed_event=ctx.Event(),
-            exception_info_queue=ctx.Queue(),
-            num_generations=num_generations,
-            dataset_start_index=dataset_start_index,
-        )
-        with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
-            return _AsyncRolloutLoop(**kwargs)
-
-    def _stub_trainer_for_save(self, trained_groups, dataset_start_index=10, groups_before_resume=0, model_version=7):
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)  # __new__ skips __init__ (requires GPU + model)
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.is_main_process = True
-        trainer.model_version = model_version
-        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
-        trainer._trained_groups = trained_groups
-        trainer._groups_before_resume = groups_before_resume
-        trainer.state = MagicMock()
+    def _trainer_at_step_5(self, trained_groups, dataset_start_index=10):
+        trainer = _checkpoint_trainer(self.tmp_dir, dataset_start_index)
         trainer.state.global_step = 5
-        trainer._get_output_dir = lambda trial: self.tmp_dir
+        trainer._trained_groups = trained_groups
         return trainer
 
     def test_save_checkpoint_writes_rollout_state(self):
-        trainer = self._stub_trainer_for_save({0, 1, 2, 3, 4}, dataset_start_index=10, groups_before_resume=40)
+        trainer = self._trainer_at_step_5({0, 1, 2, 3, 4}, dataset_start_index=10)
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
-            trainer._save_checkpoint(MagicMock(), None)
+            trainer._save_checkpoint(trainer.model, None)
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             data = json.load(f)
@@ -618,7 +620,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
         # file has to exist by the time it runs. Writing it from an `on_save` callback would not: `Trainer` fires
         # `on_save` only after `_save_checkpoint` returns, leaving the Hub copy without it.
-        trainer = self._stub_trainer_for_save({0, 1})
+        trainer = self._trainer_at_step_5({0, 1})
         written_before_super = []
 
         def record(*_args, **_kwargs):
@@ -627,27 +629,20 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             )
 
         with patch.object(_BaseTrainer, "_save_checkpoint", side_effect=record):
-            trainer._save_checkpoint(MagicMock(), None)
+            trainer._save_checkpoint(trainer.model, None)
 
         assert written_before_super == [True]
 
     def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
         # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
         # prompts get re-generated on resume instead of being silently skipped.
-        trainer = self._stub_trainer_for_save({0, 1, 3, 4, 5}, dataset_start_index=0)
+        trainer = self._trainer_at_step_5({0, 1, 3, 4, 5}, dataset_start_index=0)
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
-            trainer._save_checkpoint(MagicMock(), None)
+            trainer._save_checkpoint(trainer.model, None)
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             assert json.load(f)["prompt_index"] == 2
-
-    def test_rollout_loop_skips_to_start_index(self):
-        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
-        loop = self._make_rollout_loop(dataset, dataset_start_index=3)
-        it = loop._repeat_iterator()
-        _group_id, row = next(it)
-        assert row["prompt"] == "row_3"
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
@@ -655,14 +650,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
-        # __new__ skips __init__ (requires GPU + model)
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
-        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {}
-        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.is_main_process = False  # skip finally-block teardown
-        trainer._groups_before_resume = 0
+        trainer = _checkpoint_trainer(self.tmp_dir)
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
             trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
@@ -684,13 +672,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
             json.dump({"prompt_index": 5}, f)
 
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
-        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {}
-        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.is_main_process = False
-        trainer._groups_before_resume = 0
+        trainer = _checkpoint_trainer(self.tmp_dir)
+        trainer.model_version = 7  # a version the resume has to reset, not the 0 `__init__` starts from
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
             trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
