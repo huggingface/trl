@@ -110,9 +110,6 @@ where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is 
 > [!TIP]
 > The paper [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
 
-> [!TIP]
-> [`SFTTrainer`] computes the loss without materializing the full logits tensor. See [Chunked log-probabilities](reducing_memory_usage#chunked-log-probabilities).
-
 ### Label shifting and masking
 
 During training, the loss is computed using a **one-token shift**: the model is trained to predict each token in the sequence based on all previous tokens. Specifically, the input sequence is shifted right by one position to form the target labels.
@@ -176,6 +173,9 @@ training_args = SFTConfig(assistant_only_loss=True)
 
 > [!WARNING]
 > This functionality requires the chat template to include `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. See [Chat Templates](chat_templates#training-templates) for the full list of bundled training templates. For other models, check that your chat template includes these keywords. See [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
+
+> [!NOTE]
+> With a [vision dataset](#training-vision-language-models), assistant-only loss requires `transformers>=5.18.0` and a conversational [language modeling](dataset_formats#language-modeling) dataset.
 
 ### Train on completion only
 
@@ -245,10 +245,6 @@ trainer.train()
 > ```python
 > SFTConfig(learning_rate=1e-4, ...)
 > ```
-
-### Train with Liger Kernel
-
-Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ### Rapid Experimentation for SFT
 

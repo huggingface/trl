@@ -28,13 +28,12 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from transformers.testing_utils import backend_device_count, backend_empty_cache, torch_device
+from transformers.testing_utils import backend_empty_cache, torch_device
+from transformers.trainer_pt_utils import LabelSmoother
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import (
-    DataCollatorForLanguageModeling,
-)
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from .testing_utils import (
     TrlTestCase,
@@ -48,7 +47,6 @@ from .testing_utils import (
     require_torch_accelerator,
     require_torch_multi_accelerator,
     require_vision,
-    xfail_data_parallel,
 )
 
 
@@ -424,6 +422,47 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_dft_loss_matches_reference(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.model.device)
+        labels = input_ids.masked_fill(torch.arange(8, device=input_ids.device) < 3, -100)
+        inputs = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids), "labels": labels}
+
+        loss = trainer.compute_loss(trainer.model, dict(inputs))
+
+        # DFT (https://huggingface.co/papers/2508.05629) weighs each token's NLL by its detached probability
+        with torch.no_grad():
+            logits = trainer.model(input_ids=input_ids, attention_mask=inputs["attention_mask"]).logits[:, :-1]
+        shift_labels = labels[:, 1:]
+        mask = shift_labels != -100
+        logprobs = logits.float().log_softmax(-1).gather(-1, shift_labels.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        expected = (-logprobs.exp() * logprobs)[mask].sum() / mask.sum()
+        torch.testing.assert_close(loss, expected, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("num_items_in_batch", [None, 0])
+    def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.model.device)
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "labels": torch.full_like(input_ids, -100),
+        }
+
+        loss = trainer.compute_loss(trainer.model, inputs, num_items_in_batch=num_items_in_batch)
+        loss.backward()
+
+        assert loss.item() == 0.0
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
 
     def test_train_dft_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
@@ -1057,6 +1096,27 @@ class TestSFTTrainer(TrlTestCase):
         assert len(trainer.train_dataset["input_ids"]) == 3  # w/ this dataset, we end up with 46 seqs
         assert len(trainer.eval_dataset["input_ids"]) == 2  # w/ this dataset, we end up with 6 seqs
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("4.57.0"), reason="Olmo 3 requires transformers>=4.57.0"
+    )
+    def test_tokenize_prompt_not_prefix_of_conversation(self):
+        # The Olmo-3 Think template ends the generation prompt with `<think>`, which the full conversation doesn't
+        # have, so the tokenized prompt is not a prefix of the tokenized prompt+completion
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Olmo3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # The completion is the whole assistant turn
+        tokenizer = trainer.processing_class
+        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
+            completion_ids = [label for label in processed["labels"] if label != -100]
+            assert tokenizer.decode(completion_ids) == example["completion"][0]["content"] + tokenizer.eos_token
+
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
@@ -1136,6 +1196,80 @@ class TestSFTTrainer(TrlTestCase):
             assert all(label == -100 or label == token_id for label, token_id in zip(labels, input_ids, strict=True))
             assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        reason="Processors return correct assistant masks for images since transformers 5.18.0",
+    )
+    @require_vision
+    def test_train_vlm_assistant_only(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            assistant_only_loss=True,
+            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.18.0.dev0"),
+        reason="Processors return correct assistant masks for images since transformers 5.18.0",
+    )
+    @require_vision
+    def test_data_collator_builds_labels_for_vlm_assistant_only_loss(self):
+        """The vision data collator must mask the non-assistant tokens in the labels."""
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        batch = trainer.data_collator([dataset[0], dataset[1]])
+        for labels, input_ids, attention_mask in zip(
+            batch["labels"], batch["input_ids"], batch["attention_mask"], strict=True
+        ):
+            labels, input_ids = labels[attention_mask == 1], input_ids[attention_mask == 1]
+            # Labels are input_ids with non-assistant tokens masked to -100.
+            assert all(label == -100 or label == token_id for label, token_id in zip(labels, input_ids, strict=True))
+            assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
+            assert any(label == -100 for label in labels)  # non-assistant tokens are masked
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.18.0.dev0"),
+        reason="Assistant-only loss on vision datasets is supported since transformers 5.18.0",
+    )
+    @require_vision
+    def test_vlm_assistant_only_loss_requires_transformers_5_18(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        with pytest.raises(ValueError, match="requires transformers>=5.18.0"):
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+                args=training_args,
+                train_dataset=dataset,
+            )
 
     def test_fully_masked_examples_dropped_after_truncation(self):
         # Example 0's assistant tokens all lie beyond `max_length=3`, so keep_start truncation leaves it fully masked;
@@ -1672,10 +1806,11 @@ class TestSFTTrainer(TrlTestCase):
         def compute_loss_func(outputs, labels, num_items_in_batch=None):
             # The outputs are the model's own, with the full logits, as before the fused LM head
             vocab_sizes.append(outputs.logits.shape[-1])
-            return outputs.loss
+            logits = outputs.logits[:, :-1].flatten(0, 1)
+            return torch.nn.functional.cross_entropy(logits, labels[:, 1:].flatten(), ignore_index=-100)
 
         training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=2, logging_steps=1, report_to="none")
-        with pytest.warns(FutureWarning, match="`compute_loss_func` receives the model's own outputs"):
+        with pytest.warns(FutureWarning, match="`compute_loss_func` is deprecated"):
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -1709,6 +1844,23 @@ class TestSFTTrainer(TrlTestCase):
         with pytest.warns(FutureWarning, match="`loss_type='chunked_nll'` is deprecated"):
             training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
         assert training_args.loss_type == "nll"
+
+    def test_label_smoothing(self):
+        # Label smoothing goes through `Trainer`'s label smoother, on the full logits
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, label_smoothing_factor=0.1, report_to="none")
+        with pytest.warns(FutureWarning, match="`label_smoothing_factor` is deprecated"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+        trainer.model.eval()  # no dropout, so the two forward passes match
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(4)])
+        inputs = {k: v.to(trainer.model.device) for k, v in batch.items()}
+
+        loss = trainer.compute_loss(trainer.model, inputs)
+
+        expected = LabelSmoother(epsilon=0.1)(trainer.model(**inputs), inputs["labels"], shift_labels=True)
+        torch.testing.assert_close(loss, expected)
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
@@ -1750,6 +1902,26 @@ class TestSFTTrainer(TrlTestCase):
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             report_to="none",
         )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_torch_accelerator
+    def test_train_with_activation_offloading(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, activation_offloading=True, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1839,17 +2011,10 @@ class TestSFTTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("5.2.0"),
-                        reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                    ),
-                    pytest.mark.xfail(
-                        Version(transformers.__version__).is_devrelease,
-                        reason="Upstream bug: Qwen3_5MoeModel drops router_logits (see #7436)",
-                        strict=True,
-                    ),
-                ],
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
             ),
         ],
     )
@@ -1967,38 +2132,6 @@ class TestSFTTrainer(TrlTestCase):
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Param {n} is not updated"
-
-    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
-    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
-    @pytest.mark.slow
-    @require_vision
-    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
-    def test_train_vlm_gemma_3n(self):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
-
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            per_device_train_batch_size=1,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            model_init_kwargs={"dtype": "bfloat16"},
-            report_to="none",
-        )
-        trainer = SFTTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if "model.audio_tower" in n or "model.embed_audio" in n:
-                # The audio embedding parameters are not updated because this dataset contains no audio data
-                continue
             assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     @pytest.mark.parametrize(
@@ -2155,6 +2288,50 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    @require_bitsandbytes
+    def test_train_peft_dora_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, learning_rate=0.1, report_to="none")
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(use_dora=True),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["mean_token_accuracy"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # The DoRA magnitude vector is the exception: it must stay in float32, since its optimizer updates can be
+            # smaller than bfloat16 can represent, which would otherwise silently freeze it, see #7268
+            if "lora_magnitude_vector" in n:
+                assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            elif "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
     def test_prompt_tuning_peft_model(self):
         """Test that SFT works with Prompt Tuning and a pre-converted PeftModel"""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
@@ -2263,7 +2440,7 @@ class TestSFTTrainerSlow(TrlTestCase):
         backend_empty_cache(torch_device)
         gc.collect()
 
-    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
+    @pytest.mark.parametrize("packing", [True, False])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2306,7 +2483,7 @@ class TestSFTTrainerSlow(TrlTestCase):
     @pytest.mark.parametrize(
         "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
     )
-    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
+    @pytest.mark.parametrize("packing", [True, False])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2450,7 +2627,7 @@ class TestSFTTrainerSlow(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @pytest.mark.parametrize("packing", [True, pytest.param(False, marks=xfail_data_parallel)])
+    @pytest.mark.parametrize("packing", [True, False])
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -2500,45 +2677,3 @@ class TestSFTTrainerSlow(TrlTestCase):
             release_memory(trainer.model, trainer)
         finally:
             cleanup_liger_patches(trainer)
-
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_torch_accelerator
-    @pytest.mark.skipif(
-        backend_device_count(torch_device) > 1,
-        reason="segfaults in accelerate's get_max_memory when more than one accelerator is visible, taking the whole "
-        "pytest process down; cause not yet diagnosed (https://github.com/huggingface/trl/issues/6836)",
-    )
-    def test_train_offloading(self, model_name, packing):
-        """Test that activation offloading works with SFTTrainer."""
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            activation_offloading=True,
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=2,
-            packing=packing,
-            max_length=self.max_length,
-        )
-        trainer = SFTTrainer(
-            model=model_name, args=training_args, train_dataset=self.train_dataset, eval_dataset=self.eval_dataset
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(trainer.model, trainer)

@@ -48,6 +48,7 @@ from ...trainer.utils import (
     compute_mfu,
     create_model_from_path,
     get_config_model_id,
+    get_peak_flops_per_device,
     is_trackio_available,
     nanmax,
     nanmin,
@@ -1122,6 +1123,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
         if peft_config is not None:
@@ -1206,6 +1217,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # self.model_accepts_loss_kwargs to False to enable scaling.
         self.model_accepts_loss_kwargs = False
 
+        precision = self.accelerator.mixed_precision
+        dtype = {
+            "bf16": "bfloat16",
+            "fp16": "float16",
+            "no": str(self.model.dtype).removeprefix("torch."),
+        }.get(precision, precision)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
+
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
@@ -1276,19 +1295,35 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._lora_dir = os.path.abspath(os.path.join(self.args.output_dir, ".vllm_lora"))
         # Captured once, so a trainer that later activates another adapter does not ship that one as the policy.
         self._adapter_name = model.active_adapters[0] if is_peft_model(model) else None
+        # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
+        # place that talks to it, independent of how rollouts are produced.
+        self.vllm_client = (
+            VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
+            if self.accelerator.is_main_process
+            else None
+        )
+        # Rank 0 probes the server for the sync mode, which every rank must agree on: one arm runs a collective
+        # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
+        # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
+        # alone would leave the others waiting in this collective.
+        if weight_transfer is None and is_peft_model(model):
+            lora_sync = None
+            if self.accelerator.is_main_process:
+                try:
+                    lora_sync = self._init_lora_sync(model)
+                except Exception as error:
+                    lora_sync = error
+            lora_sync = broadcast_object_list([lora_sync], from_process=0)[0]
+            if isinstance(lora_sync, Exception):
+                raise lora_sync
+            self._lora_sync = lora_sync
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
-            # place that talks to it, independent of how rollouts are produced.
-            self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
-
             if weight_transfer is not None:
                 # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
                 # entirely, so the server is not probed and adapter sync stays off.
                 self.weight_transfer = weight_transfer
             else:
-                if is_peft_model(model):
-                    self._lora_sync = self._init_lora_sync(model)
                 if self._lora_sync:
                     # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
                     # group to build and no manifest to collect.
@@ -1321,6 +1356,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
+                    eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
@@ -1345,12 +1381,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             self.rollout_queue = None
             self.rollout_worker = None
-            self.vllm_client = None
             self.weight_transfer = None
-
-        # Every rank must agree on the sync mode: one arm runs a collective adapter save, the other a collective
-        # parameter gather, and a split decision hangs both.
-        self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
 
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
@@ -1622,15 +1653,24 @@ class AsyncGRPOTrainer(_BaseTrainer):
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            metrics["perf/mfu_fwd_bwd"].append(
-                compute_mfu(flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size)
-            )
+            if self._peak_flops_per_device is not None:
+                metrics["perf/mfu_fwd_bwd"].append(
+                    compute_mfu(
+                        flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
+                    )
+                )
             if step_s is not None:
                 metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
                 metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                metrics["perf/mfu_wall_clock"].append(
-                    compute_mfu(flops_per_token, self._step_forward_tokens / step_s, world_size)
-                )
+                if self._peak_flops_per_device is not None:
+                    metrics["perf/mfu_wall_clock"].append(
+                        compute_mfu(
+                            flops_per_token,
+                            self._step_forward_tokens / step_s,
+                            world_size,
+                            self._peak_flops_per_device,
+                        )
+                    )
 
         self._last_step_end_time = time_after
         self._current_train_step_time = 0.0

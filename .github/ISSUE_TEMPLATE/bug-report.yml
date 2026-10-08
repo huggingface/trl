@@ -36,6 +36,15 @@ body:
         ```
 
   - type: textarea
+    id: impact
+    validations:
+      required: true
+    attributes:
+      label: How did you hit this?
+      description: |
+        What were you training, with which configuration, and what did the bug cost you? If you found the problem by reading the source or with automated analysis rather than in a real run, say so and explain what would go wrong for a user.
+
+  - type: textarea
     id: system-info
     attributes:
       label: System Info

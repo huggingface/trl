@@ -124,65 +124,6 @@ trainer = SFTTrainer(
 
 PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
 
-## Liger for reducing peak memory usage
-
-[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
-
-For more information, see [Liger Kernel Integration](liger_kernel_integration).
-
-<Tip warning={true}>
-
-`use_liger_kernel=True` is deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0. These trainers compute the log-probabilities with a fused LM head, so only Liger's layer kernels (`RMSNorm`, `RoPE`, `SwiGLU`) apply. Use the Hub kernels instead, with `model_init_kwargs={"use_kernels": True}`.
-
-</Tip>
-
-To use Liger for reducing peak memory usage, use the following code snippet:
-
-<hfoptions id="liger">
-<hfoption id="SFT">
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="DPO">
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GRPO">
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="KTO">
-
-```python
-from trl import KTOConfig
-
-training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-</hfoptions>
-
-## Chunked log-probabilities
-
-At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`], [`GRPOTrainer`] and [`RLOOTrainer`] never materialize it: positions with `labels == -100` are dropped before the `lm_head` matmul, and the log-probabilities are computed on `[4096 tokens × 32768 vocab]` tiles by a Triton kernel, so peak memory scales with the tile instead of `(batch × seq_len) × vocab_size`.
-
-This is always on and needs no configuration. On `Qwen3-8B` (vocab ≈ 152k) with 16k tokens, the head's forward and backward take +2.6 GiB instead of +45 GiB with full logits.
-
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
@@ -258,6 +199,18 @@ training_args = RewardConfig(..., pad_to_multiple_of=2048)
 
 </hfoption>
 </hfoptions>
+
+## PyTorch caching allocator
+
+On long runs, especially online RL (GRPO, RLOO, Online DPO), GPU memory can fragment. Setting [`expandable_segments:True`](https://docs.pytorch.org/docs/stable/notes/cuda.html) lets PyTorch's caching allocator grow existing segments instead, which reduces the gap between allocated and reserved memory:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_ALLOC_CONF=expandable_segments:True  # canonical name since PyTorch 2.10
+```
+
+> [!WARNING]
+> With vLLM sleep mode (`vllm_enable_sleep_mode=True`), vLLM only reads `PYTORCH_CUDA_ALLOC_CONF` to work around this setting, so don't set only `PYTORCH_ALLOC_CONF`.
 
 ## Disabling model gathering for generation in online methods
 

@@ -54,6 +54,7 @@ from ..chat_template_utils import (
 from ..data_utils import (
     _tokenize,
     apply_chat_template,
+    common_prefix_length,
     get_dataset_column_names,
     is_conversational,
     is_conversational_from_value,
@@ -283,6 +284,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
             datasets format](dataset_formats#standard).
+        assistant_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the assistant turns. When `True`, the labels for the other tokens are set
+            to -100. It requires a conversational language modeling dataset, `transformers>=5.18.0`, and a chat
+            template with `{% generation %}` markers.
+        chat_template (`str`, *optional*):
+            Chat template used to render the messages. Defaults to the one attached to `processor`.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -329,9 +336,15 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
     pad_to_multiple_of: int | None = None
     dataset_text_field: str = "text"
+    assistant_only_loss: bool = False
+    chat_template: str | None = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.assistant_only_loss and "messages" not in examples[0]:
+            raise ValueError(
+                "The `assistant_only_loss` argument is only supported for conversational language modeling datasets."
+            )
         if "messages" in examples[0] or self.dataset_text_field in examples[0]:
             if self.completion_only_loss:
                 raise ValueError(
@@ -352,35 +365,45 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if all(img_list == [] for img_list in images):
             images = None
 
+        processor_kwargs = {
+            "padding": True,
+            "padding_side": "right",
+            "pad_to_multiple_of": self.pad_to_multiple_of,
+            "truncation": self.max_length is not None,
+            "max_length": self.max_length,
+            "add_special_tokens": False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        }
         if "messages" in examples[0]:  # conversational case
             messages = [
                 prepare_multimodal_messages(example["messages"], images=example["images"]) for example in examples
             ]
-            texts = self.processor.apply_chat_template(messages)
+            # transformers 5.4.0 moved processor kwargs to the `processor_kwargs` argument (transformers#44881)
+            if Version(transformers.__version__) >= Version("5.4.0"):
+                template_kwargs = {"processor_kwargs": processor_kwargs}
+            else:
+                template_kwargs = processor_kwargs
+            output = self.processor.apply_chat_template(
+                messages,
+                chat_template=self.chat_template,
+                tokenize=True,
+                return_dict=True,
+                return_tensors=self.return_tensors,
+                return_assistant_tokens_mask=self.assistant_only_loss,
+                **template_kwargs,
+            )
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
+            output = self.processor(images=images, text=texts, return_tensors=self.return_tensors, **processor_kwargs)
         else:
             raise KeyError(
                 "The input examples must contain either 'messages' for conversational data or 'text' for standard "
                 "data."
             )
 
-        output = self.processor(
-            images=images,
-            text=texts,
-            padding=True,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            truncation=self.max_length is not None,
-            max_length=self.max_length,
-            return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS twice, see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        )
         labels = output["input_ids"].clone()
         labels[output["attention_mask"] == 0] = -100
-        # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
-        # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
-        # token definitions vary across architectures.
+        if self.assistant_only_loss:
+            labels[output.pop("assistant_masks") == 0] = -100
         output["labels"] = labels
         return output
 
@@ -547,9 +570,8 @@ class SFTTrainer(_BaseTrainer):
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
         compute_loss_func (`Callable`, *optional*):
             A function that accepts the model outputs, the labels, and the number of items in the entire accumulated
-            batch (batch_size * gradient_accumulation_steps) and returns the loss. The outputs, with the full logits,
-            come from a forward pass that does not use the fused LM head. This is deprecated: from v2.0.0, it will
-            receive the fused LM head's outputs ([`~trainer.utils.FusedCausalLMOutput`]) instead.
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. This is deprecated and will be
+            removed in v2.0.0: subclass [`SFTTrainer`] and override `compute_loss` instead.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
@@ -744,10 +766,14 @@ class SFTTrainer(_BaseTrainer):
                 "Padding-free training is yet not supported for vision datasets. Please set `padding_free=False` in "
                 "the `SFTConfig`."
             )
-        if self._is_vision_dataset and args.assistant_only_loss:
+        if (
+            self._is_vision_dataset
+            and args.assistant_only_loss
+            and Version(transformers.__version__) < Version("5.18.0.dev0")
+        ):
             raise ValueError(
-                "Assistant-only loss is not yet supported for vision datasets. Please set "
-                "`assistant_only_loss=False` in the `SFTConfig`."
+                "Assistant-only loss for vision datasets requires transformers>=5.18.0. Please upgrade transformers "
+                "or set `assistant_only_loss=False` in the `SFTConfig`."
             )
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
@@ -846,9 +872,11 @@ class SFTTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
@@ -885,6 +913,32 @@ class SFTTrainer(_BaseTrainer):
                     "to at least 2."
                 )
 
+        if args.assistant_only_loss and not is_conversational(dataset_sample):
+            raise ValueError(
+                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
+                "supported for conversational datasets."
+            )
+
+        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
+        # if the current template doesn't already have them.
+        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
+            self.chat_template = get_training_chat_template(processing_class)
+        else:
+            self.chat_template = None
+
+        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
+        # message, leaving it out of the assistant mask so the model is never trained to stop.
+        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
+            processing_class, chat_template=self.chat_template
+        ):
+            logger.warning(
+                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
+                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
+                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
+                "or edit the chat template so the end-of-turn token falls inside "
+                "`{% generation %}...{% endgeneration %}`."
+            )
+
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
         if args.completion_only_loss is None:
@@ -914,6 +968,8 @@ class SFTTrainer(_BaseTrainer):
                     completion_only_loss=self.completion_only_loss,
                     pad_to_multiple_of=args.pad_to_multiple_of,
                     dataset_text_field=args.dataset_text_field,
+                    assistant_only_loss=args.assistant_only_loss,
+                    chat_template=self.chat_template,
                 )
             else:
                 data_collator = DataCollatorForLanguageModeling(
@@ -930,31 +986,6 @@ class SFTTrainer(_BaseTrainer):
                 "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
                 "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
                 "to one of these supported options."
-            )
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
-            raise ValueError(
-                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
-                "supported for conversational datasets."
-            )
-
-        # When assistant_only_loss is enabled, swap in a training chat template with {% generation %} markers
-        # if the current template doesn't already have them.
-        if args.assistant_only_loss and not has_generation_markers(processing_class.chat_template):
-            self.chat_template = get_training_chat_template(processing_class)
-        else:
-            self.chat_template = None
-
-        # A template can define generation markers and still attribute the assistant's end-of-turn token to the next
-        # message, leaving it out of the assistant mask so the model is never trained to stop.
-        if args.assistant_only_loss and not is_chat_template_stop_token_trained(
-            processing_class, chat_template=self.chat_template
-        ):
-            logger.warning(
-                "The chat template does not include the assistant turn's end-of-turn token in the loss mask; "
-                "the model may not learn to stop. The training loss still looks healthy, so this usually only "
-                "surfaces at inference. Either set `assistant_only_loss=False` to train on the full sequence, "
-                "or edit the chat template so the end-of-turn token falls inside "
-                "`{% generation %}...{% endgeneration %}`."
             )
 
         # Dataset
@@ -1011,9 +1042,17 @@ class SFTTrainer(_BaseTrainer):
             )
         if compute_loss_func is not None:
             warnings.warn(
-                "`compute_loss_func` receives the model's own outputs, with the full logits, from a forward pass that "
-                "does not use the fused LM head. This is deprecated: from v2.0.0, it will receive the fused LM head's "
-                "outputs (`FusedCausalLMOutput`, with per-token log-probabilities) instead.",
+                "`compute_loss_func` is deprecated and will be removed in v2.0.0. Subclass `SFTTrainer` and override "
+                "`compute_loss` instead. Expect slower training meanwhile: the loss needs the full logits, so each "
+                "step runs an extra forward pass.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if args.label_smoothing_factor > 0 and args.loss_type == "nll":
+            warnings.warn(
+                "`label_smoothing_factor` is deprecated in `SFTTrainer` and will be removed in v2.0.0. Label smoothing "
+                "needs the full logits, so the loss is computed from a forward pass that does not use the fused LM "
+                "head. Expect slower training meanwhile: each step runs an extra forward pass.",
                 FutureWarning,
                 stacklevel=2,
             )
@@ -1065,6 +1104,16 @@ class SFTTrainer(_BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
+
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
 
         # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
         # LM head, so only its layer kernels are applied
@@ -1119,6 +1168,21 @@ class SFTTrainer(_BaseTrainer):
             and isinstance(self.data_collator, DataCollatorForLanguageModeling)
         ):
             self.data_collator.return_position_ids = True
+
+        # Under DeepSpeed sequence parallelism (Ulysses/ALST), `Trainer` reduces the model's own loss across ranks,
+        # which is the fused LM head's negative log-likelihood
+        if (
+            Version(accelerate.__version__) >= Version("1.12.0")
+            and self.accelerator.parallelism_config is not None
+            and self.accelerator.parallelism_config.sp_backend == "deepspeed"
+            and self.accelerator.parallelism_config.sp_enabled
+            and (args.loss_type == "dft" or self.compute_loss_func is not None or args.label_smoothing_factor > 0)
+        ):
+            raise ValueError(
+                "`loss_type='dft'`, `compute_loss_func` and `label_smoothing_factor` are not supported with DeepSpeed "
+                "sequence parallelism (Ulysses/ALST): the loss is the model's own negative log-likelihood, reduced "
+                "across ranks by `Trainer`."
+            )
 
         # Initialize activation offloading context
         if self.args.activation_offloading:
@@ -1281,16 +1345,24 @@ class SFTTrainer(_BaseTrainer):
                                 chat_template=chat_template,
                             )["input_ids"]
 
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            logger.warning(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
+                        # The completion starts where the tokenized prompt and prompt+completion diverge, which is not
+                        # always after the prompt (see `common_prefix_length`)
+                        prompt_len = common_prefix_length(prompt_ids, prompt_completion_ids)
+                        if prompt_len < len(prompt_ids):
+                            logger.warning_once(
+                                "The tokenized prompt is not a prefix of the tokenized prompt+completion, usually "
+                                "because the chat template renders the prompt alone differently or because tokens "
+                                "merge across the boundary. The completion starts where they diverge, and this end of "
+                                "the prompt is left out of the training sequence: "
+                                f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
+                                ". The model is trained on a context that differs from the one it sees at inference. "
+                                "To avoid it, use a chat template that renders the prompt the same way in both cases, "
+                                "or end the prompt on a token boundary. This warning is shown once, but it likely "
+                                "applies to every example in the dataset."
                             )
 
                         # Create completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        completion_mask = [0] * prompt_len + [1] * (len(prompt_completion_ids) - prompt_len)
                         output["input_ids"] = prompt_completion_ids
                         output["completion_mask"] = completion_mask
 
@@ -1485,8 +1557,22 @@ class SFTTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
+
+        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+        inputs["use_cache"] = False
+
+        # MoE models: request router logits so the model returns `outputs.aux_loss`. VLM wrappers honor this only
+        # as a forward kwarg (not from the model config), so it must be passed here.
+        if self.aux_loss_enabled:
+            inputs["output_router_logits"] = True
+
+        # The forwards that build the full logits leave the loss to the caller, like in `Trainer.compute_loss`
+        logits_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+
         try:
-            parallelism_config = self.accelerator.parallelism_config
+            parallelism_config = (
+                self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
+            )
             if (
                 parallelism_config is not None
                 and parallelism_config.sp_backend == "deepspeed"
@@ -1505,8 +1591,17 @@ class SFTTrainer(_BaseTrainer):
                     # `compute_loss_func` receives the model's own outputs, with the logits; the fused outputs only feed
                     # the metrics
                     loss = self.compute_loss_func(
-                        model(**inputs), inputs.get("labels"), num_items_in_batch=num_items_in_batch
+                        model(**logits_inputs), inputs.get("labels"), num_items_in_batch=num_items_in_batch
                     )
+                    with torch.no_grad():
+                        outputs = model(**inputs, fused_lm_head=True)
+                elif self.label_smoother is not None and self.args.loss_type == "nll":
+                    # Label smoothing needs the full logits; the fused outputs only feed the metrics
+                    # `LabelSmoother` takes `num_items_in_batch` since transformers 5.15.0
+                    kwargs = {}
+                    if Version(transformers.__version__) >= Version("5.15.0"):
+                        kwargs["num_items_in_batch"] = num_items_in_batch
+                    loss = self.label_smoother(model(**logits_inputs), inputs["labels"], shift_labels=True, **kwargs)
                     with torch.no_grad():
                         outputs = model(**inputs, fused_lm_head=True)
                 else:
@@ -1515,16 +1610,15 @@ class SFTTrainer(_BaseTrainer):
                     if self.args.loss_type == "dft":
                         # DFT: https://huggingface.co/papers/2508.05629
                         per_token_loss = per_token_loss * outputs.log_probs.exp().detach()
-                    if num_items_in_batch is None:
-                        loss = per_token_loss.sum() / outputs.label_mask.sum().clamp(min=1)
-                    else:
-                        loss = per_token_loss.sum() / num_items_in_batch
+                    num_tokens = outputs.label_mask.sum() if num_items_in_batch is None else num_items_in_batch
+                    # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
+                    loss = per_token_loss.sum() / torch.as_tensor(num_tokens).clamp(min=1)
                     if self.aux_loss_enabled:
                         loss = loss + self.router_aux_loss_coef * outputs.aux_loss
                 # Like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages
                 # the gradients across ranks
                 if self.args.average_tokens_across_devices and num_items_in_batch is not None:
-                    loss = loss * (self.accelerator.num_processes // self._tp_size)
+                    loss = loss * (self.accelerator.num_processes // self.get_tp_size())
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(
@@ -1569,7 +1663,7 @@ class SFTTrainer(_BaseTrainer):
                 stacklevel=2,
             )
             with torch.no_grad():
-                outputs = model(**inputs)
+                outputs = model(**logits_inputs)
         return (loss, outputs) if return_outputs else loss
 
     # During eval, Trainer calls prediction_step, which asks `compute_loss` for the outputs even when only the loss is
