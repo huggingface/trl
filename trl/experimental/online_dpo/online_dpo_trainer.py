@@ -395,6 +395,16 @@ class OnlineDPOTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
         self.vision_start_token_id = getattr(processing_class, "vision_start_token_id", None)
@@ -544,7 +554,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "do_sample": True,
                 "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": self.eos_token_ids,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
                 "top_p": self.top_p,
@@ -620,7 +630,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         return model
 
     def _generate_vllm(self, prompts, images=None):
-        eos_token_id = self._tokenizer.eos_token_id
         pad_token_id = self._tokenizer.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
@@ -636,7 +645,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         max_tokens = self.generation_config.max_tokens
         completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
         completion_ids = [
-            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+            ids + [self.eos_token_ids[0]] if ids[-1] not in self.eos_token_ids and len(ids) < max_tokens else ids
             for ids in completion_ids
         ]
         completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
@@ -938,7 +947,6 @@ class OnlineDPOTrainer(_BaseTrainer):
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
-        eos_token_id = self._tokenizer.eos_token_id
         pad_token_id = self._tokenizer.pad_token_id
 
         # Apply chat template and tokenize the input
@@ -1041,7 +1049,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             )
 
         completion_ids = output[:, prompt_ids.size(1) :]
-        completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+        completion_ids, completion_mask = truncate_right(completion_ids, self.eos_token_ids, pad_token_id)
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
@@ -1161,7 +1169,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
 
-        contain_eos_token = torch.any(completion_ids == self._tokenizer.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(
+            torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=completion_ids.device)), dim=-1
+        )
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None

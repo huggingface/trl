@@ -1437,7 +1437,7 @@ class TestAddFusedLMHead:
     def test_masked_labels(self):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        add_fused_lm_head(model)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
         labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
@@ -1450,10 +1450,21 @@ class TestAddFusedLMHead:
         assert (out["log_probs"][~mask] == 0).all()
         assert (out["entropy"][~mask] == 0).all()
 
+    def test_outputs(self):
+        """Only the requested per-token fields are computed; the others are `None`."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model, outputs=("log_probs", "is_top1"))
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert out.log_probs is not None and out.is_top1 is not None
+        assert out.entropy is None and out.log_sum_sq_probs is None and out.mean_logits is None
+
     def test_shift_labels(self):
         """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        add_fused_lm_head(model)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
 
@@ -1484,6 +1495,19 @@ class TestAddFusedLMHead:
         add_fused_lm_head(model)
 
         torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
+
+    def test_log_sum_sq_probs(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logits = model(input_ids=input_ids).logits[:, :-1]
+        expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
+
+        add_fused_lm_head(model, outputs=("log_probs", "log_sum_sq_probs"))
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert not out["log_sum_sq_probs"].requires_grad
+        torch.testing.assert_close(out["log_sum_sq_probs"], expected, rtol=1e-5, atol=1e-5)
 
     def test_output_multiplier(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
@@ -1600,7 +1624,7 @@ class TestAddFusedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        add_fused_lm_head(model, temperature)
+        add_fused_lm_head(model, temperature, outputs=("log_probs", "entropy"))
         with torch.no_grad():
             out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
