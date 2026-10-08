@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="11" skipped="0" tests="12" time="369.964" timestamp="2026-10-06T14:58:45.903549+00:00" hostname="ip-10-53-86-250"><testcase classname="tests.kernels.test_tree_gdn" name="test_qwen_gdn_layer[vendored-dtype0]" time="190.449"><failure message="AssertionError: (0.04105720296502113, 1.2857060432434082, 1.3008147478103638)&#10;assert tensor(0.0411, device='cuda:0') &lt; 0.04">tests/kernels/test_tree_gdn.py:214: in test_qwen_gdn_layer
+    assert relative_rms &lt; 0.04, (relative_rms.item(), a.grad.norm().item(), b.grad.norm().item())
+E   AssertionError: (0.04105720296502113, 1.2857060432434082, 1.3008147478103638)
+E   assert tensor(0.0411, device='cuda:0') &lt; 0.04</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_qwen_gdn_layer[vendored-dtype1]" time="118.086"><failure message="AssertionError: (0.1106969341635704, 0.1728515625, 0.1669921875)&#10;assert tensor(0.1107, device='cuda:0') &lt; 0.04">tests/kernels/test_tree_gdn.py:214: in test_qwen_gdn_layer
+    assert relative_rms &lt; 0.04, (relative_rms.item(), a.grad.norm().item(), b.grad.norm().item())
+E   AssertionError: (0.1106969341635704, 0.1728515625, 0.1669921875)
+E   assert tensor(0.1107, device='cuda:0') &lt; 0.04</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_qwen_gdn_layer[vendored_aligned-dtype0]" time="30.784"><properties><property name="max_gradient_relative_rms" value="0.003333826083689928" /></properties></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_qwen_gdn_layer[vendored_aligned-dtype1]" time="20.484"><failure message="AssertionError: (0.1106969341635704, 0.1728515625, 0.1669921875)&#10;assert tensor(0.1107, device='cuda:0') &lt; 0.04">tests/kernels/test_tree_gdn.py:214: in test_qwen_gdn_layer
+    assert relative_rms &lt; 0.04, (relative_rms.item(), a.grad.norm().item(), b.grad.norm().item())
+E   AssertionError: (0.1106969341635704, 0.1728515625, 0.1669921875)
+E   assert tensor(0.1107, device='cuda:0') &lt; 0.04</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored-dtype0-False]" time="0.053"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored-dtype0-True]" time="0.014"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored-dtype1-False]" time="0.014"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored-dtype1-True]" time="0.013"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored_aligned-dtype0-False]" time="0.012"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored_aligned-dtype0-True]" time="0.013"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored_aligned-dtype1-False]" time="0.014"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored_aligned-dtype1-True]" time="0.014"><failure message="AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'">tests/kernels/test_tree_gdn.py:251: in test_hybrid_qwen_model
+    if layer.block_type == "linear_attention":
+       ^^^^^^^^^^^^^^^^
+../trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/nn/modules/module.py:1968: in __getattr__
+    raise AttributeError(
+E   AttributeError: 'Qwen3_5DecoderLayer' object has no attribute 'block_type'</failure></testcase></testsuite></testsuites>

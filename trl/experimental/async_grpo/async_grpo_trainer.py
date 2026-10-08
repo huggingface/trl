@@ -56,7 +56,8 @@ from ...trainer.utils import (
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .packing import PackingProtocol, SequencePacking, SequenceRow, TrainingRow, TreePacking, TreeRow
-from .tree import register_tree_attention
+from .tree import TREE_ATTENTION, register_tree_attention
+from .tree.gdn import enable_qwen3_5_tree_gdn
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -664,6 +665,8 @@ class DataCollatorForRollout(DataCollatorMixin):
         if rows[0].tree_enter is not None:
             batch["tree_enter"] = pad([row.tree_enter for row in rows], padding_value=0)
             batch["tree_leave"] = pad([row.tree_leave for row in rows], padding_value=0)
+            batch["tree_segment_lengths"] = pad([row.tree_segment_lengths for row in rows], padding_value=0)
+            batch["tree_segment_parents"] = pad([row.tree_segment_parents for row in rows], padding_value=-1)
         return batch
 
     def _log_metrics(
@@ -1142,6 +1145,28 @@ class AsyncGRPOTrainer(_BaseTrainer):
             **model_init_kwargs,
         )
 
+        # Tree packing shares a prefix between rows and tells attention who may see what through a block mask. A
+        # layer that is not attention never reads that mask: it scans the row in order, and a row is a prefix
+        # forest flattened depth-first, so state would run from the end of one branch into the start of its
+        # sibling. Transformers cannot catch this -- `_supports_flex_attn` answers whether attention can be
+        # swapped, and a name registered through `AttentionInterface` skips that check anyway -- so the loss
+        # would be wrong rather than refused. Qwen3.5 is the one hybrid handled: its gated DeltaNet layers are
+        # swapped for a scan that follows the forest's branches.
+        text_config = model.config.get_text_config()
+        layer_types = getattr(text_config, "layer_types", None)
+        if self.packing.attn_implementation == TREE_ATTENTION and layer_types is not None:
+            not_attention = sorted({t for t in layer_types if t != "full_attention"})
+            if not_attention and text_config.model_type == "qwen3_5_text":
+                enable_qwen3_5_tree_gdn(model)
+                self.packing.gdn_conv_kernel_size = text_config.linear_conv_kernel_dim
+            elif not_attention:
+                raise ValueError(
+                    f"`packing='tree'` needs every layer to be attention, but {model.config.model_type} has "
+                    f"{len(layer_types) - sum(t == 'full_attention' for t in layer_types)} of {len(layer_types)} "
+                    f"layers of type {not_attention}. Those layers ignore the tree block mask and would read "
+                    f"across the forest's branches. Use `packing='sequence'`."
+                )
+
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
@@ -1510,6 +1535,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "mean_seq_len",
                 "tree_enter",
                 "tree_leave",
+                "tree_segment_lengths",
+                "tree_segment_parents",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

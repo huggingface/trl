@@ -1,0 +1,1777 @@
+{
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "torch": "2.11.0+cu130",
+  "triton": "3.7.1",
+  "fla": "0.5.2",
+  "fla_tilelang": "0",
+  "dtype": "bfloat16",
+  "component": "layer",
+  "hidden_size": 4096,
+  "key_heads": 16,
+  "value_heads": 32,
+  "head_dim": 128,
+  "repeats": 5,
+  "float32_matmul_precision": "highest",
+  "compiled_scan_chunks_per_region": 8,
+  "tree_implementation": "vendored FLA 0.5.2 with tree-native state kernels",
+  "compiled_implementation": "FP32 chunk algebra and eight-chunk compiled PyTorch scan",
+  "input_generation": "Seeded synthetic hidden states (layer) or Q/K/V/gates (core); shared histories reuse identical values.",
+  "cases": [
+    {
+      "prefix": 0,
+      "suffix": 16384,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        16384,
+        16384,
+        16384,
+        16384
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 65536,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.30418799305335,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 35.58165979500336,
+          "logical_tokens_s": 1967800.5665134254,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 21.215566011960618,
+          "peak_extra_mib": 5404.0,
+          "warmup_and_compile_s": 36.69168512200122,
+          "logical_tokens_s": 3089052.6306511466,
+          "speedup_vs_baseline": 1.5697996449530298
+        },
+        "qwen_native": {
+          "ms": 144.61419500003103,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.5624348790006479,
+          "logical_tokens_s": 453178.19595777534,
+          "speedup_vs_baseline": 0.23029681140946226
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.63674600678496,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 72.95102121900709,
+          "logical_tokens_s": 651213.4245236978,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 84.29552499728743,
+          "peak_extra_mib": 13764.0947265625,
+          "warmup_and_compile_s": 101.22544838298927,
+          "logical_tokens_s": 777455.2682613805,
+          "speedup_vs_baseline": 1.1938563287911592
+        },
+        "qwen_native": {
+          "ms": 2311.3618869974744,
+          "peak_extra_mib": 36497.84765625,
+          "warmup_and_compile_s": 6.973086461992352,
+          "logical_tokens_s": 28353.846435156527,
+          "speedup_vs_baseline": 0.043540021392978405
+        }
+      }
+    },
+    {
+      "prefix": 4096,
+      "suffix": 12288,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        4096,
+        12288,
+        12288,
+        12288,
+        12288
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 53248,
+      "packing_ratio": 1.2307692307692308,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.49506999074947,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.099790419000783,
+          "logical_tokens_s": 1956586.4474413537,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 16.940998990321532,
+          "peak_extra_mib": 4390.75,
+          "warmup_and_compile_s": 8.637857966998126,
+          "logical_tokens_s": 3868484.971721031,
+          "speedup_vs_baseline": 1.9771602613213868
+        },
+        "qwen_native": {
+          "ms": 144.75865999702364,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.4354363309976179,
+          "logical_tokens_s": 452725.93709659565,
+          "speedup_vs_baseline": 0.23138560409054737
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.76127499633003,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.32144720300857443,
+          "logical_tokens_s": 650408.6019394553,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 68.24338200385682,
+          "peak_extra_mib": 11172.0947265625,
+          "warmup_and_compile_s": 12.420894322000095,
+          "logical_tokens_s": 960327.5522935863,
+          "speedup_vs_baseline": 1.4764988492310571
+        },
+        "qwen_native": {
+          "ms": 2308.2143000065116,
+          "peak_extra_mib": 36497.84765625,
+          "warmup_and_compile_s": 6.972976391989505,
+          "logical_tokens_s": 28392.511041897244,
+          "speedup_vs_baseline": 0.04365334492384255
+        }
+      }
+    },
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 28672,
+      "packing_ratio": 2.2857142857142856,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.67880400037393,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10029349799151532,
+          "logical_tokens_s": 1945912.3310694871,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 9.124541000346653,
+          "peak_extra_mib": 2364.25,
+          "warmup_and_compile_s": 8.449768185004359,
+          "logical_tokens_s": 7182388.680976961,
+          "speedup_vs_baseline": 3.6910134985523575
+        },
+        "qwen_native": {
+          "ms": 142.72790700488258,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.43006757499824744,
+          "logical_tokens_s": 459167.3862194173,
+          "speedup_vs_baseline": 0.23596509405285268
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.56223400169984,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.2991565359989181,
+          "logical_tokens_s": 651695.9438161668,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 37.152303993934765,
+          "peak_extra_mib": 5988.0947265625,
+          "warmup_and_compile_s": 12.219001474004472,
+          "logical_tokens_s": 1763982.1210199767,
+          "speedup_vs_baseline": 2.706756329785548
+        },
+        "qwen_native": {
+          "ms": 2306.760496998322,
+          "peak_extra_mib": 36497.47265625,
+          "warmup_and_compile_s": 6.946234614995774,
+          "logical_tokens_s": 28410.405018327165,
+          "speedup_vs_baseline": 0.04359457088525518
+        }
+      }
+    },
+    {
+      "prefix": 15360,
+      "suffix": 1024,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        15360,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 19456,
+      "packing_ratio": 3.3684210526315788,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.441199993831106,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10060352200525813,
+          "logical_tokens_s": 1959738.2872650928,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 6.311140998150222,
+          "peak_extra_mib": 1604.3125,
+          "warmup_and_compile_s": 8.322663585000555,
+          "logical_tokens_s": 10384176.176575428,
+          "speedup_vs_baseline": 5.29875659625298
+        },
+        "qwen_native": {
+          "ms": 143.13869200123008,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.4368688559916336,
+          "logical_tokens_s": 457849.6497609242,
+          "speedup_vs_baseline": 0.2336279557000823
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.19534500315785,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.2999951649981085,
+          "logical_tokens_s": 654082.2829437286,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 25.333565994515084,
+          "peak_extra_mib": 4044.0947265625,
+          "warmup_and_compile_s": 12.093402725004125,
+          "logical_tokens_s": 2586923.6101300963,
+          "speedup_vs_baseline": 3.9550430849273623
+        },
+        "qwen_native": {
+          "ms": 2306.4458110020496,
+          "peak_extra_mib": 36497.47265625,
+          "warmup_and_compile_s": 6.945087310989038,
+          "logical_tokens_s": 28414.28126660712,
+          "speedup_vs_baseline": 0.04344144767035622
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 32768,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        32768,
+        32768,
+        32768,
+        32768
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 131072,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 69.27441999141593,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 11.336489811001229,
+          "logical_tokens_s": 1892069.251770591,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 42.31409500062,
+          "peak_extra_mib": 10808.0,
+          "warmup_and_compile_s": 5.908322636998491,
+          "logical_tokens_s": 3097596.675483181,
+          "speedup_vs_baseline": 1.6371476216235015
+        },
+        "qwen_native": {
+          "ms": 309.31088999204803,
+          "peak_extra_mib": 24646.25390625,
+          "warmup_and_compile_s": 0.9330510690051597,
+          "logical_tokens_s": 423754.8830025664,
+          "speedup_vs_baseline": 0.2239637278635643
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 205.6875270063756,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 15.042854150000494,
+          "logical_tokens_s": 637238.4456542045,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 170.6598899909295,
+          "peak_extra_mib": 27588.0947265625,
+          "warmup_and_compile_s": 8.808629150007619,
+          "logical_tokens_s": 768030.4962517344,
+          "speedup_vs_baseline": 1.205248210445394
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 1.32 GiB is free. Including non-PyTorch memory, this process has 77.82 GiB memory in use. Of the allocated memory 68.69 GiB is allocated by PyTorch, and 2.03 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 8192,
+      "suffix": 24576,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        8192,
+        24576,
+        24576,
+        24576,
+        24576
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 106496,
+      "packing_ratio": 1.2307692307692308,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 70.0117539963685,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20926624999265186,
+          "logical_tokens_s": 1872142.7834360313,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 34.74813299544621,
+          "peak_extra_mib": 8781.5,
+          "warmup_and_compile_s": 8.732060655005625,
+          "logical_tokens_s": 3772058.775565788,
+          "speedup_vs_baseline": 2.0148349842434303
+        },
+        "qwen_native": {
+          "ms": 308.5107130027609,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.9306142989953514,
+          "logical_tokens_s": 424853.9660884548,
+          "speedup_vs_baseline": 0.22693459593327625
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 205.0554169982206,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6124064540053951,
+          "logical_tokens_s": 639202.8160911126,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 138.86288899811916,
+          "peak_extra_mib": 22404.0947265625,
+          "warmup_and_compile_s": 12.542415778007125,
+          "logical_tokens_s": 943895.0964197159,
+          "speedup_vs_baseline": 1.4766754348672524
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 1.52 GiB is free. Including non-PyTorch memory, this process has 77.61 GiB memory in use. Of the allocated memory 68.50 GiB is allocated by PyTorch, and 2.02 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 57344,
+      "packing_ratio": 2.2857142857142856,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 69.27328200254124,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20664902399585117,
+          "logical_tokens_s": 1892100.3337937954,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 18.286373000591993,
+          "peak_extra_mib": 4728.5,
+          "warmup_and_compile_s": 8.439914097005385,
+          "logical_tokens_s": 7167741.793069448,
+          "speedup_vs_baseline": 3.788246143743137
+        },
+        "qwen_native": {
+          "ms": 309.7347059956519,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.9313919550040737,
+          "logical_tokens_s": 423175.05098004744,
+          "speedup_vs_baseline": 0.22365359987625574
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 205.4246250045253,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6084504369937349,
+          "logical_tokens_s": 638053.982073048,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 74.69296600902453,
+          "peak_extra_mib": 12036.0947265625,
+          "warmup_and_compile_s": 12.154468931999872,
+          "logical_tokens_s": 1754810.4862265566,
+          "speedup_vs_baseline": 2.7502539526908807
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 77.90 GiB memory in use. Of the allocated memory 68.12 GiB is allocated by PyTorch, and 2.68 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 30720,
+      "suffix": 2048,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        30720,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 38912,
+      "packing_ratio": 3.3684210526315788,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 69.54829599999357,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20800175599288195,
+          "logical_tokens_s": 1884618.4240087222,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 12.632992002181709,
+          "peak_extra_mib": 3208.625,
+          "warmup_and_compile_s": 8.426177066998207,
+          "logical_tokens_s": 10375372.67318494,
+          "speedup_vs_baseline": 5.505290907172475
+        },
+        "qwen_native": {
+          "ms": 311.2938580015907,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.9292871429934166,
+          "logical_tokens_s": 421055.5288223201,
+          "speedup_vs_baseline": 0.22341685906195483
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 205.92184801353142,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6102618459990481,
+          "logical_tokens_s": 636513.3241781468,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 50.89281700202264,
+          "peak_extra_mib": 8148.0947265625,
+          "warmup_and_compile_s": 12.00912025400612,
+          "logical_tokens_s": 2575451.8559031775,
+          "speedup_vs_baseline": 4.0461868716237
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 1.38 GiB is free. Including non-PyTorch memory, this process has 77.76 GiB memory in use. Of the allocated memory 67.98 GiB is allocated by PyTorch, and 2.68 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 65536,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        65536,
+        65536,
+        65536,
+        65536
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 262144,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 138.00245299353264,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 11.578670849004993,
+          "logical_tokens_s": 1899560.4376125482,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 86.21827099705115,
+          "peak_extra_mib": 21616.0,
+          "warmup_and_compile_s": 7.12578208699415,
+          "logical_tokens_s": 3040469.229648155,
+          "speedup_vs_baseline": 1.600617263575752
+        },
+        "qwen_native": {
+          "ms": 667.5252900022315,
+          "peak_extra_mib": 49278.50390625,
+          "warmup_and_compile_s": 2.0577899960044306,
+          "logical_tokens_s": 392710.214768228,
+          "speedup_vs_baseline": 0.20673741513684268
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 452.95656799862627,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 16.12275695199787,
+          "logical_tokens_s": 578739.8141907394,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "error": "CUDA out of memory. Tried to allocate 8.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 7.30 GiB is free. Including non-PyTorch memory, this process has 71.69 GiB memory in use. Of the allocated memory 52.27 GiB is allocated by PyTorch, and 12.31 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.17 GiB. GPU 0 has a total capacity of 79.18 GiB of which 860.12 MiB is free. Including non-PyTorch memory, this process has 78.15 GiB memory in use. Of the allocated memory 70.78 GiB is allocated by PyTorch, and 268.87 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 16384,
+      "suffix": 49152,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        16384,
+        49152,
+        49152,
+        49152,
+        49152
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 212992,
+      "packing_ratio": 1.2307692307692308,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 140.64052900357638,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4176726919977227,
+          "logical_tokens_s": 1863929.280252735,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 69.58604700048454,
+          "peak_extra_mib": 17563.0,
+          "warmup_and_compile_s": 8.887682032000157,
+          "logical_tokens_s": 3767192.006152823,
+          "speedup_vs_baseline": 2.021102434552678
+        },
+        "qwen_native": {
+          "ms": 661.8980210041627,
+          "peak_extra_mib": 49278.75390625,
+          "warmup_and_compile_s": 2.0510771609988296,
+          "logical_tokens_s": 396048.92548598716,
+          "speedup_vs_baseline": 0.2124806609788789
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 452.26134099357296,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.3468701179954223,
+          "logical_tokens_s": 579629.4669451425,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 278.8595080055529,
+          "peak_extra_mib": 44880.0947265625,
+          "warmup_and_compile_s": 13.041495139012113,
+          "logical_tokens_s": 940057.6005992951,
+          "speedup_vs_baseline": 1.62182506964965
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.17 GiB. GPU 0 has a total capacity of 79.18 GiB of which 596.12 MiB is free. Including non-PyTorch memory, this process has 78.41 GiB memory in use. Of the allocated memory 70.40 GiB is allocated by PyTorch, and 919.88 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        16384,
+        16384,
+        16384,
+        16384
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 114688,
+      "packing_ratio": 2.2857142857142856,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 139.07072800793685,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4091892429860309,
+          "logical_tokens_s": 1884968.9201672927,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 36.77749699272681,
+          "peak_extra_mib": 9457.0,
+          "warmup_and_compile_s": 8.751588539002114,
+          "logical_tokens_s": 7127836.895801857,
+          "speedup_vs_baseline": 3.7814081810798528
+        },
+        "qwen_native": {
+          "ms": 663.0787480098661,
+          "peak_extra_mib": 49278.00390625,
+          "warmup_and_compile_s": 2.041657955996925,
+          "logical_tokens_s": 395343.6915099253,
+          "speedup_vs_baseline": 0.2097348594346257
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 455.1863929955289,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.354477005006629,
+          "logical_tokens_s": 575904.7371228756,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 148.68518800358288,
+          "peak_extra_mib": 24144.0947265625,
+          "warmup_and_compile_s": 12.492586164997192,
+          "logical_tokens_s": 1763080.798564031,
+          "speedup_vs_baseline": 3.061410481483604
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.22 GiB. GPU 0 has a total capacity of 79.18 GiB of which 172.12 MiB is free. Including non-PyTorch memory, this process has 78.83 GiB memory in use. Of the allocated memory 70.89 GiB is allocated by PyTorch, and 840.71 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 61440,
+      "suffix": 4096,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        61440,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 77824,
+      "packing_ratio": 3.3684210526315788,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 140.6050969962962,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4154559379967395,
+          "logical_tokens_s": 1864398.9841058562,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 25.23437500349246,
+          "peak_extra_mib": 6417.25,
+          "warmup_and_compile_s": 8.675351854995824,
+          "logical_tokens_s": 10388369.038809918,
+          "speedup_vs_baseline": 5.571966691342121
+        },
+        "qwen_native": {
+          "ms": 683.2494440022856,
+          "peak_extra_mib": 49278.00390625,
+          "warmup_and_compile_s": 2.6513501809968147,
+          "logical_tokens_s": 383672.4673560409,
+          "speedup_vs_baseline": 0.20578882021867528
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 453.45026699942537,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.3471153980062809,
+          "logical_tokens_s": 578109.7048076767,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 100.79066699836403,
+          "peak_extra_mib": 16368.3447265625,
+          "warmup_and_compile_s": 12.448635254011606,
+          "logical_tokens_s": 2600875.7339035664,
+          "speedup_vs_baseline": 4.49893110645637
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.22 GiB. GPU 0 has a total capacity of 79.18 GiB of which 462.12 MiB is free. Including non-PyTorch memory, this process has 78.54 GiB memory in use. Of the allocated memory 70.60 GiB is allocated by PyTorch, and 840.55 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        16384,
+        16384,
+        16384,
+        16384
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 65536,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.51854700304102,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10144597900216468,
+          "logical_tokens_s": 1955216.0179871207,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 20.47029900131747,
+          "peak_extra_mib": 5404.0,
+          "warmup_and_compile_s": 0.06129089499881957,
+          "logical_tokens_s": 3201516.4993819627,
+          "speedup_vs_baseline": 1.6374234201896007
+        },
+        "qwen_native": {
+          "ms": 143.34979400155134,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.4342676050000591,
+          "logical_tokens_s": 457175.4040978305,
+          "speedup_vs_baseline": 0.2338234752027497
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.12545599602163,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.3226355969964061,
+          "logical_tokens_s": 654538.8417767006,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 83.69300799677148,
+          "peak_extra_mib": 13776.0947265625,
+          "warmup_and_compile_s": 0.24971443899266887,
+          "logical_tokens_s": 783052.2712545843,
+          "speedup_vs_baseline": 1.1963419453138073
+        },
+        "qwen_native": {
+          "ms": 2314.1354149993276,
+          "peak_extra_mib": 36497.84765625,
+          "warmup_and_compile_s": 7.000047376001021,
+          "logical_tokens_s": 28319.86390045331,
+          "speedup_vs_baseline": 0.04326689585537963
+        }
+      }
+    },
+    {
+      "prefix": 4096,
+      "suffix": 12288,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        4096,
+        6144,
+        6144,
+        6144,
+        6144,
+        6144,
+        6144
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 40960,
+      "packing_ratio": 1.6,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.50159899855498,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.09968014300102368,
+          "logical_tokens_s": 1956205.1352482236,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 12.818456001696177,
+          "peak_extra_mib": 3377.5,
+          "warmup_and_compile_s": 2.825739391002571,
+          "logical_tokens_s": 5112628.228495544,
+          "speedup_vs_baseline": 2.6135440176353493
+        },
+        "qwen_native": {
+          "ms": 143.6608390067704,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.4373390679975273,
+          "logical_tokens_s": 456185.5579648358,
+          "speedup_vs_baseline": 0.23319924365035993
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 101.46756599715445,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.30081452599551994,
+          "logical_tokens_s": 645881.2661559053,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 51.635608993819915,
+          "peak_extra_mib": 8592.0947265625,
+          "warmup_and_compile_s": 3.85917293500097,
+          "logical_tokens_s": 1269201.647410487,
+          "speedup_vs_baseline": 1.9650696094104119
+        },
+        "qwen_native": {
+          "ms": 2314.170728001045,
+          "peak_extra_mib": 36497.84765625,
+          "warmup_and_compile_s": 6.998962736004614,
+          "logical_tokens_s": 28319.431754548754,
+          "speedup_vs_baseline": 0.043846188515572926
+        }
+      }
+    },
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 24576,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.69326300162356,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10088046599412337,
+          "logical_tokens_s": 1945077.2695076177,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 7.817146994057111,
+          "peak_extra_mib": 2026.5,
+          "warmup_and_compile_s": 8.49801665400446,
+          "logical_tokens_s": 8383621.294293548,
+          "speedup_vs_baseline": 4.310173907083805
+        },
+        "qwen_native": {
+          "ms": 144.81563899607863,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 0.45285136200254783,
+          "logical_tokens_s": 452547.8080566603,
+          "speedup_vs_baseline": 0.23266315181978323
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.45907800667919,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.29881332999502774,
+          "logical_tokens_s": 652365.1351413232,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 31.3121420040261,
+          "peak_extra_mib": 5136.0947265625,
+          "warmup_and_compile_s": 12.028687572004856,
+          "logical_tokens_s": 2092989.997029696,
+          "speedup_vs_baseline": 3.2083106289490577
+        },
+        "qwen_native": {
+          "ms": 2313.3309639961226,
+          "peak_extra_mib": 36497.47265625,
+          "warmup_and_compile_s": 6.984376783002517,
+          "logical_tokens_s": 28329.71201266895,
+          "speedup_vs_baseline": 0.043426158889579264
+        }
+      }
+    },
+    {
+      "prefix": 15360,
+      "suffix": 1024,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        15360,
+        512,
+        512,
+        512,
+        512,
+        512,
+        512
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 18432,
+      "packing_ratio": 3.5555555555555554,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 33.30957599973772,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10197123698890209,
+          "logical_tokens_s": 1967482.263974661,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 5.962945011560805,
+          "peak_extra_mib": 1519.875,
+          "warmup_and_compile_s": 2.7657973839959595,
+          "logical_tokens_s": 10990542.403617756,
+          "speedup_vs_baseline": 5.5860947795356095
+        },
+        "qwen_native": {
+          "ms": 143.67163101269398,
+          "peak_extra_mib": 12330.12890625,
+          "warmup_and_compile_s": 1.0559557730011875,
+          "logical_tokens_s": 456151.29123305925,
+          "speedup_vs_baseline": 0.2318451858933423
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 100.31564699602313,
+          "peak_extra_mib": 11487.6259765625,
+          "warmup_and_compile_s": 0.30129559799388517,
+          "logical_tokens_s": 653297.884851384,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 23.84516000165604,
+          "peak_extra_mib": 3840.0947265625,
+          "warmup_and_compile_s": 3.663957017008215,
+          "logical_tokens_s": 2748398.416930251,
+          "speedup_vs_baseline": 4.206960531573545
+        },
+        "qwen_native": {
+          "ms": 2314.508165989537,
+          "peak_extra_mib": 36497.47265625,
+          "warmup_and_compile_s": 6.962681791002979,
+          "logical_tokens_s": 28315.302993100897,
+          "speedup_vs_baseline": 0.04334210112978129
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 32768,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        32768,
+        32768,
+        32768,
+        32768
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 131072,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 69.55837800342124,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.2069579109956976,
+          "logical_tokens_s": 1884345.2616671596,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 42.148823995376006,
+          "peak_extra_mib": 10808.0,
+          "warmup_and_compile_s": 0.12381752399960533,
+          "logical_tokens_s": 3109742.7537807324,
+          "speedup_vs_baseline": 1.650304122626345
+        },
+        "qwen_native": {
+          "ms": 309.4214790035039,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.9351190979941748,
+          "logical_tokens_s": 423603.43057669804,
+          "speedup_vs_baseline": 0.22480138815002418
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 206.5578839974478,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6114184470061446,
+          "logical_tokens_s": 634553.3632675067,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 168.64661598810926,
+          "peak_extra_mib": 27600.0947265625,
+          "warmup_and_compile_s": 0.5053279749990907,
+          "logical_tokens_s": 777199.1108866452,
+          "speedup_vs_baseline": 1.224797087016626
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 160.12 MiB is free. Including non-PyTorch memory, this process has 78.84 GiB memory in use. Of the allocated memory 70.68 GiB is allocated by PyTorch, and 1.04 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 8192,
+      "suffix": 24576,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        8192,
+        12288,
+        12288,
+        12288,
+        12288,
+        12288,
+        12288
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 81920,
+      "packing_ratio": 1.6,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 69.91291300801095,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.2085933100024704,
+          "logical_tokens_s": 1874789.5683445656,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 25.561880000168458,
+          "peak_extra_mib": 6755.0,
+          "warmup_and_compile_s": 8.6815063009999,
+          "logical_tokens_s": 5127635.369508667,
+          "speedup_vs_baseline": 2.7350458185215722
+        },
+        "qwen_native": {
+          "ms": 308.8276899943594,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.925429170994903,
+          "logical_tokens_s": 424417.90113572386,
+          "speedup_vs_baseline": 0.2263816207973057
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 204.99148000089917,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6143414609978208,
+          "logical_tokens_s": 639402.1839318642,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 104.1049240011489,
+          "peak_extra_mib": 17232.0947265625,
+          "warmup_and_compile_s": 12.471205523004755,
+          "logical_tokens_s": 1259037.4687613575,
+          "speedup_vs_baseline": 1.9690853431547282
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 558.12 MiB is free. Including non-PyTorch memory, this process has 78.45 GiB memory in use. Of the allocated memory 70.30 GiB is allocated by PyTorch, and 1.02 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 49152,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 70.03691399586387,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20832103899738286,
+          "logical_tokens_s": 1871470.2365061466,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 15.702905991929583,
+          "peak_extra_mib": 4053.0,
+          "warmup_and_compile_s": 8.646001305009122,
+          "logical_tokens_s": 8346990.045496272,
+          "speedup_vs_baseline": 4.460124389196428
+        },
+        "qwen_native": {
+          "ms": 309.508600999834,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.9324710350047098,
+          "logical_tokens_s": 423484.1926091427,
+          "speedup_vs_baseline": 0.22628422528361797
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 204.9742320086807,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6089314980054041,
+          "logical_tokens_s": 639455.987787036,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 62.78838700382039,
+          "peak_extra_mib": 10320.0947265625,
+          "warmup_and_compile_s": 12.077275331001147,
+          "logical_tokens_s": 2087519.7827908027,
+          "speedup_vs_baseline": 3.264524568790228
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 534.12 MiB is free. Including non-PyTorch memory, this process has 78.47 GiB memory in use. Of the allocated memory 70.05 GiB is allocated by PyTorch, and 1.30 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 30720,
+      "suffix": 2048,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        30720,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 36864,
+      "packing_ratio": 3.5555555555555554,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 69.63128699862864,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20615306199761108,
+          "logical_tokens_s": 1882372.2158486228,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 11.906879997695796,
+          "peak_extra_mib": 3039.75,
+          "warmup_and_compile_s": 8.605580485003884,
+          "logical_tokens_s": 11008089.442856977,
+          "speedup_vs_baseline": 5.847987635056673
+        },
+        "qwen_native": {
+          "ms": 312.0593279891182,
+          "peak_extra_mib": 24646.00390625,
+          "warmup_and_compile_s": 0.9398336199956248,
+          "logical_tokens_s": 420022.69518625195,
+          "speedup_vs_baseline": 0.22313477199135914
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 205.11463399452623,
+          "peak_extra_mib": 23071.6259765625,
+          "warmup_and_compile_s": 0.6087852070049848,
+          "logical_tokens_s": 639018.2769869937,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 47.955930000171065,
+          "peak_extra_mib": 7728.5947265625,
+          "warmup_and_compile_s": 12.003040711992071,
+          "logical_tokens_s": 2733176.0639306223,
+          "speedup_vs_baseline": 4.277148498502575
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 628.12 MiB is free. Including non-PyTorch memory, this process has 78.38 GiB memory in use. Of the allocated memory 69.96 GiB is allocated by PyTorch, and 1.30 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 65536,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        65536,
+        65536,
+        65536,
+        65536
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 262144,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 140.10621300258208,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.41698727100447286,
+          "logical_tokens_s": 1871037.65337779,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 85.54246599669568,
+          "peak_extra_mib": 21616.0,
+          "warmup_and_compile_s": 0.2582784080004785,
+          "logical_tokens_s": 3064489.63033315,
+          "speedup_vs_baseline": 1.637855670515672
+        },
+        "qwen_native": {
+          "ms": 660.501991995261,
+          "peak_extra_mib": 49278.50390625,
+          "warmup_and_compile_s": 2.0326949900045292,
+          "logical_tokens_s": 396886.0096971226,
+          "speedup_vs_baseline": 0.21212080311725587
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 456.76867199654225,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.359323680997477,
+          "logical_tokens_s": 573909.7623621272,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 344.87609899952076,
+          "peak_extra_mib": 55248.0947265625,
+          "warmup_and_compile_s": 1.1719681979884626,
+          "logical_tokens_s": 760110.6622363073,
+          "speedup_vs_baseline": 1.3244428167728057
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.17 GiB. GPU 0 has a total capacity of 79.18 GiB of which 440.12 MiB is free. Including non-PyTorch memory, this process has 78.56 GiB memory in use. Of the allocated memory 70.78 GiB is allocated by PyTorch, and 681.87 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 16384,
+      "suffix": 49152,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        16384,
+        24576,
+        24576,
+        24576,
+        24576,
+        24576,
+        24576
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 163840,
+      "packing_ratio": 1.6,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 139.7466530033853,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.42228558399074245,
+          "logical_tokens_s": 1875851.7242888794,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 52.98059500637464,
+          "peak_extra_mib": 13510.0,
+          "warmup_and_compile_s": 8.985343288994045,
+          "logical_tokens_s": 4947924.800928694,
+          "speedup_vs_baseline": 2.637695046395212
+        },
+        "qwen_native": {
+          "ms": 667.5152280076873,
+          "peak_extra_mib": 49278.50390625,
+          "warmup_and_compile_s": 2.045923131998279,
+          "logical_tokens_s": 392716.13440552267,
+          "speedup_vs_baseline": 0.2093535055679298
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 454.3346169957658,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.3574013619945617,
+          "logical_tokens_s": 576984.4299635285,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 212.72898999450263,
+          "peak_extra_mib": 34512.0947265625,
+          "warmup_and_compile_s": 12.977902768994682,
+          "logical_tokens_s": 1232290.9068800372,
+          "speedup_vs_baseline": 2.1357437790096534
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.12 GiB. GPU 0 has a total capacity of 79.18 GiB of which 1.07 GiB is free. Including non-PyTorch memory, this process has 77.93 GiB memory in use. Of the allocated memory 68.83 GiB is allocated by PyTorch, and 1.98 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 98304,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 139.70830300240777,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4226884810050251,
+          "logical_tokens_s": 1876366.6465512943,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 32.44447200268041,
+          "peak_extra_mib": 8106.0,
+          "warmup_and_compile_s": 8.864614132005954,
+          "logical_tokens_s": 8079773.95897652,
+          "speedup_vs_baseline": 4.306074174696562
+        },
+        "qwen_native": {
+          "ms": 661.7465339950286,
+          "peak_extra_mib": 49278.00390625,
+          "warmup_and_compile_s": 2.0351543919969117,
+          "logical_tokens_s": 396139.5890015638,
+          "speedup_vs_baseline": 0.2111205662974539
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 451.8995459948201,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.3529763270053081,
+          "logical_tokens_s": 580093.5237120261,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 127.96003199764527,
+          "peak_extra_mib": 20688.0947265625,
+          "warmup_and_compile_s": 12.444350134988781,
+          "logical_tokens_s": 2048639.6877801968,
+          "speedup_vs_baseline": 3.5315679352372773
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.22 GiB. GPU 0 has a total capacity of 79.18 GiB of which 294.12 MiB is free. Including non-PyTorch memory, this process has 78.71 GiB memory in use. Of the allocated memory 70.76 GiB is allocated by PyTorch, and 839.53 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    },
+    {
+      "prefix": 61440,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        61440,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 73728,
+      "packing_ratio": 3.5555555555555554,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "torch.nn.Conv1d",
+      "forward": {
+        "qwen_default": {
+          "ms": 139.6269489923725,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.41533315199194476,
+          "logical_tokens_s": 1877459.916526002,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 23.63659700495191,
+          "peak_extra_mib": 6079.5,
+          "warmup_and_compile_s": 8.815427622001152,
+          "logical_tokens_s": 11090598.1916551,
+          "speedup_vs_baseline": 5.907235672001363
+        },
+        "qwen_native": {
+          "ms": 663.6811250064056,
+          "peak_extra_mib": 49278.00390625,
+          "warmup_and_compile_s": 2.0513382960052695,
+          "logical_tokens_s": 394984.8656573891,
+          "speedup_vs_baseline": 0.2103825824352393
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 453.4749099984765,
+          "peak_extra_mib": 46239.6259765625,
+          "warmup_and_compile_s": 1.348885387997143,
+          "logical_tokens_s": 578078.2888316372,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 96.62707199458964,
+          "peak_extra_mib": 15504.0947265625,
+          "warmup_and_compile_s": 12.326304276008159,
+          "logical_tokens_s": 2712945.7054714235,
+          "speedup_vs_baseline": 4.693042028882625
+        },
+        "qwen_native": {
+          "error": "CUDA out of memory. Tried to allocate 1.22 GiB. GPU 0 has a total capacity of 79.18 GiB of which 486.12 MiB is free. Including non-PyTorch memory, this process has 78.52 GiB memory in use. Of the allocated memory 70.57 GiB is allocated by PyTorch, and 840.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        }
+      }
+    }
+  ]
+}

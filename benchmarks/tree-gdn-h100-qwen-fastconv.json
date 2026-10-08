@@ -1,0 +1,1558 @@
+{
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "torch": "2.11.0+cu130",
+  "triton": "3.7.1",
+  "fla": "0.5.2",
+  "fla_tilelang": "0",
+  "allocator": "expandable_segments:True",
+  "dtype": "bfloat16",
+  "component": "layer",
+  "hidden_size": 4096,
+  "key_heads": 16,
+  "value_heads": 32,
+  "head_dim": 128,
+  "repeats": 5,
+  "float32_matmul_precision": "highest",
+  "compiled_scan_chunks_per_region": 8,
+  "tree_implementation": "vendored FLA 0.5.2 with tree-native state kernels",
+  "compiled_implementation": "FP32 chunk algebra and eight-chunk compiled PyTorch scan",
+  "input_generation": "Seeded synthetic hidden states (layer) or Q/K/V/gates (core); shared histories reuse identical values.",
+  "cases": [
+    {
+      "prefix": 0,
+      "suffix": 16384,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        16384,
+        16384,
+        16384,
+        16384
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 65536,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 19.637090008473024,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.7309549230121775,
+          "logical_tokens_s": 3337358.0286958246,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 20.298547999118455,
+          "peak_extra_mib": 5404.0,
+          "warmup_and_compile_s": 2.7011513080069562,
+          "logical_tokens_s": 3228605.3171313615,
+          "speedup_vs_baseline": 0.9674135317129995
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 64.77762300346512,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.5860727440012852,
+          "logical_tokens_s": 1011707.3915554807,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 83.61688599688932,
+          "peak_extra_mib": 13764.0947265625,
+          "warmup_and_compile_s": 25.90725040899997,
+          "logical_tokens_s": 783765.135698046,
+          "speedup_vs_baseline": 0.7746954724656328
+        }
+      }
+    },
+    {
+      "prefix": 4096,
+      "suffix": 12288,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        4096,
+        12288,
+        12288,
+        12288,
+        12288
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 53248,
+      "packing_ratio": 1.2307692307692308,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 20.17710699874442,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10036655300064012,
+          "logical_tokens_s": 3248037.4914044007,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 16.72246601083316,
+          "peak_extra_mib": 4390.75,
+          "warmup_and_compile_s": 0.07913998799631372,
+          "logical_tokens_s": 3919039.21093602,
+          "speedup_vs_baseline": 1.2065868147480925
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 64.16682800045237,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.24659030200564303,
+          "logical_tokens_s": 1021337.6917982914,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 67.77455098927021,
+          "peak_extra_mib": 11172.0947265625,
+          "warmup_and_compile_s": 0.32232856399787124,
+          "logical_tokens_s": 966970.6260448025,
+          "speedup_vs_baseline": 0.9467687659134916
+        }
+      }
+    },
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 28672,
+      "packing_ratio": 2.2857142857142856,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 19.64590500574559,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10073850001208484,
+          "logical_tokens_s": 3335860.5765849683,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 9.13348099857103,
+          "peak_extra_mib": 2364.25,
+          "warmup_and_compile_s": 0.04510852199746296,
+          "logical_tokens_s": 7175358.443320062,
+          "speedup_vs_baseline": 2.150976720575569
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 65.68994499684777,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.2438031729980139,
+          "logical_tokens_s": 997656.4907025701,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 37.00538999692071,
+          "peak_extra_mib": 5988.0947265625,
+          "warmup_and_compile_s": 0.1644062380073592,
+          "logical_tokens_s": 1770985.2539171556,
+          "speedup_vs_baseline": 1.7751453234870367
+        }
+      }
+    },
+    {
+      "prefix": 15360,
+      "suffix": 1024,
+      "topology": "prompt",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        15360,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 19456,
+      "packing_ratio": 3.3684210526315788,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 19.919900005334057,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10075543999846559,
+          "logical_tokens_s": 3289976.354422014,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 6.264709998504259,
+          "peak_extra_mib": 1604.3125,
+          "warmup_and_compile_s": 0.03346240799874067,
+          "logical_tokens_s": 10461138.666537981,
+          "speedup_vs_baseline": 3.179700259084629
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 65.00390199653339,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.24716880200139713,
+          "logical_tokens_s": 1008185.6317409221,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 25.22973300074227,
+          "peak_extra_mib": 4044.0947265625,
+          "warmup_and_compile_s": 0.1062186260096496,
+          "logical_tokens_s": 2597570.0970783914,
+          "speedup_vs_baseline": 2.576479980767967
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 32768,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        32768,
+        32768,
+        32768,
+        32768
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 131072,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.65442399587482,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.2028963949996978,
+          "logical_tokens_s": 3224052.565922464,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 42.36520400445443,
+          "peak_extra_mib": 10808.0,
+          "warmup_and_compile_s": 0.18592235700634774,
+          "logical_tokens_s": 3093859.7625121465,
+          "speedup_vs_baseline": 0.9596182752147322
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 132.68337098998018,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.5279718960082391,
+          "logical_tokens_s": 987855.516648715,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 169.42562600888778,
+          "peak_extra_mib": 27588.0947265625,
+          "warmup_and_compile_s": 0.6639649150019977,
+          "logical_tokens_s": 773625.5906950239,
+          "speedup_vs_baseline": 0.7831363773920471
+        }
+      }
+    },
+    {
+      "prefix": 8192,
+      "suffix": 24576,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        8192,
+        24576,
+        24576,
+        24576,
+        24576
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 106496,
+      "packing_ratio": 1.2307692307692308,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.90393800288439,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.43119596599717624,
+          "logical_tokens_s": 3204385.846437507,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 34.20413000276312,
+          "peak_extra_mib": 8781.5,
+          "warmup_and_compile_s": 0.1510653339937562,
+          "logical_tokens_s": 3832051.860094426,
+          "speedup_vs_baseline": 1.1958771645289628
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 133.63000500248745,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.5010933289886452,
+          "logical_tokens_s": 980857.5551393578,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 137.49037100933492,
+          "peak_extra_mib": 22404.0947265625,
+          "warmup_and_compile_s": 0.6098302610043902,
+          "logical_tokens_s": 953317.6689958954,
+          "speedup_vs_baseline": 0.9719226446295256
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 57344,
+      "packing_ratio": 2.2857142857142856,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.78598599880934,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20828462699137162,
+          "logical_tokens_s": 3213652.8464415786,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 18.22399599768687,
+          "peak_extra_mib": 4728.5,
+          "warmup_and_compile_s": 0.08893297999748029,
+          "logical_tokens_s": 7192275.50404624,
+          "speedup_vs_baseline": 2.238037475643992
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 133.79562699992675,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.49798217401257716,
+          "logical_tokens_s": 979643.3780311202,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 74.40843900258187,
+          "peak_extra_mib": 12036.0947265625,
+          "warmup_and_compile_s": 0.29917016200488433,
+          "logical_tokens_s": 1761520.6253077285,
+          "speedup_vs_baseline": 1.7981243632228896
+        }
+      }
+    },
+    {
+      "prefix": 30720,
+      "suffix": 2048,
+      "topology": "prompt",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        30720,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 38912,
+      "packing_ratio": 3.3684210526315788,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.607273011119105,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20721454799058847,
+          "logical_tokens_s": 3227796.162626084,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 12.673129996983334,
+          "peak_extra_mib": 3208.625,
+          "warmup_and_compile_s": 0.061677088000578806,
+          "logical_tokens_s": 10342512.073276287,
+          "speedup_vs_baseline": 3.2042023573328065
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 132.0384269929491,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.499981258995831,
+          "logical_tokens_s": 992680.7141302834,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 50.640177010791376,
+          "peak_extra_mib": 8148.0947265625,
+          "warmup_and_compile_s": 0.201878025996848,
+          "logical_tokens_s": 2588300.5893140673,
+          "speedup_vs_baseline": 2.6073847839199265
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 65536,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        65536,
+        65536,
+        65536,
+        65536
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 262144,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 82.65558100538328,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.41891457499878015,
+          "logical_tokens_s": 3171522.0776553103,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 86.06456099369098,
+          "peak_extra_mib": 21616.0,
+          "warmup_and_compile_s": 1.4581595630006632,
+          "logical_tokens_s": 3045899.4616752495,
+          "speedup_vs_baseline": 0.9603904330778195
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 272.8860019997228,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0482270579959732,
+          "logical_tokens_s": 960635.5697214043,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 343.3886310085654,
+          "peak_extra_mib": 55248.0947265625,
+          "warmup_and_compile_s": 97.09805437800242,
+          "logical_tokens_s": 763403.2589548986,
+          "speedup_vs_baseline": 0.7946856050482229
+        }
+      }
+    },
+    {
+      "prefix": 16384,
+      "suffix": 49152,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        16384,
+        49152,
+        49152,
+        49152,
+        49152
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 212992,
+      "packing_ratio": 1.2307692307692308,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 82.87574000132736,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.39945538599567953,
+          "logical_tokens_s": 3163096.9448453966,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 69.45104300393723,
+          "peak_extra_mib": 17563.0,
+          "warmup_and_compile_s": 0.3106637309974758,
+          "logical_tokens_s": 3774514.948395215,
+          "speedup_vs_baseline": 1.19329726979952
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 274.77865399851,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0154002930066781,
+          "logical_tokens_s": 954018.7936193235,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 278.1969960051356,
+          "peak_extra_mib": 44880.0947265625,
+          "warmup_and_compile_s": 1.0951982789993053,
+          "logical_tokens_s": 942296.2999757221,
+          "speedup_vs_baseline": 0.9877125128750042
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        16384,
+        16384,
+        16384,
+        16384
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 114688,
+      "packing_ratio": 2.2857142857142856,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 82.21597300143912,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4192384390044026,
+          "logical_tokens_s": 3188480.1752016167,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 36.35333001147956,
+          "peak_extra_mib": 9457.0,
+          "warmup_and_compile_s": 0.165502835996449,
+          "logical_tokens_s": 7211003.77646892,
+          "speedup_vs_baseline": 2.2615802452066203
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 274.44065200688783,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0125708720006514,
+          "logical_tokens_s": 955193.7662406544,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 147.98172199516557,
+          "peak_extra_mib": 24144.0947265625,
+          "warmup_and_compile_s": 0.6100916830037022,
+          "logical_tokens_s": 1771462.0188604374,
+          "speedup_vs_baseline": 1.854557767721162
+        }
+      }
+    },
+    {
+      "prefix": 61440,
+      "suffix": 4096,
+      "topology": "prompt",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        61440,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 77824,
+      "packing_ratio": 3.3684210526315788,
+      "segments": 5,
+      "depth": 2,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 82.91881499462761,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4200511430099141,
+          "logical_tokens_s": 3161453.766759505,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 25.314957994851284,
+          "peak_extra_mib": 6417.25,
+          "warmup_and_compile_s": 0.11940262799907941,
+          "logical_tokens_s": 10355300.611334868,
+          "speedup_vs_baseline": 3.27548696748745
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 273.91615200031083,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0062069109990261,
+          "logical_tokens_s": 957022.7899510743,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 100.43401099392213,
+          "peak_extra_mib": 16368.0947265625,
+          "warmup_and_compile_s": 0.414650413003983,
+          "logical_tokens_s": 2610111.827714059,
+          "speedup_vs_baseline": 2.7273246312634787
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        16384,
+        16384,
+        16384,
+        16384
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 65536,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 20.49575900309719,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10491188000014517,
+          "logical_tokens_s": 3197539.5490401993,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 20.50147899717558,
+          "peak_extra_mib": 5404.0,
+          "warmup_and_compile_s": 0.09765523299574852,
+          "logical_tokens_s": 3196647.422804407,
+          "speedup_vs_baseline": 0.9997209960276925
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 65.70421298965812,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.2482004630001029,
+          "logical_tokens_s": 997439.8446917766,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 83.15639800275676,
+          "peak_extra_mib": 13776.0947265625,
+          "warmup_and_compile_s": 0.3224598649976542,
+          "logical_tokens_s": 788105.3241126123,
+          "speedup_vs_baseline": 0.7901281749538974
+        }
+      }
+    },
+    {
+      "prefix": 4096,
+      "suffix": 12288,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        4096,
+        6144,
+        6144,
+        6144,
+        6144,
+        6144,
+        6144
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 40960,
+      "packing_ratio": 1.6,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 19.76968700182624,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10505059199931566,
+          "logical_tokens_s": 3314974.080972858,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 12.745833999360912,
+          "peak_extra_mib": 3377.5,
+          "warmup_and_compile_s": 0.06430976800038479,
+          "logical_tokens_s": 5141758.476007614,
+          "speedup_vs_baseline": 1.551070491175196
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 64.93850800325163,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.24575634999200702,
+          "logical_tokens_s": 1009200.8888888925,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 51.299519996973686,
+          "peak_extra_mib": 8592.0947265625,
+          "warmup_and_compile_s": 0.2265010830014944,
+          "logical_tokens_s": 1277516.8267435282,
+          "speedup_vs_baseline": 1.2658697002834052
+        }
+      }
+    },
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 24576,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 19.80074700259138,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.11183867198997177,
+          "logical_tokens_s": 3309774.1207148964,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 7.8167070023482665,
+          "peak_extra_mib": 2026.5,
+          "warmup_and_compile_s": 0.0398303690017201,
+          "logical_tokens_s": 8384093.196829805,
+          "speedup_vs_baseline": 2.5331315343715595
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 64.43936999130528,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.252270575001603,
+          "logical_tokens_s": 1017018.0125727903,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 31.301609007641673,
+          "peak_extra_mib": 5136.0947265625,
+          "warmup_and_compile_s": 0.13418023301346693,
+          "logical_tokens_s": 2093694.2884949036,
+          "speedup_vs_baseline": 2.058659986953823
+        }
+      }
+    },
+    {
+      "prefix": 15360,
+      "suffix": 1024,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        15360,
+        512,
+        512,
+        512,
+        512,
+        512,
+        512
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 18432,
+      "packing_ratio": 3.5555555555555554,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 19.840807988657616,
+          "peak_extra_mib": 7468.0,
+          "warmup_and_compile_s": 0.10528779700689483,
+          "logical_tokens_s": 3303091.287283508,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 5.9335439873393625,
+          "peak_extra_mib": 1519.875,
+          "warmup_and_compile_s": 0.031275329005438834,
+          "logical_tokens_s": 11045001.122404546,
+          "speedup_vs_baseline": 3.343837684694465
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 64.8169469932327,
+          "peak_extra_mib": 10463.4384765625,
+          "warmup_and_compile_s": 0.2480161300045438,
+          "logical_tokens_s": 1011093.595735732,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 23.845120987971313,
+          "peak_extra_mib": 3840.0947265625,
+          "warmup_and_compile_s": 0.10554657099419273,
+          "logical_tokens_s": 2748402.9136635405,
+          "speedup_vs_baseline": 2.7182477717739264
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 32768,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        32768,
+        32768,
+        32768,
+        32768
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 131072,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 41.07453499455005,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.21385980400373228,
+          "logical_tokens_s": 3191076.904885015,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 41.787027003010735,
+          "peak_extra_mib": 10808.0,
+          "warmup_and_compile_s": 0.19249857700197026,
+          "logical_tokens_s": 3136667.272131045,
+          "speedup_vs_baseline": 0.982949444850208
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 134.90023999474943,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.6324475800065557,
+          "logical_tokens_s": 971621.696188988,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 167.15525899780914,
+          "peak_extra_mib": 27600.0947265625,
+          "warmup_and_compile_s": 0.655265702996985,
+          "logical_tokens_s": 784133.2709832236,
+          "speedup_vs_baseline": 0.8070355716209774
+        }
+      }
+    },
+    {
+      "prefix": 8192,
+      "suffix": 24576,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        8192,
+        12288,
+        12288,
+        12288,
+        12288,
+        12288,
+        12288
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 81920,
+      "packing_ratio": 1.6,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.64080699754413,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20792132899805438,
+          "logical_tokens_s": 3225132.8082122114,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 25.635031997808255,
+          "peak_extra_mib": 6755.0,
+          "warmup_and_compile_s": 0.12005993899947498,
+          "logical_tokens_s": 5113003.1751552485,
+          "speedup_vs_baseline": 1.5853620545907194
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 131.63074299518485,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.5016223209968302,
+          "logical_tokens_s": 995755.2241788586,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 103.25234199990518,
+          "peak_extra_mib": 17232.0947265625,
+          "warmup_and_compile_s": 0.4164754789962899,
+          "logical_tokens_s": 1269433.6754135839,
+          "speedup_vs_baseline": 1.274845107099902
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 49152,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.84773000795394,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.2101447390014073,
+          "logical_tokens_s": 3208795.200479376,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 15.886660010437481,
+          "peak_extra_mib": 4053.0,
+          "warmup_and_compile_s": 0.07563685499189887,
+          "logical_tokens_s": 8250444.077854385,
+          "speedup_vs_baseline": 2.5711968394311406
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 132.98681601008866,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.508864599003573,
+          "logical_tokens_s": 985601.4598473927,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 62.89101199945435,
+          "peak_extra_mib": 10320.0947265625,
+          "warmup_and_compile_s": 0.26414317000308074,
+          "logical_tokens_s": 2084113.3865223413,
+          "speedup_vs_baseline": 2.1145599630554917
+        }
+      }
+    },
+    {
+      "prefix": 30720,
+      "suffix": 2048,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        30720,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 36864,
+      "packing_ratio": 3.5555555555555554,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 40.5483170034131,
+          "peak_extra_mib": 14936.0,
+          "warmup_and_compile_s": 0.20745659800013527,
+          "logical_tokens_s": 3232489.279122662,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 11.781287990743294,
+          "peak_extra_mib": 3039.75,
+          "warmup_and_compile_s": 0.05958578299032524,
+          "logical_tokens_s": 11125438.925097572,
+          "speedup_vs_baseline": 3.4417558619458606
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 132.46440200600773,
+          "peak_extra_mib": 21023.4384765625,
+          "warmup_and_compile_s": 0.5003743470006157,
+          "logical_tokens_s": 989488.4815473324,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 47.693903994513676,
+          "peak_extra_mib": 7728.0947265625,
+          "warmup_and_compile_s": 0.1969939740083646,
+          "logical_tokens_s": 2748191.886641896,
+          "speedup_vs_baseline": 2.7773864354078746
+        }
+      }
+    },
+    {
+      "prefix": 0,
+      "suffix": 65536,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        65536,
+        65536,
+        65536,
+        65536
+      ],
+      "segment_parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 262144,
+      "packing_ratio": 1.0,
+      "segments": 4,
+      "depth": 1,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 83.32352299476042,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.43028567799774464,
+          "logical_tokens_s": 3146098.371482495,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 85.97398998972494,
+          "peak_extra_mib": 21616.0,
+          "warmup_and_compile_s": 0.37883401800354477,
+          "logical_tokens_s": 3049108.2248402075,
+          "speedup_vs_baseline": 0.9691712924422691
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 272.0405199943343,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0326357479934813,
+          "logical_tokens_s": 963621.1546921744,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 345.6279420061037,
+          "peak_extra_mib": 55248.0947265625,
+          "warmup_and_compile_s": 1.308551626992994,
+          "logical_tokens_s": 758457.1967140626,
+          "speedup_vs_baseline": 0.7870906455518292
+        }
+      }
+    },
+    {
+      "prefix": 16384,
+      "suffix": 49152,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        16384,
+        24576,
+        24576,
+        24576,
+        24576,
+        24576,
+        24576
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 163840,
+      "packing_ratio": 1.6,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 83.36744300322607,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4186079619976226,
+          "logical_tokens_s": 3144440.929894609,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 53.88771300204098,
+          "peak_extra_mib": 13510.0,
+          "warmup_and_compile_s": 0.23792498701368459,
+          "logical_tokens_s": 4864633.98418989,
+          "speedup_vs_baseline": 1.547058473238019
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 266.8783179979073,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0124456609919434,
+          "logical_tokens_s": 982260.3873052571,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 213.5325359995477,
+          "peak_extra_mib": 34512.0947265625,
+          "warmup_and_compile_s": 0.851137039004243,
+          "logical_tokens_s": 1227653.66304906,
+          "speedup_vs_baseline": 1.24982507583047
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 98304,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 83.49719700345304,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.4202089699974749,
+          "logical_tokens_s": 3139554.4929389544,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 31.75039100460708,
+          "peak_extra_mib": 8106.0,
+          "warmup_and_compile_s": 0.14372886100318283,
+          "logical_tokens_s": 8256402.258541071,
+          "speedup_vs_baseline": 2.62980059021438
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 267.1700440114364,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 1.0053526160045294,
+          "logical_tokens_s": 981187.8460025957,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 127.49359299778007,
+          "peak_extra_mib": 20688.0947265625,
+          "warmup_and_compile_s": 0.5098938740120502,
+          "logical_tokens_s": 2056134.69536908,
+          "speedup_vs_baseline": 2.095556629391474
+        }
+      }
+    },
+    {
+      "prefix": 61440,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        61440,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 73728,
+      "packing_ratio": 3.5555555555555554,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "qwen_default_core": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "qwen_convolution": "causal_conv1d",
+      "transformers_version": "5.8.1",
+      "causal_conv1d_version": "1.7.0",
+      "forward": {
+        "qwen_default": {
+          "ms": 84.67319599003531,
+          "peak_extra_mib": 29872.0,
+          "warmup_and_compile_s": 0.41324104100931436,
+          "logical_tokens_s": 3095950.2229117486,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 24.145746996509843,
+          "peak_extra_mib": 6079.5,
+          "warmup_and_compile_s": 0.11476192700501997,
+          "logical_tokens_s": 10856735.972504463,
+          "speedup_vs_baseline": 3.5067540466763956
+        }
+      },
+      "forward_backward": {
+        "qwen_default": {
+          "ms": 267.39774500310887,
+          "peak_extra_mib": 42143.4384765625,
+          "warmup_and_compile_s": 0.9971949600003427,
+          "logical_tokens_s": 980352.3212095607,
+          "speedup_vs_baseline": 1.0
+        },
+        "triton_tree": {
+          "ms": 95.7261020084843,
+          "peak_extra_mib": 15504.0947265625,
+          "warmup_and_compile_s": 0.3898635780060431,
+          "logical_tokens_s": 2738479.834651221,
+          "speedup_vs_baseline": 2.793362932289974
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,1138 @@
+{
+  "before": "a1ae2ef4976df67234ca401daae0c4b947ea260f",
+  "device": "NVIDIA H100 80GB HBM3",
+  "torch": "2.11.0+cu130",
+  "triton": "3.7.1",
+  "triton_f32_default": "tf32",
+  "pinned_configs": false,
+  "cases": [
+    {
+      "topology": "prompt",
+      "length": 16384,
+      "fraction": 0.0,
+      "offsets": [
+        0,
+        16384,
+        32768,
+        49152,
+        65536
+      ],
+      "parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 1.0,
+      "before_ms": 20.211807250976562,
+      "after_ms": 20.154592514038086,
+      "speedup": 1.0028387940316146
+    },
+    {
+      "topology": "prompt",
+      "length": 16384,
+      "fraction": 0.75,
+      "offsets": [
+        0,
+        12288,
+        16384,
+        20480,
+        24576,
+        28672
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 2.2857142857142856,
+      "before_ms": 9.410367965698242,
+      "after_ms": 9.320287704467773,
+      "speedup": 1.0096649657271082
+    },
+    {
+      "topology": "prompt",
+      "length": 16384,
+      "fraction": 0.9375,
+      "offsets": [
+        0,
+        15360,
+        16384,
+        17408,
+        18432,
+        19456
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 3.3684210526315788,
+      "before_ms": 6.692383766174316,
+      "after_ms": 6.628704071044922,
+      "speedup": 1.0096066583221834
+    },
+    {
+      "topology": "fork",
+      "length": 16384,
+      "fraction": 0.0,
+      "offsets": [
+        0,
+        16384,
+        32768,
+        49152,
+        65536
+      ],
+      "parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 1.0,
+      "before_ms": 20.16124725341797,
+      "after_ms": 20.142175674438477,
+      "speedup": 1.0009468480112451
+    },
+    {
+      "topology": "fork",
+      "length": 16384,
+      "fraction": 0.75,
+      "offsets": [
+        0,
+        12288,
+        14336,
+        16384,
+        18432,
+        20480,
+        22528,
+        24576
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 2.6666666666666665,
+      "before_ms": 8.164992332458496,
+      "after_ms": 8.097696304321289,
+      "speedup": 1.008310515189523
+    },
+    {
+      "topology": "fork",
+      "length": 16384,
+      "fraction": 0.9375,
+      "offsets": [
+        0,
+        15360,
+        15872,
+        16384,
+        16896,
+        17408,
+        17920,
+        18432
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 3.5555555555555554,
+      "before_ms": 6.3658881187438965,
+      "after_ms": 6.33568000793457,
+      "speedup": 1.0047679350553522
+    },
+    {
+      "topology": "prompt",
+      "length": 32768,
+      "fraction": 0.0,
+      "offsets": [
+        0,
+        32768,
+        65536,
+        98304,
+        131072
+      ],
+      "parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 1.0,
+      "before_ms": 40.13955307006836,
+      "after_ms": 40.150657653808594,
+      "speedup": 0.9997234271020918
+    },
+    {
+      "topology": "prompt",
+      "length": 32768,
+      "fraction": 0.75,
+      "offsets": [
+        0,
+        24576,
+        32768,
+        40960,
+        49152,
+        57344
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 2.2857142857142856,
+      "before_ms": 18.54297637939453,
+      "after_ms": 18.46713638305664,
+      "speedup": 1.0041067545484461
+    },
+    {
+      "topology": "prompt",
+      "length": 32768,
+      "fraction": 0.9375,
+      "offsets": [
+        0,
+        30720,
+        32768,
+        34816,
+        36864,
+        38912
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 3.3684210526315788,
+      "before_ms": 13.167296409606934,
+      "after_ms": 13.044927597045898,
+      "speedup": 1.0093805666340951
+    },
+    {
+      "topology": "fork",
+      "length": 32768,
+      "fraction": 0.0,
+      "offsets": [
+        0,
+        32768,
+        65536,
+        98304,
+        131072
+      ],
+      "parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 1.0,
+      "before_ms": 40.14188766479492,
+      "after_ms": 40.160064697265625,
+      "speedup": 0.9995473853787905
+    },
+    {
+      "topology": "fork",
+      "length": 32768,
+      "fraction": 0.75,
+      "offsets": [
+        0,
+        24576,
+        28672,
+        32768,
+        36864,
+        40960,
+        45056,
+        49152
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 2.6666666666666665,
+      "before_ms": 16.14316749572754,
+      "after_ms": 15.991968154907227,
+      "speedup": 1.0094547049716276
+    },
+    {
+      "topology": "fork",
+      "length": 32768,
+      "fraction": 0.9375,
+      "offsets": [
+        0,
+        30720,
+        31744,
+        32768,
+        33792,
+        34816,
+        35840,
+        36864
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 3.5555555555555554,
+      "before_ms": 12.568032264709473,
+      "after_ms": 12.447967529296875,
+      "speedup": 1.0096453284546267
+    },
+    {
+      "topology": "prompt",
+      "length": 65536,
+      "fraction": 0.0,
+      "offsets": [
+        0,
+        65536,
+        131072,
+        196608,
+        262144
+      ],
+      "parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 1.0,
+      "before_ms": 80.75667572021484,
+      "after_ms": 80.73971557617188,
+      "speedup": 1.0002100594970138
+    },
+    {
+      "topology": "prompt",
+      "length": 65536,
+      "fraction": 0.75,
+      "offsets": [
+        0,
+        49152,
+        65536,
+        81920,
+        98304,
+        114688
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 2.2857142857142856,
+      "before_ms": 36.70988845825195,
+      "after_ms": 36.717857360839844,
+      "speedup": 0.9997829692917651
+    },
+    {
+      "topology": "prompt",
+      "length": 65536,
+      "fraction": 0.9375,
+      "offsets": [
+        0,
+        61440,
+        65536,
+        69632,
+        73728,
+        77824
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 3.3684210526315788,
+      "before_ms": 25.962207794189453,
+      "after_ms": 25.92038345336914,
+      "speedup": 1.0016135695251405
+    },
+    {
+      "topology": "fork",
+      "length": 65536,
+      "fraction": 0.0,
+      "offsets": [
+        0,
+        65536,
+        131072,
+        196608,
+        262144
+      ],
+      "parents": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 1.0,
+      "before_ms": 80.68892669677734,
+      "after_ms": 80.78451538085938,
+      "speedup": 0.9988167449710953
+    },
+    {
+      "topology": "fork",
+      "length": 65536,
+      "fraction": 0.75,
+      "offsets": [
+        0,
+        49152,
+        57344,
+        65536,
+        73728,
+        81920,
+        90112,
+        98304
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 2.6666666666666665,
+      "before_ms": 31.886112213134766,
+      "after_ms": 31.790815353393555,
+      "speedup": 1.002997622385015
+    },
+    {
+      "topology": "fork",
+      "length": 65536,
+      "fraction": 0.9375,
+      "offsets": [
+        0,
+        61440,
+        63488,
+        65536,
+        67584,
+        69632,
+        71680,
+        73728
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 16,
+      "value_heads": 32,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      },
+      "packing_ratio": 3.5555555555555554,
+      "before_ms": 24.710784912109375,
+      "after_ms": 24.700767517089844,
+      "speedup": 1.0004055499495148
+    }
+  ]
+}

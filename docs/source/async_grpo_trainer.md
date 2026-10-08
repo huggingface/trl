@@ -97,7 +97,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 > **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
 
 > [!WARNING]
-> **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
+> Qwen3.5 supports `packing="tree"` through the self-contained segment GDN kernel described below; this path does not require `flash-linear-attention`. Ordinary `packing="sequence"` still does not reset hybrid recurrent state at sample boundaries; it is not a correctness reference for these models. Other hybrid architectures, including Qwen3.6 and Qwen3.5 MoE, are not supported by the tree adapter yet.
 
 ## LoRA
 
@@ -218,6 +218,46 @@ So `batch/samples_per_step ≈ row-slots x batch/samples_per_row`, and likewise 
 `batch/row_fill_frac` is the one to watch when samples are long: a 10k-token sample tiles a 32k budget badly (three fit, four never do, so the packer often gets two and the row runs ~77% full), while 1k-token samples tile it almost perfectly. That is quantization, not a bug, and `token_budget` is the lever — bearing in mind that attention is O(L²) per sequence, so a fuller row of long sequences does not cost linearly more memory.
 
 ### Tree packing
+
+> [!WARNING]
+> Qwen3.5 tree GDN support is experimental. Ordinary-packing gate-gradient and model/FSDP comparisons still have
+> known numerical failures. The passing cleanup regressions compare old and new tree implementations, not tree
+> packing against ordinary packing. See `benchmarks/README.md` for measured errors and limitations.
+
+Qwen3.5's dense text backbone also supports tree packing. Full-attention layers use the tree FlexAttention mask.
+Gated DeltaNet layers use `trl/kernels/tree_gated_delta_rule.py`: optimized FLA 0.5.2 Triton kernels are vendored under
+`trl/kernels/_tree_gdn_fla/`, with the MIT license and source provenance. `torch.compile` handles ancestor convolution.
+The chunk-local kernels are preserved; only the recurrent state scans are adapted to linear tree segments. A segment
+loads its parent's final state, retains it across chunks, and saves its own final state. Backward sums child-state
+gradients before scanning the parent, without branch atomics. There is no FLA runtime dependency. On Hopper, use
+Triton >= 3.7.1: upstream rejects its backward kernel on Triton >= 3.4.0 and < 3.7.1 due to a compiler correctness issue.
+
+The trainer builds one `TreeGDNPlan` per packed forward and passes it explicitly through the model. The adapter is
+installed before FSDP wrapping, preserves parameter names, and invokes GDN modules normally so their FSDP hooks run.
+Gradient checkpointing receives the same plan on recomputation. This is a training path (`use_cache=False`), not a
+generation-cache implementation.
+
+For the standalone kernel and complete GDN-layer benchmark, run on a GPU allocation from the repository root.
+Install `flash-linear-attention` only for the optimized ordinary-sequence benchmark baseline:
+
+```bash
+python -m pytest tests/kernels/test_tree_gdn.py --confcutdir=tests/kernels
+python -m benchmarks.tree_gdn --component core --output core-results.json
+python -m benchmarks.tree_gdn --component layer --output layer-results.json
+python -m benchmarks.plot_tree_gdn core-results.json
+```
+
+The benchmark compares identical logical rollouts against ordinary independent sequences, including shared-prefix
+loss multiplicity. Its default dimensions are 16 key heads, 32 value heads, and 128 channels per head; the complete
+layer uses hidden size 4096. The default sweep uses 16K, 32K, and 64K tokens per rollout, with four continuations and
+25%, 75%, or 93.75% shared prefixes. The core benchmark also compares a pure compiled PyTorch scan, batching siblings
+and compiling eight chunks per region so long sequences do not create enormous unrolled graphs. This PyTorch reference
+uses FP32 algebra, whereas the vendored path retains FLA's fused low-precision operations: these are complete-path
+comparisons, not isolated scan timings. It reports forward and forward/backward medians, incremental peak allocated memory,
+logical tokens/second, and packing ratio. Input and plan construction are outside the timing; per-layer gathers,
+convolution, branch states, and autograd are inside it. These are kernel/layer measurements, not end-to-end trainer
+speedups. Warmup/compilation is reported separately. Low sharing can be slower because depth launches and state copies
+outweigh the saved tokens. The plotting command writes PNG and SVG charts next to the JSON results.
 
 With `packing="tree"`, a rank's row is a **prefix forest** rather than a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own row. Multi-turn rollouts are mostly such tokens — every turn re-sends the conversation, and the `num_generations` rollouts of a prompt all repeat it — so the decoder's work drops by the **packing ratio** (raw tokens ÷ forwarded tokens). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and the loss matches `"sequence"` packing up to floating point.
 

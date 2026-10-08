@@ -1,0 +1,284 @@
+[
+  {
+    "dtype": "torch.float32",
+    "fused_convolution": true,
+    "triton_f32_default": "ieee",
+    "methods": {
+      "oracle64": {
+        "output_relative_to_oracle": 0.0,
+        "gradients": {
+          "input": {
+            "norm": 45.04889678955078,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 5.55116116629506e-07
+          },
+          "dt_bias": {
+            "norm": 0.16710597276687622,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0006605847156606615
+          },
+          "A_log": {
+            "norm": 0.21656976640224457,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0009432832011952996
+          },
+          "conv1d.weight": {
+            "norm": 138.04067993164062,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 3.426811190365697e-07
+          },
+          "norm.weight": {
+            "norm": 16.489816665649414,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 2.914322863034613e-07
+          },
+          "out_proj.weight": {
+            "norm": 372.2418212890625,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 2.628446509334026e-07
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.9710693359375,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 3.7706612943111395e-07
+          },
+          "in_proj_z.weight": {
+            "norm": 383.453857421875,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 2.5900808964252064e-07
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71455383300781,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 8.356404919140914e-07
+          },
+          "in_proj_a.weight": {
+            "norm": 10.651920318603516,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 3.664725591079332e-05
+          }
+        }
+      },
+      "normal": {
+        "output_relative_to_oracle": 2.614049776639149e-07,
+        "gradients": {
+          "input": {
+            "norm": 45.04889678955078,
+            "relative_to_oracle": 5.55116116629506e-07,
+            "relative_to_normal": 0.0
+          },
+          "dt_bias": {
+            "norm": 0.1672034114599228,
+            "relative_to_oracle": 0.0006609699339605868,
+            "relative_to_normal": 0.0
+          },
+          "A_log": {
+            "norm": 0.2167433500289917,
+            "relative_to_oracle": 0.0009440392605029047,
+            "relative_to_normal": 0.0
+          },
+          "conv1d.weight": {
+            "norm": 138.04067993164062,
+            "relative_to_oracle": 3.426811190365697e-07,
+            "relative_to_normal": 0.0
+          },
+          "norm.weight": {
+            "norm": 16.489816665649414,
+            "relative_to_oracle": 2.914322863034613e-07,
+            "relative_to_normal": 0.0
+          },
+          "out_proj.weight": {
+            "norm": 372.2418212890625,
+            "relative_to_oracle": 2.628446509334026e-07,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.9710693359375,
+            "relative_to_oracle": 3.7706612943111395e-07,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_z.weight": {
+            "norm": 383.453857421875,
+            "relative_to_oracle": 2.5900808964252064e-07,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71455001831055,
+            "relative_to_oracle": 8.356403782272537e-07,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_a.weight": {
+            "norm": 10.651942253112793,
+            "relative_to_oracle": 3.664732867036946e-05,
+            "relative_to_normal": 0.0
+          }
+        }
+      },
+      "aligned": {
+        "output_relative_to_oracle": 2.614103209452878e-07,
+        "gradients": {
+          "input": {
+            "norm": 45.04889678955078,
+            "relative_to_oracle": 5.550227797357365e-07,
+            "relative_to_normal": 4.9931220047483293e-08
+          },
+          "dt_bias": {
+            "norm": 0.1672065705060959,
+            "relative_to_oracle": 0.0006781663978472352,
+            "relative_to_normal": 2.002985820581671e-05
+          },
+          "A_log": {
+            "norm": 0.21674829721450806,
+            "relative_to_oracle": 0.0009667138801887631,
+            "relative_to_normal": 2.6257401259499602e-05
+          },
+          "conv1d.weight": {
+            "norm": 138.04067993164062,
+            "relative_to_oracle": 3.44495845183701e-07,
+            "relative_to_normal": 5.885378229208982e-08
+          },
+          "norm.weight": {
+            "norm": 16.489816665649414,
+            "relative_to_oracle": 2.8987579980821465e-07,
+            "relative_to_normal": 5.1150575330893844e-08
+          },
+          "out_proj.weight": {
+            "norm": 372.2418212890625,
+            "relative_to_oracle": 2.6258081220476015e-07,
+            "relative_to_normal": 3.0028804332005166e-08
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.9710693359375,
+            "relative_to_oracle": 3.768607257370604e-07,
+            "relative_to_normal": 5.6861487962578394e-08
+          },
+          "in_proj_z.weight": {
+            "norm": 383.453857421875,
+            "relative_to_oracle": 2.588260201719095e-07,
+            "relative_to_normal": 3.0792008942626126e-08
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71455001831055,
+            "relative_to_oracle": 8.339559371961514e-07,
+            "relative_to_normal": 8.987281319150497e-08
+          },
+          "in_proj_a.weight": {
+            "norm": 10.65194320678711,
+            "relative_to_oracle": 3.6690053093479946e-05,
+            "relative_to_normal": 2.118048541888129e-06
+          }
+        }
+      },
+      "tree": {
+        "output_relative_to_oracle": 4.218505296194053e-07,
+        "gradients": {
+          "input": {
+            "norm": 45.04889678955078,
+            "relative_to_oracle": 8.579197015023965e-07,
+            "relative_to_normal": 8.378187885682564e-07
+          },
+          "dt_bias": {
+            "norm": 0.16708368062973022,
+            "relative_to_oracle": 0.001383147668093443,
+            "relative_to_normal": 0.0014463632833212614
+          },
+          "A_log": {
+            "norm": 0.21651290357112885,
+            "relative_to_oracle": 0.002039629966020584,
+            "relative_to_normal": 0.0020508163142949343
+          },
+          "conv1d.weight": {
+            "norm": 138.04066467285156,
+            "relative_to_oracle": 5.312702455739782e-07,
+            "relative_to_normal": 5.047352829024021e-07
+          },
+          "norm.weight": {
+            "norm": 16.48981475830078,
+            "relative_to_oracle": 5.323246341504273e-07,
+            "relative_to_normal": 5.458126679513953e-07
+          },
+          "out_proj.weight": {
+            "norm": 372.2418212890625,
+            "relative_to_oracle": 4.40133874235471e-07,
+            "relative_to_normal": 4.097965700111672e-07
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.9710083007812,
+            "relative_to_oracle": 5.907700710849895e-07,
+            "relative_to_normal": 5.506130946741905e-07
+          },
+          "in_proj_z.weight": {
+            "norm": 383.453857421875,
+            "relative_to_oracle": 4.4435276436161075e-07,
+            "relative_to_normal": 3.9947752838997985e-07
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71455001831055,
+            "relative_to_oracle": 1.0010387541115051e-06,
+            "relative_to_normal": 7.155784942369792e-07
+          },
+          "in_proj_a.weight": {
+            "norm": 10.651888847351074,
+            "relative_to_oracle": 5.0215843657497317e-05,
+            "relative_to_normal": 5.183544271858409e-05
+          }
+        }
+      },
+      "tree_repeated": {
+        "output_relative_to_oracle": 4.218505296194053e-07,
+        "gradients": {
+          "input": {
+            "norm": 45.048892974853516,
+            "relative_to_oracle": 8.546750223104027e-07,
+            "relative_to_normal": 8.341093007402378e-07
+          },
+          "dt_bias": {
+            "norm": 0.16708368062973022,
+            "relative_to_oracle": 0.001383147668093443,
+            "relative_to_normal": 0.0014463632833212614
+          },
+          "A_log": {
+            "norm": 0.21651290357112885,
+            "relative_to_oracle": 0.002039629966020584,
+            "relative_to_normal": 0.0020508163142949343
+          },
+          "conv1d.weight": {
+            "norm": 138.04066467285156,
+            "relative_to_oracle": 5.278466232994106e-07,
+            "relative_to_normal": 5.002625016459206e-07
+          },
+          "norm.weight": {
+            "norm": 16.48981475830078,
+            "relative_to_oracle": 5.323246341504273e-07,
+            "relative_to_normal": 5.458126679513953e-07
+          },
+          "out_proj.weight": {
+            "norm": 372.2418212890625,
+            "relative_to_oracle": 4.40133874235471e-07,
+            "relative_to_normal": 4.097965700111672e-07
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.9710083007812,
+            "relative_to_oracle": 5.84966755923233e-07,
+            "relative_to_normal": 5.45370085092145e-07
+          },
+          "in_proj_z.weight": {
+            "norm": 383.453857421875,
+            "relative_to_oracle": 4.4435276436161075e-07,
+            "relative_to_normal": 3.9947752838997985e-07
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71455001831055,
+            "relative_to_oracle": 1.0010387541115051e-06,
+            "relative_to_normal": 7.155784942369792e-07
+          },
+          "in_proj_a.weight": {
+            "norm": 10.651888847351074,
+            "relative_to_oracle": 5.0215843657497317e-05,
+            "relative_to_normal": 5.183544271858409e-05
+          }
+        }
+      }
+    }
+  }
+]

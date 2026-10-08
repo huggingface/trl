@@ -1,0 +1,1944 @@
+{
+  "before": "a1ae2ef4976df67234ca401daae0c4b947ea260f",
+  "device": "NVIDIA H100 80GB HBM3",
+  "torch": "2.11.0+cu130",
+  "pinned_configs": true,
+  "cases": [
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "chain",
+      "offsets": [
+        0,
+        257
+      ],
+      "parents": [
+        -1
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "star",
+      "offsets": [
+        0,
+        65,
+        194,
+        267,
+        272
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "nested",
+      "offsets": [
+        0,
+        65,
+        68,
+        197,
+        261,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 32,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 32,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 128,
+      "dtype": "float32",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 128,
+      "dtype": "bfloat16",
+      "decay": 20.0,
+      "heads": 2,
+      "value_heads": 4,
+      "normalize": true,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 64,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 2,
+      "normalize": false,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 64,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 2,
+      "normalize": false,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 96,
+      "dtype": "float32",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 2,
+      "normalize": false,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    },
+    {
+      "topology": "forest",
+      "offsets": [
+        0,
+        63,
+        192,
+        194,
+        259,
+        262
+      ],
+      "parents": [
+        -1,
+        0,
+        0,
+        -1,
+        3
+      ],
+      "dim": 96,
+      "dtype": "bfloat16",
+      "decay": 0.2,
+      "heads": 2,
+      "value_heads": 2,
+      "normalize": false,
+      "errors": {
+        "out": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dq": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dk": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dv": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dg": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        },
+        "dbeta": {
+          "exact": true,
+          "max_abs": 0.0,
+          "relative_l2": 0.0
+        }
+      }
+    }
+  ]
+}

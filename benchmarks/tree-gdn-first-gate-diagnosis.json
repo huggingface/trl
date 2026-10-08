@@ -1,0 +1,324 @@
+[
+  {
+    "dtype": "torch.float32",
+    "fused_convolution": true,
+    "triton_f32_default": "tf32",
+    "methods": {
+      "oracle64": {
+        "first_gate_gradient_abs_max": 0.0,
+        "core_input_relative_to_normal": {
+          "q": 0.0,
+          "k": 0.0,
+          "v": 0.0,
+          "g": 0.0,
+          "beta": 0.0
+        },
+        "output_relative_to_oracle": 0.0,
+        "gradients": {
+          "input": {
+            "norm": 45.04889678955078,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.001768785179592669
+          },
+          "dt_bias": {
+            "norm": 0.1671060174703598,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.8641827702522278
+          },
+          "A_log": {
+            "norm": 0.2165696918964386,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.8940390348434448
+          },
+          "conv1d.weight": {
+            "norm": 138.04067993164062,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0010535761248320341
+          },
+          "norm.weight": {
+            "norm": 16.489816665649414,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.000578268722165376
+          },
+          "out_proj.weight": {
+            "norm": 372.2418212890625,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0005580740398727357
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.9710693359375,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0010917880572378635
+          },
+          "in_proj_z.weight": {
+            "norm": 383.453857421875,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0005676529835909605
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71455383300781,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.0016741628060117364
+          },
+          "in_proj_a.weight": {
+            "norm": 10.651920318603516,
+            "relative_to_oracle": 0.0,
+            "relative_to_normal": 0.11682337522506714
+          }
+        }
+      },
+      "normal": {
+        "first_gate_gradient_abs_max": 0.005145177245140076,
+        "core_input_relative_to_normal": {
+          "q": 0.0,
+          "k": 0.0,
+          "v": 0.0,
+          "g": 0.0,
+          "beta": 0.0
+        },
+        "output_relative_to_oracle": 0.0005598535644821823,
+        "gradients": {
+          "input": {
+            "norm": 45.025943756103516,
+            "relative_to_oracle": 0.0017678840085864067,
+            "relative_to_normal": 0.0
+          },
+          "dt_bias": {
+            "norm": 0.7354825139045715,
+            "relative_to_oracle": 3.8035213947296143,
+            "relative_to_normal": 0.0
+          },
+          "A_log": {
+            "norm": 1.3008147478103638,
+            "relative_to_oracle": 5.369999408721924,
+            "relative_to_normal": 0.0
+          },
+          "conv1d.weight": {
+            "norm": 137.9588165283203,
+            "relative_to_oracle": 0.001052951323799789,
+            "relative_to_normal": 0.0
+          },
+          "norm.weight": {
+            "norm": 16.48461151123047,
+            "relative_to_oracle": 0.0005780861829407513,
+            "relative_to_normal": 0.0
+          },
+          "out_proj.weight": {
+            "norm": 372.13128662109375,
+            "relative_to_oracle": 0.0005579083226621151,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.52001953125,
+            "relative_to_oracle": 0.0010911786230280995,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_z.weight": {
+            "norm": 383.33544921875,
+            "relative_to_oracle": 0.0005674776621162891,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71492385864258,
+            "relative_to_oracle": 0.0016741817817091942,
+            "relative_to_normal": 0.0
+          },
+          "in_proj_a.weight": {
+            "norm": 10.770533561706543,
+            "relative_to_oracle": 0.11812425404787064,
+            "relative_to_normal": 0.0
+          }
+        }
+      },
+      "aligned": {
+        "first_gate_gradient_abs_max": 0.005145207047462463,
+        "core_input_relative_to_normal": {
+          "q": 0.0,
+          "k": 0.0,
+          "v": 0.0,
+          "g": 0.0,
+          "beta": 0.0
+        },
+        "output_relative_to_oracle": 0.0005598544958047569,
+        "gradients": {
+          "input": {
+            "norm": 45.02593231201172,
+            "relative_to_oracle": 0.001734328456223011,
+            "relative_to_normal": 0.0003338543465360999
+          },
+          "dt_bias": {
+            "norm": 0.7261528968811035,
+            "relative_to_oracle": 3.7368597984313965,
+            "relative_to_normal": 0.03624989837408066
+          },
+          "A_log": {
+            "norm": 1.2834248542785645,
+            "relative_to_oracle": 5.279110431671143,
+            "relative_to_normal": 0.03907952457666397
+          },
+          "conv1d.weight": {
+            "norm": 137.95883178710938,
+            "relative_to_oracle": 0.0010530005674809217,
+            "relative_to_normal": 4.544094281300204e-06
+          },
+          "norm.weight": {
+            "norm": 16.48461151123047,
+            "relative_to_oracle": 0.0005781298968940973,
+            "relative_to_normal": 2.3533806370323873e-07
+          },
+          "out_proj.weight": {
+            "norm": 372.13128662109375,
+            "relative_to_oracle": 0.0005579108837991953,
+            "relative_to_normal": 1.8256099565405748e-07
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.52001953125,
+            "relative_to_oracle": 0.0010912128491327167,
+            "relative_to_normal": 4.520893980952678e-06
+          },
+          "in_proj_z.weight": {
+            "norm": 383.33544921875,
+            "relative_to_oracle": 0.000567476381547749,
+            "relative_to_normal": 2.1548937922943878e-07
+          },
+          "in_proj_b.weight": {
+            "norm": 32.714908599853516,
+            "relative_to_oracle": 0.0016740894643589854,
+            "relative_to_normal": 2.6152983991778456e-05
+          },
+          "in_proj_a.weight": {
+            "norm": 10.766411781311035,
+            "relative_to_oracle": 0.11424650996923447,
+            "relative_to_normal": 0.026835985481739044
+          }
+        }
+      },
+      "tree": {
+        "first_gate_gradient_abs_max": 0.00792144238948822,
+        "core_input_relative_to_normal": {
+          "q": 6.84979539755659e-08,
+          "k": 6.782114070347234e-08,
+          "v": 6.375366012889572e-08,
+          "g": 0.0,
+          "beta": 0.0
+        },
+        "output_relative_to_oracle": 0.0005598534480668604,
+        "gradients": {
+          "input": {
+            "norm": 45.02589416503906,
+            "relative_to_oracle": 0.0017902572872117162,
+            "relative_to_normal": 0.0005906302249059081
+          },
+          "dt_bias": {
+            "norm": 0.7276424169540405,
+            "relative_to_oracle": 3.7445578575134277,
+            "relative_to_normal": 0.0377691388130188
+          },
+          "A_log": {
+            "norm": 1.2858211994171143,
+            "relative_to_oracle": 5.2887959480285645,
+            "relative_to_normal": 0.04078572243452072
+          },
+          "conv1d.weight": {
+            "norm": 137.95249938964844,
+            "relative_to_oracle": 0.001252328627742827,
+            "relative_to_normal": 0.0005580466240644455
+          },
+          "norm.weight": {
+            "norm": 16.484609603881836,
+            "relative_to_oracle": 0.0005781707004643977,
+            "relative_to_normal": 4.87426063955354e-07
+          },
+          "out_proj.weight": {
+            "norm": 372.1313171386719,
+            "relative_to_oracle": 0.0005579142016358674,
+            "relative_to_normal": 4.0823812241796986e-07
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.4995727539062,
+            "relative_to_oracle": 0.001219125115312636,
+            "relative_to_normal": 0.0005303242360241711
+          },
+          "in_proj_z.weight": {
+            "norm": 383.33544921875,
+            "relative_to_oracle": 0.0005674752173945308,
+            "relative_to_normal": 6.553588605129335e-07
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71803665161133,
+            "relative_to_oracle": 0.0017971523338928819,
+            "relative_to_normal": 0.001264770864509046
+          },
+          "in_proj_a.weight": {
+            "norm": 10.764431953430176,
+            "relative_to_oracle": 0.11445970088243484,
+            "relative_to_normal": 0.026852859184145927
+          }
+        }
+      },
+      "tree_repeated": {
+        "first_gate_gradient_abs_max": 0.00792144238948822,
+        "core_input_relative_to_normal": {
+          "q": 6.84979539755659e-08,
+          "k": 6.782114070347234e-08,
+          "v": 6.375366012889572e-08,
+          "g": 0.0,
+          "beta": 0.0
+        },
+        "output_relative_to_oracle": 0.0005598534480668604,
+        "gradients": {
+          "input": {
+            "norm": 45.02589416503906,
+            "relative_to_oracle": 0.0017902539111673832,
+            "relative_to_normal": 0.0005906297592446208
+          },
+          "dt_bias": {
+            "norm": 0.7276424169540405,
+            "relative_to_oracle": 3.7445578575134277,
+            "relative_to_normal": 0.0377691388130188
+          },
+          "A_log": {
+            "norm": 1.2858211994171143,
+            "relative_to_oracle": 5.2887959480285645,
+            "relative_to_normal": 0.04078572243452072
+          },
+          "conv1d.weight": {
+            "norm": 137.95249938964844,
+            "relative_to_oracle": 0.001252321875654161,
+            "relative_to_normal": 0.0005580434226430953
+          },
+          "norm.weight": {
+            "norm": 16.484609603881836,
+            "relative_to_oracle": 0.0005781707004643977,
+            "relative_to_normal": 4.87426063955354e-07
+          },
+          "out_proj.weight": {
+            "norm": 372.1313171386719,
+            "relative_to_oracle": 0.0005579142016358674,
+            "relative_to_normal": 4.0823812241796986e-07
+          },
+          "in_proj_qkv.weight": {
+            "norm": 807.4995727539062,
+            "relative_to_oracle": 0.0012191238347440958,
+            "relative_to_normal": 0.0005303241196088493
+          },
+          "in_proj_z.weight": {
+            "norm": 383.33544921875,
+            "relative_to_oracle": 0.0005674752173945308,
+            "relative_to_normal": 6.553588605129335e-07
+          },
+          "in_proj_b.weight": {
+            "norm": 32.71803665161133,
+            "relative_to_oracle": 0.0017971523338928819,
+            "relative_to_normal": 0.001264770864509046
+          },
+          "in_proj_a.weight": {
+            "norm": 10.764431953430176,
+            "relative_to_oracle": 0.11445970088243484,
+            "relative_to_normal": 0.026852859184145927
+          }
+        }
+      }
+    }
+  }
+]

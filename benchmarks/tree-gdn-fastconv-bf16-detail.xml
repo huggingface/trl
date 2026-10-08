@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="11.622" timestamp="2026-10-06T15:08:54.514434+00:00" hostname="ip-10-53-86-250"><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored-dtype1-False]" time="11.046"><failure message="AssertionError: model.embed_tokens.weight&#10;relative_l2=0.0129735544, max_abs=0.25, reference_norm=140.352173">benchmarks/run_tree_gdn_compat.py:24: in assert_close_with_error_norm
+    return original_assert_close(actual, expected, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: model.embed_tokens.weight
+
+The above exception was the direct cause of the following exception:
+tests/kernels/test_tree_gdn.py:319: in test_hybrid_qwen_model
+    torch.testing.assert_close(actual.grad, expected.grad, atol=0.15, rtol=0.08, msg=name)
+benchmarks/run_tree_gdn_compat.py:29: in assert_close_with_error_norm
+    raise AssertionError(
+E   AssertionError: model.embed_tokens.weight
+E   relative_l2=0.0129735544, max_abs=0.25, reference_norm=140.352173</failure></testcase><testcase classname="tests.kernels.test_tree_gdn" name="test_hybrid_qwen_model[vendored-dtype1-True]" time="0.151"><failure message="AssertionError: model.embed_tokens.weight&#10;relative_l2=0.0129735544, max_abs=0.25, reference_norm=140.352173">benchmarks/run_tree_gdn_compat.py:24: in assert_close_with_error_norm
+    return original_assert_close(actual, expected, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: model.embed_tokens.weight
+
+The above exception was the direct cause of the following exception:
+tests/kernels/test_tree_gdn.py:319: in test_hybrid_qwen_model
+    torch.testing.assert_close(actual.grad, expected.grad, atol=0.15, rtol=0.08, msg=name)
+benchmarks/run_tree_gdn_compat.py:29: in assert_close_with_error_norm
+    raise AssertionError(
+E   AssertionError: model.embed_tokens.weight
+E   relative_l2=0.0129735544, max_abs=0.25, reference_norm=140.352173</failure></testcase></testsuite></testsuites>

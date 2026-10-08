@@ -1,0 +1,55 @@
+/fsx/amine_dirhoussi/trl-wt-tree-attention/.venv-gdn/lib/python3.11/site-packages/huggingface_hub/constants.py:298: FutureWarning: The `HF_HUB_ENABLE_HF_TRANSFER` environment variable is deprecated as 'hf_transfer' is not used anymore. Please use `HF_XET_HIGH_PERFORMANCE` instead to enable high performance transfer with Xet. Visit https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables#hfxethighperformance for more details.
+  warnings.warn(
+/fsx/amine_dirhoussi/trl-wt-tree-attention/benchmarks/run_tree_gdn_compat.py:39: TRLExperimentalWarning: You are importing from 'trl.experimental'. APIs here are unstable and may change or be removed without notice. Silence this warning by setting environment variable TRL_EXPERIMENTAL_SILENCE=1.
+  from trl.experimental.async_grpo.tree import gdn
+Diagnostic only: tree convolution uses FP32 SiLU to match causal-conv1d
+Test-only compatibility alias: block_type = layer_type (Transformers 5.8.1)
+rank=0 fsdp=2 checkpoint=True same_weights=True unsharded=True step=0 loss=8.490336 max_gradient_relative_rms=0.020202
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/fsx/amine_dirhoussi/trl-wt-tree-attention/benchmarks/run_tree_gdn_compat.py", line 56, in <module>
+[rank0]:     runpy.run_path(target, run_name="__main__")
+[rank0]:   File "<frozen runpy>", line 291, in run_path
+[rank0]:   File "<frozen runpy>", line 98, in _run_module_code
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "tests/kernels/fsdp_tree_gdn.py", line 183, in <module>
+[rank0]:     main()
+[rank0]:   File "tests/kernels/fsdp_tree_gdn.py", line 169, in main
+[rank0]:     assert relative_rms < 0.06, (name, relative_rms.item())
+[rank0]:            ^^^^^^^^^^^^^^^^^^^
+[rank0]: AssertionError: ('model.layers.0.linear_attn.dt_bias', 0.08043596148490906)
+[rank0]:[W1006 15:45:50.068824317 ProcessGroupNCCL.cpp:1575] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E1006 15:45:52.447000 1887202 torch/distributed/elastic/multiprocessing/api.py:986] failed (exitcode: 1) local_rank: 0 (pid: 1887256) of binary: /fsx/amine_dirhoussi/trl-wt-tree-attention/.venv-gdn/bin/python
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/fsx/amine_dirhoussi/trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/distributed/run.py", line 994, in <module>
+    main()
+  File "/fsx/amine_dirhoussi/trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 362, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/fsx/amine_dirhoussi/trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/distributed/run.py", line 990, in main
+    run(args)
+  File "/fsx/amine_dirhoussi/trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/distributed/run.py", line 981, in run
+    elastic_launch(
+  File "/fsx/amine_dirhoussi/trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 170, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/fsx/amine_dirhoussi/trl-sanity-grpo/.venv/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 317, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError:
+============================================================
+benchmarks/run_tree_gdn_compat.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-10-06_15:45:52
+  host      : ip-10-53-86-250.ec2.internal
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 1887256)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+srun: error: ip-10-53-86-250: task 0: Exited with exit code 1

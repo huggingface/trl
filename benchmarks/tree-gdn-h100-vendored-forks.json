@@ -1,0 +1,630 @@
+{
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "torch": "2.11.0+cu130",
+  "triton": "3.7.1",
+  "fla": "0.5.2",
+  "fla_tilelang": "0",
+  "allocator": "default",
+  "dtype": "bfloat16",
+  "component": "core",
+  "hidden_size": null,
+  "key_heads": 16,
+  "value_heads": 32,
+  "head_dim": 128,
+  "repeats": 5,
+  "float32_matmul_precision": "highest",
+  "compiled_scan_chunks_per_region": 8,
+  "tree_implementation": "vendored FLA 0.5.2 with tree-native state kernels",
+  "compiled_implementation": "FP32 chunk algebra and eight-chunk compiled PyTorch scan",
+  "input_generation": "Seeded synthetic hidden states (layer) or Q/K/V/gates (core); shared histories reuse identical values.",
+  "cases": [
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        0,
+        3
+      ],
+      "branches": 2,
+      "logical_tokens": 32768,
+      "unique_tokens": 20480,
+      "packing_ratio": 1.6,
+      "segments": 5,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 2.4746039998717606,
+          "peak_extra_mib": 1928.0,
+          "warmup_and_compile_s": 23.90977769398887,
+          "logical_tokens_s": 13241714.634623604,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 1.6484389925608411,
+          "peak_extra_mib": 1205.0,
+          "warmup_and_compile_s": 32.613784676999785,
+          "logical_tokens_s": 19878200.010966185,
+          "speedup_vs_baseline": 1.5011802141536803,
+          "speedup_vs_fla": 1.5011802141536803
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 10.396412995760329,
+          "peak_extra_mib": 3596.0009765625,
+          "warmup_and_compile_s": 58.677735959005076,
+          "logical_tokens_s": 3151856.3194212113,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 7.496931008063257,
+          "peak_extra_mib": 2407.5009765625,
+          "warmup_and_compile_s": 72.5627383460087,
+          "logical_tokens_s": 4370855.215921911,
+          "speedup_vs_baseline": 1.3867558584410822,
+          "speedup_vs_fla": 1.3867558584410822
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        0,
+        3
+      ],
+      "branches": 2,
+      "logical_tokens": 65536,
+      "unique_tokens": 40960,
+      "packing_ratio": 1.6,
+      "segments": 5,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 4.747022991068661,
+          "peak_extra_mib": 3856.0,
+          "warmup_and_compile_s": 8.3663277989981,
+          "logical_tokens_s": 13805705.201618662,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 3.1151650036918,
+          "peak_extra_mib": 2410.0,
+          "warmup_and_compile_s": 5.735068878013408,
+          "logical_tokens_s": 21037729.91874681,
+          "speedup_vs_baseline": 1.5238431946439233,
+          "speedup_vs_fla": 1.5238431946439233
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 20.513120005489327,
+          "peak_extra_mib": 7192.0009765625,
+          "warmup_and_compile_s": 10.651327780011343,
+          "logical_tokens_s": 3194833.354578071,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 14.659999011200853,
+          "peak_extra_mib": 4815.0009765625,
+          "warmup_and_compile_s": 8.231452339998214,
+          "logical_tokens_s": 4470395.935902026,
+          "speedup_vs_baseline": 1.3992579392274478,
+          "speedup_vs_fla": 1.3992579392274478
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        0,
+        3
+      ],
+      "branches": 2,
+      "logical_tokens": 131072,
+      "unique_tokens": 81920,
+      "packing_ratio": 1.6,
+      "segments": 5,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 9.334864997072145,
+          "peak_extra_mib": 7712.0,
+          "warmup_and_compile_s": 8.27033181898878,
+          "logical_tokens_s": 14041124.327037442,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 6.188479004777037,
+          "peak_extra_mib": 4820.0,
+          "warmup_and_compile_s": 5.817558141992777,
+          "logical_tokens_s": 21180002.37195963,
+          "speedup_vs_baseline": 1.5084263822930217,
+          "speedup_vs_fla": 1.5084263822930217
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 40.75088900572155,
+          "peak_extra_mib": 14384.0009765625,
+          "warmup_and_compile_s": 10.669908916010172,
+          "logical_tokens_s": 3216420.627819852,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 28.997181012528017,
+          "peak_extra_mib": 9630.0009765625,
+          "warmup_and_compile_s": 8.271869047006476,
+          "logical_tokens_s": 4520163.527046692,
+          "speedup_vs_baseline": 1.4053396772643323,
+          "speedup_vs_fla": 1.4053396772643323
+        }
+      }
+    },
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 65536,
+      "unique_tokens": 24576,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 4.747204002342187,
+          "peak_extra_mib": 3856.0,
+          "warmup_and_compile_s": 0.016765045991633087,
+          "logical_tokens_s": 13805178.78895992,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 1.9341239967616275,
+          "peak_extra_mib": 1446.5,
+          "warmup_and_compile_s": 5.629222699004458,
+          "logical_tokens_s": 33884073.67352313,
+          "speedup_vs_baseline": 2.454446566140847,
+          "speedup_vs_fla": 2.454446566140847
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 20.466961999773048,
+          "peak_extra_mib": 7192.0009765625,
+          "warmup_and_compile_s": 0.06569348899938632,
+          "logical_tokens_s": 3202038.485278211,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 8.822746996884234,
+          "peak_extra_mib": 2889.5009765625,
+          "warmup_and_compile_s": 7.931058016998577,
+          "logical_tokens_s": 7428072.007861512,
+          "speedup_vs_baseline": 2.3197947313915934,
+          "speedup_vs_fla": 2.3197947313915934
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 131072,
+      "unique_tokens": 49152,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 9.329184991656803,
+          "peak_extra_mib": 7712.0,
+          "warmup_and_compile_s": 0.030543091997969896,
+          "logical_tokens_s": 14049673.16193421,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 3.7306760059436783,
+          "peak_extra_mib": 2892.0,
+          "warmup_and_compile_s": 5.6589230870013125,
+          "logical_tokens_s": 35133578.952226706,
+          "speedup_vs_baseline": 2.500668773378774,
+          "speedup_vs_fla": 2.500668773378774
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 40.49808900163043,
+          "peak_extra_mib": 14384.0009765625,
+          "warmup_and_compile_s": 0.12669256899971515,
+          "logical_tokens_s": 3236498.3936581085,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 17.46404799632728,
+          "peak_extra_mib": 5778.0009765625,
+          "warmup_and_compile_s": 7.996353701004409,
+          "logical_tokens_s": 7505247.353166039,
+          "speedup_vs_baseline": 2.318940546323925,
+          "speedup_vs_fla": 2.318940546323925
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        0,
+        4,
+        4
+      ],
+      "branches": 4,
+      "logical_tokens": 262144,
+      "unique_tokens": 98304,
+      "packing_ratio": 2.6666666666666665,
+      "segments": 7,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 18.70706999034155,
+          "peak_extra_mib": 15424.0,
+          "warmup_and_compile_s": 8.309788671002025,
+          "logical_tokens_s": 14013097.729112297,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 7.358259987086058,
+          "peak_extra_mib": 5784.0,
+          "warmup_and_compile_s": 5.739362520995201,
+          "logical_tokens_s": 35625813.77391798,
+          "speedup_vs_baseline": 2.542322508741599,
+          "speedup_vs_fla": 2.542322508741599
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 81.38148600119166,
+          "peak_extra_mib": 28768.0009765625,
+          "warmup_and_compile_s": 10.557581353001297,
+          "logical_tokens_s": 3221174.8996099858,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 34.53618999628816,
+          "peak_extra_mib": 11556.0009765625,
+          "warmup_and_compile_s": 8.07042870800069,
+          "logical_tokens_s": 7590414.577525037,
+          "speedup_vs_baseline": 2.356411810623531,
+          "speedup_vs_fla": 2.356411810623531
+        }
+      }
+    },
+    {
+      "prefix": 12288,
+      "suffix": 4096,
+      "topology": "fork",
+      "rollout_length": 16384,
+      "segment_lengths": [
+        12288,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        6,
+        6,
+        6,
+        6
+      ],
+      "branches": 8,
+      "logical_tokens": 131072,
+      "unique_tokens": 32768,
+      "packing_ratio": 4.0,
+      "segments": 11,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 9.363224991830066,
+          "peak_extra_mib": 7712.0,
+          "warmup_and_compile_s": 0.030087530991295353,
+          "logical_tokens_s": 13998595.581583012,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 2.5378349964739755,
+          "peak_extra_mib": 1928.0,
+          "warmup_and_compile_s": 5.621506595009123,
+          "logical_tokens_s": 51647171.775197834,
+          "speedup_vs_baseline": 3.689453808005316,
+          "speedup_vs_fla": 3.689453808005316
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 40.51970501313917,
+          "peak_extra_mib": 14384.0009765625,
+          "warmup_and_compile_s": 0.1251297979906667,
+          "logical_tokens_s": 3234771.821697561,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 11.677846006932668,
+          "peak_extra_mib": 3852.0009765625,
+          "warmup_and_compile_s": 7.892696046008496,
+          "logical_tokens_s": 11223987.704769168,
+          "speedup_vs_baseline": 3.4697927159755535,
+          "speedup_vs_fla": 3.4697927159755535
+        }
+      }
+    },
+    {
+      "prefix": 24576,
+      "suffix": 8192,
+      "topology": "fork",
+      "rollout_length": 32768,
+      "segment_lengths": [
+        24576,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        6,
+        6,
+        6,
+        6
+      ],
+      "branches": 8,
+      "logical_tokens": 262144,
+      "unique_tokens": 65536,
+      "packing_ratio": 4.0,
+      "segments": 11,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 18.712260003667325,
+          "peak_extra_mib": 15424.0,
+          "warmup_and_compile_s": 0.05807279200234916,
+          "logical_tokens_s": 14009211.070636239,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 4.945546999806538,
+          "peak_extra_mib": 3856.0,
+          "warmup_and_compile_s": 5.663941666003666,
+          "logical_tokens_s": 53006067.88495886,
+          "speedup_vs_baseline": 3.7836583100715284,
+          "speedup_vs_fla": 3.7836583100715284
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "ms": 81.1959900020156,
+          "peak_extra_mib": 28768.0009765625,
+          "warmup_and_compile_s": 0.24971069699677173,
+          "logical_tokens_s": 3228533.8228340163,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 23.086576999048702,
+          "peak_extra_mib": 7704.0009765625,
+          "warmup_and_compile_s": 8.082433069997933,
+          "logical_tokens_s": 11354823.194915462,
+          "speedup_vs_baseline": 3.5170216011391093,
+          "speedup_vs_fla": 3.5170216011391093
+        }
+      }
+    },
+    {
+      "prefix": 49152,
+      "suffix": 16384,
+      "topology": "fork",
+      "rollout_length": 65536,
+      "segment_lengths": [
+        49152,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192,
+        8192
+      ],
+      "segment_parents": [
+        -1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        6,
+        6,
+        6,
+        6
+      ],
+      "branches": 8,
+      "logical_tokens": 524288,
+      "unique_tokens": 131072,
+      "packing_ratio": 4.0,
+      "segments": 11,
+      "depth": 3,
+      "partial_chunks": 0,
+      "forward": {
+        "fla_sequence": {
+          "ms": 37.53451199736446,
+          "peak_extra_mib": 30848.0,
+          "warmup_and_compile_s": 8.483614604992908,
+          "logical_tokens_s": 13968158.158998141,
+          "speedup_vs_baseline": 1.0,
+          "speedup_vs_fla": 1.0
+        },
+        "triton_tree": {
+          "ms": 9.784583002328873,
+          "peak_extra_mib": 7712.0,
+          "warmup_and_compile_s": 5.7597977789992,
+          "logical_tokens_s": 53583070.41549056,
+          "speedup_vs_baseline": 3.836087034923277,
+          "speedup_vs_fla": 3.836087034923277
+        }
+      },
+      "forward_backward": {
+        "fla_sequence": {
+          "error": "CUDA out of memory. Tried to allocate 4.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 1.85 GiB is free. Including non-PyTorch memory, this process has 77.32 GiB memory in use. Of the allocated memory 70.32 GiB is allocated by PyTorch, and 9.18 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+        },
+        "triton_tree": {
+          "ms": 45.631583998329006,
+          "peak_extra_mib": 15408.0009765625,
+          "warmup_and_compile_s": 8.165814085994498,
+          "logical_tokens_s": 11489585.810109047
+        }
+      }
+    }
+  ]
+}
