@@ -12,38 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import collections
-import copy
-import gc
 import json
 import pathlib
-from unittest.mock import patch
 
 import pytest
 import torch
-import torch.nn.functional as F
 import transformers
-from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForImageTextToText,
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.testing_utils import backend_empty_cache, torch_device
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.testing_utils import torch_device
+from transformers.trainer_pt_utils import LabelSmoother
+from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import (
-    DataCollatorForLanguageModeling,
-    _chunked_cross_entropy_loss,
-    _patch_chunked_ce_lm_head,
-    dft_loss,
-)
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from .testing_utils import (
     TrlTestCase,
@@ -55,7 +43,6 @@ from .testing_utils import (
     require_peft,
     require_peft_target_parameters,
     require_torch_accelerator,
-    require_torch_multi_accelerator,
     require_vision,
 )
 
@@ -64,47 +51,12 @@ if is_peft_available():
     import peft
     from peft import (
         LoraConfig,
-        PeftModel,
         PrefixTuningConfig,
         PromptEncoderConfig,
         PromptTuningConfig,
         TaskType,
         get_peft_model,
     )
-
-if is_liger_kernel_available():
-    from liger_kernel.transformers.model.output_classes import LigerCausalLMOutputWithPast
-
-
-class TestDFTLoss(TrlTestCase):
-    def test_dft_loss(self):
-        batch_size = 2
-        seq_len = 3
-        vocab_size = 2
-        # All tokens have the same probability
-        logits = torch.fill(torch.empty(batch_size, seq_len, vocab_size), torch.rand(1).item())
-        outputs = CausalLMOutputWithPast(logits=logits)
-        labels = torch.tensor([[1, 0, 0], [0, 1, -100]])
-        ce_loss = torch.nn.functional.cross_entropy(
-            logits.view(-1, vocab_size), labels.view(-1), ignore_index=-100, reduction="mean"
-        )
-        # We need to account for the logits shift operation so we don't consider the first tokens
-        # in each row of the batch
-        num_items_in_batch = 3
-        # Dft loss
-        predicted_dft_loss = dft_loss(outputs, labels, num_items_in_batch)
-        # If we have just two tokens in our vocab and all logits are the same,
-        # dft scales the ce_loss per token by 0.5. So the dft_loss should be ce_loss/2
-        torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
-
-    @pytest.mark.parametrize("num_items_in_batch", [None, 0])
-    def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
-        outputs = CausalLMOutputWithPast(logits=torch.randn(2, 3, 2, requires_grad=True))
-        labels = torch.full((2, 3), -100)
-        loss = dft_loss(outputs, labels, num_items_in_batch)
-        loss.backward()
-        assert loss.item() == 0.0
-        assert torch.isfinite(outputs.logits.grad).all()
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
@@ -467,6 +419,47 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_dft_loss_matches_reference(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.model.device)
+        labels = input_ids.masked_fill(torch.arange(8, device=input_ids.device) < 3, -100)
+        inputs = {"input_ids": input_ids, "attention_mask": torch.ones_like(input_ids), "labels": labels}
+
+        loss = trainer.compute_loss(trainer.model, dict(inputs))
+
+        # DFT (https://huggingface.co/papers/2508.05629) weighs each token's NLL by its detached probability
+        with torch.no_grad():
+            logits = trainer.model(input_ids=input_ids, attention_mask=inputs["attention_mask"]).logits[:, :-1]
+        shift_labels = labels[:, 1:]
+        mask = shift_labels != -100
+        logprobs = logits.float().log_softmax(-1).gather(-1, shift_labels.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        expected = (-logprobs.exp() * logprobs)[mask].sum() / mask.sum()
+        torch.testing.assert_close(loss, expected, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("num_items_in_batch", [None, 0])
+    def test_dft_loss_without_trainable_tokens(self, num_items_in_batch):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 8), device=trainer.model.device)
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "labels": torch.full_like(input_ids, -100),
+        }
+
+        loss = trainer.compute_loss(trainer.model, inputs, num_items_in_batch=num_items_in_batch)
+        loss.backward()
+
+        assert loss.item() == 0.0
+        assert all(torch.isfinite(p.grad).all() for p in trainer.model.parameters() if p.grad is not None)
+
     def test_train_dft_loss(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
@@ -495,141 +488,6 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    def test_train_nll_loss(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="nll", report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_peft
-    def test_train_nll_loss_peft(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="nll", report_to="none")
-        trainer = SFTTrainer(
-            model=model_id,
-            args=training_args,
-            train_dataset=dataset,
-            peft_config=LoraConfig(),
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the peft params have changed and the base model params have not changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model params to be the same
-                torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
-            elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.5.0"),
-                    reason="Gemma4 models were introduced in transformers-5.5.0",
-                ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.0.0"),
-                    reason="LFM2.5-VL requires transformers>=5.0.0",
-                ),
-            ),
-            "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.15.0"),
-                    reason="Muse Glimmer was introduced in transformers-5.15.0",
-                ),
-            ),
-            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-                marks=[
-                    pytest.mark.skipif(
-                        Version(transformers.__version__) < Version("4.57.0"),
-                        reason="Qwen3-VL series were introduced in transformers-4.57.0",
-                    ),
-                ],
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-        ],
-    )
-    @require_vision
-    def test_train_nll_loss_vlm(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
-
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            loss_type="nll",
-            max_length=None,  # for VLMs, truncating can remove image tokens, leading to errors
-            report_to="none",
-        )
-        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            # LLaVA & LLaVA-Next: vision_feature_layer=-2 leaves the last encoder layer (layers.1) and
-            # post_layernorm (pooler-only path) without gradient by design. Assert they stay frozen — if they
-            # ever start training, the feature-selection plumbing has likely regressed.
-            if model_id in (
-                "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-                "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-            ) and ("encoder.layers.1" in n or "post_layernorm" in n):
-                assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-            else:
-                assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
     def test_train_with_formatting_func(self):
         # Dummy formatting function
@@ -975,9 +833,12 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
+        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
+        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -989,94 +850,6 @@ class TestSFTTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_torch_accelerator
-    @require_liger_kernel
-    def test_compute_loss_skip_logits_on_eval_without_metrics_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
-
-        # Init with `use_liger_kernel=False` to skip Liger model wrapping, then flip the flag after to exercise the
-        # Liger branch of `compute_loss`. `loss_type="nll"` so the chunked path isn't patched in (incompatible with
-        # Liger), keeping `model.forward` unmodified.
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            use_liger_kernel=False,
-            loss_type="nll",
-            report_to="none",
-            max_length=8,
-            bf16=False,
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=dataset,
-            compute_metrics=None,
-        )
-        trainer.args.use_liger_kernel = True
-        trainer.model.eval()
-
-        captured = {}
-
-        def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
-            captured["skip_logits"] = inputs.get("skip_logits")
-            dummy_loss = torch.tensor(1.0, requires_grad=True)
-            dummy_outputs = LigerCausalLMOutputWithPast(
-                logits=torch.randn(1, 5, trainer.model.config.vocab_size), token_accuracy=torch.tensor(0.5)
-            )
-            return (dummy_loss, dummy_outputs)
-
-        inputs = {
-            "input_ids": torch.tensor([[1, 2, 3, 4, 5]]),
-            "labels": torch.tensor([[1, 2, 3, 4, 5]]),
-            "attention_mask": torch.tensor([[1, 1, 1, 1, 1]]),
-        }
-
-        with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
-            trainer.compute_loss(trainer.model, inputs)
-
-        assert captured["skip_logits"] is True
-
-    @require_torch_accelerator
-    @require_liger_kernel
-    def test_predict_does_not_skip_logits_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:1]")
-
-        # Same pattern as `test_compute_loss_skip_logits_on_eval_without_metrics_with_liger`: init without Liger then
-        # flip the flag, and force `loss_type="nll"` to keep `model.forward` unpatched.
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            use_liger_kernel=False,
-            loss_type="nll",
-            report_to="none",
-            max_length=8,
-            bf16=False,
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=dataset,
-            compute_metrics=None,
-        )
-        trainer.args.use_liger_kernel = True
-        trainer.model.eval()
-
-        captured = {}
-
-        def mock_super_compute_loss(model, inputs, return_outputs=False, num_items_in_batch=None):
-            captured["skip_logits"] = inputs.get("skip_logits")
-            dummy_loss = torch.tensor(1.0, requires_grad=True)
-            DummyOutput = collections.namedtuple("DummyOutput", ["loss", "logits", "token_accuracy"])
-            dummy_outputs = DummyOutput(
-                loss=dummy_loss,
-                logits=torch.randn(1, 5, trainer.model.config.vocab_size),
-                token_accuracy=torch.tensor(0.5),
-            )
-            return (dummy_loss, dummy_outputs)
-
-        with patch("transformers.Trainer.compute_loss", side_effect=mock_super_compute_loss):
-            trainer.predict(trainer.train_dataset)
-
-        assert captured["skip_logits"] is False
 
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -1999,6 +1772,8 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
         def dummy_compute_metrics(eval_pred):
+            # The logits are the full-vocabulary logits, as before the fused LM head
+            assert eval_pred.predictions.shape[-1] == trainer.model.config.vocab_size
             return {"my_metric": 0.123}
 
         training_args = SFTConfig(
@@ -2015,9 +1790,73 @@ class TestSFTTrainer(TrlTestCase):
             compute_metrics=dummy_compute_metrics,
         )
 
-        trainer.train()
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            trainer.train()
 
         assert trainer.state.log_history[-2]["eval_my_metric"] == 0.123
+
+    def test_train_with_compute_loss_func(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        vocab_sizes = []
+
+        def compute_loss_func(outputs, labels, num_items_in_batch=None):
+            # The outputs are the model's own, with the full logits, as before the fused LM head
+            vocab_sizes.append(outputs.logits.shape[-1])
+            logits = outputs.logits[:, :-1].flatten(0, 1)
+            return torch.nn.functional.cross_entropy(logits, labels[:, 1:].flatten(), ignore_index=-100)
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=2, logging_steps=1, report_to="none")
+        with pytest.warns(FutureWarning, match="`compute_loss_func` is deprecated"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                compute_loss_func=compute_loss_func,
+            )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert vocab_sizes and all(v == trainer.model.config.vocab_size for v in vocab_sizes)
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-2]["mean_token_accuracy"] is not None
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_predict_returns_logits(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="test")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        with pytest.warns(FutureWarning, match="`return_outputs=True`"):
+            predictions = trainer.predict(trainer.train_dataset)
+
+        assert predictions.predictions.shape[-1] == trainer.model.config.vocab_size
+
+    def test_chunked_nll_is_deprecated_alias_of_nll(self):
+        with pytest.warns(FutureWarning, match="`loss_type='chunked_nll'` is deprecated"):
+            training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="chunked_nll", report_to="none")
+        assert training_args.loss_type == "nll"
+
+    def test_label_smoothing(self):
+        # Label smoothing goes through `Trainer`'s label smoother, on the full logits
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, label_smoothing_factor=0.1, report_to="none")
+        with pytest.warns(FutureWarning, match="`label_smoothing_factor` is deprecated"):
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+        trainer.model.eval()  # no dropout, so the two forward passes match
+        batch = trainer.data_collator([trainer.train_dataset[i] for i in range(4)])
+        inputs = {k: v.to(trainer.model.device) for k, v in batch.items()}
+
+        loss = trainer.compute_loss(trainer.model, inputs)
+
+        expected = LabelSmoother(epsilon=0.1)(trainer.model(**inputs), inputs["labels"], shift_labels=True)
+        torch.testing.assert_close(loss, expected)
 
     # In practice, this test is the same as `test_train`, since gradient checkpointing is enabled by default in
     # `SFTTrainer`. We keep it as a regression guard: if the default ever changes, we still explicitly test gradient
@@ -2059,6 +1898,26 @@ class TestSFTTrainer(TrlTestCase):
             gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
             report_to="none",
         )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_torch_accelerator
+    def test_train_with_fp16(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, fp16=True, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -2574,802 +2433,3 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.eos_token_id == eos_token_id
         # The model's own eos tokens are kept, since any of them halts generation
         assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
-
-
-@pytest.mark.slow
-@require_torch_accelerator
-@require_peft
-class TestSFTTrainerSlow(TrlTestCase):
-    def setup_method(self):
-        self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
-        self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
-        self.max_length = 128
-        self.peft_config = LoraConfig(
-            lora_alpha=16,
-            lora_dropout=0.1,
-            r=8,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-    def teardown_method(self):
-        gc.collect()
-        backend_empty_cache(torch_device)
-        gc.collect()
-
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    def test_sft_trainer_transformers_mp(self, model_name, packing):
-        """
-        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
-        precision.
-        """
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            logging_strategy="no",
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=10,
-            fp16=True,  # this is sufficient to enable amp
-            packing=packing,
-            max_length=self.max_length,
-        )
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        trainer = SFTTrainer(
-            model,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-        )
-
-        trainer.train()
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize("device_map", [{"": 0}, "auto"])
-    @pytest.mark.parametrize(
-        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
-    )
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_torch_multi_accelerator
-    def test_sft_trainer_transformers_mp_gc_device_map(
-        self, model_name, packing, gradient_checkpointing_kwargs, device_map
-    ):
-        """
-        Simply tests if passing a transformers model to `SFTTrainer` loads and runs the trainer as expected in mixed
-        precision + different scenarios of gradient_checkpointing (single, multi-gpu, etc).
-        """
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            logging_strategy="no",
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=10,
-            packing=packing,
-            max_length=self.max_length,
-            fp16=True,  # this is sufficient to enable amp
-            gradient_checkpointing=True,  # default, here for clarity
-            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-        )
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32", device_map=device_map)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        trainer = SFTTrainer(
-            model,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-        )
-
-        trainer.train()
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize(
-        "gradient_checkpointing_kwargs", [None, {"use_reentrant": False}, {"use_reentrant": True}]
-    )
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_peft
-    @require_bitsandbytes
-    def test_sft_trainer_transformers_mp_gc_peft_qlora(self, model_name, packing, gradient_checkpointing_kwargs):
-        """
-        Simply tests if passing a transformers model + PEFT + bnb to `SFTTrainer` loads and runs the trainer as
-        expected in mixed precision + different scenarios of gradient_checkpointing.
-        """
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            logging_strategy="no",
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=10,
-            packing=packing,
-            max_length=self.max_length,
-            gradient_checkpointing=True,  # default, here for clarity
-            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
-        )
-
-        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype="float32", quantization_config=quantization_config
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        trainer = SFTTrainer(
-            model,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            peft_config=self.peft_config,
-        )
-
-        assert isinstance(trainer.model, PeftModel)
-
-        trainer.train()
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_peft
-    @require_bitsandbytes
-    def test_sft_trainer_with_chat_format_qlora(self, model_name, packing):
-        """
-        Simply tests if using setup_chat_format with a transformers model + peft + bnb config to `SFTTrainer` loads and
-        runs the trainer as expected.
-        """
-        train_dataset = load_dataset("trl-internal-testing/dolly-chatml-sft", split="train")
-
-        training_args = SFTConfig(
-            packing=packing,
-            max_length=self.max_length,
-            output_dir=self.tmp_dir,
-            logging_strategy="no",
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=10,
-        )
-
-        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype="float32", quantization_config=quantization_config
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        trainer = SFTTrainer(
-            model,
-            args=training_args,
-            processing_class=tokenizer,
-            train_dataset=train_dataset,
-            peft_config=self.peft_config,
-        )
-
-        assert isinstance(trainer.model, PeftModel)
-
-        trainer.train()
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize("packing", [True, False])
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_liger_kernel
-    def test_sft_trainer_with_liger(self, model_name, packing):
-        """
-        Tests if passing use_liger=True to SFTConfig loads and runs the trainer with AutoLigerKernelForCausalLM as
-        expected.
-        """
-        import importlib
-
-        def cleanup_liger_patches(trainer):
-            """Clean up liger_kernel patches by reloading the model's specific module"""
-            try:
-                # Get the specific module that was used by the trainer's model
-                module_path = trainer.model.__module__
-                reload_module = importlib.import_module(module_path)
-                importlib.reload(reload_module)
-            except Exception:
-                pass  # Continue if reload fails
-
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            logging_strategy="no",
-            report_to="none",
-            per_device_train_batch_size=2,
-            max_steps=2,
-            packing=packing,
-            max_length=self.max_length,
-            use_liger_kernel=True,
-        )
-
-        trainer = SFTTrainer(
-            model_name,
-            args=training_args,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-        )
-
-        # Ensure cleanup of liger patches after the test
-        try:
-            trainer.train()
-            release_memory(trainer.model, trainer)
-        finally:
-            cleanup_liger_patches(trainer)
-
-
-_CHUNKED_CE_MODEL_IDS = [
-    "trl-internal-testing/tiny-CohereForCausalLM",
-    pytest.param(
-        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
-    ),
-    pytest.param(
-        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
-    ),
-    "trl-internal-testing/tiny-Gemma2ForCausalLM",
-    "trl-internal-testing/tiny-GemmaForCausalLM",
-    "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-    "trl-internal-testing/tiny-GptOssForCausalLM",
-    "trl-internal-testing/tiny-Lfm2ForCausalLM",
-    pytest.param(
-        "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="LFM2.5 tokenizer requires transformers>=5.0.0",
-        ),
-    ),
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
-    "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-    "trl-internal-testing/tiny-LlamaForCausalLM-3",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.1",
-    "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-    pytest.param(
-        "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.3.0"),
-            reason="Nemotron 3 was introduced in transformers>=5.3.0",
-        ),
-    ),
-    "trl-internal-testing/tiny-Phi3ForCausalLM-3",
-    "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
-    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-    "trl-internal-testing/tiny-Qwen3ForCausalLM",
-    "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-]
-
-
-_CHUNKED_CE_VLM_MODEL_IDS = [
-    "trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
-    pytest.param(
-        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.5.0"),
-            reason="Gemma4 models were introduced in transformers-5.5.0",
-        ),
-    ),
-    pytest.param(
-        "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="LFM2.5-VL requires transformers>=5.0.0",
-        ),
-    ),
-    "trl-internal-testing/tiny-LlavaForConditionalGeneration",
-    "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
-    pytest.param(
-        "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.15.0"),
-            reason="Muse Glimmer was introduced in transformers-5.15.0",
-        ),
-    ),
-    "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
-    "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-    pytest.param(
-        "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("4.57.0"),
-            reason="Qwen3-VL series were introduced in transformers-4.57.0",
-        ),
-    ),
-    pytest.param(
-        "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.2.0"),
-            reason="Qwen3.5 models were introduced in transformers-5.2.0",
-        ),
-    ),
-    pytest.param(
-        "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.2.0"),
-            reason="Qwen3.5 models were introduced in transformers-5.2.0",
-        ),
-    ),
-]
-
-
-class TestChunkedCrossEntropyLoss:
-    B, S, H, V = 2, 8, 4, 16
-    CHUNK_SIZE = 3  # deliberately small to force multiple chunks and a partial final chunk
-
-    def _inputs(self, seed=0, ignore_positions=None, requires_grad=False):
-        torch.manual_seed(seed)
-        hidden = torch.randn(self.B, self.S, self.H, dtype=torch.float32, requires_grad=requires_grad)
-        weight = torch.randn(self.V, self.H, dtype=torch.float32, requires_grad=requires_grad)
-        labels = torch.randint(0, self.V, (self.B, self.S))
-        if ignore_positions is not None:
-            labels[:, ignore_positions] = -100
-        return hidden, weight, labels
-
-    @staticmethod
-    def _reference(hidden, weight, labels, num_items_in_batch=None):
-        shift_h = hidden[..., :-1, :].reshape(-1, hidden.size(-1))
-        shift_l = labels[..., 1:].reshape(-1)
-        logits = shift_h.float() @ weight.float().t()
-        if num_items_in_batch is None:
-            loss = F.cross_entropy(logits, shift_l, ignore_index=-100, reduction="mean")
-        else:
-            loss = F.cross_entropy(logits, shift_l, ignore_index=-100, reduction="sum")
-            loss = loss / num_items_in_batch
-        valid = shift_l != -100
-        if valid.any():
-            log_p = F.log_softmax(logits, dim=-1)
-            preds = logits.argmax(dim=-1)
-            accuracy = (preds[valid] == shift_l[valid]).float().mean()
-            entropy = -(log_p.exp() * log_p).sum(dim=-1)[valid].mean()
-        else:
-            accuracy = torch.zeros((), dtype=torch.float32)
-            entropy = torch.zeros((), dtype=torch.float32)
-        return loss, accuracy, entropy
-
-    def test_forward_matches_cross_entropy(self):
-        """With no ignored tokens, chunked loss equals standard mean cross-entropy."""
-        hidden, weight, labels = self._inputs()
-        expected_n_valid = (labels[..., 1:] != -100).sum()
-        loss_c, correct_c, ent_sum_c, n_valid_c = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
-        loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
-        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(correct_c / n_valid_c, acc_r, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(ent_sum_c / n_valid_c, ent_r, atol=1e-5, rtol=1e-5)
-        assert n_valid_c.item() == expected_n_valid.item()
-
-    def test_forward_ignore_index(self):
-        """Ignored labels are excluded from loss, accuracy and entropy (matches F.cross_entropy)."""
-        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
-        expected_n_valid = (labels[..., 1:] != -100).sum()
-        loss_c, correct_c, ent_sum_c, n_valid_c = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
-        loss_r, acc_r, ent_r = self._reference(hidden, weight, labels)
-        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(correct_c / n_valid_c, acc_r, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(ent_sum_c / n_valid_c, ent_r, atol=1e-5, rtol=1e-5)
-        assert n_valid_c.item() == expected_n_valid.item()
-
-    def test_bf16_hidden_fp32_weight(self):
-        """A bf16 hidden state against an fp32 `lm_head` weight projects without a dtype mismatch."""
-        hidden, weight, labels = self._inputs()
-        loss_c, *_ = _chunked_cross_entropy_loss(hidden.bfloat16(), weight, self.CHUNK_SIZE, labels)
-        loss_r, *_ = self._reference(hidden.bfloat16().float(), weight, labels)
-        torch.testing.assert_close(loss_c, loss_r, atol=2e-2, rtol=2e-2)
-
-    def test_num_items_in_batch_reduction(self):
-        """When num_items_in_batch is provided, loss is sum / num_items_in_batch."""
-        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
-        num_items = 5  # arbitrary global denominator, != local valid count
-        loss_c, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=num_items)
-        loss_r, *_ = self._reference(hidden, weight, labels, num_items_in_batch=num_items)
-        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
-
-    def test_num_items_in_batch_tensor(self):
-        """A tensor `num_items_in_batch` is accepted and produces the same result as the int form."""
-        hidden, weight, labels = self._inputs()
-        num_items_tensor = torch.tensor(7, dtype=torch.float32)
-        loss_t, *_ = _chunked_cross_entropy_loss(
-            hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=num_items_tensor
-        )
-        loss_i, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, num_items_in_batch=7)
-        torch.testing.assert_close(loss_t, loss_i, atol=1e-6, rtol=1e-6)
-
-    def test_backward_matches_reference(self):
-        """Gradients on hidden_states and lm_head weight match the standard CE path."""
-        hidden_c, weight_c, labels = self._inputs(ignore_positions=slice(0, 3), requires_grad=True)
-        hidden_r = hidden_c.detach().clone().requires_grad_(True)
-        weight_r = weight_c.detach().clone().requires_grad_(True)
-
-        loss_c, *_ = _chunked_cross_entropy_loss(hidden_c, weight_c, self.CHUNK_SIZE, labels)
-        loss_c.backward()
-
-        loss_r, *_ = self._reference(hidden_r, weight_r, labels)
-        loss_r.backward()
-
-        torch.testing.assert_close(hidden_c.grad, hidden_r.grad, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(weight_c.grad, weight_r.grad, atol=1e-5, rtol=1e-5)
-
-    def test_all_ignored_returns_zero(self):
-        """If every label is ignored, loss/correct/entropy_sum are all zero and backward still works.
-
-        Every trainable parameter of the chunked path (hidden_states, lm_head_weight, and lm_head_bias when present)
-        must receive a gradient — otherwise DDP / FSDP synchronization hangs or errors at the all-reduce step.
-        """
-        hidden, weight, labels = self._inputs(requires_grad=True)
-        bias = torch.zeros(self.V, dtype=torch.float32, requires_grad=True)
-        labels[:] = -100
-        loss, correct, ent_sum, n_valid = _chunked_cross_entropy_loss(
-            hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias
-        )
-        assert loss.item() == 0.0
-        assert correct.item() == 0.0
-        assert ent_sum.item() == 0.0
-        assert n_valid.item() == 0
-        assert not torch.isnan(loss)
-        # Backward must succeed even when n_valid == 0 (can happen with completion-only loss
-        # + truncation where a whole micro-batch is masked).
-        loss.backward()
-        assert hidden.grad is not None and hidden.grad.abs().sum().item() == 0.0
-        assert weight.grad is not None and weight.grad.abs().sum().item() == 0.0
-        assert bias.grad is not None and bias.grad.abs().sum().item() == 0.0
-
-    def test_shift_labels_matches_labels(self):
-        """`shift_labels` path (CP/SP) must match the default `labels` path after external shifting."""
-        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
-        loss_l, correct_l, ent_l, n_valid_l = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels)
-        # Mimic what transformers does under CP/SP: pad labels with -100, then shift.
-        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
-        loss_s, correct_s, ent_s, n_valid_s = _chunked_cross_entropy_loss(
-            hidden, weight, self.CHUNK_SIZE, shift_labels=shift_labels
-        )
-        torch.testing.assert_close(loss_s, loss_l, atol=1e-6, rtol=1e-6)
-        torch.testing.assert_close(correct_s, correct_l, atol=1e-6, rtol=1e-6)
-        torch.testing.assert_close(ent_s, ent_l, atol=1e-6, rtol=1e-6)
-        assert n_valid_s.item() == n_valid_l.item()
-
-    def test_requires_labels_or_shift_labels(self):
-        """Must provide at least one of `labels` or `shift_labels`."""
-        hidden, weight, _ = self._inputs()
-        with pytest.raises(ValueError, match="At least one"):
-            _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE)
-
-    def test_shift_labels_wins_when_both_provided(self):
-        """When both `labels` and `shift_labels` are provided (Ulysses / CP / SP path), `shift_labels` wins."""
-        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
-        shift_labels = F.pad(labels, (0, 1), value=-100)[..., 1:].contiguous()
-        # Chunked result with both passed in must match the shift_labels-only path.
-        loss_both, *_ = _chunked_cross_entropy_loss(
-            hidden, weight, self.CHUNK_SIZE, labels=labels, shift_labels=shift_labels
-        )
-        loss_shift, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, shift_labels=shift_labels)
-        torch.testing.assert_close(loss_both, loss_shift, atol=1e-6, rtol=1e-6)
-
-    def test_lm_head_bias(self):
-        """When `lm_head_bias` is provided, chunked loss matches `F.linear(h, w, b)` followed by CE."""
-        hidden, weight, labels = self._inputs(ignore_positions=slice(0, 3))
-        torch.manual_seed(1)
-        bias = torch.randn(self.V, dtype=torch.float32)
-
-        loss_c, *_ = _chunked_cross_entropy_loss(hidden, weight, self.CHUNK_SIZE, labels, lm_head_bias=bias)
-
-        # Reference: full F.linear with bias, then CE over non-ignored shifted positions.
-        logits_ref = F.linear(hidden[..., :-1, :], weight, bias).reshape(-1, self.V)
-        labels_ref = labels[..., 1:].reshape(-1)
-        valid = labels_ref != -100
-        loss_r = F.cross_entropy(logits_ref[valid], labels_ref[valid], reduction="mean")
-        torch.testing.assert_close(loss_c, loss_r, atol=1e-5, rtol=1e-5)
-
-
-@require_torch_accelerator
-class TestPatchChunkedCELMHead:
-    """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
-
-    CHUNK_SIZE = 5  # small, to exercise the chunk loop
-
-    def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
-        chunked_model = copy.deepcopy(ref_model)
-        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
-
-        B, S = 2, 16
-        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
-        labels = input_ids.clone()
-        labels[:, :4] = -100  # prompt-like mask
-        num_items = int((labels[..., 1:] != -100).sum())
-        return ref_model, chunked_model, input_ids, labels, num_items
-
-    def _setup_vlm(self, model_id):
-        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
-        chunked_model = copy.deepcopy(ref_model)
-        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
-
-        B, S = 2, 16
-        vocab_size = ref_model.config.text_config.vocab_size
-        input_ids = torch.randint(0, vocab_size, (B, S), device=torch_device)
-        labels = input_ids.clone()
-        labels[:, :4] = -100
-        num_items = int((labels[..., 1:] != -100).sum())
-        return ref_model, chunked_model, input_ids, labels, num_items
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
-    def test_forward_matches_reference(self, model_id):
-        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
-
-        with torch.no_grad():
-            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-
-        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
-        assert out.logits is None
-        assert out.num_correct_tokens is not None and out.num_correct_tokens.item() >= 0
-        assert out.entropy_sum is not None and out.entropy_sum.item() >= 0.0
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
-        ],
-    )
-    def test_forward_matches_reference_with_aux_loss(self, model_id):
-        """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
-        to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
-        )
-        chunked_model = copy.deepcopy(ref_model)
-        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE)
-
-        B, S = 2, 16
-        input_ids = torch.randint(0, ref_model.config.vocab_size, (B, S), device=torch_device)
-        labels = input_ids.clone()
-        labels[:, :4] = -100
-        num_items = int((labels[..., 1:] != -100).sum())
-
-        with torch.no_grad():
-            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-
-        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_CE_MODEL_IDS)
-    def test_backward_matches_reference(self, model_id):
-        ref_model, chunked_model, input_ids, labels, num_items = self._setup(model_id)
-
-        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        ref_out.loss.backward()
-
-        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        out.loss.backward()
-
-        # lm_head gradient
-        torch.testing.assert_close(
-            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
-        )
-        # Base decoder gradients
-        for name, ref_param in ref_model.model.named_parameters():
-            chunked_grad = chunked_model.model.get_parameter(name).grad
-            ref_grad = ref_param.grad
-            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
-            if ref_grad is not None:
-                torch.testing.assert_close(
-                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
-                )
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
-    def test_forward_matches_reference_vlm(self, model_id):
-        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
-
-        with torch.no_grad():
-            ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-            out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-
-        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
-        assert out.logits is None
-        assert out.num_correct_tokens is not None and out.num_correct_tokens.item() >= 0
-        assert out.entropy_sum is not None and out.entropy_sum.item() >= 0.0
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.2.0"),
-                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
-                ),
-            ),
-        ],
-    )
-    def test_forward_matches_reference_vlm_with_aux_loss(self, model_id):
-        ref_model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
-        chunked_model = copy.deepcopy(ref_model)
-        _patch_chunked_ce_lm_head(chunked_model, chunk_size=self.CHUNK_SIZE, is_vlm=True)
-
-        # VLM MoE wrappers only read `output_router_logits` from forward kwargs (their `text_config` explicitly
-        # removes the attribute), so we have to pass it at call time on both paths.
-        B, S = 2, 16
-        input_ids = torch.randint(0, ref_model.config.text_config.vocab_size, (B, S), device=torch_device)
-        labels = input_ids.clone()
-        labels[:, :4] = -100
-        num_items = int((labels[..., 1:] != -100).sum())
-
-        with torch.no_grad():
-            ref_out = ref_model(
-                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
-            )
-            out = chunked_model(
-                input_ids=input_ids, labels=labels, num_items_in_batch=num_items, output_router_logits=True
-            )
-
-        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
-        torch.testing.assert_close(out.aux_loss, ref_out.aux_loss, atol=1e-5, rtol=1e-5)
-
-    @pytest.mark.parametrize("model_id", _CHUNKED_CE_VLM_MODEL_IDS)
-    def test_backward_matches_reference_vlm(self, model_id):
-        ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
-
-        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        ref_out.loss.backward()
-
-        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        out.loss.backward()
-
-        # lm_head gradient
-        torch.testing.assert_close(
-            chunked_model.lm_head.weight.grad, ref_model.lm_head.weight.grad, atol=1e-5, rtol=1e-5
-        )
-        # Multimodal-wrapper gradients (covers both vision tower and inner text decoder).
-        for name, ref_param in ref_model.model.named_parameters():
-            chunked_grad = chunked_model.model.get_parameter(name).grad
-            ref_grad = ref_param.grad
-            assert (chunked_grad is None) == (ref_grad is None), f"grad presence mismatch on model.{name}"
-            if ref_grad is not None:
-                torch.testing.assert_close(
-                    chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
-                )
-
-    def test_forward_without_labels_uses_original_path(self):
-        """With labels=None the patched forward returns real logits (for generation / eval)."""
-        _, chunked_model, input_ids, _, _ = self._setup("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
-        with torch.no_grad():
-            out = chunked_model(input_ids=input_ids)
-        assert out.logits is not None
-        assert out.logits.shape[-1] == chunked_model.config.vocab_size
-
-    def test_forward_without_labels_matches_reference(self):
-        """labels=None logits must match the unpatched model, including per-model post-processing
-        (`final_logit_softcapping`, `logit_scale`, ...). This is what makes `.generate()` safe to call on a patched
-        model."""
-        ref_model, chunked_model, input_ids, *_ = self._setup("trl-internal-testing/tiny-CohereForCausalLM")
-        with torch.no_grad():
-            ref_out = ref_model(input_ids=input_ids)
-            out = chunked_model(input_ids=input_ids)
-        torch.testing.assert_close(out.logits, ref_out.logits, atol=1e-5, rtol=1e-5)
-
-    @require_peft
-    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
-    @pytest.mark.parametrize(
-        "peft_config_factory",
-        [
-            pytest.param(lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"]), id="lora"),
-            pytest.param(
-                lambda: LoraConfig(r=4, target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]),
-                id="lora+modules_to_save",
-            ),
-            pytest.param(
-                lambda: PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_tuning"
-            ),
-            pytest.param(
-                lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
-            ),
-            pytest.param(
-                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
-            ),
-        ],
-    )
-    def test_forward_matches_reference_with_peft(self, peft_config_factory):
-        """Patching the inner causal LM (`peft_model.get_base_model()`) must produce a forward whose loss matches
-        the unpatched PEFT reference for both LoRA-style (adapters live in the module tree) and prompt-learning
-        (`PeftModel.forward` injects virtual tokens, then delegates into the patched inner forward)."""
-        base = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
-        )
-        ref_model = get_peft_model(copy.deepcopy(base), peft_config_factory())
-        chunked_model = copy.deepcopy(ref_model)
-        _patch_chunked_ce_lm_head(chunked_model.get_base_model(), chunk_size=self.CHUNK_SIZE)
-
-        B, S = 2, 16
-        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
-        labels = input_ids.clone()
-        labels[:, :4] = -100
-        num_items = int((labels[..., 1:] != -100).sum())
-
-        ref_out = ref_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        out = chunked_model(input_ids=input_ids, labels=labels, num_items_in_batch=num_items)
-        torch.testing.assert_close(out.loss, ref_out.loss, atol=1e-5, rtol=1e-5)
-
-        ref_out.loss.backward()
-        out.loss.backward()
-        chunked_params = dict(chunked_model.named_parameters())
-        for name, ref_param in ref_model.named_parameters():
-            if not ref_param.requires_grad or ref_param.grad is None:
-                continue
-            torch.testing.assert_close(
-                chunked_params[name].grad,
-                ref_param.grad,
-                atol=1e-5,
-                rtol=1e-5,
-                msg=f"gradient mismatch on {name}",
-            )
-
-    @require_peft
-    @pytest.mark.filterwarnings("ignore:Model has `tie_word_embeddings=True`")
-    def test_num_valid_tokens_with_prompt_learning_peft(self):
-        """For prompt-learning PEFT (PromptTuning, P-Tuning), `PeftModel.forward` prepends `-100`-padded virtual
-        tokens before delegating into the patched inner forward. The patched output's `num_valid_tokens` must reflect
-        the padded labels — when original `label[0] != -100`, it counts as a valid target paired with the last virtual
-        token's hidden state, so it must be included in the metric denominator to keep accuracy ≤ 1."""
-        base = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32, device_map=torch_device
-        )
-        peft_config = PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4)
-        chunked_model = get_peft_model(base, peft_config)
-        _patch_chunked_ce_lm_head(chunked_model.get_base_model(), chunk_size=self.CHUNK_SIZE)
-
-        B, S = 2, 16
-        input_ids = torch.randint(0, base.config.vocab_size, (B, S), device=torch_device)
-        labels = input_ids.clone()  # all positions valid, including label[0]
-
-        out = chunked_model(input_ids=input_ids, labels=labels)
-
-        # `labels[..., 1:]` (un-padded, what compute_loss used to compute) excludes original `label[0]`,
-        # but the patched forward sees padded labels and counts `label[0]` as a valid target.
-        unpadded = int((labels[..., 1:] != -100).sum())
-        # One extra valid target per sequence (original `label[0]`).
-        assert out.num_valid_tokens.item() == unpadded + B
-        # Accuracy denominator from the patched output keeps numerator/denominator aligned, so accuracy ≤ 1.
-        assert out.num_correct_tokens.item() <= out.num_valid_tokens.item()

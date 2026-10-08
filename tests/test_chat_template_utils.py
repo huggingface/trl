@@ -27,14 +27,19 @@ from trl.chat_template_utils import (
     _CHAT_TEMPLATES_DIR,
     _SUPPORTS_RESPONSE_TEMPLATE,
     add_response_schema,
+    cohere2_chat_template,
+    cohere_chat_template,
+    cohere_training_chat_template,
     gemma4_v2_chat_template,
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
     gemma4_v5_chat_template,
     get_training_chat_template,
+    has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
     lfm2_2_5_v2_chat_template,
+    lfm2_chat_template,
     lfm2_v2_chat_template,
     parse_response,
     supports_tool_calling,
@@ -216,6 +221,15 @@ class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "tokenizer_name, chat_template",
         [
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM",
+                lfm2_v2_chat_template,
+                id="lfm2-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2 reuses the new-style response template of LFM2.5, which requires transformers>=5.13",
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 lfm2_2_5_v2_chat_template,
@@ -516,6 +530,10 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            # The earlier LFM2 revision renders `tools` into the system prompt and wraps tool message content in
+            # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
+            # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.
+            pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
             # DeepSeek-R1-Distill renders `tool_calls` only when `content` is `None`, and never closes a single-call
             # turn with `<｜tool▁calls▁end｜>`.
             pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
@@ -524,7 +542,11 @@ class TestSupportsToolCalling:
         ],
     )
     def test_does_not_support_tool_calling(self, model_id):
+        # A (model, chat template) pair stands for the same tiny model with the chat template of another Hub revision
+        model_id, chat_template = model_id if isinstance(model_id, tuple) else (model_id, None)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if chat_template is not None:
+            tokenizer.chat_template = chat_template
         assert supports_tool_calling(tokenizer) is False
 
 
@@ -737,7 +759,16 @@ class TestIsChatTemplateStopTokenTrained:
     "tokenizer_name",
     [
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
+        # Real Cohere checkpoints ship their chat template as named variants, which load as a dict
+        pytest.param(
+            ("trl-internal-testing/tiny-CohereForCausalLM", {"default": cohere_chat_template}),
+            id="cohere-named-variants",
+        ),
         pytest.param("trl-internal-testing/tiny-Cohere2ForCausalLM", id="cohere2"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Cohere2ForCausalLM", {"default": cohere2_chat_template}),
+            id="cohere2-named-variants",
+        ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
         pytest.param(
@@ -767,6 +798,7 @@ class TestIsChatTemplateStopTokenTrained:
             "trl-internal-testing/tiny-Idefics3ForConditionalGeneration", id="idefics3", marks=require_vision
         ),
         pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
+        pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_chat_template), id="lfm2-v1"),
         pytest.param(("trl-internal-testing/tiny-Lfm2ForCausalLM", lfm2_v2_chat_template), id="lfm2-v2"),
         pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
@@ -885,7 +917,7 @@ class TestIsChatTemplateStopTokenTrained:
 )
 class TestGetTrainingChatTemplate:
     def _load(self, model_name):
-        # A (model, chat template) pair stands for the same tiny model with the chat template of another Hub revision
+        # A (model, chat template) pair stands for the same tiny model with another form of its chat template
         model_name, chat_template = model_name if isinstance(model_name, tuple) else (model_name, None)
         if "ForCausalLM" in model_name:
             self.is_vlm = False
@@ -1183,6 +1215,19 @@ class TestGetTrainingChatTemplate:
         # Should have two masked regions (two assistant turns)
         region_starts = sum(1 for i in range(1, len(masks)) if masks[i] == 1 and masks[i - 1] == 0)
         assert region_starts == 2
+
+
+class TestNamedChatTemplateVariants:
+    # A chat template shipped as named variants loads as a dict, e.g. {"default": ..., "tool_use": ..., "rag": ...}
+    def test_has_generation_markers(self):
+        assert has_generation_markers({"default": cohere_training_chat_template}) is True
+        assert has_generation_markers({"default": cohere_chat_template}) is False
+
+    def test_unsupported_default_variant(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-CohereForCausalLM")
+        tokenizer.chat_template = {"default": "{{ messages[0]['content'] }}", "tool_use": cohere_chat_template}
+        with pytest.raises(ValueError, match="not training-compatible"):
+            get_training_chat_template(tokenizer)
 
 
 @pytest.mark.parametrize(
