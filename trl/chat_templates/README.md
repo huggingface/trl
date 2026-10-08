@@ -83,7 +83,7 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 
 ### `lfm2_v2.jinja`
 
-Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them.
+Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them. Response parsing reuses `lfm2_2_5_template`.
 
 ### `lfm2_2_5.jinja`
 

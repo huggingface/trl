@@ -20,8 +20,6 @@ those raw, unverified samples with standard cross-entropy loss. No reward model,
 reinforcement learning is needed.
 """
 
-from __future__ import annotations
-
 import inspect
 import math
 import textwrap
@@ -106,7 +104,7 @@ class SSDTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")

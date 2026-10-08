@@ -1569,6 +1569,7 @@ class SFTTrainer(_BaseTrainer):
         # The forwards that build the full logits leave the loss to the caller, like in `Trainer.compute_loss`
         logits_inputs = {k: v for k, v in inputs.items() if k != "labels"}
 
+        weighted_aux_loss = None
         try:
             parallelism_config = (
                 self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
@@ -1614,11 +1615,16 @@ class SFTTrainer(_BaseTrainer):
                     # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
                     loss = per_token_loss.sum() / torch.as_tensor(num_tokens).clamp(min=1)
                     if self.aux_loss_enabled:
-                        loss = loss + self.router_aux_loss_coef * outputs.aux_loss
+                        weighted_aux_loss = self.router_aux_loss_coef * outputs.aux_loss
                 # Like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages
                 # the gradients across ranks
                 if self.args.average_tokens_across_devices and num_items_in_batch is not None:
                     loss = loss * (self.accelerator.num_processes // self.get_tp_size())
+                # The MoE aux loss is a per-micro-batch mean that DDP averages across ranks. With `num_items_in_batch`,
+                # `Trainer` leaves gradient accumulation to the loss, so average it over the accumulation steps
+                if weighted_aux_loss is not None:
+                    steps = self.current_gradient_accumulation_steps if num_items_in_batch is not None else 1
+                    loss = loss + weighted_aux_loss / steps
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(
