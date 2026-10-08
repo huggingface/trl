@@ -978,6 +978,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+            model_init_kwargs.setdefault("dtype", self.model.dtype)
+            model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
