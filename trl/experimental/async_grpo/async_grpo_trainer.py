@@ -1109,7 +1109,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature)
+        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
         # Processing class
         if processing_class is None:
@@ -1122,6 +1122,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # configs.
         model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
@@ -1150,7 +1160,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
-        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
             from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -1346,6 +1356,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
+                    eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,

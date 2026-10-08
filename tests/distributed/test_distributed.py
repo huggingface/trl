@@ -550,8 +550,8 @@ class TestModelParallel:
         }
         model = AutoModelForCausalLM.from_pretrained(model_id, device_map={"": 0})
         model_split = AutoModelForCausalLM.from_pretrained(model_id, device_map=device_map)
-        add_fused_lm_head(model)
-        add_fused_lm_head(model_split)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
+        add_fused_lm_head(model_split, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=model.device)
         labels = input_ids.masked_fill(torch.arange(16, device=model.device) < 4, -100)
 

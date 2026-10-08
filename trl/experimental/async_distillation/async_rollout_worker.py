@@ -18,6 +18,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -195,6 +196,7 @@ class _AsyncRolloutLoop:
         model_name: str,
         dataset: Dataset,
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
@@ -230,6 +232,7 @@ class _AsyncRolloutLoop:
         else:
             self._dataset_iter = iter(dataset)
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -471,7 +474,7 @@ class _AsyncRolloutLoop:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
-            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
         self._push_metrics(
@@ -567,6 +570,10 @@ class _AsyncRolloutLoop:
             "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
