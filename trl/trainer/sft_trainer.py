@@ -110,6 +110,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
     - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths of the flattened sequence.
     - `"max_length_q"`, `"max_length_k"`: Length of the longest sequence.
+    - `"seq_idx"`: Tensor of the sequence index of each token.
 
     Args:
         pad_token_id (`int`):
@@ -162,7 +163,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
      'cu_seq_lens_q': tensor([0, 3, 5], dtype=torch.int32),
      'cu_seq_lens_k': tensor([0, 3, 5], dtype=torch.int32),
      'max_length_q': 3,
-     'max_length_k': 3}
+     'max_length_k': 3,
+     'seq_idx': tensor([[0, 0, 0, 1, 1]], dtype=torch.int32)}
     ```
     """
 
@@ -219,6 +221,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].size(1)])]).to(torch.int32)
             output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
             output["max_length_q"] = output["max_length_k"] = int(cu_seq_lens.diff().max())
+            # Sequence index of each token, for the short convolutions of linear-attention layers
+            output["seq_idx"] = torch.repeat_interleave(
+                torch.arange(cu_seq_lens.numel() - 1, dtype=torch.int32), cu_seq_lens.diff()
+            )[None]
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(
