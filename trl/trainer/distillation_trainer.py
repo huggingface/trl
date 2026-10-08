@@ -290,6 +290,8 @@ class DistillationTrainer(_BaseTrainer):
             use and that it has been fine-tuned for tool calling.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "distillation"]
     _name = "Distillation"
     _paper = {
@@ -629,12 +631,6 @@ class DistillationTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
-            # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
-            # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
-            # (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses that behavior
-            # without rewriting `training_step`.
-            compute_loss_func="non-None value to disable scaling",
         )
 
         # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
@@ -646,11 +642,6 @@ class DistillationTrainer(_BaseTrainer):
                 "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
                 "single GPU visible with `CUDA_VISIBLE_DEVICES`."
             )
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         self._dist = DistributedBackend(self.accelerator)
 
