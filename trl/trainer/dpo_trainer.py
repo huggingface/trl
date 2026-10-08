@@ -17,6 +17,7 @@ import json
 import math
 import os
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,39 +48,39 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
-from ..import_utils import is_liger_kernel_available
+from ..data_utils import (
+    _tokenize,
+    apply_chat_template,
+    common_prefix_length,
+    extract_prompt,
+    is_conversational,
+    prepare_multimodal_messages,
+)
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
+from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
-    _ChunkedLogProbFunction,
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
     flush_left,
     get_config_model_id,
     global_then_local_main_first,
     hash_module,
-    maybe_gather_lm_head_ctx,
     pad,
-    selective_log_softmax,
-    selective_log_softmax_and_entropy,
     use_adapter,
 )
 
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
-
-
-_CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 
 
 @dataclass
@@ -473,7 +474,8 @@ class DPOTrainer(_BaseTrainer):
             [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
             `compute_result` argument. This will be triggered after the last eval batch to signal that the function
             needs to calculate and return the global summary statistics rather than accumulating the batch-level
-            statistics.
+            statistics. The logits it receives are recomputed with an extra forward pass. This is deprecated and will
+            be removed in v2.0.0.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -809,53 +811,14 @@ class DPOTrainer(_BaseTrainer):
                 "value of 1e-3."
             )
 
-        # Chunked log-probability path
-        self.use_liger_kernel = args.use_liger_kernel
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
-            if self.use_weighting:
-                raise ValueError(
-                    "`use_liger_kernel=True` is incompatible with `use_weighting=True`. WPO weighting requires a "
-                    "second full-vocabulary statistic that the chunked log-probability path does not compute."
-                )
-            if compute_metrics is not None:
-                raise ValueError(
-                    "`compute_metrics` is not supported with `use_liger_kernel=True`. It needs the logits from the "
-                    "forward pass, and the chunked log-probability path does not materialize them."
-                )
-            if is_peft_model(model):
-                # The chunked projection multiplies the hidden states by `lm_head.weight` directly. When the LM head
-                # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
-                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
-                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
-                # Fail loudly rather than train a silently-frozen head.
-                output_embeddings = model.get_output_embeddings()
-                if isinstance(output_embeddings, BaseTunerLayer):
-                    raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The "
-                        "chunked projection reads `lm_head.weight` directly, so the adapter on the head is ignored and "
-                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
-                        "`use_liger_kernel=False`."
-                    )
-                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-                # `PeftModel.forward()`. The chunked path bypasses `PeftModel.forward()` by calling the backbone
-                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
-                # Fail loudly rather than train on a silently corrupted input.
-                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
-                    raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                        "PrefixTuning, P-Tuning). The chunked path bypasses `PeftModel.forward()` by calling the "
-                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
-                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                        "`use_liger_kernel=False`."
-                    )
-            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
-            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the chunked projection.
-            self._forward_redirection = _ForwardRedirection()
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -892,6 +855,16 @@ class DPOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
@@ -909,12 +882,6 @@ class DPOTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
-        if self.aux_loss_enabled and self.use_liger_kernel:
-            raise ValueError(
-                "The chunked DPO path does not support the Mixture-of-Experts load-balancing auxiliary loss, because "
-                "it bypasses the wrapper that computes it. Either set `router_aux_loss_coef` to `0.0` "
-                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
-            )
 
         # Reference model
         if ref_model is None:
@@ -942,6 +909,33 @@ class DPOTrainer(_BaseTrainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
+
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        # `mean_logits` and `is_top1` feed the `logits/*` and `mean_token_accuracy` metrics, `log_sum_sq_probs` the WPO
+        # weights
+        outputs = ("log_probs", "entropy", "mean_logits", "is_top1")
+        if self.use_weighting:
+            outputs += ("log_sum_sq_probs",)
+        add_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model, outputs=outputs)
+        if self.ref_model is not None:
+            add_fused_lm_head(self.ref_model)
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1083,23 +1077,28 @@ class DPOTrainer(_BaseTrainer):
                         "input_ids"
                     ]
 
-                # Check if the tokenized prompt starts with the tokenized prompt+completion
-                if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
-                    )
-                if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
+                # The completion starts where the tokenized prompt and prompt+completion diverge, which is not always
+                # after the prompt (see `common_prefix_length`)
+                prompt_len = min(
+                    common_prefix_length(prompt_ids, prompt_chosen_ids),
+                    common_prefix_length(prompt_ids, prompt_rejected_ids),
+                )
+                if prompt_len < len(prompt_ids):
+                    logger.warning_once(
+                        "The tokenized prompt is not a prefix of the tokenized prompt+completion, usually because the "
+                        "chat template renders the prompt alone differently or because tokens merge across the "
+                        "boundary. The completion starts where they diverge, and this end of the prompt is left out "
+                        "of the training sequence: "
+                        f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
+                        ". The model is trained on a context that differs from the one it sees at inference. To avoid "
+                        "it, use a chat template that renders the prompt the same way in both cases, or end the "
+                        "prompt on a token boundary. This warning is shown once, but it likely applies to every "
+                        "example in the dataset."
                     )
 
-                output["prompt_ids"] = prompt_ids
-                output["chosen_ids"] = prompt_chosen_ids[len(prompt_ids) :]
-                output["rejected_ids"] = prompt_rejected_ids[len(prompt_ids) :]
+                output["prompt_ids"] = prompt_ids[:prompt_len]
+                output["chosen_ids"] = prompt_chosen_ids[prompt_len:]
+                output["rejected_ids"] = prompt_rejected_ids[prompt_len:]
                 return output
 
             dataset = dataset.map(
@@ -1217,84 +1216,13 @@ class DPOTrainer(_BaseTrainer):
 
         return concatenate_datasets([dataset, Dataset.from_file(cache_file)], axis=1)
 
-    def _get_per_token_logps_and_entropies(self, model, model_kwargs, input_ids, completion_mask):
-        """Compute selected-token log probabilities without materializing the full logits tensor."""
-        model = self.accelerator.unwrap_model(model)
-        inner_model = model.base_model.model if is_peft_model(model) else model
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone = inner_model.model
-        else:
-            backbone = inner_model.base_model
-
-        with self.accelerator.autocast():
-            outputs = backbone(**model_kwargs)
-        hidden_states = outputs.last_hidden_state[:, :-1]
-        labels = input_ids[:, 1:]
-        mask = completion_mask[:, 1:].bool()
-        hidden_states = hidden_states[mask]
-        labels = labels[mask]
-
-        lm_head = inner_model.get_output_embeddings()
-        text_config = inner_model.config.get_text_config()
-        final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
-        # `logit_scale` is None on models that don't scale (e.g. MPT); read that as unscaled (1.0). A real 0.0 is
-        # kept as-is. Muse Glimmer applies the same pre-softcap multiplier as `output_multiplier`.
-        logit_scale = getattr(text_config, "logit_scale", None)
-        if logit_scale is None:
-            logit_scale = getattr(text_config, "output_multiplier", None)
-        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
-        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
-        if logit_scale is None:
-            logit_scale = getattr(text_config, "lm_head_multiplier", None)
-        if logit_scale is None and getattr(text_config, "logits_scaling", None) is not None:
-            logits_scaling = text_config.logits_scaling
-            logit_scale = logits_scaling if text_config.model_type == "hyperclovax" else 1 / logits_scaling
-        logit_scale = 1.0 if logit_scale is None else logit_scale
-
-        lm_head_weight = lm_head.weight
-        lm_head_bias = lm_head.bias
-        # FSDP2 exposes sharded parameters as DTensors, while the backbone output is a regular tensor. Gather the
-        # head once before splitting tokens so every projection uses compatible tensor types.
-        if isinstance(lm_head_weight, torch.distributed.tensor.DTensor):
-            lm_head_weight = lm_head_weight.full_tensor()
-            if lm_head_bias is not None:
-                lm_head_bias = lm_head_bias.full_tensor()
-
-        with self.accelerator.autocast(), maybe_gather_lm_head_ctx(lm_head_weight, lm_head_bias):
-            logps, entropies = _ChunkedLogProbFunction.apply(
-                hidden_states,
-                lm_head_weight,
-                lm_head_bias,
-                labels,
-                1.0,
-                _CHUNKED_LOGPROB_CHUNK_SIZE,
-                final_logit_softcapping,
-                logit_scale,
-            )
-
-        per_token_logps = logps.new_zeros(mask.shape).masked_scatter(mask, logps)
-        per_token_entropies = entropies.new_zeros(mask.shape).masked_scatter(mask, entropies)
-        return per_token_logps, per_token_entropies, outputs
-
     def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
-        if self.use_liger_kernel:
-            # Precomputation runs outside `compute_loss`, so a distributed wrapper has not yet armed the hooks that
-            # gather the backbone parameters read by the chunked forward.
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            # FSDP2 modifies the model in place, so unwrapping preserves object identity even though its root forward
-            # still has to run to distribute inputs and materialize parameters.
-            if self.is_fsdp_enabled or model is not unwrapped_model:
-                return self._forward_redirection(
-                    model, unwrapped_model, self._compute_ref_log_probs, unwrapped_model, inputs
-                )
-        return self._compute_ref_log_probs(model, inputs)
-
-    def _compute_ref_log_probs(self, model, inputs):
         device = self.accelerator.device
         _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
+        labels = inputs["input_ids"].masked_fill(inputs["completion_mask"] == 0, -100)
 
         adapter_context = contextlib.nullcontext()
         if self.ref_model is None and is_peft_model(self.model):
@@ -1307,19 +1235,13 @@ class DPOTrainer(_BaseTrainer):
             torch.no_grad(),
             disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs),
             adapter_context,
+            self.accelerator.autocast(),
         ):
-            if self.use_liger_kernel:
-                ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
-                    model, model_kwargs, inputs["input_ids"], inputs["completion_mask"]
-                )
-            else:
-                ref_outputs = model(**model_kwargs)
-                ref_shift_logits = ref_outputs.logits[..., :-1, :]
-                ref_per_token_logps = selective_log_softmax(
-                    ref_shift_logits, inputs["input_ids"][..., 1:], row_mask=inputs["completion_mask"][..., 1:]
-                )
+            ref_per_token_logps = model(**model_kwargs, labels=labels, fused_lm_head=True).log_probs
 
         shift_completion_mask = inputs["completion_mask"][..., 1:]
+        # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+        ref_per_token_logps = ref_per_token_logps[:, -shift_completion_mask.size(1) :]
         if self.ld_alpha is None:
             ref_logps = ref_per_token_logps.sum(dim=1)
         else:
@@ -1337,11 +1259,6 @@ class DPOTrainer(_BaseTrainer):
         return ref_logps.chunk(2, dim=0)
 
     def _compute_loss(self, model, inputs, return_outputs):
-        if return_outputs and self.use_liger_kernel:
-            raise RuntimeError(
-                "return_outputs=True is not supported with the chunked DPO path because it does not materialize "
-                "logits."
-            )
         mode = "train" if self.model.training else "eval"
         device = self.accelerator.device
 
@@ -1352,20 +1269,13 @@ class DPOTrainer(_BaseTrainer):
         # as a forward kwarg (not from the model config), so it must be passed here.
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
-        input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        if self.use_liger_kernel:
-            per_token_logps, per_token_entropies, outputs = self._get_per_token_logps_and_entropies(
-                model, model_kwargs, input_ids, completion_mask
-            )
-        else:
-            outputs = model(**model_kwargs)
-            shift_logits = outputs.logits[..., :-1, :]
-            per_token_logps, per_token_entropies = selective_log_softmax_and_entropy(
-                shift_logits, shift_labels, entropy_requires_grad=False, row_mask=shift_completion_mask
-            )
+        labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
+        outputs = model(**model_kwargs, labels=labels, fused_lm_head=True)
+        # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+        seq_len = shift_completion_mask.size(1)
+        per_token_logps = outputs.log_probs[:, -seq_len:]
         if self.ld_alpha is None:
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
         else:
@@ -1395,41 +1305,14 @@ class DPOTrainer(_BaseTrainer):
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
                     # - New adapter: disabling adapters yields the base model.
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        if self.use_liger_kernel:
-                            ref_per_token_logps, _, ref_outputs = self._get_per_token_logps_and_entropies(
-                                self.model, ref_model_kwargs, input_ids, completion_mask
-                            )
-                        else:
-                            ref_outputs = self.model(**ref_model_kwargs)
+                    ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(
+                        ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
+                    ):
+                        ref_outputs = self.model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
                 else:
-                    if self.use_liger_kernel:
-                        ref_model_unwrapped = self.accelerator.unwrap_model(self.ref_model)
-                        if self.is_fsdp_enabled:
-                            # The reference model has its own FSDP wrapper. Route the direct-backbone pass through that
-                            # wrapper so FSDP2 distributes the inputs and materializes its sharded parameters.
-                            ref_per_token_logps, _, ref_outputs = self._forward_redirection(
-                                self.ref_model,
-                                ref_model_unwrapped,
-                                self._get_per_token_logps_and_entropies,
-                                ref_model_unwrapped,
-                                ref_model_kwargs,
-                                input_ids,
-                                completion_mask,
-                            )
-                        else:
-                            ref_per_token_logps, _, ref_outputs = self._get_per_token_logps_and_entropies(
-                                self.ref_model, ref_model_kwargs, input_ids, completion_mask
-                            )
-                    else:
-                        ref_outputs = self.ref_model(**ref_model_kwargs)
-
-            if not self.use_liger_kernel:
-                ref_shift_logits = ref_outputs.logits[..., :-1, :]
-                ref_per_token_logps = selective_log_softmax(
-                    ref_shift_logits, shift_labels, row_mask=shift_completion_mask
-                )
+                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
+            ref_per_token_logps = ref_outputs.log_probs[:, -seq_len:]
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
             else:
@@ -1587,15 +1470,9 @@ class DPOTrainer(_BaseTrainer):
 
             elif loss_type == "sft":
                 chosen_mask, _ = shift_completion_mask.chunk(2, dim=0)
-                if self.use_liger_kernel:
-                    chosen_per_token_logps, _ = per_token_logps.chunk(2, dim=0)
-                    batch_loss = -chosen_per_token_logps[chosen_mask.bool()].mean()
-                    batch_size = chosen_per_token_logps.size(0)
-                else:
-                    chosen_logits, _ = shift_logits.chunk(2, dim=0)
-                    chosen_labels, _ = shift_labels.chunk(2, dim=0)
-                    batch_loss = F.cross_entropy(chosen_logits[chosen_mask.bool()], chosen_labels[chosen_mask.bool()])
-                    batch_size = chosen_logits.size(0)
+                chosen_per_token_logps, _ = per_token_logps.chunk(2, dim=0)
+                batch_loss = -chosen_per_token_logps[chosen_mask.bool()].mean()
+                batch_size = chosen_per_token_logps.size(0)
                 # Implementation convenience: expand the scalar SFT loss to a per-sequence tensor so it matches the
                 # shape of other losses; only the mean is used, so this is a no-op numerically.
                 per_sequence_loss = batch_loss.expand(batch_size)
@@ -1618,10 +1495,7 @@ class DPOTrainer(_BaseTrainer):
                 # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
                 completion_lengths = shift_completion_mask.sum(dim=1).clamp_min(1)
                 with torch.no_grad():
-                    lse1 = torch.logsumexp(shift_logits, dim=-1)
-                    lse2 = torch.logsumexp(2.0 * shift_logits, dim=-1)
-                    log_denom = lse2 - 2.0 * lse1
-                    aligned_logps = (per_token_logps - log_denom) * shift_completion_mask
+                    aligned_logps = (per_token_logps - outputs.log_sum_sq_probs[:, -seq_len:]) * shift_completion_mask
                 mean_logps = aligned_logps.sum(dim=1) / completion_lengths
                 weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
@@ -1636,10 +1510,7 @@ class DPOTrainer(_BaseTrainer):
 
         # Log the metrics
         # Entropy
-        if self.use_liger_kernel:
-            per_token_entropy = per_token_entropies.detach()
-        else:
-            per_token_entropy = per_token_entropies
+        per_token_entropy = outputs.entropy[:, -seq_len:].detach()
         mask = shift_completion_mask
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()
@@ -1656,35 +1527,32 @@ class DPOTrainer(_BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        if not self.use_liger_kernel:
-            # Average logits for chosen and rejected completions
-            chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
-            chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
-            total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
-            total_chosen_tokens = chosen_mask.sum()
-            total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
-            total_rejected_tokens = rejected_mask.sum()
-            total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
-            total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
-            total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
-            total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
-            avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
-            avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
-            self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
-            self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
+        # Average logits for chosen and rejected completions
+        chosen_mean_logits, rejected_mean_logits = outputs.mean_logits[:, -seq_len:].chunk(2, dim=0)
+        chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
+        total_chosen_logits = chosen_mean_logits[chosen_mask.bool()].sum()
+        total_chosen_tokens = chosen_mask.sum()
+        total_rejected_logits = rejected_mean_logits[rejected_mask.bool()].sum()
+        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+        avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
+        avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
+        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
+        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
 
-            # Token accuracy for the chosen completions
-            predictions = chosen_logits.argmax(dim=-1)
-            chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
-            chosen_labels = shift_labels[: len(shift_labels) // 2]
-            correct_predictions = (predictions == chosen_labels) & chosen_mask
-            total_tokens = chosen_mask.sum()
-            correct_tokens = correct_predictions.sum()
-            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-            total_sum = total_tokens.sum()
-            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+        # Token accuracy for the chosen completions
+        chosen_is_top1, _ = outputs.is_top1[:, -seq_len:].chunk(2, dim=0)
+        correct_predictions = chosen_is_top1 & chosen_mask.bool()
+        total_tokens = chosen_mask.sum()
+        correct_tokens = correct_predictions.sum()
+        correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+        total_sum = total_tokens.sum()
+        accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+        self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         # Rewards for chosen and rejected completions
         chosen_rewards = self.beta * chosen_logratios.detach()
@@ -1708,6 +1576,15 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
+        if return_outputs:
+            warnings.warn(
+                "`return_outputs=True`, and the logits it passes to `compute_metrics`, are deprecated and will be removed "
+                "in v2.0.0. The fused LM head does not build the logits, so they are recomputed with an extra forward pass.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            with torch.no_grad():
+                outputs = model(**model_kwargs)
         return (loss, outputs) if return_outputs else loss
 
     def evaluate(
@@ -1780,17 +1657,6 @@ class DPOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
-            if self.use_liger_kernel:
-                # The chunked projection reads `lm_head.weight` directly, bypassing the module, so the loss has to
-                # run inside the wrapper's forward via `_forward_redirection`: that is what gathers sharded
-                # parameters under ZeRO-3 and FSDP, and what arms DDP's gradient reducer. FSDP2 shards in place, so
-                # unwrapping preserves object identity and needs its own check.
-                unwrapped_model = self.accelerator.unwrap_model(model)
-                if self.is_fsdp_enabled or model is not unwrapped_model:
-                    return self._forward_redirection(
-                        model, unwrapped_model, self._compute_loss, unwrapped_model, inputs, return_outputs
-                    )
-                return self._compute_loss(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
@@ -1823,7 +1689,7 @@ class DPOTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
-                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
+                loss = self.compute_loss(model, inputs, return_outputs=False)
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)

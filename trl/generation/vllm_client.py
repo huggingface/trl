@@ -26,10 +26,8 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 import torch
-from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers.utils import get_json_schema
-from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_available
 
@@ -37,6 +35,8 @@ from ..import_utils import is_requests_available, is_vllm_available
 if is_requests_available():
     import requests
     from requests import ConnectionError
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
 
 
 if is_vllm_available():
@@ -51,10 +51,6 @@ if _HAS_STATEFUL_TRAINER_ENGINE:
     from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
 elif is_vllm_available():
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
-
-# `/start_weight_update` and `/finish_weight_update` were introduced in vLLM 0.21.0. Before that, `/update_weights`
-# ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
-_HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
 
 # vLLM 0.26.0 (vllm-project/vllm#46893) made `/reset_prefix_cache` return `{"success": bool}`. Before that, it answered
 # with an empty body.
@@ -773,12 +769,10 @@ class VLLMClient:
             self._finish_weight_update()
 
     def _start_weight_update(self):
-        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
-            self._post(f"{self.base_url}/start_weight_update", json={})
+        self._post(f"{self.base_url}/start_weight_update", json={})
 
     def _finish_weight_update(self):
-        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
-            self._post(f"{self.base_url}/finish_weight_update", json={})
+        self._post(f"{self.base_url}/finish_weight_update", json={})
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
