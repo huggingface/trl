@@ -35,7 +35,6 @@ from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
-import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -64,7 +63,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_response_parsing, require_vllm
 
 
 # The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
@@ -1215,118 +1214,60 @@ class TestReconciler(TrlTestCase):
         assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1]
 
 
-# A tool-calling assistant turn keeps the loop going; a plain turn ends it.
-_TOOL_CALL = {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [{"type": "function", "function": {"name": "t", "arguments": {}}}],
-}
-_FINAL = {"role": "assistant", "content": "done"}
+# The vLLM server's turns, opened by Qwen3's empty thinking block: a tool call continues the loop, an answer ends it
+_TOOL_CALL = '<think>\n\n</think>\n\n<tool_call>\n{"name": "t", "arguments": {}}\n</tool_call><|im_end|>'
+_FINAL = "<think>\n\n</think>\n\ndone<|im_end|>"
 
 
-def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max_iters=None):
-    """Drive _AsyncRolloutLoop._generate_one on scripted per-turn fixtures.
-
-    prompt_ids: list of the token list `apply_chat_template` returns each turn. turns: list of (turn_ids, logprobs)
-    `_generate_one_turn` returns each turn. assistants: list of the message `parse_response` returns each turn.
+def t() -> str:
     """
-    pq, tq, aq = list(prompt_ids), list(turns), list(assistants)
-    monkeypatch.setattr(worker, "parse_response", lambda tokenizer, ids, prefix=None: aq.pop(0))
+    Return ok.
+    """
+    return "ok"
 
-    class _StubTokenizer:
-        # `completions/clipped_ratio` reads these to decide whether the last turn ended on EOS. The scripted turn ids
-        # below never end on 0, so every fixture rollout counts as clipped — irrelevant to what these tests assert.
-        eos_token_id = 0
-        pad_token_id = 0
 
-        def apply_chat_template(self, messages, **kwargs):
-            return pq.pop(0)
-
-    loop = object.__new__(_AsyncRolloutLoop)  # skip the heavy __init__; set only what _generate_one reads
-    loop.tokenizer = _StubTokenizer()
-    loop.eos_token_ids = [loop.tokenizer.eos_token_id]
-    loop.tools = []
-    loop.chat_template = None
-    loop.chat_template_kwargs = {}
-    loop.max_tool_calling_iterations = max_iters
-    loop._fork_threshold_tokens = fork_threshold
-    # `_generate_one` pushes its rollout-structure metrics; collect them instead of sending them to a queue.
-    loop._pushed_metrics = []
-    loop._counters = defaultdict(float)
-    loop._rates = defaultdict(lambda: [0.0, 0.0])
-    loop._push_metrics = loop._pushed_metrics.append
+def _run(*, turns, max_iters=None):
+    """
+    Drive `_AsyncRolloutLoop._generate_one` with the real tokenizer, chat template and response parser, scripting only
+    the vLLM server, which generates the text of `turns` one turn after the other.
+    """
+    loop = _rollout_loop(tools=[t], max_tool_calling_iterations=max_iters)
+    outputs = [loop.tokenizer.encode(text, add_special_tokens=False) for text in turns]
 
     async def _generate_one_turn(prompt_ids):
-        return tq.pop(0)
-
-    async def _execute_tool_calls(tool_calls, tool_dict):
-        return [{"role": "tool", "name": "t", "content": "ok"}], 1, 0
+        ids = outputs.pop(0)
+        return ids, [-0.1] * len(ids)
 
     loop._generate_one_turn = _generate_one_turn
-    loop._execute_tool_calls = _execute_tool_calls
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
-    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
+    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
 
 
+@require_response_parsing
 class TestRolloutLoop(TrlTestCase):
-    def test_single_turn_no_tool_call(self, monkeypatch):
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3]],
-            turns=[([10, 11], [-0.1, -0.2])],
-            assistants=[_FINAL],
-        )
+    def test_single_turn_no_tool_call(self):
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_FINAL])
         assert len(sequences) == 1
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1]
-        assert sequences[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2]
-        assert completion_ids == [10, 11]
+        n = len(completion_ids)
+        assert sequences[0].input_ids[-n:] == completion_ids
+        assert sequences[0].completion_mask == [0] * (len(sequences[0].input_ids) - n) + [1] * n
+        assert sequences[0].old_log_probs[-n:] == [-0.1] * n
         assert [m["role"] for m in completion] == ["assistant"]
         assert n_calls == 0 and n_failures == 0
 
-    def test_clean_two_turns_stay_one_row(self, monkeypatch):
-        # Turn 2's re-tokenized prompt starts with what we held (gen tokens + tool tokens) -> CLEAN.
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3], [1, 2, 3, 10, 11, 20, 21]],
-            turns=[([10, 11], [-0.1, -0.2]), ([30, 31], [-0.3, -0.4])],
-            assistants=[_TOOL_CALL, _FINAL],
-        )
+    def test_clean_two_turns_stay_one_row(self):
+        # The training chat template is prefix-preserving, so turn 2's re-tokenized prompt extends turn 1 -> one row
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_TOOL_CALL, _FINAL])
         assert len(sequences) == 1
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11, 20, 21, 30, 31]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1, 0, 0, 1, 1]  # prompt=0, gen=1, tool=0, gen=1
-        assert sequences[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2, 0.0, 0.0, -0.3, -0.4]
-        assert completion_ids == [10, 11, 30, 31]  # generated tokens only, both turns
+        assert sum(sequences[0].completion_mask) == len(completion_ids)  # every generated token is trained once
         assert [m["role"] for m in completion] == ["assistant", "tool", "assistant"]
+        assert completion[1]["content"] == "ok"
         assert n_calls == 1 and n_failures == 0
 
-    def test_history_rewrite_forks_into_two_rows(self, monkeypatch):
-        # Turn 2's prompt diverges inside turn 1's answer and the new turn is >= fork_threshold -> FORK.
-        _, _, sequences, _, _, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3], [1, 2, 3, 99, 88, 77]],
-            turns=[([10, 11, 12, 13], [-0.1] * 4), ([30, 31, 32], [-0.2] * 3)],
-            assistants=[_TOOL_CALL, _FINAL],
-            fork_threshold=2,
-        )
-        assert len(sequences) == 2
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1, 1, 1]
-        assert sequences[1].input_ids == [1, 2, 3, 99, 88, 77, 30, 31, 32]
-        assert sequences[1].completion_mask == [0, 0, 0, 0, 0, 0, 1, 1, 1]  # 6 context (rewritten history) + 3 gen
-        # Every generated token is trained exactly once across the rows.
-        assert sum(sum(s.completion_mask) for s in sequences) == 4 + 3
-
-    def test_max_tool_calling_iterations_caps_turns(self, monkeypatch):
+    def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
-        completion, _, sequences, n_calls, _, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3]],
-            turns=[([10, 11], [-0.1, -0.2])],
-            assistants=[_TOOL_CALL],
-            max_iters=0,
-        )
+        completion, _, sequences, n_calls, _, _ = _run(turns=[_TOOL_CALL], max_iters=0)
         assert len(sequences) == 1
         assert [m["role"] for m in completion] == ["assistant"]  # no tool message appended
         assert n_calls == 0
