@@ -142,7 +142,6 @@ def main():
         report_to="trackio",
         trackio_space_id=output_dir,
         max_length=1024,
-        use_liger_kernel=True,
         activation_offloading=True,
         push_to_hub=True,
     )
