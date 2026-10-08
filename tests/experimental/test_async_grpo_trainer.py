@@ -2078,7 +2078,7 @@ class TestTrainingClient(TrlTestCase):
         self.model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.float32, attn_implementation="sdpa"
         ).to(torch_device)
-        add_fused_lm_head(self.model, temperature=1.0)
+        add_fused_lm_head(self.model, temperature=1.0, outputs=("log_probs", "entropy"))
         self.model.train()
 
         torch.manual_seed(1)
