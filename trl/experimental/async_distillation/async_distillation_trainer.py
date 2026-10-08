@@ -533,19 +533,24 @@ class _EpochStopCallback(TrainerCallback):
     An epoch is counted in distinct prompts actually trained (accumulated in the collator, which runs on the main
     process just before the model forward). Where [`~trl.experimental.async_grpo.async_grpo_trainer`] counts
     prompt-groups, one prompt here yields exactly one training sample, so a prompt and a group are the same thing. Only
-    the main process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep
-    data-parallel workers in lockstep.
+    the main process collates (`dispatch_batches=True`), so the count is gathered across ranks to keep data-parallel
+    workers in lockstep. The same count is written to `state.epoch`, so logs and `trainer_state.json` report the real
+    number of passes over the prompts.
     """
 
-    def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int):
+    def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int, num_prompts: int):
         self._trainer = trainer
         self._target = target_prompts
+        self._num_prompts = num_prompts
 
-    def on_step_end(self, _args, _state, control, **_kwargs):
+    def on_step_end(self, _args, state, control, **_kwargs):
         acc = self._trainer.accelerator
         trained = self._trainer._prompts_before_resume + len(self._trainer._trained_prompts)
-        reached = torch.tensor(int(trained >= self._target), device=acc.device)
-        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+        # Only the main process collates, so every rank takes the main process's count.
+        trained = int(acc.gather(torch.tensor([trained], device=acc.device)).max().item())
+        # transformers derives `state.epoch` from `max_steps`, which is only a safety ceiling here.
+        state.epoch = trained / self._num_prompts
+        if trained >= self._target:
             control.should_training_stop = True
 
 
@@ -1339,6 +1344,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # Tracks restart to match `num_train_epochs`
         self._prompts_before_resume = 0
         self._epoch_stop_prompts: int | None = None
+        self._epoch_stop_num_prompts: int | None = None
         # This must happen after super().__init__() so that self.accelerator.num_processes is available. The training
         # dataloader is driven by the async rollout queue (an IterableDataset with no __len__), so max_steps must be
         # set explicitly for transformers.Trainer's step-counting to work.
@@ -1349,6 +1355,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         )
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
             self._epoch_stop_prompts = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            self._epoch_stop_num_prompts = len(train_dataset)
             # max_steps is a safety ceiling, left uninflated unlike AsyncGRPOTrainer's: `lr_scheduler_type` defaults
             # to `linear` here, so its value also sets the decay horizon. Under `TokenBudgetBatcher` (the default once
             # `token_budget` is set, see below) a step consumes more samples than assumed here, so the run reaches the
@@ -1508,7 +1515,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
         if self._epoch_stop_prompts is not None:
-            self.add_callback(_EpochStopCallback(self, self._epoch_stop_prompts))
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_prompts, self._epoch_stop_num_prompts))
 
     def _init_lora_sync(self, model: "PeftModel") -> bool:
         """Probe the server and decide the sync mode. Main process only; the decision itself is [`select_adapter_sync`]."""

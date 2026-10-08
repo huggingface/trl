@@ -239,19 +239,24 @@ class _EpochStopCallback(TrainerCallback):
     An epoch is counted in distinct prompt-groups actually trained (accumulated in the collator, which runs on the main
     process just before the model forward). This is fork-independent: all generations of a prompt and all forked rows
     of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
-    process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
-    workers in lockstep.
+    process collates (`dispatch_batches=True`), so the count is gathered across ranks to keep data-parallel workers in
+    lockstep. The same count is written to `state.epoch`, so logs and `trainer_state.json` report the real number of
+    passes over the prompts.
     """
 
-    def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
+    def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int, num_prompts: int):
         self._trainer = trainer
         self._target = target_groups
+        self._num_prompts = num_prompts
 
-    def on_step_end(self, _args, _state, control, **_kwargs):
+    def on_step_end(self, _args, state, control, **_kwargs):
         acc = self._trainer.accelerator
         trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
-        reached = torch.tensor(int(trained >= self._target), device=acc.device)
-        if int(acc.reduce(reached, reduction="sum").item()) >= 1:
+        # Only the main process collates, so every rank takes the main process's count.
+        trained = int(acc.gather(torch.tensor([trained], device=acc.device)).max().item())
+        # transformers derives `state.epoch` from `max_steps`, which is only a safety ceiling here.
+        state.epoch = trained / self._num_prompts
+        if trained >= self._target:
             control.should_training_stop = True
 
 
@@ -1231,6 +1236,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Tracks restart to match `num_train_epochs`
         self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
+        self._epoch_stop_num_prompts: int | None = None
         samples_per_step = (
             self.args.per_device_train_batch_size
             * self.args.gradient_accumulation_steps
@@ -1239,6 +1245,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if self.args.max_steps <= 0 and train_dataset is not None and hasattr(train_dataset, "__len__"):
             # Fork-independent stop: num_train_epochs full passes over the prompts.
             self._epoch_stop_groups = math.ceil(self.args.num_train_epochs * len(train_dataset))
+            self._epoch_stop_num_prompts = len(train_dataset)
             # max_steps is a generous safety ceiling; with the default constant LR its exact value doesn't matter.
             max_rows_per_conv = (
                 self.args.max_tool_calling_iterations + 1 if self.args.max_tool_calling_iterations is not None else 32
@@ -1389,7 +1396,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.add_callback(StepIntervalCallback(self._sync_weight, self.args.weight_sync_steps))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
         if self._epoch_stop_groups is not None:
-            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups))
+            self.add_callback(_EpochStopCallback(self, self._epoch_stop_groups, self._epoch_stop_num_prompts))
 
     def _init_lora_sync(self, model: "PeftModel") -> bool:
         """Probe the server and decide the sync mode. Main process only; the decision itself is [`select_adapter_sync`]."""
