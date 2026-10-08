@@ -21,7 +21,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer, GenerationConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoProcessor,
+    AutoTokenizer,
+    GenerationConfig,
+)
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -2092,99 +2098,16 @@ def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_exampl
             )
 
 
-def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
-    """GOLDTrainer should raise ValueError when the student is a VLM but the teacher is not."""
-
-    class DummyStudentModel:
-        def __init__(self):
-            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            # vision_config=None — looks like a text-only model
-            self.config = SimpleNamespace(vision_config=None)
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        del (
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            compute_metrics,
-            callbacks,
-            optimizers,
-        )
-        del preprocess_logits_for_metrics, peft_config
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-
-    args = SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        truncation_mode="keep_start",
-        use_liger_kernel=False,
-        trust_remote_code=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=1.0,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=False,
-    )
+def test_gold_trainer_init_rejects_non_vlm_teacher(tmp_path, vlm_dataset):
+    """GOLDTrainer should raise ValueError when the student is a VLM but the instantiated teacher is not."""
+    teacher_model = AutoModelForCausalLM.from_pretrained(_TINY_QWEN2)
 
     with pytest.raises(ValueError, match="VLM distillation requires both student and teacher"):
         GOLDTrainer(
-            model=DummyStudentModel(),
-            teacher_model=DummyTeacherModel(),
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=processor,
+            model=_TINY_SMOLVLM,
+            teacher_model=teacher_model,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+            train_dataset=vlm_dataset,
         )
 
 
