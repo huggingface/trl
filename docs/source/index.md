@@ -94,7 +94,7 @@ The documentation is organized into the following sections:
 - **Getting Started**: installation and quickstart guide.
 - **Conceptual Guides**: dataset formats, training FAQ, and understanding logs.
 - **How-to Guides**: reducing memory usage, speeding up training, distributing training, etc.
-- **Integrations**: DeepSpeed, Liger Kernel, PEFT, etc.
+- **Integrations**: DeepSpeed, PEFT, etc.
 - **Examples**: example overview, community tutorials, etc.
 - **API**: trainers, utils, etc.
 
