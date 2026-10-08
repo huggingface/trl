@@ -197,6 +197,37 @@ class TestChunkedLogProbFunction:
 
         torch.testing.assert_close(mean_logits, (hidden @ weight.t()).mean(-1) / 0.7, atol=1e-5, rtol=1e-5)
 
+    @pytest.mark.parametrize(
+        ("temperature", "logit_scale", "final_logit_softcapping"),
+        [(1.0, 1.0, None), (0.7, 0.5, None), (0.7, 1.0, 3.0)],
+    )
+    @pytest.mark.parametrize("entropy_weight", [0.0, 0.5])
+    def test_backward_frozen_head(self, temperature, logit_scale, final_logit_softcapping, entropy_weight):
+        # Only the hidden states need a gradient, as with a PEFT adapter
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, device=torch_device, requires_grad=True)
+        weight = torch.randn(self.V, self.H, device=torch_device)
+        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+
+        logprobs, entropy, *_ = ChunkedLogProbFunction.apply(
+            hidden, weight, None, labels, temperature, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
+        )
+        (2.0 * logprobs + entropy_weight * entropy).sum().backward()
+        grad = hidden.grad.clone()
+
+        hidden.grad = None
+        logprobs_ref, entropy_ref = self._reference_logprobs_and_entropy(
+            hidden,
+            weight,
+            labels,
+            temperature,
+            logit_scale=logit_scale,
+            final_logit_softcapping=final_logit_softcapping,
+        )
+        (2.0 * logprobs_ref + entropy_weight * entropy_ref).sum().backward()
+
+        torch.testing.assert_close(grad, hidden.grad, atol=1e-4, rtol=1e-4)
+
     def test_is_top1_matches_argmax_with_ties(self):
         # Duplicated head rows make exact ties; `argmax` picks the first one, and so must `is_top1`
         torch.manual_seed(42)
