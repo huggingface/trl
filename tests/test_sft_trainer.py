@@ -2314,6 +2314,9 @@ class TestSFTTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+        # The vision tower gets no gradients, so DDP must search for unused parameters
+        assert trainer.args.ddp_find_unused_parameters
+
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()

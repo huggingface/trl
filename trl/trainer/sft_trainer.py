@@ -1090,6 +1090,10 @@ class SFTTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        # Text-only data leaves the vision tower of a vision-language model without gradients. DDP must then search
+        # for unused parameters, which transformers turns off by default under gradient checkpointing.
+        if self._is_vlm and not self._is_vision_dataset and args.ddp_find_unused_parameters is None:
+            args.ddp_find_unused_parameters = True
 
         if self._is_vision_dataset and args.packing:
             raise ValueError(
