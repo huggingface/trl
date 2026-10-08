@@ -1618,7 +1618,7 @@ class SFTTrainer(_BaseTrainer):
                 # Like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages
                 # the gradients across ranks
                 if self.args.average_tokens_across_devices and num_items_in_batch is not None:
-                    loss = loss * (self.accelerator.num_processes // self._tp_size)
+                    loss = loss * (self.accelerator.num_processes // self.get_tp_size())
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(
