@@ -106,8 +106,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
     to `False`, the following key is also returned:
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following key is also returned:
+    If `padding_free` is set to `True`, the following keys are also returned:
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
+    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths of the flattened sequence.
+    - `"max_length_q"`, `"max_length_k"`: Length of the longest sequence.
 
     Args:
         pad_token_id (`int`):
@@ -156,7 +158,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[-100, 2, 3, -100, 5]])}
+     'labels': tensor([[-100, 2, 3, -100, 5]]),
+     'cu_seq_lens_q': tensor([0, 3, 5], dtype=torch.int32),
+     'cu_seq_lens_k': tensor([0, 3, 5], dtype=torch.int32),
+     'max_length_q': 3,
+     'max_length_k': 3}
     ```
     """
 
@@ -207,6 +213,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][output["position_ids"] == 0] = -100
+            # Sequence boundaries for the varlen kernels (flash attention, linear attention). Computed here, on CPU,
+            # since the model would otherwise derive them from `position_ids` with device-to-host syncs in every layer.
+            seq_starts = (output["position_ids"][0] == 0).nonzero().flatten()
+            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].size(1)])]).to(torch.int32)
+            output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
+            output["max_length_q"] = output["max_length_k"] = int(cu_seq_lens.diff().max())
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(

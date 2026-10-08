@@ -135,10 +135,20 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5], dtype=torch.int32))
+        assert result["max_length_q"] == 3
 
     def test_padding_free_without_labels(self):
         """Padding-free mode without labels: labels default to the input IDs (document starts masked)."""
@@ -147,10 +157,20 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5], dtype=torch.int32))
+        assert result["max_length_q"] == 3
 
     def test_packing(self):
         """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
@@ -164,10 +184,20 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, 6, -100, 8, 9, 10, -100]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 6, 10, 11], dtype=torch.int32))
+        assert result["max_length_q"] == 4
 
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
@@ -188,10 +218,20 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 0, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, -100, -100, -100]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5, 6, 7, 8], dtype=torch.int32))
+        assert result["max_length_q"] == 3
 
     def test_custom_position_ids_but_no_padding_free(self):
         """Test that custom position_ids are ignored if padding_free is False."""
