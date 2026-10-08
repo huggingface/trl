@@ -102,7 +102,8 @@ def _reference_chunked_divergence(
     elif beta == 1.0:  # reverse KL: KL(student || teacher)
         per_element = student_probs * (student_log_probs - teacher_log_probs)
     else:  # generalized JSD against the mixture M = (1 - beta) * student + beta * teacher
-        mixture_log_probs = ((1 - beta) * student_probs + beta * teacher_probs).log()
+        beta_t = student_log_probs.new_tensor(beta)
+        mixture_log_probs = torch.logaddexp(student_log_probs + torch.log1p(-beta_t), teacher_log_probs + beta_t.log())
         per_element = beta * (teacher_probs * (teacher_log_probs - mixture_log_probs)) + (1 - beta) * (
             student_probs * (student_log_probs - mixture_log_probs)
         )
@@ -116,12 +117,11 @@ def _reference_chunked_divergence(
 class TestChunkedDivergenceLoss(TrlTestCase):
     """Unit tests for the memory-efficient chunked JSD loss (`_chunked_divergence_loss`)."""
 
-    @pytest.fixture(autouse=True)
-    def small_chunks(self):
-        # Small tiles so every test crosses token and vocabulary chunk boundaries
+    @pytest.fixture(autouse=True, params=[(4, 5)])
+    def small_chunks(self, request):
         with (
-            patch("trl.kernels.chunked_divergence.TOKEN_CHUNK_SIZE", 4),
-            patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", 5),
+            patch("trl.kernels.chunked_divergence.TOKEN_CHUNK_SIZE", request.param[0]),
+            patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", request.param[1]),
         ):
             yield
 
@@ -132,7 +132,6 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         student_w = torch.randn(V, H, generator=g, device=torch_device)
         teacher_w = torch.randn(V, H, generator=g, device=torch_device)
         completion_mask = torch.ones(B, K, device=torch_device)
-        # Mask a few scattered positions so the packed masked tail is exercised.
         completion_mask.reshape(-1)[torch.randperm(B * K, generator=g, device=torch_device)[:n_masked]] = 0
         return student_hidden, teacher_hidden, student_w, teacher_w, completion_mask
 
@@ -293,6 +292,66 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         torch.testing.assert_close(sh_c.grad, sh_r.grad, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(sw_c.grad, sw_r.grad, atol=1e-5, rtol=1e-5)
 
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+    @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+    @pytest.mark.parametrize("use_autocast", [False, True])
+    def test_low_precision_backward_matches_reference(self, dtype, beta, use_autocast):
+        # A close scalar loss can hide gradient errors from rounded logits.
+        sh, th, sw, tw, mask = self._inputs(H=64)
+        logit_std = 10.0 if beta == 0.5 else 30.0
+        sw, tw = sw * (logit_std / 64**0.5), tw * (logit_std / 64**0.5)
+        input_dtype = torch.float32 if use_autocast else dtype
+        sh, th = sh.to(input_dtype).requires_grad_(), th.to(input_dtype).requires_grad_()
+        sw, tw = sw.to(input_dtype).requires_grad_(), tw.to(input_dtype).requires_grad_()
+        s_bias = torch.linspace(-1.0, 1.0, sw.size(0), device=torch_device, requires_grad=True)
+        t_bias = torch.linspace(1.0, -1.0, tw.size(0), device=torch_device, requires_grad=True)
+        with torch.autocast(torch_device, dtype=dtype, enabled=use_autocast):
+            loss, entropy, _ = _chunked_divergence_loss(
+                sh, th, sw, tw, mask, beta, student_lm_head_bias=s_bias, teacher_lm_head_bias=t_bias
+            )
+        loss.backward()
+
+        sh_r, sw_r = sh.detach().clone().requires_grad_(), sw.detach().clone().requires_grad_()
+        s_bias_r = s_bias.detach().clone().requires_grad_()
+        expected = _reference_chunked_divergence(
+            sh_r.to(dtype),
+            th.detach().to(dtype),
+            sw_r.to(dtype),
+            tw.detach().to(dtype),
+            mask,
+            beta,
+            s_bias=s_bias_r,
+            t_bias=t_bias.detach(),
+        )
+        expected.backward()
+        torch.testing.assert_close(loss, expected, atol=1e-5, rtol=1e-5)
+        logits = sh.detach().to(dtype).float() @ sw.detach().to(dtype).float().t() + s_bias.detach()
+        log_probs = logits.log_softmax(dim=-1)
+        expected_entropy = (-(log_probs.exp() * log_probs).sum(dim=-1) * mask).sum()
+        torch.testing.assert_close(entropy, expected_entropy, atol=1e-5, rtol=1e-5)
+        for actual, reference in ((sh.grad, sh_r.grad), (sw.grad, sw_r.grad), (s_bias.grad, s_bias_r.grad)):
+            assert torch.isfinite(actual).all()
+            relative_error = (actual.float() - reference.float()).abs().max() / reference.float().abs().max()
+            assert relative_error < 0.01
+        assert th.grad is None and tw.grad is None and t_bias.grad is None
+
+    @pytest.mark.parametrize("small_chunks", [(4, 2053)], indirect=True)
+    def test_jsd_underflow_across_blocks(self):
+        sh, th, sw, tw, mask = self._inputs(B=1, K=3, H=1, V=2053, n_masked=1)
+        sh.fill_(1.0)
+        th.fill_(1.0)
+        sw.fill_(-120.0)
+        tw.fill_(-120.0)
+        sw[:2, 0] = torch.tensor([0.0, 1.0], device=torch_device)
+        tw[:2, 0] = torch.tensor([1.0, 0.0], device=torch_device)
+        sh.requires_grad_()
+        loss, entropy, _ = _chunked_divergence_loss(sh, th, sw, tw, mask, beta=0.5)
+        expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta=0.5)
+        torch.testing.assert_close(loss, expected)
+        assert torch.isfinite(entropy)
+        loss.backward()
+        assert torch.isfinite(sh.grad).all()
+
     def test_fully_masked_batch_keeps_graph(self):
         # With every position masked the loss is 0, but backward must still touch every trainable student param
         # (hidden states, lm_head weight and bias) — otherwise DDP/FSDP synchronization hangs at the all-reduce.
@@ -305,6 +364,9 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         assert torch.isfinite(loss)
         loss.backward()  # must not raise: the graph stays connected through the student hidden states + lm_head
         assert sh.grad is not None and sw.grad is not None and s_bias.grad is not None
+        assert torch.count_nonzero(sh.grad) == 0
+        assert torch.count_nonzero(sw.grad) == 0
+        assert torch.count_nonzero(s_bias.grad) == 0
 
 
 class TestDistillationTrainer(TrlTestCase):

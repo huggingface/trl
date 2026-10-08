@@ -217,9 +217,11 @@ def _compute_dtype(hidden: torch.Tensor) -> torch.dtype:
 
 
 def _project(tile, hidden_chunk, weight, bias, start, end, dtype):
-    torch.mm(hidden_chunk, weight[start:end].to(dtype).t(), out=tile)
+    # FP32 projection output avoids rounding logits before computing the divergence.
+    tile.zero_()
+    _addmm_fp32(tile, hidden_chunk, weight[start:end].to(dtype).t())
     if bias is not None:
-        tile.add_(bias[start:end].to(dtype))
+        tile.add_(bias[start:end].float())
 
 
 class ChunkedDivergenceFunction(torch.autograd.Function):
@@ -269,8 +271,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
         s_sum, s_x_sum, t_sum, t_weighted_gap, s_weighted_gap = zeros(), zeros(), zeros(), zeros(), zeros()
         jsd, kl_student = zeros(), zeros()
         rows = min(N, TOKEN_CHUNK_SIZE)
-        s_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=s_dtype)
-        t_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=t_dtype)
+        s_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=torch.float32)
+        t_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=torch.float32)
         is_jsd = 0.0 < beta < 1.0
 
         with (
@@ -392,8 +394,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
             if needs_bias_grad:
                 grad_bias = torch.zeros(student_bias.shape, device=student_bias.device, dtype=torch.float32)
             rows = min(N, TOKEN_CHUNK_SIZE)
-            s_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=student_hidden.device, dtype=s_dtype)
-            t_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=student_hidden.device, dtype=t_dtype)
+            s_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=student_hidden.device, dtype=torch.float32)
+            t_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=student_hidden.device, dtype=torch.float32)
             for token_start in range(0, N, TOKEN_CHUNK_SIZE):
                 token_end = min(token_start + TOKEN_CHUNK_SIZE, N)
                 n = token_end - token_start
@@ -420,10 +422,11 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         BLOCK_SIZE=_BLOCK_SIZE,
                         **ctx.kernel_args,
                     )
+                    grad_tile = s_tile.to(s_dtype)
                     if grad_hidden is not None:
-                        _addmm_fp32(grad_hidden[sl], s_tile, student_weight[start:end].to(s_dtype))
+                        _addmm_fp32(grad_hidden[sl], grad_tile, student_weight[start:end].to(s_dtype))
                     if grad_weight is not None:
-                        _addmm_fp32(grad_weight[start:end], s_tile.t(), h_s)
+                        _addmm_fp32(grad_weight[start:end], grad_tile.t(), h_s)
                     if grad_bias is not None:
                         grad_bias[start:end] += s_tile.sum(dim=0, dtype=torch.float32)
 
