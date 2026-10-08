@@ -11,17 +11,19 @@ Jinja2 chat templates stored here serve two purposes:
 
 **Why `_v2`?** Identity comparison is exact, so when a model repo changes its chat template, the new revision is stored next to the original as `<name>_v2.jinja` (then `_v3`, ...) and both are recognized. The suffix only orders revisions as they are added; each section below says where the revision comes from.
 
+**How is drift detected?** A weekly CI job runs `scripts/check_chat_templates.py`, which fails when one of its reference Hub repos ships a chat template that is not stored here. When adding a template for a new model, add the repo it comes from to `REPOS` in that script.
+
 ## Original templates
 
 Used for identity comparison only.
 
 ### `cohere.jinja`
 
-Original Cohere Command chat template (as shipped by `CohereForAI/c4ai-command-r-v01` and related checkpoints).
+Original Cohere chat template (as shipped by `CohereLabs/aya-expanse-8b`).
 
 ### `cohere2.jinja`
 
-Original Cohere2 chat template (as shipped by `CohereLabs/c4ai-command-r7b-12-2024` and related checkpoints).
+Original Cohere2 chat template (as shipped by `CohereLabs/tiny-aya-earth`).
 
 ### `deepseek_r1_distill.jinja`
 
@@ -30,6 +32,10 @@ Original DeepSeek-R1-Distill chat template, shipped byte-identically by every di
 ### `deepseekv3.jinja`
 
 Original DeepSeek-V3 chat template.
+
+### `diffusion_gemma.jinja`
+
+Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
 
 ### `gemma.jinja`
 
@@ -77,7 +83,7 @@ Original LFM2 chat template (as shipped by `LiquidAI/LFM2-*` checkpoints). ChatM
 
 ### `lfm2_v2.jinja`
 
-Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them.
+Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` since [40f3da0](https://huggingface.co/LiquidAI/LFM2-1.2B/commit/40f3da0d0164913923aee9462c23077868b816a3)). Unlike `lfm2.jinja`, it renders assistant `tool_calls`, in the same `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` format as `lfm2_2_5.jinja`, and tolerates a missing `content` alongside them. Response parsing reuses `lfm2_2_5_template`.
 
 ### `lfm2_2_5.jinja`
 
@@ -143,6 +149,10 @@ Original Qwen2.5-VL chat template. Also matches Qwen2-VL, which ships a byte-ide
 
 Original Qwen3 chat template.
 
+### `qwen3_instruct_2507.jinja`
+
+Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507`). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
+
 ### `qwen3_vl.jinja`
 
 Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is already prefix-preserving (no conditional thinking blocks), so no training patch is needed.
@@ -195,6 +205,12 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+
+### `diffusion_gemma_training.jinja`
+
+Patched DiffusionGemma template. Diff vs `diffusion_gemma.jinja`:
+
+Wrap the parts of a model turn that the model emits (thinking channel, tool calls, content, and the closing `<turn|>`) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. Tool responses embedded in the turn come from the environment and stay outside the generation block.
 
 ### `gemma_training.jinja`
 
@@ -334,6 +350,12 @@ Always include the thinking block regardless of message position. The original c
 - {%- endif %}
 + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
 ```
+
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_instruct_2507_training.jinja`
+
+Patched Qwen3-Instruct-2507 template. Diff vs `qwen3_instruct_2507.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
