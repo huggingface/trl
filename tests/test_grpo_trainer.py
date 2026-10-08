@@ -176,6 +176,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
             rollout_func=rollout_func,
         )
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_prefers_rollout_func(self):
         rollout_func = self._make_rollout_func(
             prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[-0.1]], env_mask=[[1]]
@@ -189,6 +190,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert result[2] == [[1]]  # tool_mask (from env_mask)
         assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
         rollout_func = self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[0.0]])
         trainer = self._make_trainer(rollout_func)
@@ -203,6 +205,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert trainer._last_loaded_step == trainer.state.global_step
         assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
         trainer = self._make_trainer(self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]]))
 
