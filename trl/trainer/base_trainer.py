@@ -74,7 +74,7 @@ class _BaseTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # `Trainer.loss_is_scaled_for_ga` requires transformers 5.19; older versions only read these two attributes
-        if Version(transformers.__version__) < Version("5.19.0.dev0") and self.loss_is_scaled_for_ga is not None:
+        if Version(transformers.__version__) < Version("5.19.0") and self.loss_is_scaled_for_ga is not None:
             self.model_accepts_loss_kwargs = False
             if self.loss_is_scaled_for_ga:
                 self.compute_loss_func = "non-None value to disable scaling"
