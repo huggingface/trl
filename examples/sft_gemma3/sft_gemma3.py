@@ -40,7 +40,7 @@ def main():
 
     # Load model
     model_id = "google/gemma-3-12b-it"
-    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager")
+    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager", use_kernels=True)
 
     # Train model
     training_args = SFTConfig(

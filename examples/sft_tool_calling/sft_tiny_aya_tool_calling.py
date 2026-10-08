@@ -16,7 +16,7 @@
 # dependencies = [
 #     "trl[peft]",
 #     "bitsandbytes",
-#     "liger-kernel",
+#     "kernels",
 #     "trackio",
 # ]
 # ///
@@ -113,6 +113,7 @@ def main():
         model_id,
         attn_implementation="sdpa",
         dtype=torch.float16,
+        use_kernels=True,
         quantization_config=BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
