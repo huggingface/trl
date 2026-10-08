@@ -597,6 +597,16 @@ class RewardTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # TRL doesn't support `nn.DataParallel`, which `Trainer` uses when several GPUs are visible and no distributed
+        # launcher is used. Checked after `Trainer.__init__`, which sets `n_gpu` to 1 for a model split across devices
+        # with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # During evaluation, Trainer calls compute_loss() only if can_return_loss is True and label_names is empty.
         self.can_return_loss = True
         self.label_names = []
