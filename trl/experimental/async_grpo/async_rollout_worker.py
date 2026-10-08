@@ -20,6 +20,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -316,6 +317,7 @@ class _AsyncRolloutLoop:
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
@@ -368,6 +370,7 @@ class _AsyncRolloutLoop:
                 FutureWarning,
             )
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -428,14 +431,15 @@ class _AsyncRolloutLoop:
                 instance = factory()
                 has_reset = False
                 methods = []
-                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         if type(instance) not in self._env_reward_types:
                             self._env_reward_types.append(type(instance))
                     elif not member_name.startswith("_"):
-                        methods.append(member)
+                        methods.append(getattr(instance, member_name))
                 if not has_reset:
                     raise ValueError(
                         "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -588,8 +592,8 @@ class _AsyncRolloutLoop:
                     methods = []
                     if environment is not None:
                         methods = [
-                            member
-                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            getattr(environment, member_name)
+                            for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                             if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                         ]
                     tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
@@ -706,7 +710,7 @@ class _AsyncRolloutLoop:
             self._heartbeat_value.value = time.time()
             try:
                 group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             if group is None:
                 return
@@ -829,7 +833,7 @@ class _AsyncRolloutLoop:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
-            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
         if self.tools:
@@ -987,6 +991,10 @@ class _AsyncRolloutLoop:
             "n": 1,
             "return_token_ids": True,
             "logprobs": 0,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
