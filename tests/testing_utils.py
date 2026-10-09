@@ -30,6 +30,7 @@ from transformers.utils import (
     is_torch_available,
     is_torch_bf16_gpu_available,
     is_torch_xla_available,
+    is_triton_available,
     is_vision_available,
 )
 
@@ -78,6 +79,7 @@ require_torch_accelerator = pytest.mark.skipif(
 require_torch_multi_accelerator = pytest.mark.skipif(
     not is_torch_available() or backend_device_count(torch_device) <= 1, reason="test requires multiple accelerators"
 )
+require_triton = pytest.mark.skipif(not is_triton_available(), reason="test requires triton")
 require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requires vision")
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
 require_wandb = pytest.mark.skipif(not is_wandb_available(), reason="test requires wandb")
