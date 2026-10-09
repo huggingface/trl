@@ -1836,24 +1836,7 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
-```python
-from trl.experimental.ssd import SSDConfig, SSDTrainer
-
-training_args = SSDConfig(
-    temperature=0.6,                       # Training-time sampling temperature (T_train)
-    top_k=20,                              # Training-time top-k truncation
-    top_p=0.95,                            # Training-time top-p truncation
-    max_completion_length=65536,
-    learning_rate=5e-6,
-)
-
-trainer = SSDTrainer(
-    model="Qwen/Qwen3-4B-Instruct",
-    args=training_args,
-    train_dataset=...,
-)
-trainer.train()
-```
+TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history. The recipe can be reproduced by sampling completions with vLLM at the desired temperature and truncation (`temperature`, `top_k`, `top_p`), then fine-tuning on the samples with [`SFTTrainer`].
 
 Expected dataset columns:
 
