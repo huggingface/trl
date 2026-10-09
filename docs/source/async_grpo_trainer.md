@@ -251,6 +251,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | metric                                                             | meaning                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rollout/duration_s`                                               | wall time for one conversation, from dispatch to its last turn.                                                                                                                                                                              |
+| `rollout/generate_s`, `rollout/tool_s`                             | of that wall time, seconds spent waiting on vLLM and seconds spent running tools. The remainder is tokenization and parsing. Not logged on the loop-owning harness path, which has no timestamps                                              |
 | `rollout/generated_tok_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
 | `rollout/inflight`                                                 | conversations in flight to vLLM.                                                                                                                                                                                                             |
 | `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
@@ -274,6 +275,15 @@ Logged only when the model executes tools. `tools/<name>_*` repeats per tool nam
 | `tools/unknown_name_total`                              | built-in                   | the model asked for a tool that does not exist: tracks a policy error, unlike a tool that ran and raised                                                                                                                                                                                     |
 | `tools/parallel_calls_mean`                             | built-in                   | tool calls requested in a single assistant message                                                                                                                                                                                                                                           |
 | `tools/loop_exhausted_frac`                             | built-in                   | conversations cut off at `max_tool_calling_iterations` while still asking for tools                                                                                                                                                                                                          |
+
+### Environments
+
+Logged only with an `environment_factory`. Both calls run on the worker's tool thread pool, so a slow environment delays its own rollout but not the others in flight.
+
+| metric                                | meaning                                                                                                    |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `env/reset_s`, `env/<name>_reset_s`   | time in `reset()` before the rollout starts, per environment name when `environment_factory` is a mapping |
+| `env/reward_s`                        | time in `get_reward()` after the rollout ends                                                              |
 
 ### Samples arriving from the queue
 

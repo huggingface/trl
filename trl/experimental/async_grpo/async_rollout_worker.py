@@ -537,6 +537,7 @@ class _AsyncRolloutLoop:
         inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
+        loop = asyncio.get_running_loop()
 
         self._generation_start_time = time.monotonic()
         try:
@@ -572,7 +573,16 @@ class _AsyncRolloutLoop:
                         reset_kwargs = (
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
-                        observation = environment.reset(**reset_kwargs)
+                        t0 = time.monotonic()
+                        observation = await loop.run_in_executor(
+                            self._tool_pool, functools.partial(environment.reset, **reset_kwargs)
+                        )
+                        elapsed = time.monotonic() - t0
+                        self._rates["env/reset_s"][0] += elapsed
+                        self._rates["env/reset_s"][1] += 1
+                        if self._multi_environment:
+                            self._rates[f"env/{name}_reset_s"][0] += elapsed
+                            self._rates[f"env/{name}_reset_s"][1] += 1
                     # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
                     # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
                     if "prompt" not in row and self.environment_factories is not None:
@@ -670,7 +680,13 @@ class _AsyncRolloutLoop:
                         env_type = type(environment)
                         if env_type in self._env_reward_types:
                             get_reward = environment.get_reward
-                            reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                            t0 = time.monotonic()
+                            if inspect.iscoroutinefunction(get_reward):
+                                reward = await get_reward()
+                            else:
+                                reward = await loop.run_in_executor(self._tool_pool, get_reward)
+                            self._rates["env/reward_s"][0] += time.monotonic() - t0
+                            self._rates["env/reward_s"][1] += 1
                             group.env_rewards.append((env_type, reward))
                         else:
                             group.env_rewards.append(None)
@@ -821,6 +837,8 @@ class _AsyncRolloutLoop:
         tally: dict[str, float],
         loop_exhausted: bool,
         duration_s: float,
+        generate_s: float | None = None,
+        tool_s: float | None = None,
     ) -> None:
         """One conversation's structure and its completion, aggregated per rollout."""
         transitions = tally["transitions"]
@@ -831,6 +849,11 @@ class _AsyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
+        if generate_s is not None:
+            self._rates["rollout/generate_s"][0] += generate_s
+            self._rates["rollout/generate_s"][1] += 1
+            self._rates["rollout/tool_s"][0] += tool_s
+            self._rates["rollout/tool_s"][1] += 1
         if completion_ids:
             # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
@@ -896,6 +919,8 @@ class _AsyncRolloutLoop:
         completion, completion_ids = [], []
         tool_call_count = 0
         tool_failure_count = 0
+        generate_s = 0.0
+        tool_s = 0.0
         iteration_num = 0
         loop_exhausted = False
         max_iterations = self.max_tool_calling_iterations
@@ -908,7 +933,9 @@ class _AsyncRolloutLoop:
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
             )
+            t0 = time.monotonic()
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
+            generate_s += time.monotonic() - t0
             assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
@@ -922,7 +949,9 @@ class _AsyncRolloutLoop:
                 # it had finished, so this is a silent truncation — hence the metric.
                 loop_exhausted = True
                 break
+            t0 = time.monotonic()
             tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
+            tool_s += time.monotonic() - t0
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
@@ -937,6 +966,8 @@ class _AsyncRolloutLoop:
             tally=tally,
             loop_exhausted=loop_exhausted,
             duration_s=time.monotonic() - t_dispatch,
+            generate_s=generate_s,
+            tool_s=tool_s,
         )
         return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 

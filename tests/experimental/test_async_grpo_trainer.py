@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import threading
 import time
 from collections import OrderedDict, defaultdict
 from types import SimpleNamespace
@@ -783,6 +784,59 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             assert [tool.__name__ for tool in loop.tools] == ["echo"]
         finally:
             loop._loop.close()
+
+    @require_response_parsing
+    def test_environment_and_tool_time_reach_the_metrics_queue(self):
+        reset_threads = []
+
+        class SlowEnvironment:
+            def reset(self, **kwargs):
+                reset_threads.append(threading.current_thread())
+                time.sleep(0.02)
+
+            def step(self) -> str:
+                """
+                Take a step.
+                """
+                time.sleep(0.02)
+                return "ok"
+
+            def get_reward(self):
+                time.sleep(0.02)
+                loop._stop_event.set()
+                return 1.0
+
+        loop = self._make_loop(SlowEnvironment)
+        tool_call = loop.tokenizer.encode(_TOOL_CALL.replace('"t"', '"step"'), add_special_tokens=False)
+        final = loop.tokenizer.encode(_FINAL, add_special_tokens=False)
+
+        async def _generate_one_turn(prompt_ids):
+            ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
+            return ids, [-0.1] * len(ids)
+
+        loop._generate_one_turn = _generate_one_turn
+        PartialState()
+        try:
+            loop._loop.run_until_complete(loop._run_loops(stop_event=loop._stop_event))
+        finally:
+            loop._loop.close()
+
+        rates = defaultdict(lambda: [0.0, 0.0])
+        while True:
+            try:
+                payload = loop._metrics_queue.get(timeout=1)
+            except queue.Empty:
+                break
+            for key, value in payload.items():
+                if isinstance(value, tuple):
+                    rates[key][0] += value[0]
+                    rates[key][1] += value[1]
+        assert reset_threads and all(t is not threading.main_thread() for t in reset_threads)
+        assert rates["env/reset_s"][1] >= 2 and rates["env/reset_s"][0] / rates["env/reset_s"][1] >= 0.02
+        assert rates["env/reward_s"][0] / rates["env/reward_s"][1] >= 0.02
+        assert rates["rollout/tool_s"][0] / rates["rollout/tool_s"][1] >= 0.02
+        assert rates["tools/step_latency_s"][0] / rates["tools/step_latency_s"][1] >= 0.02
+        assert rates["rollout/generate_s"][1] == rates["rollout/tool_s"][1]
 
     def test_unknown_environment_raises(self):
         # An example whose `environment` field doesn't match any configured environment should fail with a clear error
