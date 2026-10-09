@@ -492,6 +492,8 @@ class DPOTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "dpo"]
     _name = "DPO"
     _paper = {
@@ -946,11 +948,6 @@ class DPOTrainer(_BaseTrainer):
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)

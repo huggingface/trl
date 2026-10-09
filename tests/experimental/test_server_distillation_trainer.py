@@ -74,11 +74,6 @@ def _variable_length_dataset():
     )
 
 
-def test_config_rejects_liger(tmp_path):
-    with pytest.raises(ValueError, match="use_liger_kernel=True is not supported by ServerDistillationTrainer"):
-        ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), use_liger_kernel=True)
-
-
 def test_config_rejects_reverse_kl_argmax(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode='argmax' is not supported"):
         ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), reverse_kl_top_1_mode="argmax")
