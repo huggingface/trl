@@ -1085,6 +1085,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
     def _stub_trainer_for_save(self, trained_prompts, dataset_start_index=0, prompts_before_resume=0, model_version=7):
         trainer = AsyncDistillationTrainer.__new__(AsyncDistillationTrainer)  # __new__ skips __init__ (needs a GPU)
+        trainer._dropped_prompts = set()
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = True
         trainer.model_version = model_version
@@ -1101,8 +1102,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         ("trained_prompts", "dataset_start_index", "expected"),
         [
             ({0, 1, 2, 3, 4}, 10, 15),  # dataset_start_index(10) + first_untrained(5)
-            # Prompt 2 was never trained (its rollout was dropped as stale), so the cursor stops there: it gets
-            # re-generated on resume instead of being silently skipped.
+            # Prompt 2 is still in flight, so the cursor must not skip it on resume.
             ({0, 1, 3, 4, 5}, 0, 2),
         ],
     )
@@ -1157,6 +1157,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
         trainer = AsyncDistillationTrainer.__new__(AsyncDistillationTrainer)  # __new__ skips __init__ (needs a GPU)
+        trainer._dropped_prompts = set()
         trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
         trainer.rollout_worker._loop_kwargs = {}
         trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
@@ -1194,6 +1195,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_main_process = False
         trainer._prompts_before_resume = 0
+        trainer._dropped_prompts = set()
         trainer._trained_prompts = set()
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
