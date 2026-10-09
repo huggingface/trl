@@ -870,7 +870,7 @@ class GOLDTrainer(SFTTrainer):
                 ).model_type
             else:
                 # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
-                if teacher_model.config.vision_config is None:
+                if "vision_config" not in teacher_model.config.sub_configs:
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
                         "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "

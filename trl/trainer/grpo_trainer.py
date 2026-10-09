@@ -282,6 +282,8 @@ class GRPOTrainer(_BaseTrainer):
             any time without prior notice.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "grpo"]
     _name = "GRPO"
     _paper = {
@@ -942,12 +944,6 @@ class GRPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
-            # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
-            # global accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The
-            # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
-            # that behavior without rewriting `training_step`.
-            compute_loss_func="non-None value to disable scaling",
         )
 
         # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
@@ -1042,10 +1038,12 @@ class GRPOTrainer(_BaseTrainer):
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        # `entropy` feeds the `entropy` metric, the high-entropy token mask and the entropy bonus
         add_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             temperature=self.temperature,
             cast_lm_head_to_fp32=args.cast_lm_head_to_fp32,
+            outputs=("log_probs", "entropy"),
         )
         if self.ref_model is not None:
             add_fused_lm_head(
@@ -1134,10 +1132,6 @@ class GRPOTrainer(_BaseTrainer):
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
         self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
