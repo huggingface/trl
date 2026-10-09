@@ -4250,9 +4250,19 @@ class TestGRPOTrainerVLM(TrlTestCase):
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        trainer.train()
+        fused_inputs = []
+
+        def record_fused_inputs(_module, _args, kwargs):
+            if kwargs.get("fused_lm_head"):
+                fused_inputs.append(kwargs)
+
+        with trainer.model.register_forward_pre_hook(record_fused_inputs, with_kwargs=True):
+            trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        if model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration":
+            assert fused_inputs
+            assert all(inputs.get("token_type_ids") is not None for inputs in fused_inputs)
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
