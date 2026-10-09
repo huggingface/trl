@@ -1338,6 +1338,21 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 ```
 
+### Reducing Activation Recomputation in Large Transformer Models
+
+**📜 Paper**: https://huggingface.co/papers/2205.05198
+
+Full activation checkpointing recomputes every op in a checkpointed region during backward, including attention, even though only a few ops (attention among them) account for most of the recomputation cost relative to the memory they'd cost to keep. The paper's selective activation recomputation checkpoints only those expensive ops instead of the whole region. TRL implements this as selective activation checkpointing (SAC) for [`SFTTrainer`], saving the attention output during the forward pass so backward does not recompute it:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective": True},
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
@@ -1728,7 +1743,7 @@ training_args = GOLDConfig(
 )
 ```
 
-### Cross-Tokenizer Knowledge Distillation (X-Token)
+### X-Token: Projection-Guided Cross-Tokenizer Knowledge Distillation
 
 **📜 Paper**: https://huggingface.co/papers/2605.21699
 
@@ -1739,7 +1754,11 @@ Two loss formulations are provided:
 | Variant | `xtoken_loss_type` | Description |
 |---------|-------------------|-------------|
 | P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
-| H-KL | `"h_kl"` | Hybrid: forward KL on renormalized distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+| H-KL | `"h_kl"` | Hybrid: forward KL on the common slice of full-vocabulary distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+
+H-KL follows the reference implementation without renormalizing the common-set slice, so that partial KL term can be negative.
+
+This implementation uses a frozen projection matrix. The paper also jointly learns the matrix for P-KL; that variant is not implemented here.
 
 First build the projection matrix with the prep scripts in `examples/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
 
@@ -1769,7 +1788,9 @@ or pass the path to [`experimental.gold.GOLDConfig`] directly:
 from trl.experimental.gold import GOLDConfig
 
 config = GOLDConfig(
-    lmbda=0.0,  # off-policy: no student rollouts needed
+    lmbda=0.0,  # "off-policy knowledge distillation"
+    xtoken_temperature=1.0,  # "temperature τ=1.0"
+    xtoken_dynamic_scaling=True,  # Eq. (7): stop-gradient CE/KD balance
     xtoken_loss_type="p_kl",
     xtoken_projection_matrix_path="cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt",
     teacher_tokenizer_name_or_path="Qwen/Qwen3-4B",
@@ -1784,23 +1805,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
-
-```python
-from datasets import load_dataset
-from trl.experimental.minillm import MiniLLMTrainer
-
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-trainer = MiniLLMTrainer(
-    model="Qwen/Qwen3-0.6B",
-    teacher_model="Qwen/Qwen3-1.7B",
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
+TRL shipped an implementation as `MiniLLMTrainer` up to v1.14; it is no longer part of the library and remains available in the git history.
 
 ### Reinforcement Learning via Self-Distillation
 

@@ -28,7 +28,7 @@ Typical usage (Llama-3.2-1B student → Qwen3-4B teacher, runtime top-4):
 
 Then optionally run ``reapply_exact_map.py`` (Step 2) and ``sort_and_cut_projection_matrix.py`` (Step 3) on the output,
 or pass the ``--runtime-top-k`` flag here to perform the trim in-place. Train with the resulting file via
-``examples/xtoken/xtoken.py --projection-matrix <output>.pt``.
+``examples/xtoken/xtoken.py --xtoken_projection_matrix_path <output>.pt``.
 
 See https://huggingface.co/papers/2605.21699 for the algorithm details.
 """

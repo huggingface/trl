@@ -36,10 +36,12 @@ from trl.trainer.utils import (
     adjusted_mfu,
     compute_flops_per_token,
     compute_mfu,
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
     get_callable_name,
+    get_peak_flops,
     get_peft_config,
     hash_module,
     is_async_callable,
@@ -261,6 +263,29 @@ class TestHashModule(TrlTestCase):
             model.lm_head.weight.add_(0.01)
         h2 = hash_module(model)
         assert h1 != h2
+
+
+class TestCreateModelFromPath(TrlTestCase):
+    @pytest.mark.parametrize(("device_type", "expected_device_map"), [("cpu", None), ("mps", None), ("cuda", "auto")])
+    def test_default_device_map(self, device_type, expected_device_map):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = device_type
+            create_model_from_path("trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM)
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == expected_device_map
+
+    def test_explicit_device_map_is_kept(self):
+        with (
+            patch.object(trainer_utils, "PartialState") as mock_state,
+            patch.object(AutoModelForCausalLM, "from_pretrained") as mock_from_pretrained,
+        ):
+            mock_state.return_value.device.type = "mps"
+            create_model_from_path(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
+            )
+        assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
 
 @require_peft
@@ -686,6 +711,28 @@ class TestEntropyFromLogits(TrlTestCase):
 @require_rich
 class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
+    def test_print_tool_only_assistant_with_null_content(self, mock_stdout):
+        completions = [
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the data.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "bash", "arguments": '{"command":"ls"}'},
+                        }
+                    ],
+                }
+            ]
+        ]
+        print_prompt_completions_sample(["Find the table"], completions, {"reward": [0.0]}, None, 0)
+        assert "Inspect the data." in mock_stdout.getvalue()
+        assert "None" not in mock_stdout.getvalue()
+
+    @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
@@ -861,8 +908,22 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             [{"role": "user", "content": "What is the weather in London?"}],
         ]
         completions = [
-            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
-            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_temperature", "arguments": {"location": "Paris"}}}],
+                },
+                {"role": "tool", "content": "22 degrees"},
+                {"role": "assistant", "content": "The temperature in Paris is 22 degrees."},
+            ],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_weather", "arguments": {"location": "London"}}}],
+                },
+                {"role": "tool", "content": "Cloudy"},
+                {"role": "assistant", "content": "The weather in London is cloudy."},
+            ],
         ]
         rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
         advantages = [0.987, 0.654]
@@ -878,15 +939,26 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
         │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
         │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ USER              │ ASSISTANT         │        0.12 │   0.79 │      0.99 │ │
         │ │ What is the       │ get_temperature(… │             │        │           │ │
-        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
-        │ │ Paris?            │                   │             │        │           │ │
+        │ │ temperature in    │                   │             │        │           │ │
+        │ │ Paris?            │ TOOL              │             │        │           │ │
+        │ │                   │ 22 degrees        │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The temperature   │             │        │           │ │
+        │ │                   │ in Paris is 22    │             │        │           │ │
+        │ │                   │ degrees.          │             │        │           │ │
         │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
-        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
-        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
-        │ │ weather in        │ 'London'})        │             │        │           │ │
-        │ │ London?           │                   │             │        │           │ │
+        │ │ USER              │ ASSISTANT         │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather(loca… │             │        │           │ │
+        │ │ weather in        │                   │             │        │           │ │
+        │ │ London?           │ TOOL              │             │        │           │ │
+        │ │                   │ Cloudy            │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The weather in    │             │        │           │ │
+        │ │                   │ London is cloudy. │             │        │           │ │
         │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────────────────╯
         """)
@@ -1365,7 +1437,7 @@ class TestAddFusedLMHead:
     def test_masked_labels(self):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        add_fused_lm_head(model)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
         labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
 
@@ -1378,10 +1450,21 @@ class TestAddFusedLMHead:
         assert (out["log_probs"][~mask] == 0).all()
         assert (out["entropy"][~mask] == 0).all()
 
+    def test_outputs(self):
+        """Only the requested per-token fields are computed; the others are `None`."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model, outputs=("log_probs", "is_top1"))
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert out.log_probs is not None and out.is_top1 is not None
+        assert out.entropy is None and out.log_sum_sq_probs is None and out.mean_logits is None
+
     def test_shift_labels(self):
         """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        add_fused_lm_head(model)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
 
@@ -1413,12 +1496,70 @@ class TestAddFusedLMHead:
 
         torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
 
+    def test_log_sum_sq_probs(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logits = model(input_ids=input_ids).logits[:, :-1]
+        expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
+
+        add_fused_lm_head(model, outputs=("log_probs", "log_sum_sq_probs"))
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert not out["log_sum_sq_probs"].requires_grad
+        torch.testing.assert_close(out["log_sum_sq_probs"], expected, rtol=1e-5, atol=1e-5)
+
     def test_output_multiplier(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
         model = model.to(torch_device)
         model.config.output_multiplier = 0.5
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         logps = (model(input_ids=input_ids).logits[:, :-1] * 0.5).log_softmax(-1)
+        expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
+
+    @pytest.mark.parametrize(
+        "model_type, config_kwargs",
+        [
+            ("granite", {"logits_scaling": 8.0}),
+            pytest.param(
+                "minicpm3",
+                {"dim_model_base": 16, "q_lora_rank": 32, "kv_lora_rank": 16, "v_head_dim": 16},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.13.0"),
+                    reason="MiniCPM3 was introduced in transformers>=5.13.0",
+                ),
+            ),
+            pytest.param(
+                "hyperclovax",
+                {"logits_scaling": 4.0},
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.9.0"),
+                    reason="HyperCLOVA X was introduced in transformers>=5.9.0",
+                ),
+            ),
+            ("falcon_h1", {"lm_head_multiplier": 0.25, "mamba_d_ssm": 64, "mamba_n_heads": 4, "mamba_d_head": 16}),
+        ],
+    )
+    def test_logits_scaling(self, model_type, config_kwargs):
+        """Models that rescale the logits around the LM head get the same log-probabilities as their own forward."""
+        config = AutoConfig.for_model(
+            model_type,
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            **config_kwargs,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, config.vocab_size, (2, 16), device=torch_device)
+        logps = model(input_ids=input_ids).logits[:, :-1].log_softmax(-1)
         expected = logps.gather(-1, input_ids[:, 1:].unsqueeze(-1)).squeeze(-1)
 
         add_fused_lm_head(model)
@@ -1483,7 +1624,7 @@ class TestAddFusedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        add_fused_lm_head(model, temperature)
+        add_fused_lm_head(model, temperature, outputs=("log_probs", "entropy"))
         with torch.no_grad():
             out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
@@ -1899,14 +2040,22 @@ class TestComputeFlopsPerToken(TrlTestCase):
         assert f_32k - f_16k == 2 * (f_16k - f_8k)
 
     def test_tied_vs_untied_lm_head(self):
-        # Untied lm_head adds `2 * V * h` forward FLOPs, ×3 for fwd+bwd.
+        # Tying shares weights, not compute: lm_head is still a 2*V*h matmul.
         cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
         cfg.tie_word_embeddings = True
         f_tied = compute_flops_per_token(cfg, 16384)
         cfg.tie_word_embeddings = False
         f_untied = compute_flops_per_token(cfg, 16384)
-        expected_delta = 3 * 2 * cfg.vocab_size * cfg.hidden_size
-        assert f_untied - f_tied == expected_delta
+        assert f_tied == f_untied
+
+    def test_vocab_size_scaling(self):
+        # Only the lm_head scales with vocab: 3 * 2 * ΔV * h (fwd + bwd).
+        cfg = AutoConfig.from_pretrained(self.DENSE_MODEL_ID)
+        cfg.tie_word_embeddings = False
+        f_lo = compute_flops_per_token(cfg, 16384)
+        cfg.vocab_size += 1000
+        f_hi = compute_flops_per_token(cfg, 16384)
+        assert f_hi - f_lo == 3 * 2 * 1000 * cfg.hidden_size
 
     def test_moe_active_vs_total_experts(self):
         # Doubling `num_experts_per_tok` (active experts) changes FLOPs by exactly the
@@ -1930,6 +2079,52 @@ class TestComputeFlopsPerToken(TrlTestCase):
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
+
+
+class TestGetPeakFlops:
+    @pytest.mark.parametrize(
+        ("device_name", "dtype", "expected"),
+        [
+            ("NVIDIA GB300", "bfloat16", 2.5e15),
+            ("NVIDIA GB200", "bfloat16", 2.5e15),
+            ("NVIDIA B300", "bfloat16", 2.25e15),
+            ("NVIDIA B200", "bfloat16", 2.25e15),
+            ("NVIDIA H100 NVL", "bfloat16", 835e12),
+            ("NVIDIA H100 PCIe", "float16", 756e12),
+            ("NVIDIA H100 80GB HBM3", "bfloat16", 989e12),
+            ("NVIDIA H200 NVL", "float16", 835e12),
+            ("NVIDIA H200", "bfloat16", 989e12),
+            ("NVIDIA H20", "float16", 148e12),
+            ("NVIDIA RTX PRO 6000 Blackwell Server Edition", "bfloat16", 500e12),
+            ("NVIDIA A100-SXM4-80GB", "float16", 312e12),
+            ("NVIDIA RTX A6000", "bfloat16", 154.85e12),
+            ("NVIDIA A10G", "bfloat16", 125e12),
+            ("NVIDIA A10", "bfloat16", 125e12),
+            ("NVIDIA L40S", "float16", 362e12),
+            ("NVIDIA L4", "bfloat16", 121e12),
+            ("Tesla T4", "float16", 65e12),
+            ("AMD Instinct MI355X", "bfloat16", 2500e12),
+            ("AMD Instinct MI325X", "bfloat16", 1300e12),
+            ("AMD Instinct MI300X", "bfloat16", 1300e12),
+            ("AMD Instinct MI250X", "bfloat16", 191.5e12),
+        ],
+    )
+    def test_known_device(self, device_name, dtype, expected):
+        assert get_peak_flops(device_name, dtype) == expected
+
+    @pytest.mark.parametrize(
+        ("device_name", "dtype"),
+        [
+            ("Tesla T4", "bfloat16"),
+            ("NVIDIA A10G", "float32"),
+            ("Unknown accelerator", "bfloat16"),
+            ("NVIDIA L40", "bfloat16"),
+            ("NVIDIA A1000", "bfloat16"),
+            ("NVIDIA XA100", "bfloat16"),
+        ],
+    )
+    def test_unsupported_device_or_dtype(self, device_name, dtype):
+        assert get_peak_flops(device_name, dtype) is None
 
 
 class TestComputeMfu(TrlTestCase):

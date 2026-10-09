@@ -1005,6 +1005,7 @@ class XTokenLoss(nn.Module):
         student_byte_offsets,
         teacher_byte_offsets,
     ):
+        teacher_logits = teacher_logits.detach()
         device = student_logits.device
         T = self.temperature
         batch_size = student_logits.size(0)
@@ -1021,6 +1022,12 @@ class XTokenLoss(nn.Module):
             teacher_labels, skip_eos=self.skip_teacher_eos, eos_token_id=self.teacher_eos_token_id
         )
 
+        top_idx = None
+        if self.loss_type == "p_kl":
+            vocab = teacher_logits.shape[-1]
+            topk = min(self.vocab_topk, vocab) if self.vocab_topk > 0 else vocab
+            top_idx = teacher_logits.amax(dim=(0, 1)).topk(topk).indices.sort().values
+
         kd_terms = []
         ce_terms = []
         acc_num = acc_den = valid_pairs_total = proj_acc_num = proj_acc_den = 0
@@ -1036,27 +1043,21 @@ class XTokenLoss(nn.Module):
                 continue
 
             # CE: logit at s0-1 predicts token at s0; shift back by 1.
-            # s0 may be 0 for truncated sequences where the prompt was cut off entirely.
-            if s0 < 1:
-                ce_terms.append(student_logits[i].sum() * 0.0)
-            else:
-                ce_i = F.cross_entropy(
-                    student_logits[i, s0 - 1 : s0 + ss - 1],
-                    student_labels[i, s0 : s0 + ss],
-                    ignore_index=self.ignore_index,
-                )
-                ce_terms.append(ce_i)
-                with torch.no_grad():
-                    labels_i = student_labels[i, s0 : s0 + ss]
-                    preds_i = student_logits[i, s0 - 1 : s0 + ss - 1].argmax(dim=-1)
-                    valid = labels_i != self.ignore_index
-                    acc_num += int((preds_i == labels_i)[valid].sum().item())
-                    acc_den += int(valid.sum().item())
+            ce_i = F.cross_entropy(
+                student_logits[i, s0 - 1 : s0 + ss - 1].float(),
+                student_labels[i, s0 : s0 + ss],
+                ignore_index=self.ignore_index,
+            )
+            ce_terms.append(ce_i * ss)
+            with torch.no_grad():
+                labels_i = student_labels[i, s0 : s0 + ss]
+                preds_i = student_logits[i, s0 - 1 : s0 + ss - 1].argmax(dim=-1)
+                valid = labels_i != self.ignore_index
+                acc_num += int((preds_i == labels_i)[valid].sum().item())
+                acc_den += int(valid.sum().item())
 
-            # KD: logit at s0-1 predicts token s0 (first completion token) — same
-            # [:, :-1] / [:, 1:] shift as CE. Skip when s0 or t0 == 0 (no preceding
-            # predictor; CE is already zero'd by the s0 < 1 branch above).
-            if ts <= 0 or s0 < 1 or t0 < 1:
+            # Alignment offsets describe the labels, one position after their prediction logits.
+            if ts <= 0:
                 kd_terms.append(student_logits[i].sum() * 0.0)
                 continue
 
@@ -1065,22 +1066,22 @@ class XTokenLoss(nn.Module):
             s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
             t_offs = teacher_byte_offsets[i, t0 : t0 + ts].tolist()
             s_groups, t_groups = ULDLoss._align_by_byte_offsets(s_offs, t_offs)
-            paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=False) if sg and tg]
+            paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=True) if sg and tg]
             if not paired:
                 kd_terms.append(student_logits[i].sum() * 0.0)
                 continue
 
             valid_pairs_total += len(paired)
             if self.loss_type == "p_kl":
-                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, device, T)
+                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, device, T, top_idx)
                 proj_acc_num += p_num
                 proj_acc_den += p_den
             else:
                 kd_i = self._compute_h_kl(s_logits_i, t_logits_i, paired, device, T)
-            kd_terms.append(kd_i)
+            kd_terms.append(kd_i * len(paired))
 
-        kd = torch.stack(kd_terms).mean()
-        ce = torch.stack(ce_terms).mean()
+        kd = torch.stack(kd_terms).sum() / max(valid_pairs_total, 1)
+        ce = torch.stack(ce_terms).sum() / max(acc_den, 1)
 
         self.last_kl_loss = kd.detach()
         self.last_ce_loss = ce.detach()
@@ -1092,7 +1093,8 @@ class XTokenLoss(nn.Module):
 
         if self.dynamic_scaling:
             # loss = sg(ce/kd) * kd + ce; kl_weight and ce_scale are intentionally ignored in this branch.
-            scale = (ce.detach().abs() / kd.detach().abs().clamp(min=1e-8)).clamp(0.01, 100.0)
+            kd_abs = kd.detach().abs()
+            scale = torch.where(kd_abs > 0, ce.detach().abs() / kd_abs, torch.ones_like(kd_abs))
             return scale * kd + ce
         return self.kl_weight * kd + self.ce_scale * ce
 
@@ -1101,6 +1103,7 @@ class XTokenLoss(nn.Module):
         starts, sizes = [], []
         for row in labels:
             mask = row.ne(-100)
+            mask[0] = False
             if not mask.any():
                 starts.append(0)
                 sizes.append(0)
@@ -1112,19 +1115,10 @@ class XTokenLoss(nn.Module):
         return starts, sizes
 
     @staticmethod
-    def _chunk_average(log_probs, groups):
-        """Average probabilities within each group then re-log, giving ``[G, V]``."""
-        eps = 1e-10
-        chunks = []
-        for grp in groups:
-            if len(grp) == 1:
-                chunks.append(log_probs[grp[0]])
-            else:
-                avg_prob = log_probs[grp].exp().mean(dim=0)
-                chunks.append((avg_prob + eps).log())
-        return torch.stack(chunks, dim=0)
+    def _chunk_average(values, groups):
+        return torch.stack([values[group].mean(dim=0) for group in groups])
 
-    def _compute_p_kl(self, s_logits, t_logits, paired, device, T):
+    def _compute_p_kl(self, s_logits, t_logits, paired, device, T, top_idx):
         """P-KL: project student to teacher vocab, global top-k, forward KL with T² scaling.
 
         Implements Eq. (4) from https://huggingface.co/papers/2605.21699.
@@ -1133,34 +1127,30 @@ class XTokenLoss(nn.Module):
         s_groups = [p[0] for p in paired]
         t_groups = [p[1] for p in paired]
 
-        s_log = F.log_softmax(s_logits.float() / T, dim=-1)
-        s_chunks = self._chunk_average(s_log, s_groups)  # [G, V_s]
-        s_probs = s_chunks.exp()
+        s_probs = self._chunk_average(F.softmax(s_logits.float() / T, dim=-1), s_groups)
 
-        M = self._proj_matrix(device)  # [V_s, V_t] sparse COO fp32
-        s_proj = _Fp32SparseMM.apply(M, s_probs.t()).t()  # [G, V_t]
-        s_proj = s_proj / (s_proj.sum(dim=-1, keepdim=True) + eps)
-
-        t_log = F.log_softmax(t_logits.float() / T, dim=-1)
-        t_chunks = self._chunk_average(t_log, t_groups)  # [G, V_t]
-
-        v_t = t_chunks.shape[-1]
-        topk = min(self.vocab_topk, v_t) if self.vocab_topk > 0 else v_t
-        with torch.no_grad():
-            importance = t_chunks.max(dim=0).values
-            top_idx = torch.topk(importance, k=topk).indices.sort().values
-
-        s_proj_topk = s_proj[:, top_idx]
+        projection = self._proj_matrix(device)
+        if top_idx.numel() < projection.size(1):
+            # Restrict the sparse projection before matmul to avoid a full teacher-vocabulary output.
+            indices = projection.indices()
+            columns = torch.searchsorted(top_idx, indices[1])
+            keep = (columns < top_idx.numel()) & (top_idx[columns.clamp_max(top_idx.numel() - 1)] == indices[1])
+            projection = torch.sparse_coo_tensor(
+                torch.stack([indices[0, keep], columns[keep]]),
+                projection.values()[keep],
+                (self.student_vocab_size, top_idx.numel()),
+                device=device,
+            ).coalesce()
+        s_proj_topk = _Fp32SparseMM.apply(projection, s_probs.t()).t()
         s_proj_topk = s_proj_topk / (s_proj_topk.sum(dim=-1, keepdim=True) + eps)
         s_log_proj = (s_proj_topk + eps).log()
 
-        t_topk = t_chunks[:, top_idx].exp()
-        t_topk = t_topk / (t_topk.sum(dim=-1, keepdim=True) + eps)
-        t_log_topk = (t_topk + eps).log()
+        t_log = F.log_softmax(t_logits[:, top_idx].float() / T, dim=-1)
+        t_log_topk = self._chunk_average(t_log, t_groups)
 
         with torch.no_grad():
             proj_top1 = s_proj_topk.argmax(dim=-1)
-            tgt_top1 = t_topk.argmax(dim=-1)
+            tgt_top1 = t_log_topk.argmax(dim=-1)
             proj_acc_n = int((proj_top1 == tgt_top1).sum().item())
             proj_acc_d = int(proj_top1.shape[0])
 
@@ -1168,7 +1158,7 @@ class XTokenLoss(nn.Module):
         return per_chunk_kl.mean() * (T * T), proj_acc_n, proj_acc_d
 
     def _compute_h_kl(self, s_logits, t_logits, paired, device, T):
-        """H-KL: renormalized common-set forward KL + uncommon sorted-L1, T² scaling.
+        """H-KL: common-set forward KL + uncommon sorted-L1, T² scaling.
 
         Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3) and Eq. (5) from
         https://huggingface.co/papers/2605.21699.
@@ -1188,8 +1178,6 @@ class XTokenLoss(nn.Module):
         if common_s.numel() > 0:
             s_common = s_chunks[:, common_s]
             t_common = t_chunks[:, common_t]
-            s_common = s_common - torch.logsumexp(s_common, dim=-1, keepdim=True)
-            t_common = t_common - torch.logsumexp(t_common, dim=-1, keepdim=True)
             kl_per_chunk = F.kl_div(s_common, t_common, reduction="none", log_target=True).sum(dim=-1)
             kl_common = kl_per_chunk.mean()
         else:
@@ -1213,7 +1201,7 @@ class XTokenLoss(nn.Module):
 
 
 class GOLDTrainer(SFTTrainer):
-    xtoken_loss_fn = None  # set in __init__; class-level default so __new__-constructed instances are safe
+    xtoken_loss_fn = None
 
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
@@ -1297,7 +1285,7 @@ class GOLDTrainer(SFTTrainer):
                 ).model_type
             else:
                 # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
-                if teacher_model.config.vision_config is None:
+                if "vision_config" not in teacher_model.config.sub_configs:
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
                         "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
@@ -1417,12 +1405,6 @@ class GOLDTrainer(SFTTrainer):
             if self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
-        if args.use_uld_loss and args.xtoken_loss_type != "none":
-            raise ValueError(
-                "ULD loss and X-Token loss cannot be enabled at the same time. "
-                "Set either `use_uld_loss=False` or `xtoken_loss_type='none'`."
-            )
-
         # Initialise to None so _prepare_dataset (called by super().__init__) can safely read this attribute.
         self.xtoken_loss_fn = None
 
@@ -1449,7 +1431,9 @@ class GOLDTrainer(SFTTrainer):
         # Capture teacher vocab size before the model is wrapped by DeepSpeed/FSDP.
         # Only needed when X-Token is active; avoids requiring teacher_model.config otherwise.
         _teacher_vocab_size = (
-            teacher_model.config.get_text_config().vocab_size if args.xtoken_loss_type != "none" else None
+            min(teacher_model.config.get_text_config().vocab_size, len(self.teacher_tokenizer))
+            if args.xtoken_loss_type != "none"
+            else None
         )
 
         if self.is_deepspeed_enabled:
@@ -1504,7 +1488,7 @@ class GOLDTrainer(SFTTrainer):
         if args.xtoken_loss_type != "none":
             self.xtoken_loss_fn = XTokenLoss(
                 config=args,
-                student_vocab_size=self.model.config.get_text_config().vocab_size,
+                student_vocab_size=min(self.model.config.get_text_config().vocab_size, len(self._tokenizer)),
                 teacher_vocab_size=_teacher_vocab_size,
                 student_eos_token_id=self._tokenizer.eos_token_id,
                 teacher_eos_token_id=self.teacher_tokenizer.eos_token_id,
@@ -3063,13 +3047,6 @@ class GOLDTrainer(SFTTrainer):
                 self._unmatched_step_eq += step_eq
 
         if self.xtoken_loss_fn is not None and self.teacher_tokenizer is not None:
-            xtoken_student_labels = inputs["labels"].clone()
-            if self.pad_token_id is not None:
-                xtoken_student_labels[xtoken_student_labels == self.pad_token_id] = -100
-            xtoken_teacher_labels = teacher_labels.clone()
-            if self.teacher_tokenizer.pad_token_id is not None:
-                xtoken_teacher_labels[xtoken_teacher_labels == self.teacher_tokenizer.pad_token_id] = -100
-
             xtoken_student_byte_offsets = inputs.get("byte_offsets")
             if xtoken_student_byte_offsets is None:
                 raise ValueError("Input batches must include `byte_offsets` when using X-Token loss.")
@@ -3077,14 +3054,14 @@ class GOLDTrainer(SFTTrainer):
             loss = self.xtoken_loss_fn(
                 student_logits=outputs_student.logits,
                 teacher_logits=outputs_teacher.logits,
-                student_labels=xtoken_student_labels,
-                teacher_labels=xtoken_teacher_labels,
+                student_labels=inputs["labels"],
+                teacher_labels=teacher_labels,
                 student_byte_offsets=xtoken_student_byte_offsets,
                 teacher_byte_offsets=teacher_completion_byte_offsets,
             )
 
             if num_items_in_batch is not None:
-                num_valid_local = (xtoken_student_labels[:, 1:] != -100).sum().clamp_min(1)
+                num_valid_local = (inputs["labels"][:, 1:] != -100).sum().clamp_min(1)
                 if isinstance(num_items_in_batch, torch.Tensor):
                     num_items_in_batch = num_items_in_batch.to(loss.device)
                 loss = loss * num_valid_local / num_items_in_batch

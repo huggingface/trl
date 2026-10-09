@@ -14,6 +14,7 @@
 
 import torch
 from transformers import AutoTokenizer, GenerationConfig, NemotronHConfig, NemotronHForCausalLM
+from transformers.utils import is_kernels_available
 
 from .._common import (
     check_dtype_pattern,
@@ -27,6 +28,9 @@ from .._common import (
 
 
 check_transformers_version("5.3.0")
+# Remove once the version above is raised past 5.3.0 (fixed in transformers 5.4.0, transformers#44887)
+if is_kernels_available():
+    raise RuntimeError("Uninstall kernels: transformers 5.3.0 fails to load the Mamba Hub kernels (TypeError).")
 
 set_seed()
 
@@ -51,7 +55,13 @@ config = NemotronHConfig(
     num_experts_per_tok=2,
     moe_intermediate_size=32,
     moe_shared_expert_intermediate_size=32,
-    use_mamba_kernels=False,  # CPU-friendly for testing
+    use_mamba_kernels=True,
+    max_position_embeddings=262144,
+    routed_scaling_factor=2.5,
+    # Reference-only keys; `norm_eps` is the reference's alias for `layer_norm_epsilon`.
+    norm_eps=1e-05,
+    partial_rotary_factor=1.0,
+    rope_theta=10000,
 )
 model = NemotronHForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
