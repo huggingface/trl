@@ -22,6 +22,7 @@ import transformers
 from datasets import load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM
+from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.utils import add_fused_lm_head
@@ -117,6 +118,19 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+    @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
+    def test_sdpo_peft_ema_zero3(self, get_config_path):
+        run_command(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                get_config_path("zero3"),
+                "tests/distributed/sdpo_peft_ema_zero3.py",
+            ],
+            os.environ.copy(),
+        )
 
     @pytest.mark.parametrize(
         "config",
