@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import subprocess
 from types import SimpleNamespace
@@ -95,6 +96,71 @@ class TestResetPrefixCache(TrlTestCase):
             patch.object(client.session, "post", return_value=response),
         ):
             client.reset_prefix_cache()
+
+
+@require_requests
+class TestMissingServerSettings(TrlTestCase):
+    @staticmethod
+    def make_client():
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            return VLLMClient(host="127.0.0.1")
+
+    @staticmethod
+    def make_response(status_code, body=None):
+        response = requests.Response()
+        response.status_code = status_code
+        response._content = json.dumps(body).encode() if body is not None else b""
+        return response
+
+    def server_info(self, weight_transfer_config, logprobs_mode):
+        body = {
+            "vllm_config": {
+                "weight_transfer_config": weight_transfer_config,
+                "model_config": {"logprobs_mode": logprobs_mode},
+            }
+        }
+        return self.make_response(200, body)
+
+    def test_init_communicator_without_dev_mode(self):
+        client = self.make_client()
+        with patch.object(client.session, "get", return_value=self.make_response(404)):
+            with pytest.raises(RuntimeError, match="VLLM_SERVER_DEV_MODE=1"):
+                client.init_communicator()
+
+    def test_init_communicator_without_weight_transfer_config(self):
+        client = self.make_client()
+        response = self.server_info(weight_transfer_config=None, logprobs_mode="processed_logprobs")
+        with patch.object(client.session, "get", return_value=response):
+            with pytest.raises(RuntimeError, match="--weight-transfer-config"):
+                client.init_communicator()
+
+    def test_init_communicator_warns_on_raw_logprobs(self, caplog):
+        client = self.make_client()
+        # The world size request fails, which stops `init_communicator` right after the settings checks.
+        responses = [
+            self.server_info(weight_transfer_config={"backend": "nccl"}, logprobs_mode="raw_logprobs"),
+            self.make_response(500),
+        ]
+        with patch.object(client.session, "get", side_effect=responses):
+            with (
+                caplog.at_level("WARNING", logger="trl.generation.vllm_client"),
+                pytest.raises(Exception, match="Request failed: 500"),
+            ):
+                client.init_communicator()
+        assert "--logprobs-mode processed_logprobs" in caplog.text
+
+    @require_vision
+    def test_image_features_without_scale_out(self):
+        from PIL import Image
+
+        client = self.make_client()
+        with patch.object(client.session, "post", return_value=self.make_response(404)):
+            with pytest.raises(RuntimeError, match="--enable-scale-out"):
+                client.image_features([[Image.new("RGB", (8, 8))]])
 
 
 class TestParseLogprobs(TrlTestCase):

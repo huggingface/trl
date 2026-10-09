@@ -334,11 +334,18 @@ class VLLMClient:
             messages = [
                 {"role": "user", "content": [{"type": "image", "image": image} for image in images_for_prompt]}
             ]
-            rendered = self._post(
+            response = self.session.post(
                 f"{self.base_url}/v1/chat/completions/render",
                 json={"model": self.model, "messages": to_openai_messages(messages), "max_tokens": 1},
             )
-            return rendered["features"]
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The vLLM server at {self.base_url} does not serve `/v1/chat/completions/render`, which "
+                    "multimodal prompts use. From vLLM 0.30.0, restart it with `--enable-scale-out`."
+                )
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            return response.json()["features"]
 
         with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(images))) as executor:
             return list(executor.map(send, images))
@@ -708,6 +715,29 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
+        # Weight synchronization needs these server settings, so name the missing one instead of failing later.
+        response = self.session.get(f"{self.base_url}/server_info", params={"config_format": "json"})
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} does not expose its development endpoints, which weight "
+                "synchronization uses. Restart it with `VLLM_SERVER_DEV_MODE=1` in its environment."
+            )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        vllm_config = response.json()["vllm_config"]
+        if vllm_config["weight_transfer_config"] is None:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} has no weight-transfer engine. Restart it with "
+                """`--weight-transfer-config '{"backend": "nccl"}'`."""
+            )
+        if vllm_config["model_config"]["logprobs_mode"] != "processed_logprobs":
+            logger.warning(
+                f"The vLLM server at {self.base_url} runs with `--logprobs-mode "
+                f"{vllm_config['model_config']['logprobs_mode']}`: its logprobs ignore temperature and logit "
+                "processing, which biases the importance sampling correction. Restart it with `--logprobs-mode "
+                "processed_logprobs`."
+            )
+
         # The trainer joins the vLLM workers as an extra rank; it is rank 0, so the workers are offset by one.
         world_size = self.get_world_size() + 1
         init_info = {
