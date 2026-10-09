@@ -35,7 +35,6 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
@@ -48,16 +47,20 @@ from ...chat_template_utils import (
     is_chat_template_prefix_preserving,
     parse_response,
 )
-from ...import_utils import is_vllm_available
+from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
-
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 @dataclass(frozen=True)
@@ -1146,6 +1149,8 @@ class AsyncRolloutWorker:
     ):
         if not is_vllm_available():
             raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)

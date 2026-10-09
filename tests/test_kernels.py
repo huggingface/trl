@@ -18,11 +18,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 from transformers.testing_utils import torch_device
+from transformers.utils import is_triton_available
 
-from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
-from trl.kernels.chunked_logprob import _addmm_fp32
+from .testing_utils import require_torch_accelerator, require_triton
 
-from .testing_utils import require_torch_accelerator
+
+if is_triton_available():
+    from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
+    from trl.kernels.chunked_logprob import _addmm_fp32
 
 
 def reference(logits, index, temperature, row_mask):
@@ -37,6 +40,7 @@ def reference(logits, index, temperature, row_mask):
 
 
 @require_torch_accelerator
+@require_triton
 class TestLogProbEntropy:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize(
@@ -104,6 +108,7 @@ class TestLogProbEntropy:
 
 
 @require_torch_accelerator
+@require_triton
 class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
