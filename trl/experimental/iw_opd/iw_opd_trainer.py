@@ -880,6 +880,7 @@ class IWOPDTrainer(_BaseTrainer):
         _, completion_ids, logprobs, logprob_token_ids = self.vllm_generation.generate(
             prompts=prompt_ids_list, images=None, num_generations=self.num_generations
         )
+        self.vllm_generation.sleep()
 
         # Process completions into the buffer
         self._store_completions_in_buffer(

@@ -1000,6 +1000,7 @@ class SDPOTrainer(_BaseTrainer):
             images=None,
             num_generations=num_generations,
         )
+        self.vllm_generation.sleep()
         return prompt_ids_out, completion_ids_list
 
     def _generate_transformers(self, prompt_ids: list[list[int]]) -> tuple[list[list[int]], list[list[int]]]:

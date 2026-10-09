@@ -366,6 +366,7 @@ class VLLMGeneration:
                 self.llm.sleep(level=2)
             # Sleep level 2 discards the weights; track it so that generate() knows it must re-push them
             self._llm_weights_sleeping = self.enable_sleep_mode
+            self._kv_cache_sleeping = self.enable_sleep_mode
         else:
             raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.mode}'.")
 
@@ -486,7 +487,7 @@ class VLLMGeneration:
         # Wake up vLLM weights before loading to ensure device memory is mapped. Without this, load_weights() writes to
         # freed/unmapped memory when sleep mode is active, which crashes on backends with strict physical memory
         # management (e.g., Ascend NPU). See https://github.com/huggingface/trl/issues/5142
-        if self.mode == "colocate" and self.enable_sleep_mode:
+        if self.mode == "colocate" and self.enable_sleep_mode and self._llm_weights_sleeping:
             empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
             self._llm_weights_sleeping = False
@@ -515,6 +516,12 @@ class VLLMGeneration:
             self.vllm_client.reset_prefix_cache()
         elif self.mode == "colocate":
             self.llm.reset_prefix_cache()
+
+    def sleep(self):
+        if self.mode == "colocate" and self.enable_sleep_mode and not self._kv_cache_sleeping:
+            self.llm.sleep(level=2)
+            self._llm_weights_sleeping = True
+            self._kv_cache_sleeping = True
 
     def _place_features(self, features: dict | None, prompt_ids: list[int]) -> dict | None:
         """Point the image features at the image tokens of `prompt_ids`.
@@ -701,8 +708,9 @@ class VLLMGeneration:
                 all_prompts = prompts
                 all_images = images
 
-            if self.enable_sleep_mode:
+            if self.enable_sleep_mode and self._kv_cache_sleeping:
                 self.llm.wake_up(tags=["kv_cache"])
+                self._kv_cache_sleeping = False
 
             # Build vLLM-compatible prompt inputs with token IDs and optional multi-modal data
             vllm_prompts = []
@@ -746,9 +754,5 @@ class VLLMGeneration:
                 completion_ids = all_completion_ids
                 logprobs = all_logprobs
                 logprob_token_ids = all_logprob_token_ids
-
-            if self.enable_sleep_mode:
-                self.llm.sleep(level=2)
-                self._llm_weights_sleeping = True
 
         return prompt_ids, completion_ids, logprobs, logprob_token_ids

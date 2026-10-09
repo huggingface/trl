@@ -18,10 +18,19 @@ import os
 import sys
 import traceback
 from functools import wraps
+from unittest.mock import Mock
 
 import pytest
 import torch
+from accelerate import Accelerator
+from datasets import Dataset
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
+
+from trl import GRPOConfig, GRPOTrainer
+from trl.generation.vllm_generation import VLLMGeneration
 
 
 # ============================================================================
@@ -306,3 +315,48 @@ def undo_liger_kernel_patching(monkeypatch):
     yield
     for module, snapshot in snapshots.values():
         vars(module).update(snapshot)
+
+
+@pytest.fixture
+def vllm_generation(monkeypatch):
+    monkeypatch.setattr(VLLMGeneration, "_init_vllm", lambda self: None)
+    generation = VLLMGeneration(torch.nn.Linear(1, 1), Accelerator(cpu=True), None)
+    generation.llm = Mock()
+    return generation
+
+
+@pytest.fixture
+def colocate_grpo_trainer(monkeypatch, tmp_path):
+    """Real GRPO trainer on a local tiny model, with colocated vLLM in sleep mode replaced by a mock `LLM`."""
+    monkeypatch.setattr("trl.generation.vllm_generation.is_vllm_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr("trl.generation.vllm_generation.LLM", Mock(), raising=False)
+    monkeypatch.setattr("trl.generation.vllm_generation.SamplingParams", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr("trl.generation.vllm_generation.empty_cache", lambda: None)
+    monkeypatch.setenv("TRL_EXPERIMENTAL_SILENCE", "1")
+    config = LlamaConfig(
+        vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"<pad>": 0, "<eos>": 1, "a": 2}, unk_token="a")),
+        pad_token="<pad>",
+        eos_token="<eos>",
+    )
+    trainer = GRPOTrainer(
+        model=LlamaForCausalLM(config),
+        processing_class=tokenizer,
+        reward_funcs=lambda completions, **kwargs: [0.0] * len(completions),
+        args=GRPOConfig(
+            output_dir=str(tmp_path),
+            use_vllm=True,
+            vllm_mode="colocate",
+            vllm_enable_sleep_mode=True,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            report_to="none",
+        ),
+        train_dataset=Dataset.from_dict({"prompt": ["a", "a"]}),
+        rollout_func=lambda prompts, trainer: None,
+    )
+    trainer.vllm_generation.llm.reset_mock()  # forget the sleep at the end of engine init
+    trainer.vllm_generation.llm.generate.return_value = []
+    return trainer

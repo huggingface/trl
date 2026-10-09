@@ -388,6 +388,7 @@ class SSDTrainer(_BaseTrainer):
             images=None,
             num_generations=self.num_generations,
         )
+        self.vllm_generation.sleep()
 
         device = self.accelerator.device
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
