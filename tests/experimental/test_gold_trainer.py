@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import sys
 import warnings
 from contextlib import nullcontext
 from functools import partial
@@ -23,12 +24,19 @@ import pytest
 import torch
 import torch.nn.functional as F
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
+from examples.xtoken.build_projection_matrix import build_projection_matrix, parse_args
+from examples.xtoken.sort_and_cut_projection_matrix import sort_and_cut
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import WhitespaceSplit
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
+    LlamaConfig,
+    PreTrainedTokenizerFast,
 )
 from transformers.testing_utils import torch_device
 
@@ -3038,6 +3046,60 @@ class TestXTokenLoss(TrlTestCase):
                 byte_offsets,
             )
             assert torch.isfinite(loss)
+
+    @pytest.mark.parametrize("scale_trick", [False, True])
+    def test_projection_builder_reserves_sentinel_id(self, monkeypatch, scale_trick):
+        student_dir, teacher_dir = Path(self.tmp_dir) / "student", Path(self.tmp_dir) / "teacher"
+        for directory, vocab in (
+            (student_dir, {"[UNK]": 0, "aa bb cc": 1, "aa": 2, "bb": 3, "cc": 4}),
+            (teacher_dir, {"[UNK]": 0, "aa": 1, "bb": 2, "cc": 3}),
+        ):
+            backend = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
+            backend.pre_tokenizer = WhitespaceSplit()
+            tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
+            tokenizer.save_pretrained(directory)
+            LlamaConfig(vocab_size=len(tokenizer)).save_pretrained(directory)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "build_projection_matrix.py",
+                "--student-model",
+                str(student_dir),
+                "--teacher-model",
+                str(teacher_dir),
+                "--top-k",
+                "3",
+                "--no-enable-reverse-pass",
+                "--no-enable-special-token-mapping",
+                "--enable-scale-trick" if scale_trick else "--no-enable-scale-trick",
+                "--output-dir",
+                self.tmp_dir,
+            ],
+        )
+        path = build_projection_matrix(parse_args())
+        data = torch.load(path, weights_only=True)
+        projection = _load_sparse_projection_matrix(
+            path, torch.device("cpu"), student_vocab_size=5, teacher_vocab_size=4
+        ).to_dense()
+        if scale_trick:
+            assert torch.all(data["indices"][:, -1] == -1)
+            assert torch.all(data["likelihoods"][:, -1] > 0)
+            assert projection[1, 3] == 0
+            torch.testing.assert_close(projection.sum(1), 1 - data["likelihoods"][:, -1])
+        else:
+            torch.testing.assert_close(data["indices"][1], torch.tensor([1, 2, 3]))
+            assert projection[1, 3] > 0
+            torch.testing.assert_close(projection.sum(1), torch.ones(5))
+        torch.testing.assert_close(data["likelihoods"].sum(1), torch.ones(5))
+
+        trimmed_path = Path(self.tmp_dir) / "trimmed.pt"
+        sort_and_cut(path, trimmed_path, 2, preserve_last=scale_trick, verbose=False)
+        trimmed = torch.load(trimmed_path, weights_only=True)
+        torch.testing.assert_close(trimmed["likelihoods"].sum(1), torch.ones(5))
+        if scale_trick:
+            assert torch.all(trimmed["indices"][:, -1] == -1)
+            assert torch.all(trimmed["likelihoods"][:, -1] > 0)
 
     def test_sparse_counts_are_row_normalized(self):
         projection_path = Path(self.tmp_dir) / "counts.pt"

@@ -270,6 +270,7 @@ def build_projection_matrix(args):
     if args.enable_scale_trick:
         # Reserve the last column for the scale-trick sentinel weight 0.2,
         # then re-normalise so the remaining k-1 columns + sentinel sum to 1.
+        top_indices[:, -1] = -1
         top_likelihoods[:, -1] = 0.2
         top_likelihoods = _sinkhorn_rows(top_likelihoods, n_iters=1)
 
