@@ -2124,6 +2124,8 @@ class TestSFTTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        # Some samples have no image: their batches leave the vision tower without gradients
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -2204,6 +2206,9 @@ class TestSFTTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+
+        # The vision tower gets no gradients, so DDP must search for unused parameters
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

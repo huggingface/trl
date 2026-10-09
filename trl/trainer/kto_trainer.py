@@ -776,6 +776,12 @@ class KTOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443).
+        if self._is_vlm and args.ddp_find_unused_parameters is None:
+            args.ddp_find_unused_parameters = True
         if self._is_vision_dataset and args.precompute_ref_log_probs:
             raise ValueError(
                 "`precompute_ref_log_probs=True` is not supported for vision datasets. For vision-language "
