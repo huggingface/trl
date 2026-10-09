@@ -1004,6 +1004,7 @@ class XTokenLoss(nn.Module):
         teacher_labels,
         student_byte_offsets,
         teacher_byte_offsets,
+        loss_counts=None,
     ):
         teacher_logits = teacher_logits.detach()
         device = student_logits.device
@@ -1015,12 +1016,7 @@ class XTokenLoss(nn.Module):
         if student_logits.shape[-1] > self.student_vocab_size:
             student_logits = student_logits[..., : self.student_vocab_size]
 
-        s_starts, s_sizes = self._answer_spans(
-            student_labels, skip_eos=self.skip_student_eos, eos_token_id=self.student_eos_token_id
-        )
-        t_starts, t_sizes = self._answer_spans(
-            teacher_labels, skip_eos=self.skip_teacher_eos, eos_token_id=self.teacher_eos_token_id
-        )
+        alignment = self._get_alignment(student_labels, teacher_labels, student_byte_offsets, teacher_byte_offsets)
 
         top_idx = None
         if self.loss_type == "p_kl":
@@ -1032,10 +1028,7 @@ class XTokenLoss(nn.Module):
         ce_terms = []
         acc_num = acc_den = valid_pairs_total = proj_acc_num = proj_acc_den = 0
 
-        for i in range(batch_size):
-            s0, ss = s_starts[i], s_sizes[i]
-            t0, ts = t_starts[i], t_sizes[i]
-
+        for i, (s0, ss, t0, ts, paired) in enumerate(alignment):
             if ss <= 0:
                 zero = student_logits[i].sum() * 0.0
                 kd_terms.append(zero)
@@ -1063,10 +1056,6 @@ class XTokenLoss(nn.Module):
 
             s_logits_i = student_logits[i, s0 - 1 : s0 + ss - 1]
             t_logits_i = teacher_logits[i, t0 - 1 : t0 + ts - 1]
-            s_offs = student_byte_offsets[i, s0 : s0 + ss].tolist()
-            t_offs = teacher_byte_offsets[i, t0 : t0 + ts].tolist()
-            s_groups, t_groups = ULDLoss._align_by_byte_offsets(s_offs, t_offs)
-            paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=True) if sg and tg]
             if not paired:
                 kd_terms.append(student_logits[i].sum() * 0.0)
                 continue
@@ -1091,12 +1080,35 @@ class XTokenLoss(nn.Module):
         self.last_proj_accuracy_num = proj_acc_num
         self.last_proj_accuracy_den = proj_acc_den
 
+        if loss_counts is not None:
+            ce_count, kd_count = loss_counts.clamp_min(1)
+            kd = kd * valid_pairs_total / kd_count
+            ce = ce * acc_den / ce_count
+
         if self.dynamic_scaling:
             # loss = sg(ce/kd) * kd + ce; kl_weight and ce_scale are intentionally ignored in this branch.
             kd_abs = kd.detach().abs()
             scale = torch.where(kd_abs > 0, ce.detach().abs() / kd_abs, torch.ones_like(kd_abs))
             return scale * kd + ce
         return self.kl_weight * kd + self.ce_scale * ce
+
+    def _get_alignment(self, student_labels, teacher_labels, student_offsets, teacher_offsets):
+        s_starts, s_sizes = self._answer_spans(
+            student_labels, skip_eos=self.skip_student_eos, eos_token_id=self.student_eos_token_id
+        )
+        t_starts, t_sizes = self._answer_spans(
+            teacher_labels, skip_eos=self.skip_teacher_eos, eos_token_id=self.teacher_eos_token_id
+        )
+        alignment = []
+        for i, (s0, ss, t0, ts) in enumerate(zip(s_starts, s_sizes, t_starts, t_sizes, strict=True)):
+            paired = []
+            if ss > 0 and ts > 0:
+                s_groups, t_groups = ULDLoss._align_by_byte_offsets(
+                    student_offsets[i, s0 : s0 + ss].tolist(), teacher_offsets[i, t0 : t0 + ts].tolist()
+                )
+                paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=True) if sg and tg]
+            alignment.append((s0, ss, t0, ts, paired))
+        return alignment
 
     @staticmethod
     def _answer_spans(labels, *, skip_eos, eos_token_id):
@@ -1147,6 +1159,7 @@ class XTokenLoss(nn.Module):
 
         t_log = F.log_softmax(t_logits[:, top_idx].float() / T, dim=-1)
         t_log_topk = self._chunk_average(t_log, t_groups)
+        t_log_topk = F.log_softmax(t_log_topk, dim=-1)
 
         with torch.no_grad():
             proj_top1 = s_proj_topk.argmax(dim=-1)
@@ -1176,8 +1189,8 @@ class XTokenLoss(nn.Module):
         t_chunks = self._chunk_average(t_log, t_groups)
 
         if common_s.numel() > 0:
-            s_common = s_chunks[:, common_s]
-            t_common = t_chunks[:, common_t]
+            s_common = F.log_softmax(s_chunks[:, common_s], dim=-1)
+            t_common = F.log_softmax(t_chunks[:, common_t], dim=-1)
             kl_per_chunk = F.kl_div(s_common, t_common, reduction="none", log_target=True).sum(dim=-1)
             kl_common = kl_per_chunk.mean()
         else:
@@ -1493,6 +1506,7 @@ class GOLDTrainer(SFTTrainer):
                 student_eos_token_id=self._tokenizer.eos_token_id,
                 teacher_eos_token_id=self.teacher_tokenizer.eos_token_id,
             )
+            self.model_accepts_loss_kwargs = True
 
         generation_kwargs = {
             "max_new_tokens": args.max_completion_length,
@@ -1648,6 +1662,31 @@ class GOLDTrainer(SFTTrainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches, device)
+        if self.xtoken_loss_fn is not None and batch_samples:
+            # GOLD repeats each generation batch; count its buffered slices once.
+            self._fill_buffer(batch_samples[0], len(batch_samples))
+            self._xtoken_buffer_step = self._step
+            counts = torch.zeros(2, device=device, dtype=torch.long)
+            for inputs in self._buffered_inputs:
+                if self._vlm_collator is not None:
+                    pending = inputs
+                    inputs = self._vlm_collator([dict(example) for example in pending["_gold_vlm_lazy_examples"]])
+                    if self._teacher_processor is not None:
+                        inputs["_raw_images"] = pending["_gold_vlm_raw_images"]
+                        inputs["_raw_prompts"] = pending["_gold_vlm_raw_prompts"]
+                _, teacher_labels, _, teacher_offsets, _ = self._build_cross_tokenizer_teacher_inputs(inputs)
+                alignment = self.xtoken_loss_fn._get_alignment(
+                    inputs["labels"], teacher_labels, inputs["byte_offsets"], teacher_offsets
+                )
+                counts += counts.new_tensor(
+                    [sum(ss for _, ss, _, _, _ in alignment), sum(len(p) for *_, p in alignment)]
+                )
+            self._xtoken_loss_counts = self.accelerator.reduce(counts, reduction="sum")
+            num_items_in_batch = self._xtoken_loss_counts[0].clamp_min(1)
+        return batch_samples, num_items_in_batch
+
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         if not self.model.training:
@@ -1667,10 +1706,12 @@ class GOLDTrainer(SFTTrainer):
             return generation_batch
 
         buffer_steps = self.args.gradient_accumulation_steps
-        if self._step % buffer_steps == 0 or self._buffered_inputs is None:
-            self._fill_buffer(generation_batch, buffer_steps)
-
-        slice_idx = self._step % buffer_steps
+        if self.xtoken_loss_fn is not None:
+            slice_idx = self._step - self._xtoken_buffer_step
+        else:
+            if self._step % buffer_steps == 0 or self._buffered_inputs is None:
+                self._fill_buffer(generation_batch, buffer_steps)
+            slice_idx = self._step % buffer_steps
         inputs = self._buffered_inputs[slice_idx]
         if isinstance(inputs, dict):
             if "_gold_vlm_on_policy_raw_examples" in inputs:
@@ -2916,6 +2957,47 @@ class GOLDTrainer(SFTTrainer):
             forward_kwargs,
         )
 
+    def _build_cross_tokenizer_teacher_inputs(self, inputs):
+        if self._teacher_processor is not None:
+            # VLM teacher: render the prompt through the teacher's own processor so image
+            # placeholders and pixel tensors match the teacher model.
+            if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
+                raise ValueError(
+                    "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
+                    "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
+                    "or ensure your custom collator preserves these fields."
+                )
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+                teacher_forward_kwargs,
+            ) = self._build_teacher_vlm_inputs(
+                inputs["original_completion_text"], inputs["_raw_images"], inputs["_raw_prompts"]
+            )
+        else:
+            teacher_forward_kwargs = {}
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+            ) = build_teacher_inputs_from_texts(
+                self.teacher_tokenizer,
+                inputs["original_prompt_text"],
+                inputs["original_completion_text"],
+                use_extended_uld=self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld,
+            )
+
+        return (
+            teacher_input_ids,
+            teacher_labels,
+            teacher_attention_mask,
+            teacher_completion_byte_offsets,
+            teacher_forward_kwargs,
+        )
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Extract multimodal fields (pixel_values, image_grid_thw, ...) for student forward passes.
         # Standard JSD reuses these for the teacher (same-family VLM); cross-tokenizer ULD rebuilds
@@ -2925,38 +3007,13 @@ class GOLDTrainer(SFTTrainer):
         if _cross_tok:
             # Both DataCollatorForChatML and the on-policy generation path attach these
             # fields, so cross-tokenizer ULD never has to round-trip through batch_decode.
-            prompt_texts = inputs["original_prompt_text"]
-            completion_texts = inputs["original_completion_text"]
-
-            if self._teacher_processor is not None:
-                # VLM teacher: render the prompt through the teacher's own processor so image
-                # placeholders and pixel tensors match the teacher model.
-                if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
-                    raise ValueError(
-                        "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
-                        "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
-                        "or ensure your custom collator preserves these fields."
-                    )
-                (
-                    teacher_input_ids,
-                    teacher_labels,
-                    teacher_attention_mask,
-                    teacher_completion_byte_offsets,
-                    teacher_forward_kwargs,
-                ) = self._build_teacher_vlm_inputs(completion_texts, inputs["_raw_images"], inputs["_raw_prompts"])
-            else:
-                teacher_forward_kwargs = {}
-                (
-                    teacher_input_ids,
-                    teacher_labels,
-                    teacher_attention_mask,
-                    teacher_completion_byte_offsets,
-                ) = build_teacher_inputs_from_texts(
-                    self.teacher_tokenizer,
-                    prompt_texts,
-                    completion_texts,
-                    use_extended_uld=self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld,
-                )
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+                teacher_forward_kwargs,
+            ) = self._build_cross_tokenizer_teacher_inputs(inputs)
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
@@ -3058,13 +3115,11 @@ class GOLDTrainer(SFTTrainer):
                 teacher_labels=teacher_labels,
                 student_byte_offsets=xtoken_student_byte_offsets,
                 teacher_byte_offsets=teacher_completion_byte_offsets,
+                loss_counts=self._xtoken_loss_counts if num_items_in_batch is not None else None,
             )
 
             if num_items_in_batch is not None:
-                num_valid_local = (inputs["labels"][:, 1:] != -100).sum().clamp_min(1)
-                if isinstance(num_items_in_batch, torch.Tensor):
-                    num_items_in_batch = num_items_in_batch.to(loss.device)
-                loss = loss * num_valid_local / num_items_in_batch
+                loss = loss * self.accelerator.num_processes
 
             mode = "train" if self.model.training else "eval"
             if mode == "train":

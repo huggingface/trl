@@ -121,7 +121,7 @@ class GOLDConfig(SFTConfig):
         xtoken_temperature (`float`, *optional*, defaults to `1.0`):
             Temperature T for X-Token KD loss; the loss is multiplied by T² (Hinton 2015).
         xtoken_dynamic_scaling (`bool`, *optional*, defaults to `True`):
-            Scale KD by `stop_gradient(abs(CE) / abs(KD))` to balance loss magnitudes (paper Eq. 7).
+            Scale KD by `stop_gradient(abs(CE) / abs(KD))` per microbatch to balance loss magnitudes (paper Eq. 7).
         xtoken_uncommon_topk (`int`, *optional*, defaults to `8192`):
             H-KL: cap sorted-L1 uncommon comparison to the top-k tokens per side.
         xtoken_vocab_topk (`int`, *optional*, defaults to `8192`):
@@ -417,7 +417,7 @@ class GOLDConfig(SFTConfig):
         metadata={
             "help": (
                 "When True, scale the KD loss by stop_gradient(abs(CE) / abs(KD)) before adding CE, keeping CE and "
-                "KD magnitudes balanced throughout training (X-Token paper Eq. 7)."
+                "KD magnitudes balanced per microbatch (X-Token paper Eq. 7)."
             )
         },
     )

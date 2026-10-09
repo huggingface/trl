@@ -1754,9 +1754,9 @@ Two loss formulations are provided:
 | Variant | `xtoken_loss_type` | Description |
 |---------|-------------------|-------------|
 | P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
-| H-KL | `"h_kl"` | Hybrid: forward KL on the common slice of full-vocabulary distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+| H-KL | `"h_kl"` | Hybrid: forward KL on renormalized distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
 
-H-KL follows the reference implementation without renormalizing the common-set slice, so that partial KL term can be negative.
+TRL renormalizes H-KL distributions over the common set and the pooled P-KL teacher distribution after span averaging, so each KL compares normalized distributions. This intentionally differs from the unnormalized log-probability slices in the reference implementation. CE and KD use separate token and aligned-span counts over each accumulation window. Dynamic CE/KD balancing and P-KL top-k selection are computed per microbatch.
 
 This implementation uses a frozen projection matrix. The paper also jointly learns the matrix for P-KL; that variant is not implemented here.
 
