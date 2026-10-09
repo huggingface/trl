@@ -15,7 +15,7 @@
 import pytest
 import torch
 from datasets import Dataset, DatasetDict
-from transformers import TrainerCallback
+from transformers import AutoModelForCausalLM, TrainerCallback
 from transformers.utils import is_peft_available
 
 from trl.experimental.sdft import SDFTConfig, SDFTTrainer
@@ -127,6 +127,23 @@ class TestSDFTTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
         self._assert_any_trainable_param_changed(trainer.model, previous_trainable_params)
+
+    def test_teacher_model_like_model_instance(self):
+        # A student passed as an instance has no `model_init_kwargs`: the teacher is built with its dtype and attention
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Solve 2+2.", "Name the capital of France."],
+                "privileged_context": ["Example answer: 4.", "Example answer: Paris."],
+            }
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = SDFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert trainer.teacher_model.dtype == torch.bfloat16
+        assert trainer.teacher_model.config._attn_implementation == "eager"
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):

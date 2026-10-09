@@ -17,7 +17,7 @@ import logging
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
-from transformers import HfArgumentParser, TrainerCallback
+from transformers import AutoModelForCausalLM, HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
@@ -168,6 +168,23 @@ class TestSDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_teacher_model_like_model_instance(self):
+        # A student passed as an instance has no `model_init_kwargs`: the teacher is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = SDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SDPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.teacher_model.dtype == torch.bfloat16
+        assert trainer.teacher_model.config._attn_implementation == "eager"
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
