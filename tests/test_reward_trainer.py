@@ -24,7 +24,7 @@ from transformers.utils import is_peft_available
 from trl import RewardConfig, RewardTrainer
 from trl.trainer.reward_trainer import DataCollatorForPreference
 
-from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft
+from .testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_peft_target_parameters
 
 
 if is_peft_available():
@@ -422,9 +422,9 @@ class TestRewardTrainer(TrlTestCase):
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft
+    @require_peft_target_parameters
     def test_train_moe_with_peft_config(self):
-        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
@@ -436,7 +436,9 @@ class TestRewardTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            peft_config=LoraConfig(target_modules=["gate_proj", "up_proj", "down_proj", "score"]),
+            peft_config=LoraConfig(
+                target_modules=["score"], target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]
+            ),
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
