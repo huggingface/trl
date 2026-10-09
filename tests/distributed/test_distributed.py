@@ -653,7 +653,11 @@ class TestModelParallel:
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
-        training_args = KTOConfig(output_dir=str(tmp_path), learning_rate=0.1, report_to="none")
+        training_args = KTOConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
         trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
