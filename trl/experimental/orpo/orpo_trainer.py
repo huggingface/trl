@@ -88,7 +88,8 @@ def log1mexp(x: torch.FloatTensor) -> torch.FloatTensor:
     """Numerically stable computation of log(1-exp(x))."""
     # branch at -ln 2 ~ -0.693 to avoid cancellation
     t = -0.6931471805599453
-    return torch.where(x < t, torch.log1p(-torch.exp(x)), torch.log(-torch.expm1(x)))
+    # Keep the unselected log1p branch finite to avoid NaN gradients from torch.where.
+    return torch.where(x < t, torch.log1p(-torch.exp(x.clamp_max(t))), torch.log(-torch.expm1(x)))
 
 
 class ORPOTrainer(_BaseTrainer):
