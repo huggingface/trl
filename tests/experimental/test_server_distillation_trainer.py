@@ -35,8 +35,6 @@ def _make_server_config_kwargs(tmp_path):
     return {
         "output_dir": str(tmp_path),
         "report_to": "none",
-        "use_cpu": True,
-        "bf16": False,
         "teacher_model_server_url": "http://localhost:8000",
     }
 
@@ -271,7 +269,6 @@ class TestServerDistillationTrainerRaggedGrad(TrlTestCase):
             save_strategy="no",
             report_to="none",
             logging_steps=1,
-            use_cpu=not torch.cuda.is_available(),
             bf16=False,
         )
         model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32).to(self.device)
