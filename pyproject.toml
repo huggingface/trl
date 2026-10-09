@@ -76,11 +76,9 @@ quantization = [
 test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
-    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
-    "tabulate"  # test report rendering in scripts/log_reports.py
 ]
 vllm = [
     "vllm>=0.21.0,<=0.31.0",
@@ -112,11 +110,9 @@ dev = [
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
-    "pytest-reportlog",  # test report consumed by scripts/log_reports.py
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
     "pytest-xdist",
     "pytest",
-    "tabulate",  # test report rendering in scripts/log_reports.py
     # vllm: not included in dev by default due to CUDA error; see GH-4228
     # vlm
     "Pillow",
@@ -165,8 +161,6 @@ known-first-party = ["trl"]
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')",
     "invariant: training-invariant checks (run with '-m invariant')",
 ]
 norecursedirs = [
