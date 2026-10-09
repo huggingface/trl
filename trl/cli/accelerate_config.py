@@ -23,14 +23,23 @@ def resolve_accelerate_config_argument(launch_args: list[str]) -> list[str]:
     The function supports either a filesystem path or a predefined config name shipped in `trl/accelerate_configs`
     (without the `.yaml` suffix).
     """
-    if "--accelerate_config" not in launch_args:
-        return launch_args
+    if "--accelerate_config" in launch_args:
+        config_index = launch_args.index("--accelerate_config")
+        if config_index + 1 >= len(launch_args):
+            raise ValueError("Expected a value after `--accelerate_config`.")
+        config_name = launch_args[config_index + 1]
+        config_argument_count = 2
+    else:
+        config_index = next(
+            (index for index, argument in enumerate(launch_args) if argument.startswith("--accelerate_config=")), None
+        )
+        if config_index is None:
+            return launch_args
+        config_name = launch_args[config_index].split("=", maxsplit=1)[1]
+        if not config_name:
+            raise ValueError("Expected a value after `--accelerate_config`.")
+        config_argument_count = 1
 
-    config_index = launch_args.index("--accelerate_config")
-    if config_index + 1 >= len(launch_args):
-        raise ValueError("Expected a value after `--accelerate_config`.")
-
-    config_name = launch_args[config_index + 1]
     if Path(config_name).is_file():
         accelerate_config_path = config_name
     else:
@@ -42,6 +51,6 @@ def resolve_accelerate_config_argument(launch_args: list[str]) -> list[str]:
             )
         accelerate_config_path = candidate
 
-    # Remove '--accelerate_config <value>'.
-    launch_args = launch_args[:config_index] + launch_args[config_index + 2 :]
+    # Remove '--accelerate_config <value>' or '--accelerate_config=<value>'.
+    launch_args = launch_args[:config_index] + launch_args[config_index + config_argument_count :]
     return ["--config_file", str(accelerate_config_path)] + launch_args
