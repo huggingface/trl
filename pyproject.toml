@@ -77,6 +77,7 @@ test = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
+    "pytest-timeout",  # bound readiness regression tests that would otherwise wait through retry backoff
     "pytest-xdist",
     "pytest",
 ]
@@ -111,6 +112,7 @@ dev = [
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
     "pytest-rerunfailures>=16.7",  # only_rerun matches wrapped exceptions
+    "pytest-timeout",  # bound readiness regression tests that would otherwise wait through retry backoff
     "pytest-xdist",
     "pytest",
     # vllm: not included in dev by default due to CUDA error; see GH-4228

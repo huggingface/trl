@@ -403,7 +403,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
         config = OnlineDPOConfig()
         assert config.vllm_mode == "colocate"
         assert config.vllm_server_base_url is None
-        assert config.vllm_server_host == "0.0.0.0"
+        assert config.vllm_server_host == "127.0.0.1"
+        assert config.vllm_server_api_key_env == "VLLM_API_KEY"
         assert config.vllm_server_port == 8000
         assert config.vllm_server_timeout == 240.0
         assert config.vllm_gpu_memory_utilization == 0.55

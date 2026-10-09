@@ -38,7 +38,7 @@ class ScriptArguments:
         data_parallel_size (`int`, *optional*, defaults to `1`):
             Number of data parallel workers to use. For dense models, keep this at 1. Setting this above `1` for dense
             models is not supported/useful and will error out (see vLLM PR #30739).
-        host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
             Port to run the server on.
@@ -101,7 +101,7 @@ class ScriptArguments:
         },
     )
     host: str = field(
-        default="0.0.0.0",
+        default="127.0.0.1",
         metadata={"help": "Host address to run the server on."},
     )
     port: int = field(
