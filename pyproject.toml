@@ -238,13 +238,4 @@ filterwarnings = [
     # Upstream issue: https://github.com/pytorch/pytorch/issues/175484
     # Remove once: no supported torch version emits it
     "ignore:TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled:UserWarning",
-
-    # peft 0.21.0 to 0.21.2 wrongly report as unused the rank/alpha pattern keys that peft itself adds for fused MoE
-    # experts (e.g. gate_up_proj) when converting LoRA targets to transformers v5; the patterns are applied (upstream,
-    # not actionable in TRL)
-    # Triggered by the Reward MoE + PEFT test
-    # Tracking issue: https://github.com/huggingface/trl/issues/7587
-    # Upstream fix (merged, unreleased as of peft 0.21.2): https://github.com/huggingface/peft/pull/3891
-    # Remove once: no supported peft version emits it
-    "ignore:The following (rank|alpha)_pattern keys did not match any targeted module:RuntimeWarning",
 ]
