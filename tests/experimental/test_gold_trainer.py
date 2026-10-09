@@ -13,27 +13,41 @@
 # limitations under the License.
 
 import copy
+import sys
 import warnings
 from contextlib import nullcontext
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.nn.functional as F
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
+from examples.xtoken.build_projection_matrix import build_projection_matrix, parse_args
+from examples.xtoken.sort_and_cut_projection_matrix import sort_and_cut
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import WhitespaceSplit
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
+    LlamaConfig,
+    PreTrainedTokenizerFast,
 )
+from transformers.testing_utils import torch_device
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import (
     GOLDTrainer,
     ULDLoss,
+    XTokenLoss,
+    _load_exact_token_map,
+    _load_sparse_projection_matrix,
     build_teacher_inputs_from_texts,
 )
 from trl.experimental.utils import (
@@ -44,7 +58,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase
+from ..testing_utils import TrlTestCase, require_torch_accelerator
 
 
 @pytest.fixture(scope="module")
@@ -2155,7 +2169,7 @@ def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=False, GOLDTrainer should raise
     a ValueError telling the user to enable ULD loss."""
     with pytest.warns(UserWarning, match="Cross-architecture VLM distillation"):
-        with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*use_uld_loss=True"):
+        with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*Enable ULD or X-Token"):
             GOLDTrainer(
                 model=_TINY_SMOLVLM,
                 teacher_model=_TINY_QWEN3_VL,
@@ -2216,12 +2230,24 @@ def test_same_architecture_vlm_no_teacher_processor(tmp_path, vlm_dataset):
     assert trainer._vlm_collator is not None
 
 
-def test_same_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dataset):
-    """ULD VLM distillation should use a teacher processor even when the VLM model_type matches."""
+@pytest.mark.parametrize("loss_type", ["uld", "p_kl", "h_kl"])
+def test_same_architecture_vlm_cross_tokenizer_loss_sets_teacher_processor(tmp_path, vlm_dataset, loss_type):
+    """Cross-tokenizer losses use the teacher processor even when the model type matches."""
     trainer = GOLDTrainer(
         model=_TINY_SMOLVLM,
         teacher_model=_TINY_SMOLVLM,
-        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True),
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            report_to="none",
+            lmbda=0.0,
+            max_length=_VLM_SMOKE_MAX_LENGTH,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=2,
+            dataloader_drop_last=True,
+            use_uld_loss=loss_type == "uld",
+            xtoken_loss_type="none" if loss_type == "uld" else loss_type,
+            xtoken_projection_matrix_path=str(tmp_path / "projection.pt"),
+        ),
         train_dataset=vlm_dataset,
     )
 
@@ -2230,6 +2256,15 @@ def test_same_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dat
     assert trainer.teacher_tokenizer is trainer._teacher_processor.tokenizer
     assert trainer.data_collator is identity
     assert trainer._vlm_collator is not None
+
+    if loss_type != "uld":
+        batches, count = trainer.get_batch_samples(iter(trainer.get_train_dataloader()), 2, trainer.accelerator.device)
+        assert count > 0
+        assert trainer._xtoken_loss_counts[1] > 0
+        assert all("_gold_vlm_lazy_examples" in inputs for inputs in trainer._buffered_inputs)
+        first_slice = trainer._prepare_inputs(batches[0])
+        assert "_raw_images" in first_slice
+        assert "_gold_vlm_lazy_examples" in trainer._buffered_inputs[1]
 
 
 def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(
@@ -2963,3 +2998,530 @@ class TestGOLDTrainerLoss(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
         else:
             assert "input_ids" in next(iter(trainer.eval_dataset))
+
+
+class TestXTokenLoss(TrlTestCase):
+    def _config(self, projection_path, loss_type="p_kl", dynamic_scaling=False):
+        return GOLDConfig(
+            lmbda=0.0,
+            xtoken_loss_type=loss_type,
+            xtoken_projection_matrix_path=str(projection_path),
+            xtoken_temperature=1.0,
+            xtoken_dynamic_scaling=dynamic_scaling,
+            xtoken_uncommon_topk=0,
+            xtoken_vocab_topk=0,
+            xtoken_kl_weight=1.0,
+            xtoken_ce_scale=1.0,
+            uld_skip_student_eos=True,
+            uld_skip_teacher_eos=True,
+        )
+
+    def test_loss_is_finite_with_padded_model_vocabs(self):
+        student_vocab, teacher_vocab = 4, 5
+        projection_path = Path(self.tmp_dir) / "projection.pt"
+        torch.save(
+            {
+                "indices": torch.tensor([[idx % teacher_vocab, -1] for idx in range(student_vocab + 2)]),
+                "likelihoods": torch.tensor([[1.0, 0.0] for _ in range(student_vocab + 2)]),
+            },
+            projection_path,
+        )
+        student_logits = torch.randn(1, 3, student_vocab + 2)
+        teacher_logits = torch.randn(1, 3, teacher_vocab + 2)
+        labels = torch.tensor([[-100, 1, 2]])
+        byte_offsets = torch.tensor([[[0, 0], [0, 3], [3, 6]]])
+
+        for loss_type in ("p_kl", "h_kl"):
+            loss_fn = XTokenLoss(
+                self._config(projection_path, loss_type),
+                student_vocab_size=student_vocab,
+                teacher_vocab_size=teacher_vocab,
+            )
+            loss = loss_fn(
+                student_logits,
+                teacher_logits,
+                labels,
+                labels,
+                byte_offsets,
+                byte_offsets,
+            )
+            assert torch.isfinite(loss)
+
+    @pytest.mark.parametrize("scale_trick", [False, True])
+    def test_projection_builder_reserves_sentinel_id(self, monkeypatch, scale_trick):
+        student_dir, teacher_dir = Path(self.tmp_dir) / "student", Path(self.tmp_dir) / "teacher"
+        for directory, vocab in (
+            (student_dir, {"[UNK]": 0, "aa bb cc": 1, "aa": 2, "bb": 3, "cc": 4}),
+            (teacher_dir, {"[UNK]": 0, "aa": 1, "bb": 2, "cc": 3}),
+        ):
+            backend = Tokenizer(WordLevel(vocab, unk_token="[UNK]"))
+            backend.pre_tokenizer = WhitespaceSplit()
+            tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
+            tokenizer.save_pretrained(directory)
+            LlamaConfig(vocab_size=len(tokenizer)).save_pretrained(directory)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "build_projection_matrix.py",
+                "--student-model",
+                str(student_dir),
+                "--teacher-model",
+                str(teacher_dir),
+                "--top-k",
+                "3",
+                "--no-enable-reverse-pass",
+                "--no-enable-special-token-mapping",
+                "--enable-scale-trick" if scale_trick else "--no-enable-scale-trick",
+                "--output-dir",
+                self.tmp_dir,
+            ],
+        )
+        path = build_projection_matrix(parse_args())
+        data = torch.load(path, weights_only=True)
+        projection = _load_sparse_projection_matrix(
+            path, torch.device("cpu"), student_vocab_size=5, teacher_vocab_size=4
+        ).to_dense()
+        if scale_trick:
+            assert torch.all(data["indices"][:, -1] == -1)
+            assert torch.all(data["likelihoods"][:, -1] > 0)
+            assert projection[1, 3] == 0
+            torch.testing.assert_close(projection.sum(1), 1 - data["likelihoods"][:, -1])
+        else:
+            torch.testing.assert_close(data["indices"][1], torch.tensor([1, 2, 3]))
+            assert projection[1, 3] > 0
+            torch.testing.assert_close(projection.sum(1), torch.ones(5))
+        torch.testing.assert_close(data["likelihoods"].sum(1), torch.ones(5))
+
+        trimmed_path = Path(self.tmp_dir) / "trimmed.pt"
+        sort_and_cut(path, trimmed_path, 2, preserve_last=scale_trick, verbose=False)
+        trimmed = torch.load(trimmed_path, weights_only=True)
+        torch.testing.assert_close(trimmed["likelihoods"].sum(1), torch.ones(5))
+        if scale_trick:
+            assert torch.all(trimmed["indices"][:, -1] == -1)
+            assert torch.all(trimmed["likelihoods"][:, -1] > 0)
+
+    def test_sparse_counts_are_row_normalized(self):
+        projection_path = Path(self.tmp_dir) / "counts.pt"
+        torch.save({(0, 0): 1, (0, 1): 3, (1, 1): 2}, projection_path)
+
+        projection = _load_sparse_projection_matrix(
+            projection_path,
+            torch.device("cpu"),
+            student_vocab_size=2,
+            teacher_vocab_size=2,
+        ).to_dense()
+
+        torch.testing.assert_close(projection.sum(dim=1), torch.ones(2))
+        torch.testing.assert_close(projection[0], torch.tensor([0.25, 0.75]))
+
+    def test_identity_projection_has_zero_kd(self):
+        vocab_size = 6
+        projection_path = Path(self.tmp_dir) / "identity.pt"
+        torch.save(
+            {"indices": torch.arange(vocab_size).unsqueeze(1), "likelihoods": torch.ones(vocab_size, 1)},
+            projection_path,
+        )
+        logits = torch.randn(1, 4, vocab_size)
+        labels = torch.tensor([[-100, 1, 2, 3]])
+        byte_offsets = torch.tensor([[[0, 0], [0, 2], [2, 4], [4, 6]]])
+
+        for loss_type in ("p_kl", "h_kl"):
+            loss_fn = XTokenLoss(
+                self._config(projection_path, loss_type, dynamic_scaling=True),
+                student_vocab_size=vocab_size,
+                teacher_vocab_size=vocab_size,
+                student_eos_token_id=5,
+                teacher_eos_token_id=5,
+            )
+            loss = loss_fn(logits, logits, labels, labels, byte_offsets, byte_offsets)
+
+            assert torch.isfinite(loss)
+            assert loss_fn.last_kl_loss.abs().item() < 1e-5
+            if loss_type == "p_kl":
+                assert loss_fn.last_proj_accuracy_num == loss_fn.last_proj_accuracy_den
+
+    def test_empty_projection_is_rejected(self):
+        projection_path = Path(self.tmp_dir) / "empty.pt"
+        torch.save({}, projection_path)
+
+        with pytest.raises(ValueError, match="Unrecognised projection matrix format"):
+            _load_sparse_projection_matrix(
+                projection_path,
+                torch.device("cpu"),
+                student_vocab_size=2,
+                teacher_vocab_size=2,
+            )
+
+    def test_h_kl_partition_uses_model_vocab_sizes(self):
+        projection_path = Path(self.tmp_dir) / "short.pt"
+        torch.save(
+            {"indices": torch.tensor([[0], [1]]), "likelihoods": torch.ones(2, 1)},
+            projection_path,
+        )
+
+        mapping = _load_exact_token_map(
+            projection_path,
+            torch.device("cpu"),
+            student_vocab_size=4,
+            teacher_vocab_size=3,
+        )
+
+        torch.testing.assert_close(mapping["uncommon_student"], torch.tensor([2, 3]))
+        torch.testing.assert_close(mapping["uncommon_teacher"], torch.tensor([2]))
+
+    def test_h_kl_normalizes_common_probability_mass(self):
+        projection_path = Path(self.tmp_dir) / "hybrid.pt"
+        torch.save(
+            {
+                "indices": torch.tensor([[0], [1], [2]]),
+                "likelihoods": torch.tensor([[1.0], [1.0], [0.5]]),
+            },
+            projection_path,
+        )
+        config = self._config(projection_path, loss_type="h_kl")
+        config.xtoken_uncommon_topk = 1
+        loss_fn = XTokenLoss(config, student_vocab_size=3, teacher_vocab_size=3)
+        student_logits = torch.tensor([[0.8, 0.1, 0.1]]).log().requires_grad_()
+        teacher_logits = torch.tensor([[0.4, 0.3, 0.3]]).log()
+
+        loss = loss_fn._compute_h_kl(
+            student_logits,
+            teacher_logits,
+            paired=[([0], [0])],
+            device=torch.device("cpu"),
+            T=1.0,
+        )
+
+        student_common = torch.tensor([0.8, 0.1])
+        teacher_common = torch.tensor([0.4, 0.3])
+        expected_kl = F.kl_div(
+            student_common.log().log_softmax(-1),
+            teacher_common.log().log_softmax(-1),
+            reduction="sum",
+            log_target=True,
+        )
+        expected_l1 = torch.tensor(0.2)
+        torch.testing.assert_close(loss, expected_kl + expected_l1)
+        assert loss > 0
+
+        loss.backward()
+        assert student_logits.grad is not None
+        assert student_logits.grad.abs().sum() > 0
+
+    @pytest.mark.parametrize("dynamic_scaling", [False, True])
+    def test_h_kl_negative_partial_kl_keeps_distillation_gradients(self, dynamic_scaling):
+        projection_path = Path(self.tmp_dir) / "hybrid.pt"
+        torch.save(
+            {"indices": torch.tensor([[0], [1], [2]]), "likelihoods": torch.tensor([[1.0], [1.0], [0.5]])},
+            projection_path,
+        )
+        config = self._config(projection_path, "h_kl", dynamic_scaling)
+        loss_fn = XTokenLoss(config, student_vocab_size=3, teacher_vocab_size=7)
+        student = torch.tensor([[[0.8, 0.1, 0.1]] * 3]).log().requires_grad_()
+        teacher = torch.tensor([[[0.4, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]] * 3]).log()
+        labels = torch.tensor([[-100, 1, 2]])
+        offsets = torch.tensor([[[0, 0], [0, 1], [1, 2]]])
+        loss = loss_fn(student, teacher, labels, labels, offsets, offsets)
+        kd = F.kl_div(
+            torch.tensor([0.8, 0.1]).log().log_softmax(-1),
+            torch.tensor([0.4, 0.1]).log().log_softmax(-1),
+            reduction="sum",
+            log_target=True,
+        )
+        ce = F.cross_entropy(student[:, :2].reshape(-1, 3), labels[:, 1:].reshape(-1))
+        torch.testing.assert_close(loss_fn.last_kl_loss, kd)
+        torch.testing.assert_close(loss, 2 * ce if dynamic_scaling else ce + kd)
+        kd_grad = torch.autograd.grad(loss - ce, student)[0]
+        assert kd > 0
+        assert torch.isfinite(kd_grad).all()
+        assert kd_grad.abs().sum() > 0
+
+    def test_p_kl_normalizes_multitoken_teacher_span(self):
+        projection_path = Path(self.tmp_dir) / "identity.pt"
+        torch.save({"indices": torch.arange(2).unsqueeze(1), "likelihoods": torch.ones(2, 1)}, projection_path)
+        loss_fn = XTokenLoss(self._config(projection_path), student_vocab_size=2, teacher_vocab_size=2)
+        student = torch.tensor([[0.8, 0.2]]).log().requires_grad_()
+        teacher = torch.tensor([[0.9, 0.1], [0.1, 0.9]]).log()
+        kd, _, _ = loss_fn._compute_p_kl(
+            student, teacher, paired=[([0], [0, 1])], device=torch.device("cpu"), T=1.0, top_idx=torch.arange(2)
+        )
+        expected = F.kl_div(student.log_softmax(-1), torch.full((1, 2), 0.5), reduction="sum")
+        torch.testing.assert_close(kd, expected)
+        assert kd > 0
+        torch.testing.assert_close(torch.autograd.grad(kd, student)[0], torch.autograd.grad(expected, student)[0])
+
+    @pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
+    @pytest.mark.parametrize("skip_eos", [False, True])
+    def test_accumulation_matches_full_batch_loss_and_gradients(self, loss_type, skip_eos):
+        projection_path = Path(self.tmp_dir) / "identity.pt"
+        torch.save({"indices": torch.arange(4).unsqueeze(1), "likelihoods": torch.ones(4, 1)}, projection_path)
+        config = self._config(projection_path, loss_type)
+        config.uld_skip_student_eos = config.uld_skip_teacher_eos = skip_eos
+        loss_fn = XTokenLoss(
+            config, student_vocab_size=4, teacher_vocab_size=4, student_eos_token_id=3, teacher_eos_token_id=3
+        )
+        torch.manual_seed(42)
+        student = torch.randn(2, 4, 4, requires_grad=True)
+        teacher = torch.randn(2, 3, 4)
+        student_labels = torch.tensor([[-100, 1, 2, 3], [-100, 1, 2, -100]])
+        teacher_labels = torch.tensor([[-100, 1, 3], [-100, 1, -100]])
+        student_offsets = torch.tensor([[[0, 0], [0, 1], [1, 2], [2, 3]]] * 2)
+        teacher_offsets = torch.tensor([[[0, 0], [0, 2], [2, 3]]] * 2)
+        full = loss_fn(student, teacher, student_labels, teacher_labels, student_offsets, teacher_offsets)
+        full_grad = torch.autograd.grad(full, student)[0]
+        # Independent counts after shifting, EOS removal, and byte-span alignment.
+        counts = torch.tensor([4, 2] if skip_eos else [5, 3])
+        accumulated = sum(
+            loss_fn(
+                student[i : i + 1],
+                teacher[i : i + 1],
+                student_labels[i : i + 1],
+                teacher_labels[i : i + 1],
+                student_offsets[i : i + 1],
+                teacher_offsets[i : i + 1],
+                loss_counts=counts,
+            )
+            for i in range(2)
+        )
+        accumulated_grad = torch.autograd.grad(accumulated, student)[0]
+        torch.testing.assert_close(accumulated, full)
+        torch.testing.assert_close(accumulated_grad, full_grad)
+
+    @require_torch_accelerator
+    @pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
+    @pytest.mark.parametrize("dynamic_scaling", [False, True])
+    @pytest.mark.parametrize("use_autocast", [False, True])
+    def test_multitoken_loss_and_gradients_match_dense_loss(self, loss_type, dynamic_scaling, use_autocast):
+        projection_path = Path(self.tmp_dir) / "projection.pt"
+        projection = torch.tensor([[0.9, 0.1, 0, 0, 0], [0, 0.8, 0.2, 0, 0], [0, 0, 0.5, 0.5, 0], [0, 0, 0, 0.4, 0.6]])
+        torch.save(
+            {"indices": torch.arange(5).expand(4, -1), "likelihoods": projection},
+            projection_path,
+        )
+        config = self._config(projection_path, loss_type, dynamic_scaling)
+        config.xtoken_temperature = 2.0
+        config.xtoken_vocab_topk = 3
+        loss_fn = XTokenLoss(config, student_vocab_size=4, teacher_vocab_size=5)
+        torch.manual_seed(42)
+        dtype = torch.bfloat16 if use_autocast else torch.float32
+        student = torch.randn(2, 4, 4, device=torch_device, dtype=dtype, requires_grad=True)
+        teacher = torch.randn(2, 3, 5, device=torch_device, dtype=dtype, requires_grad=True)
+        student_labels = torch.tensor([[-100, 1, 2, 3]] * 2, device=torch_device)
+        teacher_labels = torch.tensor([[-100, 1, 2]] * 2, device=torch_device)
+        student_labels[1, -1] = -100
+        teacher_labels[1, -1] = -100
+        valid_chunks = torch.tensor([[True, True], [True, False]], device=torch_device)
+        student_offsets = torch.tensor([[[0, 0], [0, 1], [1, 2], [2, 3]]] * 2, device=torch_device)
+        teacher_offsets = torch.tensor([[[0, 0], [0, 2], [2, 3]]] * 2, device=torch_device)
+        with torch.autocast(torch_device, dtype=torch.bfloat16, enabled=use_autocast):
+            loss = loss_fn(student, teacher, student_labels, teacher_labels, student_offsets, teacher_offsets)
+        loss.backward()
+
+        reference = student.detach().clone().requires_grad_()
+        s_log = (reference[:, :3].float() / 2).log_softmax(-1)
+        s_probs = s_log.exp()
+        t_logits = teacher.detach().float()
+        if loss_type == "p_kl":
+            top_idx = t_logits.amax(dim=(0, 1)).topk(3).indices.sort().values
+            projected = s_probs @ projection.to(torch_device)
+            projected = torch.stack([projected[:, :2].mean(1), projected[:, 2]], dim=1)[:, :, top_idx]
+            projected = projected / (projected.sum(-1, keepdim=True) + 1e-10)
+            t_log = (t_logits[:, :2, top_idx] / 2).log_softmax(-1)
+            kd = (
+                F.kl_div((projected + 1e-10).log(), t_log, reduction="none", log_target=True)
+                .sum(-1)[valid_chunks]
+                .mean()
+                * 4
+            )
+        else:
+            s_chunks = torch.stack([s_log[:, :2].mean(1), s_log[:, 2]], dim=1)
+            t_log = (t_logits[:, :2] / 2).log_softmax(-1)
+            common_s, common_t = [0, 1, 3], [0, 1, 4]
+            common = (
+                F.kl_div(
+                    s_chunks[:, :, common_s].log_softmax(-1),
+                    t_log[:, :, common_t].log_softmax(-1),
+                    reduction="none",
+                    log_target=True,
+                )
+                .sum(-1)[valid_chunks]
+                .mean()
+            )
+            s_uncommon = s_chunks[:, :, [2]].exp()
+            t_uncommon = t_log[:, :, [2, 3]].exp().sort(-1, descending=True).values[:, :, :1]
+            kd = (common + (s_uncommon - t_uncommon).abs().sum(-1)[valid_chunks].mean()) * 4
+        ce = F.cross_entropy(reference[:, :3].float().reshape(-1, 4), student_labels[:, 1:].reshape(-1))
+        expected = ce + kd * (ce.detach().abs() / kd.detach().abs() if dynamic_scaling else 1)
+        expected.backward()
+        torch.testing.assert_close(loss, expected)
+        torch.testing.assert_close(student.grad, reference.grad, atol=1e-5, rtol=1e-5)
+        assert teacher.grad is None
+        assert torch.count_nonzero(student.grad[:, -1]) == 0
+
+    @pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
+    def test_fully_masked_batch_has_zero_gradients(self, loss_type):
+        config = self._config(Path(self.tmp_dir) / "unused.pt", loss_type, dynamic_scaling=True)
+        loss_fn = XTokenLoss(config, student_vocab_size=4, teacher_vocab_size=4)
+        student = torch.randn(1, 3, 4, requires_grad=True)
+        teacher = torch.randn_like(student, requires_grad=True)
+        labels = torch.full((1, 3), -100)
+        offsets = torch.zeros(1, 3, 2, dtype=torch.long)
+        loss = loss_fn(student, teacher, labels, labels, offsets, offsets)
+        loss.backward()
+        torch.testing.assert_close(loss, torch.tensor(0.0))
+        assert torch.count_nonzero(student.grad) == 0
+        assert teacher.grad is None
+
+    def test_truncated_prompt_keeps_predictable_completion_tokens(self):
+        loss_fn = XTokenLoss(self._config("unused.pt"), student_vocab_size=4, teacher_vocab_size=4)
+        student = torch.randn(1, 3, 4, requires_grad=True)
+        student_labels = torch.tensor([[1, 2, 3]])
+        teacher_labels = torch.full((1, 3), -100)
+        offsets = torch.tensor([[[0, 1], [1, 2], [2, 3]]])
+        loss = loss_fn(student, torch.randn_like(student), student_labels, teacher_labels, offsets, offsets)
+        expected = F.cross_entropy(student[:, :2].reshape(-1, 4), student_labels[:, 1:].reshape(-1))
+        torch.testing.assert_close(loss, expected)
+        loss.backward()
+        assert student.grad[:, :2].abs().sum() > 0
+        assert torch.count_nonzero(student.grad[:, -1]) == 0
+
+    def test_ce_is_kept_without_teacher_span_and_only_actual_eos_is_skipped(self):
+        projection_path = Path(self.tmp_dir) / "identity.pt"
+        torch.save(
+            {"indices": torch.arange(4).unsqueeze(1), "likelihoods": torch.ones(4, 1)},
+            projection_path,
+        )
+        loss_fn = XTokenLoss(
+            self._config(projection_path),
+            student_vocab_size=4,
+            teacher_vocab_size=4,
+            student_eos_token_id=3,
+            teacher_eos_token_id=3,
+        )
+        student_logits = torch.randn(1, 3, 4)
+        student_labels = torch.tensor([[-100, 1, 2]])
+        teacher_labels = torch.full((1, 3), -100)
+        byte_offsets = torch.tensor([[[0, 0], [0, 1], [1, 2]]])
+
+        loss = loss_fn(
+            student_logits,
+            torch.randn(1, 3, 4),
+            student_labels,
+            teacher_labels,
+            byte_offsets,
+            byte_offsets,
+        )
+
+        expected = torch.nn.functional.cross_entropy(student_logits[:, :2].flatten(0, 1), torch.tensor([1, 2]))
+        torch.testing.assert_close(loss, expected)
+
+
+@pytest.mark.parametrize("teacher_id", [_TINY_LLAMA, _TINY_QWEN2])
+@pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
+def test_xtoken_train_step_smoke(tmp_path, loss_type, teacher_id):
+    """X-Token off-policy training runs one step end to end."""
+    student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
+    teacher = AutoModelForCausalLM.from_pretrained(teacher_id, dtype=torch.bfloat16)
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
+    dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:4]")
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    vocab_size = student.config.vocab_size
+    projection_path = tmp_path / "identity.pt"
+    torch.save(
+        {"indices": torch.arange(vocab_size).unsqueeze(1), "likelihoods": torch.ones(vocab_size, 1)},
+        projection_path,
+    )
+    args = GOLDConfig(
+        output_dir=str(tmp_path),
+        report_to="none",
+        bf16=True,
+        max_steps=1,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=2,
+        max_completion_length=8,
+        max_length=512,
+        lmbda=0.0,
+        temperature=1.0,
+        num_generations=1,
+        use_vllm=False,
+        use_extended_uld=False,
+        xtoken_loss_type=loss_type,
+        xtoken_projection_matrix_path=str(projection_path),
+        teacher_tokenizer_name_or_path=teacher_id,
+        log_completions=False,
+        save_strategy="no",
+        eval_strategy="no",
+        logging_strategy="no",
+        dataloader_drop_last=True,
+    )
+    trainer = GOLDTrainer(
+        model=student,
+        teacher_model=teacher,
+        args=args,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+
+    train_output = trainer.train()
+
+    assert torch.isfinite(torch.tensor(train_output.training_loss))
+
+
+@pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
+def test_xtoken_accumulation_matches_full_batch_update(tmp_path, loss_type):
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
+    tokenizer.pad_token = tokenizer.eos_token
+    dataset = Dataset.from_dict(
+        {
+            "prompt": ["Hello", "Hello"],
+            "completion": [" world.", " This is a much longer completion with several tokens."],
+        }
+    )
+    projection_path = tmp_path / "identity.pt"
+    torch.save(
+        {"indices": torch.arange(len(tokenizer)).unsqueeze(1), "likelihoods": torch.ones(len(tokenizer), 1)},
+        projection_path,
+    )
+    updates = []
+    for accumulation_steps in (1, 2):
+        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.float32)
+        teacher = AutoModelForCausalLM.from_pretrained(_TINY_QWEN2, dtype=torch.float32)
+        initial = {name: param.detach().clone() for name, param in student.named_parameters()}
+        args = GOLDConfig(
+            output_dir=str(tmp_path / str(accumulation_steps)),
+            report_to="none",
+            use_cpu=True,
+            bf16=False,
+            max_steps=2,
+            per_device_train_batch_size=2 // accumulation_steps,
+            gradient_accumulation_steps=accumulation_steps,
+            learning_rate=0.01,
+            lr_scheduler_type="constant",
+            optim="sgd",
+            max_grad_norm=0.0,
+            max_length=128,
+            max_completion_length=8,
+            lmbda=0.0,
+            num_generations=1,
+            xtoken_loss_type=loss_type,
+            xtoken_projection_matrix_path=str(projection_path),
+            xtoken_dynamic_scaling=False,
+            xtoken_vocab_topk=0,
+            xtoken_ce_scale=1.0,
+            teacher_tokenizer_name_or_path=_TINY_QWEN2,
+            log_completions=False,
+            save_strategy="no",
+            logging_strategy="no",
+            dataloader_drop_last=True,
+        )
+        trainer = GOLDTrainer(
+            model=student, teacher_model=teacher, args=args, train_dataset=dataset, processing_class=tokenizer
+        )
+        trainer.train()
+        updates.append({name: param.detach() - initial[name] for name, param in student.named_parameters()})
+    assert any(update.abs().sum() > 0 for update in updates[0].values())
+    for name in updates[0]:
+        torch.testing.assert_close(updates[0][name], updates[1][name], atol=1e-7, rtol=1e-4)
