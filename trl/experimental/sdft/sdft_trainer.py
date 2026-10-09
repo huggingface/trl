@@ -206,6 +206,8 @@ class DemonstrationTeacherContextBuilder:
 class SDFTTrainer(_BaseTrainer):
     """Trainer for SDFT-style on-policy self-distillation with explicit teacher prompts."""
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
     config_cls = SDFTConfig
@@ -231,7 +233,7 @@ class SDFTTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if isinstance(train_dataset, IterableDataset):
             raise NotImplementedError("Iterable datasets are not yet supported in SDFTTrainer.")
@@ -393,7 +395,6 @@ class SDFTTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -446,7 +447,6 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:

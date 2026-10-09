@@ -1024,6 +1024,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             implementation to disable trainer-side weight sync.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "async-grpo"]
     _name = "AsyncGRPO"
     _paper = {
@@ -1109,7 +1111,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        add_fused_lm_head(model, temperature=self.temperature)
+        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
         # Processing class
         if processing_class is None:
@@ -1160,7 +1162,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
-        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
             from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -1210,12 +1212,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         precision = self.accelerator.mixed_precision
         dtype = {
