@@ -1345,7 +1345,12 @@ class TestKTOTrainer(TrlTestCase):
     def test_train_with_fp16(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 
-        training_args = KTOConfig(output_dir=self.tmp_dir, learning_rate=0.1, fp16=True, report_to="none")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            fp16=True,
+            report_to="none",
+        )
         trainer = KTOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
