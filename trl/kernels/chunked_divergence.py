@@ -117,7 +117,7 @@ def _jsd_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     # Second pass of the generalized JSD, which needs both normalizers to form the mixture m = (1 - beta) p_s + beta p_t
-    # Under torch.compile, inductor passes Python float arguments as fp64; keep the math in fp32
+    # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
     beta, s_scale, s_softcap = beta.to(tl.float32), s_scale.to(tl.float32), s_softcap.to(tl.float32)
     t_scale, t_softcap, inv_t = t_scale.to(tl.float32), t_softcap.to(tl.float32), inv_t.to(tl.float32)
     row = tl.program_id(0).to(tl.int64)
@@ -174,7 +174,7 @@ def _backward_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     # Overwrite one block of the student tile with the gradient of the divergence with respect to the projection output
-    # Under torch.compile, inductor passes Python float arguments as fp64; keep the math in fp32
+    # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
     beta, s_scale, s_softcap = beta.to(tl.float32), s_scale.to(tl.float32), s_softcap.to(tl.float32)
     t_scale, t_softcap, inv_t = t_scale.to(tl.float32), t_softcap.to(tl.float32), inv_t.to(tl.float32)
     row = tl.program_id(0).to(tl.int64)
