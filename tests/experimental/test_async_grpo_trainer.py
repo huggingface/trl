@@ -32,7 +32,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, TrainerControl, TrainerState
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
@@ -42,6 +42,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _balance_by_squared_length,
+    _EpochStopCallback,
     _iter_vllm_named_params,
     _reduce_metric,
     round_lora_rank,
@@ -1382,6 +1383,63 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[1].metrics["reward"] == 2.0
 
 
+class TestEpochStopCallback:
+    """`_EpochStopCallback` counts distinct prompt-groups, spans a resume, and reports the count in `state.epoch`.
+
+    The worker restarts `group_id` at 0 on a resume, so the groups trained before the checkpoint ride in
+    `_groups_before_resume` and are added back here. transformers derives `state.epoch` from `max_steps`, which is only
+    a safety ceiling here, so the callback overwrites it with the real number of passes over the prompts.
+    """
+
+    @pytest.mark.parametrize(
+        ("trained", "before_resume", "expected_epoch", "should_stop"),
+        [
+            ({0, 1, 2}, 0, 1.5, False),
+            ({0, 1, 2, 3}, 0, 2.0, True),
+            ({0, 1, 2, 3, 4}, 0, 2.5, True),  # a step can overshoot the target
+            ({0}, 1, 1.0, False),  # a resumed run counts the groups trained before the checkpoint
+            ({0, 1}, 2, 2.0, True),  # ... and reaches the target counting the checkpoint's groups
+            (set(), 4, 2.0, True),  # ... and reaches it having trained nothing of its own
+        ],
+    )
+    def test_reports_epoch_and_stops_once_the_group_target_is_reached(
+        self, trained, before_resume, expected_epoch, should_stop
+    ):
+        trainer = SimpleNamespace(
+            # Single process, so the cross-rank gather is the identity.
+            accelerator=SimpleNamespace(device="cpu", gather=lambda tensor: tensor),
+            _trained_groups=trained,
+            _groups_before_resume=before_resume,
+        )
+        # 2 prompts, so a target of 4 is `num_train_epochs=2`.
+        callback = _EpochStopCallback(trainer, target_groups=4, num_prompts=2)
+        state, control = TrainerState(), TrainerControl()
+
+        callback.on_step_end(None, state, control)
+
+        assert state.epoch == expected_epoch
+        assert control.should_training_stop is should_stop
+
+    def test_non_main_rank_takes_the_main_process_count(self):
+        # Only the main process collates, so this rank has trained nothing of its own. It must still report the main
+        # process's epoch and stop with it, or the ranks would leave the training loop at different steps.
+        main_process_count = 4
+        trainer = SimpleNamespace(
+            accelerator=SimpleNamespace(
+                device="cpu", gather=lambda tensor: torch.cat([tensor, torch.tensor([main_process_count])])
+            ),
+            _trained_groups=set(),
+            _groups_before_resume=0,
+        )
+        callback = _EpochStopCallback(trainer, target_groups=4, num_prompts=2)
+        state, control = TrainerState(), TrainerControl()
+
+        callback.on_step_end(None, state, control)
+
+        assert state.epoch == 2.0
+        assert control.should_training_stop is True
+
+
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu",
     reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
@@ -1425,11 +1483,12 @@ class TestEpochStop(TrlTestCase):
         forked, _ = self._train(fork_k=3)
 
         # Both stop after num_train_epochs=2 full passes over the prompts, i.e. ~2 x num_prompts distinct
-        # groups, plus at most one micro-batch of overshoot — regardless of the fork rate. (HF's own
-        # state.epoch is meaningless here: it's global_step/max_steps over an infinite IterableDataset,
-        # so we judge epochs by distinct prompt-groups trained, which is what the callback targets.)
+        # groups, plus at most one micro-batch of overshoot — regardless of the fork rate. The epoch reported in
+        # `state.epoch` counts the same thing: HF's own value is global_step/max_steps over an infinite
+        # IterableDataset (a tiny fraction of an epoch here), so the callback overwrites it with the real count.
         for trainer in (no_fork, forked):
             assert 2 * num_prompts <= len(trainer._trained_groups) < 3 * num_prompts
+            assert 2 <= trainer.state.epoch < 3
 
         # Forks add rows, hence fixed-size optimizer steps: 3x rows per conversation must take strictly more
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
