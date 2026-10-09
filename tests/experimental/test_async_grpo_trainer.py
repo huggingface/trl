@@ -785,22 +785,23 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             loop._loop.close()
 
     def test_inflight_cap_follows_vllm_load(self):
-        # The in-flight cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut on
-        # a preemption and holds until the pool has drained below it.
+        # The in-flight cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
+        # when KV usage passes 0.8 and holds until the pool has drained below it.
         import aiohttp
         from aiohttp import web
         from aiohttp.test_utils import TestServer
 
         PartialState()  # the worker logs via accelerate's logger, which needs an initialized state
-        load = {"usage": 0.1, "preemptions": 0, "polls": 0}
+        load = {"usage": 0.1, "polls": 0}
 
         async def metrics(request):
             load["polls"] += 1
+            usage = load.pop("spike", load["usage"])  # a spike is served to one poll only
             return web.Response(
                 text=f'vllm:cache_config_info{{block_size="16",engine="0",kv_cache_size_tokens="4000"}} 1.0\n'
-                f'vllm:kv_cache_usage_perc{{engine="0"}} {load["usage"]}\n'
+                f'vllm:kv_cache_usage_perc{{engine="0"}} {usage}\n'
                 f'vllm:num_requests_waiting{{engine="0"}} 0.0\n'
-                f'vllm:num_preemptions_total{{engine="0"}} {load["preemptions"]}\n'
+                f'vllm:num_preemptions_total{{engine="0"}} 0.0\n'
             )
 
         async def models(request):
@@ -845,7 +846,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 await wait_until(lambda: loop._inflight_cap == 8)
                 await wait_until(lambda: inflight["peak"] == 8 and load["polls"] >= 2)
                 load["usage"] = 0.7
-                load["preemptions"] = 1
+                load["spike"] = 0.9
                 await wait_until(lambda: loop._inflight_cap < 8)
                 assert loop._inflight_cap == 5
                 await wait_until(lambda: inflight["now"] <= 5)

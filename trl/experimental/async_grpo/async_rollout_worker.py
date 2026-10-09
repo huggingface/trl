@@ -559,11 +559,11 @@ class _AsyncRolloutLoop:
     async def _control_loop(self, stop_event: asyncio.Event) -> None:
         """Size the in-flight cap from the vLLM server's load, polled from `/metrics`.
 
-        Cut the cap by 30% when the server preempts or its KV cache usage passes 0.8, once the pool has drained below
-        the previous cut. Nothing is cancelled; admissions stop until enough rollouts finish. Grow it by 25% while the
-        server reads clear, once per turnover of the pool.
+        Cut the cap by 30% when the server's KV cache usage passes 0.8, once the pool has drained below the previous
+        cut. Nothing is cancelled; admissions stop until enough rollouts finish. Grow it by 25% while usage stays under
+        0.6 with nothing queued, once per turnover of the pool. Preemptions are reported, not acted on: a weight sync
+        resets the server's caches, which preempts every running request.
         """
-        preemptions = None
         rollouts_at_change = 0
         while not stop_event.is_set():
             try:
@@ -580,24 +580,21 @@ class _AsyncRolloutLoop:
                 logger.warning(f"vLLM /metrics poll failed, in-flight cap unchanged: {e!r}")
                 continue
             usage = max(map(float, re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)), default=0.0)
-            waiting = sum(map(float, re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)))
-            total = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
-            preempted = preemptions is not None and total > preemptions
-            preemptions = total
-            if (preempted or usage > 0.8) and self._inflight <= self._inflight_cap:
+            queued = sum(map(float, re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)))
+            preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
+            if usage > 0.8 and self._inflight <= self._inflight_cap:
                 self._inflight_cap = max(1, int(self._inflight_cap * 0.7))
                 rollouts_at_change = self._total_rollouts
-                reason = "preemptions" if preempted else f"kv cache usage {usage:.2f}"
-                logger.info(f"[control] cut in-flight cap to {self._inflight_cap} ({reason})")
-            elif usage < 0.6 and waiting == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
+                logger.info(f"[control] cut in-flight cap to {self._inflight_cap} (kv cache usage {usage:.2f})")
+            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
                 self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_inflight_tasks)
                 rollouts_at_change = self._total_rollouts
             self._push_metrics(
                 {
                     "rollout/inflight_cap": float(self._inflight_cap),
                     "rollout/kv_cache_usage": usage,
-                    "rollout/vllm_waiting": waiting,
-                    "rollout/vllm_preemptions_total": total,
+                    "rollout/vllm_queued_requests": queued,
+                    "rollout/vllm_preemptions_total": preemptions,
                 }
             )
 
