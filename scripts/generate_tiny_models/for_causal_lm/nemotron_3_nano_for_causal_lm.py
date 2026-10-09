@@ -14,6 +14,7 @@
 
 import torch
 from transformers import AutoTokenizer, GenerationConfig, NemotronHConfig, NemotronHForCausalLM
+from transformers.utils import is_kernels_available
 
 from .._common import (
     check_dtype_pattern,
@@ -27,6 +28,9 @@ from .._common import (
 
 
 check_transformers_version("5.3.0")
+# Remove once the version above is raised past 5.3.0 (fixed in transformers 5.4.0, transformers#44887)
+if is_kernels_available():
+    raise RuntimeError("Uninstall kernels: transformers 5.3.0 fails to load the Mamba Hub kernels (TypeError).")
 
 set_seed()
 
