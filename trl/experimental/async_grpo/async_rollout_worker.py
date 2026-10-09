@@ -1055,6 +1055,12 @@ class _AsyncRolloutLoop:
             reward_mean = reward_std = float("nan")
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
+        if not scored_mask.any() or reward_std == 0.0:
+            self._counters["rollout/groups_filtered_zero_advantage"] += 1
+            self._rates["reward_filtered"][0] += float(np.nansum(rewards))
+            self._rates["reward_filtered"][1] += int(scored_mask.sum())
+            return []
+
         total_calls = sum(group.tool_call_counts)
         tool_metrics = (
             [

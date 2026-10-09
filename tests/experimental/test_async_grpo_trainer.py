@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import contextlib
 import itertools
 import json
 import math
@@ -1350,19 +1351,57 @@ class TestScoreGroupOptionThree(TrlTestCase):
     def test_all_none_reward_conversation_is_unscorable(self):
         # A conversation for which every reward func returns None gets advantage 0 and NaN reward.
         def maybe_none(completions, **kwargs):
-            return [None, 2.0]
+            return [None, 2.0, 4.0]
 
         seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
         seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
-        group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+        seq_c = TrainingSequence([1, 2, 30], [0, 0, 1], [0, 0, -0.3], "c2")
+        group = _group([[seq_a], [seq_b], [seq_c]], completions_ids=[[10], [20], [30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
 
-        assert len(samples) == 2
+        assert len(samples) == 3
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
         assert math.isnan(samples[0].metrics["reward"])
-        assert samples[1].advantage == 0.0  # only one scorable row -> zero-centered
+        assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
         assert samples[1].metrics["reward"] == 2.0
+
+
+def constant_reward(completions, **kwargs):
+    return [1.0] * len(completions)
+
+
+class TestFilterZeroAdvantageGroups(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
+    def _score(self, loop):
+        for group_id, reward_func in enumerate([constant_reward, two_reward]):
+            seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
+            seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+            group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+            group.group_id = group_id
+            group.queued_at = time.monotonic()
+            loop.reward_funcs = [reward_func]
+            loop._groups_to_score.put_nowait(group)
+            loop._groups_to_score.put_nowait(None)
+            loop._loop.run_until_complete(loop._score_loop(asyncio.Event()))
+        samples, metrics = [], defaultdict(list)
+        with contextlib.suppress(queue.Empty):
+            while True:
+                samples.append(loop.rollout_buffer.get(timeout=1))
+        with contextlib.suppress(queue.Empty):
+            while True:
+                for key, value in loop._metrics_queue.get(timeout=1).items():
+                    metrics[key].append(value)
+        return samples, metrics
+
+    def test_constant_reward_group_never_reaches_the_buffer(self):
+        samples, metrics = self._score(_rollout_loop())
+        assert [s.group_id for s in samples] == [1, 1]
+        assert sum(metrics["rollout/groups_filtered_zero_advantage"]) == 1
+        assert metrics["reward_filtered"] == [(2.0, 2)]
 
 
 @pytest.mark.skipif(
