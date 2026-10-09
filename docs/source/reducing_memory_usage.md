@@ -130,9 +130,6 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 
 ![Padding-free](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/padding-free.png)
 
-> [!WARNING]
-> It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.
-
 <hfoptions id="padding-free">
 <hfoption id="DPO">
 
