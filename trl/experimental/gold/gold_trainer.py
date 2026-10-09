@@ -1090,12 +1090,13 @@ class GOLDTrainer(SFTTrainer):
             instance = environment_factory()
             has_reset = False
             methods = []
-            for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+            # List on the class: getmembers on the instance evaluates properties
+            for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                 if member_name == "reset":
                     has_reset = True
                 # `get_reward` is reserved by the environment protocol (GRPO's env-owned reward), never a tool
                 elif member_name != "get_reward" and not member_name.startswith("_"):
-                    methods.append(member)
+                    methods.append(getattr(instance, member_name))
             if not has_reset:
                 raise ValueError(
                     "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -1849,9 +1850,10 @@ class GOLDTrainer(SFTTrainer):
         for i in range(len(prompts)):
             methods = []
             if self.environments:
+                environment = self.environments[i]
                 methods = [
-                    member
-                    for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                    getattr(environment, member_name)
+                    for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                     if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                 ]
             sync_tool_dict, async_tool_dict = {}, {}
@@ -2410,9 +2412,10 @@ class GOLDTrainer(SFTTrainer):
             for i in range(len(all_prompts)):
                 methods = []
                 if self.environments:
+                    environment = self.environments[i]
                     methods = [
-                        member
-                        for member_name, member in inspect.getmembers(self.environments[i], predicate=inspect.ismethod)
+                        getattr(environment, member_name)
+                        for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                         if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                     ]
                 sync_tool_dict, async_tool_dict = {}, {}
