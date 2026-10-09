@@ -580,6 +580,7 @@ class _AsyncRolloutLoop:
                 logger.warning(f"vLLM /metrics poll failed, in-flight cap unchanged: {e!r}")
                 continue
             usage = max(map(float, re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)), default=0.0)
+            running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
             queued = sum(map(float, re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
             if usage > 0.8 and self._inflight <= self._inflight_cap:
@@ -593,6 +594,7 @@ class _AsyncRolloutLoop:
                 {
                     "rollout/inflight_cap": float(self._inflight_cap),
                     "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
                     "rollout/vllm_preemptions_total": preemptions,
                 }
