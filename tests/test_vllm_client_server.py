@@ -98,6 +98,7 @@ class TestResetPrefixCache(TrlTestCase):
             client.reset_prefix_cache()
 
 
+@require_requests
 class TestMissingServerSettings(TrlTestCase):
     @staticmethod
     def make_client():
