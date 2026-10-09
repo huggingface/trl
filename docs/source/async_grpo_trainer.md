@@ -267,6 +267,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/backpressure_s`                                           | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
 | `rollout/inflight_cap`                                             | current cap on conversations in flight. Starts at `max_inflight_tasks` and moves with vLLM load. See [concurrency](#concurrency)                                                                                                             |
 | `rollout/kv_cache_usage`                                           | vLLM KV cache usage (max over engines) at the last poll. The cap is cut when it passes 0.8 or the server preempts, and grows while it stays under 0.6                                                                                        |
+| `rollout/vllm_waiting`, `rollout/vllm_preemptions_total`           | the server's queued requests and cumulative preemption counter at the last poll, the other two inputs to the cap                                                                                                                             |
 
 ### Tools
 

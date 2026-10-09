@@ -572,7 +572,7 @@ class _AsyncRolloutLoop:
             except TimeoutError:
                 pass
             try:
-                timeout = aiohttp.ClientTimeout(total=self._metrics_poll_s)
+                timeout = aiohttp.ClientTimeout(total=30)
                 async with self.session.get(f"{self.vllm_server_url}/metrics", timeout=timeout) as response:
                     response.raise_for_status()
                     text = await response.text()
@@ -592,7 +592,14 @@ class _AsyncRolloutLoop:
             elif usage < 0.6 and waiting == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
                 self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_inflight_tasks)
                 rollouts_at_change = self._total_rollouts
-            self._push_metrics({"rollout/inflight_cap": float(self._inflight_cap), "rollout/kv_cache_usage": usage})
+            self._push_metrics(
+                {
+                    "rollout/inflight_cap": float(self._inflight_cap),
+                    "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_waiting": waiting,
+                    "rollout/vllm_preemptions_total": total,
+                }
+            )
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
