@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import itertools
 import json
 import time
 import uuid
@@ -150,6 +151,15 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             if correctness is not None:
                 self._rates["rollout/correctness_mean"][0] += correctness
                 self._rates["rollout/correctness_mean"][1] += 1.0
+            for name, count in metrics.pop("tool_calls_by_name").items():
+                self._counters[f"tools/{name}_call_total"] += count
+            for name, count in metrics.pop("tool_failures_by_name").items():
+                self._counters[f"tools/{name}_failure_total"] += count
+            for name, elapsed in metrics.pop("tool_latency"):
+                self._rates["tools/latency_s"][0] += elapsed
+                self._rates["tools/latency_s"][1] += 1
+                self._rates[f"tools/{name}_latency_s"][0] += elapsed
+                self._rates[f"tools/{name}_latency_s"][1] += 1
             self._push_rollout_metrics(**metrics)
         return result
 
@@ -192,17 +202,30 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         timed_out = False
         trace: list[TraceEntry] = []
         tool_calls_by_name: dict[str, int] = {}
+        tool_failures_by_name: dict[str, int] = {}
+        tool_latency: list[tuple[str, float]] = []
         try:
             if self._stop_event.is_set():
                 return self._EMPTY_ROLLOUT, None
             if self._adapter is not None:
                 turns: list[TurnRecord] = []
+                turn_times: list[tuple[float, float, list[str]]] = []
                 result = self._adapter.run_white_box(
-                    functools.partial(self._sample_turn, turns), session, self._limits
+                    functools.partial(self._sample_turn, turns, turn_times), session, self._limits
                 )
                 completion = result.messages
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
-                tool_failure_count = sum(1 for entry in result.tool_trace if entry.result.error is not None)
+                for entry in result.tool_trace:
+                    tool_calls_by_name[entry.tool_name] = tool_calls_by_name.get(entry.tool_name, 0) + 1
+                    if entry.result.error is not None:
+                        tool_failures_by_name[entry.tool_name] = tool_failures_by_name.get(entry.tool_name, 0) + 1
+                # A turn's tool calls run between its reply and the next request, so that gap (harness overhead
+                # included) is their latency. The trailing turn has no next request and is not timed.
+                tool_latency = [
+                    (name, t_request - t_reply)
+                    for (_, t_reply, names), (t_request, _, _) in itertools.pairwise(turn_times)
+                    for name in names
+                ]
             else:
                 if not isinstance(session, TrainableSession):
                     raise CaptureContractError("loop-owning training requires OpenEnv fetch_training_trace()")
@@ -222,7 +245,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
                 tool_call_count = sum(tool_calls_by_name.values())
-                tool_failure_count = _tool_failure_count(entries)
+                tool_failures_by_name = _tool_failures_by_name(entries)
+            tool_failure_count = sum(tool_failures_by_name.values())
             verify = session.verify(completion)
             env_reward = float(verify.env_reward) if verify.env_reward is not None else None
             outcome = HarnessRolloutOutcome(
@@ -247,6 +271,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 tally=tally,
                 loop_exhausted=timed_out,
                 duration_s=time.monotonic() - t_dispatch,
+                tool_calls_by_name=tool_calls_by_name,
+                tool_failures_by_name=tool_failures_by_name,
+                tool_latency=tool_latency,
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
@@ -263,8 +290,14 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             except Exception:
                 logger.warning("harness session close failed", exc_info=True)
 
-    def _sample_turn(self, turns: list[TurnRecord], messages, tools, sampling) -> ModelStepResult:
-        """OpenEnv `ModelStep`: sample one assistant turn against vLLM and record a `TurnRecord` into `turns`."""
+    def _sample_turn(
+        self, turns: list[TurnRecord], turn_times: list[tuple[float, float, list[str]]], messages, tools, sampling
+    ) -> ModelStepResult:
+        """OpenEnv `ModelStep`: sample one assistant turn against vLLM and record a `TurnRecord` into `turns`.
+
+        `turn_times` gets `(request time, reply time, requested tool names)` per turn, for the tool latency metrics.
+        """
+        t_request = time.monotonic()
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
             tools=_tools_to_schema(tools),
@@ -277,10 +310,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
         turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
         turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
-        message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
-        return ModelStepResult(
-            response=_msg_to_llm_response(message), prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs
-        )
+        response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids))
+        turn_times.append((t_request, time.monotonic(), [tc.name for tc in response.tool_calls]))
+        return ModelStepResult(response=response, prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs)
 
 
 def _turns_from_training_trace(trace: TrainingTrace) -> list[TurnRecord]:
@@ -307,19 +339,25 @@ def _tool_call_counts_by_name(entries: list[TraceEntry]) -> dict[str, int]:
     return counts
 
 
-def _tool_failure_count(entries: list[TraceEntry]) -> int:
-    """Estimate failures from the last request's tool-result text, deduplicated by name and content."""
-    seen, failures = set(), 0
-    for msg in (entries[-1]["request"] if entries else {}).get("messages") or []:
+def _tool_failures_by_name(entries: list[TraceEntry]) -> dict[str, int]:
+    """Estimate failures per tool from the last request's tool-result text, deduplicated by name and content."""
+    messages = (entries[-1]["request"] if entries else {}).get("messages") or []
+    # A tool result names its call id, not its tool; the assistant message that issued the call has the name.
+    names = {
+        tc.get("id"): (tc.get("function") or tc).get("name") for m in messages for tc in m.get("tool_calls") or []
+    }
+    seen, failures = set(), {}
+    for msg in messages:
         if msg.get("role") != "tool":
             continue
-        key = (msg.get("name"), str(msg.get("content"))[:200])
+        name = msg.get("name") or names.get(msg.get("tool_call_id"))
+        key = (name, str(msg.get("content"))[:200])
         if key in seen:
             continue
         seen.add(key)
         text = str(msg.get("content") or "").lower()
         if any(w in text for w in ("error", "failed", "traceback", "exception")):
-            failures += 1
+            failures[name] = failures.get(name, 0) + 1
     return failures
 
 
