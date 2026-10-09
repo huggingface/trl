@@ -17,6 +17,7 @@ import threading
 import time
 from collections import Counter
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
@@ -40,12 +41,33 @@ elif is_vllm_available(min_version="0.22.0"):
 logger = get_logger(__name__)
 
 
+def _cast_stream_to_manifest(iterator, weight_update_info):
+    """Yield the streamed weights in the dtype and shape declared to vLLM.
+
+    The manifest is collected before FSDP2 upcasts low-precision parameters to fp32. vLLM sizes each packed broadcast
+    from that manifest, so a later fp32 payload crosses chunk boundaries the server does not receive.
+    """
+    expected = zip(
+        weight_update_info["names"], weight_update_info["dtype_names"], weight_update_info["shapes"], strict=True
+    )
+    for (name, tensor), (expected_name, dtype_name, shape) in zip(iterator, expected, strict=True):
+        if name != expected_name or list(tensor.shape) != list(shape):
+            raise ValueError(
+                f"Weight {name} {tuple(tensor.shape)} does not match the vLLM manifest entry "
+                f"{expected_name} {tuple(shape)}."
+            )
+        dtype = getattr(torch, dtype_name)
+        if tensor.dtype != dtype:
+            tensor = tensor.to(dtype=dtype)
+        yield name, tensor
+
+
 class WeightTransferClient:
     """Streams the trainer's weights into the vLLM server over NCCL.
 
-    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the main
-    thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than a hang,
-    and the abandoned thread dies with the process.
+    Each transfer runs its NCCL side on a daemon thread while the HTTP request that drives the server stays on the
+    calling thread: NCCL has no timeout and cannot be interrupted, so a failure surfaces as the HTTP error rather than
+    a hang, and the abandoned thread dies with the process.
 
     Args:
         vllm_client ([`VLLMClient`]):
@@ -135,6 +157,7 @@ class WeightTransferClient:
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
         self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        iterator = _cast_stream_to_manifest(iterator, self._weight_update_info)
 
         error: list[BaseException] = []
 
@@ -156,7 +179,11 @@ class WeightTransferClient:
         thread.start()
         try:
             self.vllm.update_weights(self._weight_update_info, timeout=self.weight_sync_timeout)
-            thread.join()
+            thread.join(timeout=self._CONTROL_TIMEOUT)
+            if thread.is_alive():
+                raise RuntimeError(
+                    "vLLM finished receiving the manifest while the trainer was still sending parameters."
+                )
             if error:
                 raise error[0]
         except Exception as exc:
