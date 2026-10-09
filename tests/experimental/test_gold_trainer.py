@@ -29,6 +29,7 @@ from transformers import (
     GenerationConfig,
 )
 
+from trl.data_utils import prepare_multimodal_messages
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import (
@@ -2232,57 +2233,27 @@ def test_same_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dat
     assert trainer._vlm_collator is not None
 
 
-def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(
-    monkeypatch,
-):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.args = SimpleNamespace(gradient_accumulation_steps=2)
-    trainer.lmbda = 0.0
-    trainer.use_uld_loss = True
-    trainer.teacher_tokenizer = SimpleNamespace(pad_token_id=0)
-    trainer._teacher_processor = object()
-    trainer._is_cross_architecture_vlm = False
-    trainer._step = 0
-    trainer.model = SimpleNamespace(training=True)
-
-    def stub_collator(examples):
-        return {
-            "input_ids": torch.zeros(len(examples), 1, dtype=torch.long),
-            "original_prompt_text": [example["prompt"][0]["content"] for example in examples],
-            "original_completion_text": [example["completion"][0]["content"] for example in examples],
-        }
-
-    trainer._vlm_collator = stub_collator
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "broadcast_object_list",
-        lambda values, from_process: values,
-    )
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "prepare_multimodal_messages",
-        lambda prompt, images: prompt,
+def _gold_vlm_trainer(tmp_path, vlm_dataset, **config_kwargs):
+    return GOLDTrainer(
+        model=_TINY_SMOLVLM,
+        teacher_model=_TINY_SMOLVLM,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", **config_kwargs),
+        train_dataset=vlm_dataset,
     )
 
-    images = [object(), object()]
-    generation_batch = [
-        {
-            "prompt": [{"role": "user", "content": "q0"}],
-            "completion": [{"role": "assistant", "content": "a0"}],
-            "image": images[0],
-        },
-        {
-            "prompt": [{"role": "user", "content": "q1"}],
-            "completion": [{"role": "assistant", "content": "a1"}],
-            "image": images[1],
-        },
-    ]
+
+def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(tmp_path, vlm_dataset):
+    trainer = _gold_vlm_trainer(tmp_path, vlm_dataset, use_uld_loss=True, lmbda=0.0, gradient_accumulation_steps=2)
+    trainer.model.train()
+    generation_batch = [dict(vlm_dataset[0]), dict(vlm_dataset[1])]
+    expected_prompt = prepare_multimodal_messages(
+        copy.deepcopy(generation_batch[0]["prompt"]), images=[generation_batch[0]["image"]]
+    )
 
     first_slice = trainer._prepare_inputs(generation_batch)
 
-    assert first_slice["_raw_images"] == [[images[0]]]
-    assert first_slice["_raw_prompts"] == [generation_batch[0]["prompt"]]
+    assert first_slice["_raw_images"] == [[generation_batch[0]["image"]]]
+    assert first_slice["_raw_prompts"] == [expected_prompt]
     assert "_gold_vlm_raw_images" in trainer._buffered_inputs[1]
     assert "_gold_vlm_raw_prompts" in trainer._buffered_inputs[1]
 
@@ -2421,132 +2392,71 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     assert len(collated_per_call[0]) == unique_prompts_per_slice * num_generations
 
 
-def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error():
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.use_uld_loss = True
-    trainer.teacher_tokenizer = object()
-    trainer._teacher_processor = object()
+def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error(tmp_path, vlm_dataset):
+    trainer = _gold_vlm_trainer(tmp_path, vlm_dataset, use_uld_loss=True)
+    device = trainer.accelerator.device
 
     inputs = {
-        "input_ids": torch.ones(1, 2, dtype=torch.long),
-        "attention_mask": torch.ones(1, 2, dtype=torch.long),
+        "input_ids": torch.ones(1, 2, dtype=torch.long, device=device),
+        "attention_mask": torch.ones(1, 2, dtype=torch.long, device=device),
         "original_prompt_text": ["prompt"],
         "original_completion_text": ["completion"],
     }
 
     with pytest.raises(ValueError, match="requires `_raw_images` and `_raw_prompts`"):
-        GOLDTrainer.compute_loss(trainer, model=object(), inputs=inputs)
+        trainer.compute_loss(trainer.model, inputs)
 
 
-def test_off_policy_vlm_collates_only_consumed_slice(monkeypatch):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.args = SimpleNamespace(gradient_accumulation_steps=2)
-    trainer.lmbda = 0.0
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer._teacher_processor = None
-    trainer._is_cross_architecture_vlm = False
-    trainer._step = 0
-    trainer.model = SimpleNamespace(training=True)
-    collated_per_call = []
-
-    def stub_collator(examples):
-        collated_per_call.append(list(examples))
-        return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
-
-    trainer._vlm_collator = stub_collator
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "broadcast_object_list",
-        lambda values, from_process: values,
-    )
-
-    generation_batch = [
-        {"prompt": [{"role": "user", "content": "q0"}], "image": object()},
-        {"prompt": [{"role": "user", "content": "q1"}], "image": object()},
-        {"prompt": [{"role": "user", "content": "q2"}], "image": object()},
-        {"prompt": [{"role": "user", "content": "q3"}], "image": object()},
-    ]
+def test_off_policy_vlm_collates_only_consumed_slice(tmp_path, vlm_dataset):
+    trainer = _gold_vlm_trainer(tmp_path, vlm_dataset, lmbda=0.0, gradient_accumulation_steps=2)
+    trainer.model.train()
+    generation_batch = [dict(vlm_dataset[i]) for i in [0, 1, 2, 0]]
 
     first_slice = trainer._prepare_inputs(generation_batch)
 
-    assert len(collated_per_call) == 1
     assert first_slice["input_ids"].shape[0] == 2
+    # The second slice stays raw until it is consumed
     assert "_gold_vlm_lazy_examples" in trainer._buffered_inputs[1]
 
     second_slice = trainer._prepare_inputs(generation_batch)
 
-    assert len(collated_per_call) == 2
     assert second_slice["input_ids"].shape[0] == 2
+    assert "_gold_vlm_lazy_examples" not in trainer._buffered_inputs[1]
 
 
-def test_eval_vlm_collates_raw_batch_off_policy():
+def test_eval_vlm_collates_raw_batch_off_policy(tmp_path, vlm_dataset):
     """VLM eval (identity collator yields raw dicts) must collate off-policy in `_prepare_inputs`.
 
     Regression test for the eval crash: the inherited path indexed the raw `list[dict]`. Eval must run the VLM collator
     over the whole batch (no slicing, no buffering, no generation).
     """
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.model = SimpleNamespace(training=False)
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer._teacher_processor = None
-    collated_per_call = []
-
-    def stub_collator(examples):
-        collated_per_call.append(list(examples))
-        return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
-
-    trainer._vlm_collator = stub_collator
-
-    generation_batch = [
-        {"prompt": [{"role": "user", "content": "q0"}], "image": object()},
-        {"prompt": [{"role": "user", "content": "q1"}], "image": object()},
-        {"prompt": [{"role": "user", "content": "q2"}], "image": object()},
-    ]
+    trainer = _gold_vlm_trainer(tmp_path, vlm_dataset)
+    trainer.model.eval()
+    generation_batch = [dict(vlm_dataset[i]) for i in range(3)]
 
     inputs = trainer._prepare_inputs(generation_batch)
 
     # The whole eval batch is collated once (no per-accumulation-step slicing) into a tensor dict.
-    assert len(collated_per_call) == 1
-    assert collated_per_call[0] == generation_batch
     assert inputs["input_ids"].shape[0] == len(generation_batch)
+    assert "pixel_values" in inputs
     # Off-policy only: no generation occurred, so no on-policy buffer state was created.
-    assert not hasattr(trainer, "_buffered_inputs") or trainer._buffered_inputs is None
+    assert trainer._buffered_inputs is None
 
 
-def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
+def test_eval_vlm_attaches_raw_images_for_teacher_processor(tmp_path, vlm_dataset):
     """When a teacher processor is configured (cross-arch / ULD), eval must attach raw images and prompts."""
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.model = SimpleNamespace(training=False)
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer._teacher_processor = object()
-
-    def stub_collator(examples):
-        return {"input_ids": torch.zeros(len(examples), 1, dtype=torch.long)}
-
-    trainer._vlm_collator = stub_collator
-    # The exact multimodal-message shape is irrelevant here; pass the prompt through unchanged.
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "prepare_multimodal_messages",
-        lambda prompt, images: prompt,
-    )
-
-    img0, img1 = object(), object()
-    generation_batch = [
-        {"prompt": [{"role": "user", "content": "q0"}], "image": img0},
-        {"prompt": [{"role": "user", "content": "q1"}], "image": img1},
+    trainer = _gold_vlm_trainer(tmp_path, vlm_dataset, use_uld_loss=True)
+    trainer.model.eval()
+    generation_batch = [dict(vlm_dataset[0]), dict(vlm_dataset[1])]
+    expected_prompts = [
+        prepare_multimodal_messages(copy.deepcopy(example["prompt"]), images=[example["image"]])
+        for example in generation_batch
     ]
 
     inputs = trainer._prepare_inputs(generation_batch)
 
-    assert inputs["_raw_images"] == [[img0], [img1]]
-    assert inputs["_raw_prompts"] == [ex["prompt"] for ex in generation_batch]
+    assert inputs["_raw_images"] == [[example["image"]] for example in generation_batch]
+    assert inputs["_raw_prompts"] == expected_prompts
 
 
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
