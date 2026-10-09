@@ -14,7 +14,6 @@
 
 import copy
 import warnings
-from contextlib import nullcontext
 from functools import partial
 from types import SimpleNamespace
 
@@ -2287,7 +2286,7 @@ def test_same_architecture_vlm_uld_preserves_raw_images_for_teacher_processor(
     assert "_gold_vlm_raw_prompts" in trainer._buffered_inputs[1]
 
 
-def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatch):
+def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatch, tmp_path, vlm_dataset):
     """The VLM vLLM path must rely on RepeatSampler for `num_generations` duplication.
 
     `VLLMGeneration.generate` expects the incoming prompt batch to already contain the repeated prompt entries,
@@ -2295,130 +2294,70 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
     """
     num_generations = 3
     num_slices = 2
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
-    trainer.use_vllm = True
-    trainer.num_generations = num_generations
-    trainer.state = SimpleNamespace(global_step=0)
-    trainer._last_vllm_sync_step = -1
-    trainer.vllm_sync_frequency = 1
-    trainer.generation_config = SimpleNamespace(max_new_tokens=16)
-    trainer.args = SimpleNamespace(max_length=32)  # budget of 32 - 16 = 16 fits the 5-token stub prompts
-    trainer._buffered_inputs = {}
-    trainer._buffered_text_logs = {}
-    trainer._teacher_processor = None
-    trainer._is_cross_architecture_vlm = False
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-
-    class StubProcessor:
-        @staticmethod
-        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, **kwargs):
-            return {
-                "input_ids": [[1, 2, 3, 4, 5] for _ in conversation],
-                "attention_mask": [[1, 1, 1, 1, 1] for _ in conversation],
-            }
-
-        @staticmethod
-        def batch_decode(ids, skip_special_tokens):
-            return [f"prompt_{i}" for i in range(len(ids))]
-
-        @staticmethod
-        def decode(ids, skip_special_tokens, clean_up_tokenization_spaces):
-            tokens = []
-            for token_id in ids:
-                if token_id == 9:
-                    if skip_special_tokens:
-                        continue
-                    tokens.append("<eos>")
-                else:
-                    tokens.append(f"comp_{token_id}")
-            return "".join(tokens)
-
-    trainer.processing_class = StubProcessor
-
     received = {}
 
-    class StubVLLMGeneration:
+    # Stand in for vLLM, which cannot run here
+    class RecordingVLLMGeneration:
+        def __init__(self, processing_class, **kwargs):
+            self.eos_token_id = processing_class.tokenizer.eos_token_id
+
         def sync_weights(self):
             pass
 
         def generate(self, prompts, images, num_generations):
-            received["n_prompts"] = len(prompts)
-            received["n_images"] = len(images) if images is not None else None
             received["prompts"] = prompts
-            completion_ids = [[100 + i, 9] for i in range(len(prompts))]
-            return None, completion_ids, None, None
+            received["images"] = images
+            return None, [[100 + i, self.eos_token_id] for i in range(len(prompts))], None, None
 
-    trainer.vllm_generation = StubVLLMGeneration()
+    monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
+    monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", RecordingVLLMGeneration)
+    trainer = GOLDTrainer(
+        model=_TINY_SMOLVLM,
+        teacher_model=_TINY_SMOLVLM,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            report_to="none",
+            use_vllm=True,
+            num_generations=num_generations,
+            lmbda=1.0,
+            per_device_train_batch_size=num_generations,
+            gradient_accumulation_steps=num_slices,
+            max_length=None,
+            max_completion_length=4,
+        ),
+        train_dataset=vlm_dataset,
+    )
+    trainer._buffered_inputs = {}
+    trainer._buffered_text_logs = {}
 
-    collated_per_call = []
-
-    def stub_collator(synthetic_examples):
-        collated_per_call.append(list(synthetic_examples))
-        return {
-            "input_ids": torch.zeros(len(synthetic_examples), 1, dtype=torch.long),
-            "original_prompt_text": [example["prompt"][0]["content"] for example in synthetic_examples],
-            "original_completion_text": [
-                example["completion"][0]["content"][0]["text"] for example in synthetic_examples
-            ],
-        }
-
-    trainer._vlm_collator = stub_collator
-
-    class FakeImage:
-        def __init__(self, tag):
-            self.tag = tag
-
-    unique_prompts_per_slice = 2
-    unique_examples = [
-        {"prompt": [{"role": "user", "content": f"q{i}"}], "image": FakeImage(str(i))}
-        for i in range(num_slices * unique_prompts_per_slice)
-    ]
+    unique_examples = [dict(vlm_dataset[i]) for i in range(num_slices)]
     sampler = RepeatSampler(
-        unique_examples,
-        mini_repeat_count=num_generations,
-        batch_size=len(unique_examples),
-        shuffle=False,
+        unique_examples, mini_repeat_count=num_generations, batch_size=len(unique_examples), shuffle=False
     )
     sampled_examples = [unique_examples[i] for i in sampler]
-    raw_slices = [
-        sampled_examples[i : i + unique_prompts_per_slice * num_generations]
-        for i in range(0, len(sampled_examples), unique_prompts_per_slice * num_generations)
-    ]
+    raw_slices = [sampled_examples[i : i + num_generations] for i in range(0, len(sampled_examples), num_generations)]
     on_policy_indices = list(range(num_slices))
-
-    # Bypass multimodal-message helper; its exact shape is irrelevant to this regression.
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "prepare_multimodal_messages",
-        lambda prompt, images: prompt,
-    )
 
     trainer._generate_on_policy_vlm_raw(raw_slices, on_policy_indices)
 
-    total_sampled_prompts = num_slices * unique_prompts_per_slice * num_generations
-    assert received["n_prompts"] == total_sampled_prompts
-    assert received["n_images"] == total_sampled_prompts
-    assert all(prompt == [1, 2, 3, 4, 5] for prompt in received["prompts"])
+    total_sampled_prompts = num_slices * num_generations
+    assert len(received["prompts"]) == total_sampled_prompts
+    assert len(received["images"]) == total_sampled_prompts
+    # Each prompt arrives once per generation, already repeated by the sampler, not duplicated again
+    for i, prompt in enumerate(received["prompts"]):
+        assert prompt == received["prompts"][i - i % num_generations]
 
-    # Synthetic VLM examples are stored lazily and are not collated until their slice is consumed.
-    assert len(collated_per_call) == 0
-
-    # Buffers populated for every on-policy slice without IndexError.
+    # Buffers populated for every on-policy slice; the synthetic examples are collated only when consumed
     for slice_idx in on_policy_indices:
-        assert slice_idx in trainer._buffered_inputs
+        assert "_gold_vlm_lazy_examples" in trainer._buffered_inputs[slice_idx]
         _, completion_texts = trainer._buffered_text_logs[slice_idx]
-        assert len(completion_texts) == unique_prompts_per_slice * num_generations
+        assert len(completion_texts) == num_generations
 
     first_slice = trainer._materialize_vlm_slice(trainer._buffered_inputs[0])
-    assert first_slice["input_ids"].shape[0] == unique_prompts_per_slice * num_generations
-    assert first_slice["original_prompt_text"] == [example["prompt"][0]["content"] for example in collated_per_call[0]]
-    assert all(completion.endswith("<eos>") for completion in first_slice["original_completion_text"])
-    assert all("<" not in prompt for prompt in first_slice["original_prompt_text"])
-    assert len(collated_per_call) == 1
-    assert len(collated_per_call[0]) == unique_prompts_per_slice * num_generations
+    eos_token = trainer.processing_class.tokenizer.eos_token
+    assert first_slice["input_ids"].shape[0] == num_generations
+    assert first_slice["original_prompt_text"] == [unique_examples[0]["prompt"][0]["content"]] * num_generations
+    assert all(completion.endswith(eos_token) for completion in first_slice["original_completion_text"])
 
 
 def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error():
@@ -2549,130 +2488,50 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
     assert inputs["_raw_prompts"] == [ex["prompt"] for ex in generation_batch]
 
 
-def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.args = SimpleNamespace(gradient_accumulation_steps=2, max_length=None)
-    trainer.use_vllm = False
-    trainer._teacher_processor = None
-    trainer._is_cross_architecture_vlm = False
+def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(tmp_path, vlm_dataset):
+    # LFM2-VL's processor returns `spatial_shapes`, which generation needs alongside the pixel values
+    trainer = GOLDTrainer(
+        model=_TINY_LFM2_VL,
+        teacher_model=_TINY_LFM2_VL,
+        args=GOLDConfig(
+            output_dir=str(tmp_path), report_to="none", gradient_accumulation_steps=2, max_completion_length=2
+        ),
+        train_dataset=vlm_dataset,
+    )
+    trainer.model.train()
+    # As at the second accumulation step, with both slices still to generate
     trainer._buffered_inputs = [None, None]
     trainer._buffered_text_logs = [None, None]
     trainer._step = 1
-    trainer.generation_kwargs = {}
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
-    trainer.pad_token_id = 0
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer.uld_loss_fn = None
-    collated_per_call = []
-
-    class StubProcessor:
-        @staticmethod
-        def apply_chat_template(conversation, add_generation_prompt, tokenize, return_dict, padding):
-            return {
-                "input_ids": [[1, 2] for _ in conversation],
-                "attention_mask": [[1, 1] for _ in conversation],
-            }
-
-        @staticmethod
-        def batch_decode(ids, skip_special_tokens):
-            return [f"prompt_{i}" for i in range(len(ids))]
-
-        @staticmethod
-        def decode(ids, skip_special_tokens, clean_up_tokenization_spaces):
-            tokens = []
-            for token_id in ids:
-                if token_id == 9:
-                    if skip_special_tokens:
-                        continue
-                    tokens.append("<eos>")
-                else:
-                    tokens.append(f"tok{token_id}")
-            return "".join(tokens)
-
-    trainer.processing_class = StubProcessor
-
-    def stub_collator(examples):
-        collated_per_call.append(list(examples))
-        assert all(example.get("completion") == "" for example in examples)
-        batch_size = len(examples)
-        return {
-            "prompts": torch.ones(batch_size, 2, dtype=torch.long),
-            "prompt_attention_mask": torch.ones(batch_size, 2, dtype=torch.long),
-            "pixel_values": torch.zeros(batch_size, 3, 2, 2),
-            "spatial_shapes": torch.tensor([[2, 2]] * batch_size, dtype=torch.long),
-            "original_prompt_text": [example["prompt"][0]["content"] for example in examples],
-        }
-
-    trainer._vlm_collator = stub_collator
-
-    class FakeModel:
-        training = True
-
-        @staticmethod
-        def generate(
-            input_ids,
-            attention_mask,
-            generation_config,
-            return_dict_in_generate,
-            **kwargs,
-        ):
-            assert "spatial_shapes" in kwargs
-            assert torch.equal(kwargs["spatial_shapes"], torch.tensor([[2, 2]], dtype=torch.long))
-            completion = torch.tensor([[3, 9]] * input_ids.shape[0], dtype=torch.long)
-            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
-
-    trainer.model = FakeModel()
-
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "unwrap_model_for_generation",
-        lambda *args, **kwargs: nullcontext(args[0]),
-    )
-    monkeypatch.setattr(
-        gold_trainer_module,
-        "prepare_multimodal_messages",
-        lambda prompt, images: prompt,
-    )
-
-    raw_slices = [
-        [
-            {
-                "prompt": [{"role": "user", "content": "q0"}],
-                "completion": "gold0",
-                "image": object(),
-            }
-        ],
-        [
-            {
-                "prompt": [{"role": "user", "content": "q1"}],
-                "completion": "gold1",
-                "image": object(),
-            }
-        ],
-    ]
+    raw_slices = [[dict(vlm_dataset[0])], [dict(vlm_dataset[1])]]
 
     trainer._generate_on_policy_vlm_raw(raw_slices, [0, 1])
 
-    assert len(collated_per_call) == 0
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[0]
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[1]
 
     consumed_slice = trainer._prepare_inputs(raw_slices)
 
-    assert len(collated_per_call) == 1
-    assert consumed_slice["input_ids"].shape == (1, 4)
-    assert torch.equal(consumed_slice["spatial_shapes"], torch.tensor([[2, 2]], dtype=torch.long))
-    assert consumed_slice["original_prompt_text"] == ["q1"]
+    prompt_length = consumed_slice["prompts"].shape[1]
+    completion_ids = consumed_slice["input_ids"][0, prompt_length:]
+    assert 1 <= len(completion_ids) <= 2
+    assert "spatial_shapes" in consumed_slice
+    assert consumed_slice["original_prompt_text"] == [vlm_dataset[1]["prompt"][0]["content"]]
     # Special tokens (e.g. EOS) are kept so the text matches the supervised tokens that `byte_offsets`/ULD align on.
-    assert consumed_slice["original_completion_text"] == ["tok3<eos>"]
+    assert consumed_slice["original_completion_text"] == [
+        trainer.processing_class.decode(completion_ids, skip_special_tokens=False)
+    ]
     assert "_gold_vlm_on_policy_raw_examples" in trainer._buffered_inputs[0]
     assert "_gold_vlm_on_policy_raw_examples" not in trainer._buffered_inputs[1]
 
 
-def test_model_forward_kwargs_preserve_processor_tensor_fields():
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
+def test_model_forward_kwargs_preserve_processor_tensor_fields(tmp_path, vlm_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_SMOLVLM,
+        teacher_model=_TINY_SMOLVLM,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+        train_dataset=vlm_dataset,
+    )
     inputs = {
         "input_ids": torch.ones(1, 2, dtype=torch.long),
         "attention_mask": torch.ones(1, 2, dtype=torch.long),
@@ -2682,7 +2541,7 @@ def test_model_forward_kwargs_preserve_processor_tensor_fields():
         "completion_mask": torch.ones(1, 2, dtype=torch.long),
         "assistant_masks": torch.ones(1, 2, dtype=torch.long),
         "original_prompt_text": ["prompt"],
-        "_raw_images": [object()],
+        "_raw_images": [vlm_dataset[0]["image"]],
         "pixel_values": torch.zeros(1, 3, 2, 2),
         "spatial_shapes": torch.tensor([[2, 2]], dtype=torch.long),
         "custom_processor_tensor": torch.tensor([1]),
@@ -2709,6 +2568,7 @@ def test_model_forward_kwargs_preserve_processor_tensor_fields():
 
 _TINY_QWEN3_VL = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
 _TINY_SMOLVLM = "trl-internal-testing/tiny-SmolVLMForConditionalGeneration"
+_TINY_LFM2_VL = "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5"
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
