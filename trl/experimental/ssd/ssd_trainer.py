@@ -20,8 +20,6 @@ those raw, unverified samples with standard cross-entropy loss. No reward model,
 reinforcement learning is needed.
 """
 
-from __future__ import annotations
-
 import inspect
 import math
 import textwrap
@@ -79,6 +77,8 @@ class SSDTrainer(_BaseTrainer):
     ``prompt`` column.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "ssd"]
     _name = "SSD"
     config_cls = SSDConfig
@@ -104,7 +104,7 @@ class SSDTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
@@ -184,6 +184,16 @@ class SSDTrainer(_BaseTrainer):
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
         # SSD always samples a single completion per prompt (N=1 in the paper).
@@ -203,7 +213,7 @@ class SSDTrainer(_BaseTrainer):
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
             "bos_token_id": self._tokenizer.bos_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "eos_token_id": self.eos_token_ids,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
@@ -227,15 +237,12 @@ class SSDTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
         self.model.add_model_tags(self._tag_names)
-
-        self.model_accepts_loss_kwargs = False
 
         if self.use_vllm:
             from ...generation.vllm_generation import VLLMGeneration
@@ -419,7 +426,7 @@ class SSDTrainer(_BaseTrainer):
 
         prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-        is_eos = completion_ids == self._tokenizer.eos_token_id
+        is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=completion_ids.device))
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=completion_ids.device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=completion_ids.device).expand(is_eos.size(0), -1)
