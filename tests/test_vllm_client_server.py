@@ -152,6 +152,15 @@ class TestMissingServerSettings(TrlTestCase):
                 client.init_communicator()
         assert "--logprobs-mode processed_logprobs" in caplog.text
 
+    @require_vision
+    def test_image_features_without_scale_out(self):
+        from PIL import Image
+
+        client = self.make_client()
+        with patch.object(client.session, "post", return_value=self.make_response(404)):
+            with pytest.raises(RuntimeError, match="--enable-scale-out"):
+                client.image_features([[Image.new("RGB", (8, 8))]])
+
 
 class TestParseLogprobs(TrlTestCase):
     def test_completion_logprobs_sorted_by_probability(self):

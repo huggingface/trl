@@ -334,11 +334,18 @@ class VLLMClient:
             messages = [
                 {"role": "user", "content": [{"type": "image", "image": image} for image in images_for_prompt]}
             ]
-            rendered = self._post(
+            response = self.session.post(
                 f"{self.base_url}/v1/chat/completions/render",
                 json={"model": self.model, "messages": to_openai_messages(messages), "max_tokens": 1},
             )
-            return rendered["features"]
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The vLLM server at {self.base_url} does not serve `/v1/chat/completions/render`, which "
+                    "multimodal prompts use. From vLLM 0.30.0, restart it with `--enable-scale-out`."
+                )
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            return response.json()["features"]
 
         with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(images))) as executor:
             return list(executor.map(send, images))
