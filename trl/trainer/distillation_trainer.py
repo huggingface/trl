@@ -27,7 +27,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import transformers
 from accelerate.logging import get_logger
 from accelerate.utils import gather_object, is_peft_model, set_seed
@@ -70,7 +69,6 @@ from .utils import (
     disable_dropout_in_model,
     get_config_model_id,
     identity,
-    maybe_gather_lm_head_ctx,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
@@ -97,67 +95,6 @@ if is_wandb_available():
 logger = get_logger(__name__)
 
 
-# Number of valid completion positions projected through the `lm_head` per chunk in the memory-efficient JSD loss
-# (mirrors SFT's `_CHUNKED_LM_HEAD_CHUNK_SIZE`).
-_CHUNKED_LM_HEAD_CHUNK_SIZE = 256
-
-
-def _chunk(h_s, w_s, b_s, s_scale, s_softcap, h_t, w_t, b_t, t_scale, t_softcap, beta, temperature, valid):
-    # Project both hidden states to vocab logits inside the checkpointed body so only `(chunk, H)` is retained across
-    # the backward, never `(chunk, V)`. ZeRO-3 shards the `lm_head`, so gather it tightly around each projection.
-    # `logit_scale` (Cohere) / `final_logit_softcapping` (Gemma) are applied per model to match its full forward.
-    with maybe_gather_lm_head_ctx(w_s, b_s):
-        # Project in the compute dtype and upcast only for the softmax, like `"nll"` and
-        # `transformers`' own `ForCausalLMLoss` do. Matching the weight to the hidden-states dtype keeps the
-        # matmul in that dtype, which is what `lm_head`'s own forward computes in.
-        student_logits = (h_s @ w_s.to(h_s.dtype).t()).float()
-        if b_s is not None:
-            student_logits = student_logits + b_s.float()
-    if s_scale != 1.0:
-        student_logits = student_logits * s_scale
-    if s_softcap is not None:
-        student_logits = s_softcap * torch.tanh(student_logits / s_softcap)
-    # The teacher is a fixed target: compute its logits under `no_grad` so the projection builds no autograd graph
-    # and the teacher accumulates no gradients (the teacher params are not frozen by `prepare_model`). Everything
-    # downstream inherits this since `teacher_logits` is already detached.
-    with maybe_gather_lm_head_ctx(w_t, b_t), torch.no_grad():
-        teacher_logits = (h_t @ w_t.to(h_t.dtype).t()).float()
-        if b_t is not None:
-            teacher_logits = teacher_logits + b_t.float()
-    if t_scale != 1.0:
-        teacher_logits = teacher_logits * t_scale
-    if t_softcap is not None:
-        teacher_logits = t_softcap * torch.tanh(teacher_logits / t_softcap)
-    # Distillation (softmax) temperature: soften both distributions before the divergence, applied after any
-    # per-model scaling/softcapping (matching the model's full forward, then the loss's temperature).
-    if temperature != 1.0:
-        student_logits = student_logits / temperature
-        teacher_logits = teacher_logits / temperature
-
-    student_log_probs = F.log_softmax(student_logits, dim=-1)
-    teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
-
-    # beta: 0 = forward KL, 1 = reverse KL, else generalized JSD. `F.kl_div(input, target)` computes
-    # `target * (log target - input)`, hence the swapped argument order relative to the KL written in the paper.
-    if beta == 0.0:
-        jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
-    elif beta == 1.0:
-        jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
-    else:
-        beta_t = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
-        mixture_log_probs = torch.logsumexp(
-            torch.stack([student_log_probs + torch.log1p(-beta_t), teacher_log_probs + torch.log(beta_t)]), dim=0
-        )
-        kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
-        jsd = beta_t * kl_teacher + (1 - beta_t) * kl_student
-
-    # A chunk's tail may hold positions packed out of the valid prefix; zero those rows before summing.
-    per_token_jsd = jsd.sum(dim=-1) * valid
-    per_token_entropy = -(student_log_probs.exp() * student_log_probs).sum(dim=-1) * valid
-    return per_token_jsd.sum(), per_token_entropy.sum()
-
-
 def _chunked_divergence_loss(
     student_hidden_states: torch.Tensor,
     teacher_hidden_states: torch.Tensor,
@@ -165,7 +102,6 @@ def _chunked_divergence_loss(
     teacher_lm_head_weight: torch.Tensor,
     completion_mask: torch.Tensor,
     beta: float,
-    chunk_size: int,
     num_items_in_batch: torch.Tensor | int | None = None,
     student_lm_head_bias: torch.Tensor | None = None,
     teacher_lm_head_bias: torch.Tensor | None = None,
@@ -178,11 +114,8 @@ def _chunked_divergence_loss(
     """
     Memory-efficient generalized JSD over student/teacher hidden states and their `lm_head` weights.
 
-    The full `lm_head` projections are never materialized. Valid (unmasked) completion positions are packed to the
-    front (via `argsort` on the completion mask, a static-shape op) and processed in chunks of `chunk_size`, rounding
-    the count up to a whole chunk so masked positions land in a skippable tail. Each chunk's `[chunk_size, vocab_size]`
-    logits (for both models) are kept alive only during its own forward/backward via gradient checkpointing, so peak
-    logits memory is `2 * chunk_size * vocab_size` instead of `2 * batch_size * seq_len * vocab_size`.
+    The full `lm_head` projections are never materialized: only the valid (unmasked) completion positions are
+    projected, on tiles, by [`~kernels.chunked_divergence.ChunkedDivergenceFunction`].
 
     Args:
         student_hidden_states (`torch.Tensor`):
@@ -197,8 +130,6 @@ def _chunked_divergence_loss(
             Binary mask of shape `(B, K)`; `1` marks completion positions included in the loss.
         beta (`float`):
             Interpolation coefficient. `0.0` = forward KL, `1.0` = reverse KL, else generalized JSD.
-        chunk_size (`int`):
-            Number of valid positions processed per chunk. Peak memory scales linearly with this.
         num_items_in_batch (`torch.Tensor` or `int`, *optional*):
             Total number of valid tokens across the global batch. When provided, the loss is reduced as `sum /
             num_items_in_batch` (gradient-accumulation-correct); when `None`, reduction is `mean` over local valid
@@ -238,51 +169,34 @@ def _chunked_divergence_loss(
         if teacher_lm_head_bias is not None:
             teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
 
+    # Triton ships with PyTorch on Linux only, so the kernel is imported here rather than with `trl`
+    from ..kernels.chunked_divergence import ChunkedDivergenceFunction
+
     # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
     # vocabulary must match), and each projects through its own `lm_head`.
-    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
-    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))
     valid = completion_mask.reshape(-1) != 0
     n_valid_tensor = valid.sum()
-
-    entropy_sum = h_s.new_zeros((), dtype=torch.float32)
-
-    # Pack valid positions to the front so masked ones form whole trailing chunks. `argsort` on the boolean mask is a
-    # static-shape op (unlike `h_s[valid]`, whose output shape is data-dependent and poisons XLA compilation).
-    order = valid.to(torch.int8).argsort(descending=True, stable=True)
-    h_s = h_s[order]
-    h_t = h_t[order]
-    valid = valid[order]
-
-    # Process only the whole chunks covering the valid prefix: bounds XLA recompiles and drops fully-masked chunks on
-    # GPU. At least one chunk always runs: under context parallelism a rank can hold only masked positions, and its
-    # zero loss still has to reach every trainable parameter for `.backward()` and gradient sync to work.
-    n_padded = (n_valid_tensor / chunk_size).ceil().clamp(min=1).to(torch.int64) * chunk_size
-
-    loss = h_s.new_zeros((), dtype=torch.float32)
-    for start in range(0, n_padded, chunk_size):
-        chunk_loss, chunk_entropy = torch.utils.checkpoint.checkpoint(
-            _chunk,
-            h_s[start : start + chunk_size],
-            student_lm_head_weight,
-            student_lm_head_bias,
-            student_logit_scale,
-            student_final_logit_softcapping,
-            h_t[start : start + chunk_size],
-            teacher_lm_head_weight,
-            teacher_lm_head_bias,
-            teacher_logit_scale,
-            teacher_final_logit_softcapping,
-            beta,
-            temperature,
-            valid[start : start + chunk_size].float(),
-            use_reentrant=False,
-        )
-        loss = loss + chunk_loss
-        entropy_sum = entropy_sum + chunk_entropy
+    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))[valid]
+    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))[valid]
+    per_token_divergence, per_token_entropy = ChunkedDivergenceFunction.apply(
+        h_s,
+        student_lm_head_weight,
+        student_lm_head_bias,
+        h_t,
+        teacher_lm_head_weight,
+        teacher_lm_head_bias,
+        beta,
+        temperature,
+        student_logit_scale,
+        student_final_logit_softcapping,
+        teacher_logit_scale,
+        teacher_final_logit_softcapping,
+    )
+    loss = per_token_divergence.sum()
+    entropy_sum = per_token_entropy.sum()
 
     if num_items_in_batch is None:
-        # Clamped for the same reason: a fully-masked rank reduces to a finite zero rather than `0 / 0`.
+        # Clamped so a fully-masked rank reduces to a finite zero rather than `0 / 0`.
         loss = loss / n_valid_tensor.clamp(min=1)
     else:
         if isinstance(num_items_in_batch, torch.Tensor):
@@ -376,6 +290,8 @@ class DistillationTrainer(_BaseTrainer):
             use and that it has been fine-tuned for tool calling.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "distillation"]
     _name = "Distillation"
     _paper = {
@@ -413,6 +329,9 @@ class DistillationTrainer(_BaseTrainer):
             args = DistillationConfig(f"{model_name}-Distillation")
 
         # Student model loading
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         # `_VALID_DICT_FIELDS` already parses any JSON-string form of these in `DistillationConfig.__post_init__`, so
         # they are dicts (or None) here; copy so the setdefaults below don't mutate the config.
         model_init_kwargs = dict(args.model_init_kwargs or {})
@@ -481,8 +400,18 @@ class DistillationTrainer(_BaseTrainer):
 
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Resolve vision placeholder token IDs once. Used by the forward pass to rebuild mm_token_type_ids
         # when tool responses inject images into the completion (see _generate forward_kwargs block).
@@ -608,9 +537,11 @@ class DistillationTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # The chunked JSD loss reads `lm_head.weight` directly and runs the backbone via
@@ -700,18 +631,17 @@ class DistillationTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
-            # is None. Here, loss scaling instead depends on the total number of completion tokens across the global
-            # accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The simplest
-            # (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses that behavior
-            # without rewriting `training_step`.
-            compute_loss_func="non-None value to disable scaling",
         )
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
 
         self._dist = DistributedBackend(self.accelerator)
 
@@ -772,7 +702,7 @@ class DistillationTrainer(_BaseTrainer):
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
             "bos_token_id": self._tokenizer.bos_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "eos_token_id": self.eos_token_ids,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
@@ -1100,7 +1030,7 @@ class DistillationTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self._tokenizer.eos_token_id
+            is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1448,7 +1378,7 @@ class DistillationTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1880,9 +1810,23 @@ class DistillationTrainer(_BaseTrainer):
         student_logit_scale = getattr(student_config, "logit_scale", None)
         if student_logit_scale is None:
             student_logit_scale = getattr(student_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if student_logit_scale is None:
+            student_logit_scale = getattr(student_config, "lm_head_multiplier", None)
+        if student_logit_scale is None and getattr(student_config, "logits_scaling", None) is not None:
+            logits_scaling = student_config.logits_scaling
+            student_logit_scale = logits_scaling if student_config.model_type == "hyperclovax" else 1 / logits_scaling
         teacher_logit_scale = getattr(teacher_config, "logit_scale", None)
         if teacher_logit_scale is None:
             teacher_logit_scale = getattr(teacher_config, "output_multiplier", None)
+        # Falcon-H1 multiplies the logits by `lm_head_multiplier`. Granite and MiniCPM3 divide them by
+        # `logits_scaling`, while HyperCLOVA X multiplies them by it.
+        if teacher_logit_scale is None:
+            teacher_logit_scale = getattr(teacher_config, "lm_head_multiplier", None)
+        if teacher_logit_scale is None and getattr(teacher_config, "logits_scaling", None) is not None:
+            logits_scaling = teacher_config.logits_scaling
+            teacher_logit_scale = logits_scaling if teacher_config.model_type == "hyperclovax" else 1 / logits_scaling
         student_logit_scale = 1.0 if student_logit_scale is None else student_logit_scale
         teacher_logit_scale = 1.0 if teacher_logit_scale is None else teacher_logit_scale
         loss, entropy_sum, n_valid = _chunked_divergence_loss(
@@ -1892,7 +1836,6 @@ class DistillationTrainer(_BaseTrainer):
             teacher_lm_head.weight,
             loss_mask,
             self.beta,
-            _CHUNKED_LM_HEAD_CHUNK_SIZE,
             num_items_in_batch=num_items_in_batch,
             student_lm_head_bias=student_lm_head.bias,
             teacher_lm_head_bias=teacher_lm_head.bias,

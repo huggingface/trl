@@ -42,6 +42,7 @@ config = Phi3Config(
     num_hidden_layers=2,
     intermediate_size=32,
     sliding_window=2047,
+    attention_bias=False,
 )
 model = Phi3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

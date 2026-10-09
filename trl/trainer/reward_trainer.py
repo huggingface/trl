@@ -327,6 +327,8 @@ class RewardTrainer(_BaseTrainer):
             to ensure that the reward head is properly trained.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
     _template_file = "rm_model_card.md"
@@ -435,7 +437,7 @@ class RewardTrainer(_BaseTrainer):
             processing_class.eos_token = args.eos_token
             # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
             # config (a sequence classification model has no generation config).
-            model.config.eos_token_id = processing_class.eos_token_id
+            model.config.get_text_config().eos_token_id = processing_class.eos_token_id
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -532,9 +534,11 @@ class RewardTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Disable dropout in the model
@@ -553,7 +557,7 @@ class RewardTrainer(_BaseTrainer):
             )
         processing_class.pad_token = pad_token
         # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
 
         # Data collator
         if data_collator is None:
@@ -616,11 +620,6 @@ class RewardTrainer(_BaseTrainer):
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)

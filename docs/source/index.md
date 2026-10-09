@@ -12,7 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
+**⚡ Up to 6.9× longer sequences on the same GPU:** SFT, DPO, KTO, GRPO and RLOO now score tokens with a [fused LM head](reducing_memory_usage) **by default**. At 8k tokens that is 52% to 82% less peak VRAM.
 
 ## Taxonomy
 
@@ -56,7 +56,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`A2POTrainer`](a2po_trainer)
 - [`AsyncGRPOTrainer`](async_grpo_trainer)
 - [`GMPOTrainer`](gmpo)
-- [GSPO-token](gspo_token)
 - [`OnlineDPOTrainer`](online_dpo_trainer)
 
 </div>
@@ -75,7 +74,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`GKDTrainer`](gkd_trainer)
 - [`GOLDTrainer`](gold_trainer)
 - [`IWOPDTrainer`](iw_opd_trainer)
-- [`MiniLLMTrainer`](minillm_trainer)
 - [`SDFTTrainer`](sdft_trainer)
 - [`SDPOTrainer`](sdpo_trainer)
 - [`SSDTrainer`](ssd_trainer)
@@ -96,7 +94,7 @@ The documentation is organized into the following sections:
 - **Getting Started**: installation and quickstart guide.
 - **Conceptual Guides**: dataset formats, training FAQ, and understanding logs.
 - **How-to Guides**: reducing memory usage, speeding up training, distributing training, etc.
-- **Integrations**: DeepSpeed, Liger Kernel, PEFT, etc.
+- **Integrations**: DeepSpeed, PEFT, etc.
 - **Examples**: example overview, community tutorials, etc.
 - **API**: trainers, utils, etc.
 

@@ -13,13 +13,14 @@
 # limitations under the License.
 
 import copy
+from contextlib import nullcontext
 from functools import partial
 from types import SimpleNamespace
 
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
+from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer, GenerationConfig
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -36,7 +37,7 @@ from trl.experimental.utils import (
 )
 from trl.trainer.utils import RepeatSampler, identity
 
-from ..testing_utils import TrlTestCase, require_liger_kernel
+from ..testing_utils import TrlTestCase
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +103,6 @@ def _assert_alignment_covers_completion(loss_fn, batch, teacher_input_ids, teach
         assert sorted(k for group in teacher_groups for k in group) == list(range(len(t_answer)))
 
 
-@pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokenizer, openr1_examples):
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
     batch = collator(openr1_examples)
@@ -149,7 +149,6 @@ def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokeni
     assert torch.isfinite(loss)
 
 
-@pytest.mark.slow
 def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, qwen_tokenizer, countdown_examples):
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
     batch = collator(countdown_examples)
@@ -196,7 +195,6 @@ def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, q
     assert torch.isfinite(loss)
 
 
-@pytest.mark.slow
 def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_tokenizer, openr1_examples):
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=512)
     batch = collator(openr1_examples)
@@ -244,22 +242,7 @@ def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_toke
 
 
 def build_config(**overrides):
-    base = dict(
-        uld_crossentropy_weight=0.0,
-        uld_distillation_weight=1.0,
-        uld_student_temperature=1.0,
-        uld_teacher_temperature=1.0,
-        uld_skip_student_eos=False,
-        uld_skip_teacher_eos=False,
-        use_extended_uld=True,
-        uld_token_merge_strategy="observed",
-        uld_use_hybrid_loss=False,
-        uld_hybrid_matched_weight=None,
-        uld_hybrid_unmatched_weight=None,
-        beta=0.5,
-    )
-    base.update(overrides)
-    return SimpleNamespace(**base)
+    return GOLDConfig(uld_skip_student_eos=False, uld_skip_teacher_eos=False, **overrides)
 
 
 @pytest.fixture(scope="session")
@@ -966,14 +949,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
     )
 
     max_length = 64
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=max_length,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=max_length, max_completion_length=16, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
@@ -1021,14 +997,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
     dataset = Dataset.from_dict({"prompt": [short_prompt], "completion": [long_completion]})
 
     max_length = 32
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=max_length,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=max_length, max_completion_length=16, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     prepared = trainer._prepare_dataset_with_original_text(
         dataset,
@@ -1057,14 +1026,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         {"role": "assistant", "content": "Two."},
     ]
     dataset = Dataset.from_dict({"messages": [messages]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=512,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=512, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1093,14 +1055,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
 
 def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=64,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
+    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=True)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     row = trainer._prepare_dataset_with_original_text(
@@ -1136,14 +1091,7 @@ def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
 
 def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=64,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=False,
-    )
+    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     prepared = trainer._prepare_dataset_with_original_text(
@@ -1220,14 +1168,7 @@ def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gem
 def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
     slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=64,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=False,
-    )
+    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
     trainer = GOLDTrainer.__new__(GOLDTrainer)
 
     row = trainer._prepare_dataset_with_original_text(
@@ -1522,7 +1463,6 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
     assert sizes == [3, 3, 0]
 
 
-@pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = llama_tokenizer
@@ -1549,9 +1489,7 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
             assert torch.equal(attention_mask, prompt_mask)
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
-    )
+    generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
@@ -1609,7 +1547,7 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos():
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(eos_token_id=eos_id)
+    generation_config = GenerationConfig(eos_token_id=eos_id)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
     _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
         DummyModel(), inputs, generation_config
@@ -1647,7 +1585,7 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion():
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             return SimpleNamespace(sequences=generated_sequence)
 
-    generation_config = SimpleNamespace(eos_token_id=None)
+    generation_config = GenerationConfig()
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
     _, new_attention_mask, new_labels, _, _ = trainer.generate_on_policy_outputs(
         DummyModel(), inputs, generation_config
@@ -1700,7 +1638,6 @@ def test_decode_completion_texts_from_labels_keeps_eos_when_pad_equals_eos():
     assert captured["ids"] == [[21, 22, eos_id]]
 
 
-@pytest.mark.slow
 def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.processing_class = smollm_tokenizer
@@ -1715,9 +1652,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
             return SimpleNamespace(sequences=batch["input_ids"])
 
-    generation_config = SimpleNamespace(
-        max_completion_length=None, temperature=None, top_k=None, top_p=None, eos_token_id=None
-    )
+    generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
         trainer,
         DummyModel(),
@@ -2186,7 +2121,6 @@ def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
-@pytest.mark.slow
 def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     collator = DataCollatorForVisionLanguageChatML(processor=qwen3_vl_processor, max_length=2048)
     batch = collator(vlm_examples)
@@ -3443,7 +3377,7 @@ def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     monkeypatch.setattr(
         gold_trainer_module,
         "unwrap_model_for_generation",
-        lambda *args, **kwargs: gold_trainer_module.nullcontext(args[0]),
+        lambda *args, **kwargs: nullcontext(args[0]),
     )
     monkeypatch.setattr(
         gold_trainer_module,
@@ -3527,7 +3461,6 @@ _TINY_SMOLVLM = "trl-internal-testing/tiny-SmolVLMForConditionalGeneration"
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
-@pytest.mark.slow
 def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with a finite loss."""
     try:
@@ -3575,112 +3508,6 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
-@pytest.mark.slow
-@require_liger_kernel
-def test_jsd_liger_text_train_step_smoke(tmp_path):
-    """Text same-family (tiny Llama → tiny Llama) runs one off-policy JSD step with the fused Liger loss.
-
-    Exercises the `LigerFusedLinearJSDLoss` path end-to-end (`_liger_backbone` student + teacher forwards, fused
-    lm_head matmul) and asserts the resulting training loss is finite.
-    """
-    from datasets import load_dataset
-
-    try:
-        student = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
-        teacher = AutoModelForCausalLM.from_pretrained(_TINY_LLAMA, dtype=torch.bfloat16)
-        tokenizer = AutoTokenizer.from_pretrained(_TINY_LLAMA)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train[:3]")
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Llama / zen assets unavailable: {exc}")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    args = GOLDConfig(
-        output_dir=str(tmp_path),
-        report_to="none",
-        bf16=True,
-        max_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_completion_length=8,
-        max_length=512,
-        lmbda=0.0,
-        beta=0.5,
-        temperature=1.0,
-        num_generations=1,
-        use_vllm=False,
-        use_uld_loss=False,
-        use_liger_kernel=True,
-        log_completions=False,
-        save_strategy="no",
-        eval_strategy="no",
-        logging_strategy="no",
-        dataloader_drop_last=True,
-    )
-
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=dataset,
-        processing_class=tokenizer,
-    )
-    train_output = trainer.train()
-    assert torch.isfinite(torch.tensor(train_output.training_loss))
-
-
-@pytest.mark.slow
-@require_liger_kernel
-def test_vlm_jsd_liger_same_family_train_step_smoke(tmp_path, vlm_dataset):
-    """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with the fused Liger loss.
-
-    Proves the VLM Liger path: `_liger_backbone` routes through `base_model` (so image features are injected) for both
-    student and teacher, image kwargs reach the backbone forwards, and the fused JSD loss is finite.
-    """
-    try:
-        student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Qwen3-VL assets unavailable: {exc}")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    args = GOLDConfig(
-        output_dir=str(tmp_path),
-        report_to="none",
-        bf16=True,
-        max_steps=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        max_completion_length=8,
-        max_length=_VLM_SMOKE_MAX_LENGTH,
-        lmbda=0.0,
-        beta=0.5,
-        temperature=1.0,
-        num_generations=1,
-        use_vllm=False,
-        use_uld_loss=False,
-        use_liger_kernel=True,
-        log_completions=False,
-        save_strategy="no",
-        eval_strategy="no",
-        logging_strategy="no",
-        dataloader_drop_last=True,
-    )
-
-    trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=vlm_dataset,
-        processing_class=processor,
-    )
-    train_output = trainer.train()
-    assert torch.isfinite(torch.tensor(train_output.training_loss))
-
-
-@pytest.mark.slow
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
 

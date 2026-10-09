@@ -126,7 +126,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
     --max-loras 6
 ```
 
-`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Add `VLLM_WORKER_MULTIPROC_METHOD=spawn` if you serve tensor-parallel, and keep `--weight-transfer-config` either way: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
+`VLLM_ALLOW_RUNTIME_LORA_UPDATING=1` exposes the endpoint the trainer posts each new adapter to. Keep `--weight-transfer-config` even with `--enable-lora`: the trainer only chooses a sync mode when it starts, by which point the server is already up, and merged sync is the fallback.
 
 `--max-lora-rank` must be one of `1, 8, 16, 32, 64, 128, 256, 320, 512`. It sets the highest rank the server can serve rather than the rank it will serve, so an `r=4` adapter works fine under `8`. `--max-loras` must be at least `max_staleness + 2`: the trainer keeps `max_staleness + 1` adapter versions registered so a rollout that started under an older policy can finish under it instead of switching policies mid-generation, and each sync loads the next version before it unloads the oldest. The trainer checks both values when it starts and tells you what to restart the server with.
 
@@ -306,12 +306,16 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 
 ### Performance
 
-Throughput and MFU are each reported **twice**, over the same optimizer step, differing only in what they divide by. The suffix names the denominator:
+Throughput measures how many tokens the trainer processes per second. **Model FLOPs Utilization (MFU)** estimates the percentage of the training devices' theoretical compute capacity used for model forward and backward passes. The capacity used for this estimate depends on the hardware and training precision.
 
-- `_fwd_bwd` divides by `perf/fwd_bwd_s` — the compute alone. _How efficiently does the trainer run when it has data?_ If it is low, the trainer is the problem.
-- `_wall_clock` divides by `perf/step_s` — the whole step, including the time spent waiting for rollouts. _What fraction of the allocation actually became training?_ If this is far below the `_fwd_bwd` one, generation is probably the bottleneck.
+Throughput and MFU are reported on two time bases:
 
-The gap between them is `perf/rollout_wait_s` plus the optimizer and weight-sync time. But it's useful to look at both: looking only at `_fwd_bwd` hides the GPU-hours spent generating rollouts, and quoting only `_wall_clock` could blame the trainer for the generator's latency.
+- **`_fwd_bwd`** measures performance during the forward and backward passes.
+- **`_wall_clock`** measures performance over the complete optimizer step, including optimizer updates, weight synchronization, and time spent waiting for rollouts.
+
+The difference helps distinguish compute performance from the cost of waiting and coordination. Both MFU metrics describe the **training devices only**: they do not include the computation or hardware capacity of external rollout or teacher servers. Wall-clock MFU reflects the time the trainer spends waiting for those services, not the services' own utilization.
+
+MFU is reported only when peak compute capacity is known for the local training device at the selected precision. Otherwise, MFU is omitted; training continues and throughput and timing metrics remain available.
 
 | metric                                                            | meaning                                                                                                                                               |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |

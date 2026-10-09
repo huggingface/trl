@@ -42,10 +42,10 @@ class SFTConfig(_BaseConfig):
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -103,15 +103,13 @@ class SFTConfig(_BaseConfig):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*, defaults to `"chunked_nll"`):
-            Type of loss to use. When left unset, it defaults to `"chunked_nll"`, except when `use_liger_kernel=True`,
-            in which case it defaults to `"nll"`. Possible values are:
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are:
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
-            - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
-              only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
-              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
+            - `"chunked_nll"`: deprecated alias of `"nll"`, which computes the loss the same way. It will be removed in
+              v2.0.0.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -159,12 +157,12 @@ class SFTConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     chat_template_path: str | None = field(
@@ -278,17 +276,12 @@ class SFTConfig(_BaseConfig):
             )
         },
     )
-    loss_type: str | None = field(
-        default=None,
+    loss_type: str = field(
+        default="nll",
         metadata={
-            "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
-            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
-            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and "
-            "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
-            "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
-            "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
-            "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
-            "`lm_head`, architectures with a non-standard head are not supported)."
+            "help": "Type of loss to use. Possible values are `'nll'` (standard negative log-likelihood) and `'dft'` "
+            "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629).",
+            "choices": ["nll", "dft", "chunked_nll"],
         },
     )
     activation_offloading: bool = field(
@@ -306,6 +299,14 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.loss_type == "chunked_nll":
+            warnings.warn(
+                "`loss_type='chunked_nll'` is deprecated and will be removed in v2.0.0. Use `loss_type='nll'` (the "
+                "default), which computes the loss the same way, without materializing the full logits.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.loss_type = "nll"
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
@@ -328,7 +329,3 @@ class SFTConfig(_BaseConfig):
                 stacklevel=3,
             )
             self.packing_strategy = "bfd_split"
-
-        # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
-        if self.loss_type is None:
-            self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"

@@ -26,7 +26,7 @@ import torch.nn.functional as F
 import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils import broadcast_object_list, gather_object, is_peft_model, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -250,7 +250,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
                 # Set pad token ID on reward model config
-                reward_func.config.pad_token_id = reward_processing_class_i.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class_i.pad_token_id
             self.reward_processing_classes.append(reward_processing_class_i)
 
         # Handle reward_weights
@@ -271,6 +271,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         if processing_class is None:
             raise ValueError("`processing_class` must be provided.")
 
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
@@ -389,8 +392,18 @@ class OnlineDPOTrainer(_BaseTrainer):
             self._tokenizer.pad_token = self._tokenizer.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = self._tokenizer.pad_token_id
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
@@ -451,7 +464,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     )
 
                     # Determine device type (supports cuda, xpu, etc.)
-                    accelerator_type = torch.accelerator.current_accelerator().type
+                    if Version(torch.__version__) >= Version("2.6.0"):
+                        accelerator_type = torch.accelerator.current_accelerator().type
+                    else:  # `torch.accelerator` was introduced in torch 2.6
+                        accelerator_type = "cuda"
                     current_device = getattr(torch, accelerator_type).current_device()
                     self.vllm_client.init_communicator(device=current_device)
                 else:
@@ -538,7 +554,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "do_sample": True,
                 "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": self.eos_token_ids,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
                 "top_p": self.top_p,
@@ -614,7 +630,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         return model
 
     def _generate_vllm(self, prompts, images=None):
-        eos_token_id = self._tokenizer.eos_token_id
         pad_token_id = self._tokenizer.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
@@ -630,7 +645,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         max_tokens = self.generation_config.max_tokens
         completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
         completion_ids = [
-            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+            ids + [self.eos_token_ids[0]] if ids[-1] not in self.eos_token_ids and len(ids) < max_tokens else ids
             for ids in completion_ids
         ]
         completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
@@ -932,7 +947,6 @@ class OnlineDPOTrainer(_BaseTrainer):
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
-        eos_token_id = self._tokenizer.eos_token_id
         pad_token_id = self._tokenizer.pad_token_id
 
         # Apply chat template and tokenize the input
@@ -1035,7 +1049,7 @@ class OnlineDPOTrainer(_BaseTrainer):
             )
 
         completion_ids = output[:, prompt_ids.size(1) :]
-        completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+        completion_ids, completion_mask = truncate_right(completion_ids, self.eos_token_ids, pad_token_id)
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
@@ -1155,7 +1169,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
 
-        contain_eos_token = torch.any(completion_ids == self._tokenizer.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(
+            torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=completion_ids.device)), dim=-1
+        )
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None

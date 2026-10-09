@@ -32,7 +32,7 @@ from typing import Any, Protocol
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import broadcast_object_list, is_peft_model
+from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
@@ -43,15 +43,16 @@ from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
+    add_fused_lm_head,
     compute_flops_per_token,
     compute_mfu,
     create_model_from_path,
     get_config_model_id,
+    get_peak_flops_per_device,
     is_trackio_available,
     nanmax,
     nanmin,
     pad,
-    patch_chunked_lm_head,
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
@@ -1023,6 +1024,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             implementation to disable trainer-side weight sync.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "async-grpo"]
     _name = "AsyncGRPO"
     _paper = {
@@ -1064,6 +1067,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.temperature = args.temperature
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
@@ -1080,11 +1086,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
         self._is_vlm = text_config is not model.config
         if self._is_vlm:
@@ -1099,9 +1111,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             text_model.requires_grad_(True)
             model.get_output_embeddings().requires_grad_(True)
 
-        patch_chunked_lm_head(
-            model, chunk_size=8192, temperature=self.temperature, output_router_logits=self.aux_loss_enabled
-        )
+        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
         # Processing class
         if processing_class is None:
@@ -1112,10 +1122,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class.pad_token = processing_class.eos_token
         # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
         # configs.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
         model.generation_config.pad_token_id = processing_class.pad_token_id
 
-        # PEFT. Placed after `patch_chunked_lm_head`, which patches the bare `lm_head` and would otherwise have to
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
+        # PEFT. Placed after `add_fused_lm_head`, which reads the bare `lm_head` and would otherwise have to
         # traverse `base_model.model` to find it.
         if peft_config is not None:
             if not is_peft_available():
@@ -1138,11 +1158,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # dtype mismatch, and AsyncGRPO is FSDP2-only) and no "ref" adapter (there is no reference model).
             model = get_peft_model(model, peft_config)
 
-        # `patch_chunked_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
+        # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
         # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
-        # `SFTTrainer` refuses the same configuration for `loss_type="chunked_nll"`.
+        # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
             from peft.tuners.tuners_utils import BaseTunerLayer
 
@@ -1192,12 +1212,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
+
+        precision = self.accelerator.mixed_precision
+        dtype = {
+            "bf16": "bfloat16",
+            "fp16": "float16",
+            "no": str(self.model.dtype).removeprefix("torch."),
+        }.get(precision, precision)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
@@ -1269,19 +1292,35 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self._lora_dir = os.path.abspath(os.path.join(self.args.output_dir, ".vllm_lora"))
         # Captured once, so a trainer that later activates another adapter does not ship that one as the policy.
         self._adapter_name = model.active_adapters[0] if is_peft_model(model) else None
+        # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
+        # place that talks to it, independent of how rollouts are produced.
+        self.vllm_client = (
+            VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
+            if self.accelerator.is_main_process
+            else None
+        )
+        # Rank 0 probes the server for the sync mode, which every rank must agree on: one arm runs a collective
+        # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
+        # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
+        # alone would leave the others waiting in this collective.
+        if weight_transfer is None and is_peft_model(model):
+            lora_sync = None
+            if self.accelerator.is_main_process:
+                try:
+                    lora_sync = self._init_lora_sync(model)
+                except Exception as error:
+                    lora_sync = error
+            lora_sync = broadcast_object_list([lora_sync], from_process=0)[0]
+            if isinstance(lora_sync, Exception):
+                raise lora_sync
+            self._lora_sync = lora_sync
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            # Weight sync and the token-budget query target the vLLM server from the config; the client is the single
-            # place that talks to it, independent of how rollouts are produced.
-            self.vllm_client = VLLMClient(self.args.vllm_server_base_url, self.args.vllm_server_timeout)
-
             if weight_transfer is not None:
                 # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
                 # entirely, so the server is not probed and adapter sync stays off.
                 self.weight_transfer = weight_transfer
             else:
-                if is_peft_model(model):
-                    self._lora_sync = self._init_lora_sync(model)
                 if self._lora_sync:
                     # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
                     # group to build and no manifest to collect.
@@ -1314,6 +1353,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     reward_funcs=reward_funcs,
                     processing_class=processing_class,
+                    eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
@@ -1338,12 +1378,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         else:
             self.rollout_queue = None
             self.rollout_worker = None
-            self.vllm_client = None
             self.weight_transfer = None
-
-        # Every rank must agree on the sync mode: one arm runs a collective adapter save, the other a collective
-        # parameter gather, and a split decision hangs both.
-        self._lora_sync = broadcast_object_list([self._lora_sync], from_process=0)[0]
 
         # Add callbacks. Cold weight sync + worker start on train begin, then periodic weight syncs.
         self.add_callback(_OptimizerTimeCallback(self))
@@ -1452,14 +1487,16 @@ class AsyncGRPOTrainer(_BaseTrainer):
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
 
         forward_start = time.time()
+        # MoE models: request router logits so the forward returns the load-balancing loss
+        router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
         outputs = model(
             input_ids=input_ids,
             position_ids=position_ids,
-            labels=input_ids,
-            completion_mask=completion_mask,
-            use_cache=False,
+            labels=input_ids.masked_fill(completion_mask == 0, -100),
+            fused_lm_head=True,
+            **router_kwargs,
         )
-        log_probs, entropy = outputs["log_probs"], outputs["entropy"]
+        log_probs, entropy = outputs.log_probs, outputs.entropy
         self._last_forward_time_s = time.time() - forward_start
 
         completion_mask = completion_mask[:, 1:]
@@ -1486,7 +1523,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # The policy loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
-            aux_loss = outputs["aux_loss"]
+            aux_loss = outputs.aux_loss
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():
@@ -1613,15 +1650,24 @@ class AsyncGRPOTrainer(_BaseTrainer):
             flops_per_token = compute_flops_per_token(self.model.config.get_text_config(), int(mean_seq_len))
             world_size = self.accelerator.num_processes
             metrics["perf/forwarded_tok_s_fwd_bwd"].append((self._step_forward_tokens, fwd_bwd_s))
-            metrics["perf/mfu_fwd_bwd"].append(
-                compute_mfu(flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size)
-            )
+            if self._peak_flops_per_device is not None:
+                metrics["perf/mfu_fwd_bwd"].append(
+                    compute_mfu(
+                        flops_per_token, self._step_forward_tokens / fwd_bwd_s, world_size, self._peak_flops_per_device
+                    )
+                )
             if step_s is not None:
                 metrics["perf/forwarded_tok_s_wall_clock"].append((self._step_forward_tokens, step_s))
                 metrics["perf/trained_tok_s_wall_clock"].append((self._step_trained_tokens, step_s))
-                metrics["perf/mfu_wall_clock"].append(
-                    compute_mfu(flops_per_token, self._step_forward_tokens / step_s, world_size)
-                )
+                if self._peak_flops_per_device is not None:
+                    metrics["perf/mfu_wall_clock"].append(
+                        compute_mfu(
+                            flops_per_token,
+                            self._step_forward_tokens / step_s,
+                            world_size,
+                            self._peak_flops_per_device,
+                        )
+                    )
 
         self._last_step_end_time = time_after
         self._current_train_step_time = 0.0

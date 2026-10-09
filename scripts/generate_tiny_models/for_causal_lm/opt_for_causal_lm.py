@@ -40,6 +40,8 @@ config = OPTConfig(
     num_attention_heads=4,
     num_hidden_layers=2,
     ffn_dim=32,
+    activation_dropout=0.0,
+    prefix="</s>",
 )
 model = OPTForCausalLM(config).to(dtype=torch.float16)
 init_weights_tiny_model(model)

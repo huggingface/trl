@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+import torch
 from datasets import Dataset, DatasetDict, features, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
@@ -92,6 +93,27 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer.train()
 
         assert "train_loss" in trainer.state.log_history[-1]
+
+    def test_generation_stops_on_every_eos_token_id(self):
+        # Phi-3.5 ends a turn with `<|end|>` (32007), which only its generation config declares as eos, not its
+        # tokenizer: generation must stop on it too, and not only on the tokenizer's `<|endoftext|>` (32000)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        model_id = "trl-internal-testing/tiny-Phi3ForCausalLM-3.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        trainer = OnlineDPOTrainer(
+            model=model_id,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+
+        assert trainer.eos_token_ids == [32007, 32001, 32000]
+        assert trainer.generation_config.eos_token_id == trainer.eos_token_ids
 
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
@@ -192,6 +214,28 @@ class TestOnlineDPOTrainer(TrlTestCase):
             )
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = OnlineDPOTrainer(
+                model=self.model_id,
+                reward_funcs=self.reward_model,
+                args=OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                processing_class=self.tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         training_args = OnlineDPOConfig(
@@ -247,7 +291,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     @require_torch_accelerator
     @require_vllm
-    @pytest.mark.slow
     def test_train_with_vllm_server(self, config_name):
         def cleanup_vllm_communicator(trainer):
             """Clean up vLLM communicator to avoid conflicts between test runs"""

@@ -21,7 +21,6 @@ import os
 import queue
 import time
 from collections import OrderedDict, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -36,7 +35,6 @@ from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
-import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -64,9 +62,8 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import get_callable_name
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_response_parsing, require_vllm
 
 
 # The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
@@ -580,6 +577,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             dataset=dataset,
             reward_funcs=[dummy_reward_func],
             processing_class=MagicMock(),
+            eos_token_ids=[0],
             rollout_buffer=ctx.Queue(),
             metrics_queue=ctx.Queue(),
             model_version_value=ctx.Value("i", 0),
@@ -700,28 +698,35 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer.model_version == 0
 
 
+def _rollout_loop(**kwargs):
+    # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
+    model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    kwargs = {
+        "model_name": model_id,
+        "dataset": load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train"),
+        "reward_funcs": [dummy_reward_func],
+        "processing_class": tokenizer,
+        "eos_token_ids": [tokenizer.eos_token_id],
+        "rollout_buffer": mp.Queue(),
+        "model_version_value": mp.Value("i", 0),
+        "heartbeat_value": mp.Value("d", 0.0),
+        "failed_event": mp.Event(),
+        "exception_info_queue": mp.Queue(),
+        "metrics_queue": mp.Queue(),
+        **kwargs,
+    }
+    return _AsyncRolloutLoop(**kwargs)
+
+
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
     """Unit tests for the rollout worker's environment/tool wiring (no vLLM required)."""
 
     def _make_loop(self, environment_factory, dataset=None):
-        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         if dataset is None:
             dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
-        return _AsyncRolloutLoop(
-            model_name=model_id,
-            dataset=dataset,
-            reward_funcs=[dummy_reward_func],
-            processing_class=AutoTokenizer.from_pretrained(model_id),
-            rollout_buffer=mp.Queue(),
-            model_version_value=mp.Value("i", 0),
-            heartbeat_value=mp.Value("d", 0.0),
-            failed_event=mp.Event(),
-            exception_info_queue=mp.Queue(),
-            metrics_queue=mp.Queue(),
-            environment_factory=environment_factory,
-            num_generations=2,
-            max_inflight_tasks=4,
+        return _rollout_loop(
+            dataset=dataset, environment_factory=environment_factory, num_generations=2, max_inflight_tasks=4
         )
 
     def test_multiple_environments_expose_only_their_own_tools(self):
@@ -764,6 +769,35 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             # The probe instances seed the reuse pool, so they are not wasted.
             assert len(loop._environment_pool["counter"]) == 1
             assert len(loop._environment_pool["echo"]) == 1
+        finally:
+            loop._loop.close()
+
+    def test_tool_discovery_does_not_evaluate_properties(self):
+        # The init-time probe lists an environment's tool methods. `inspect.getmembers` calls `getattr` on every name
+        # before applying the predicate, so listing the instance would evaluate this property; listing the class
+        # leaves it inert.
+        class PropertyEnvironment:
+            def reset(self, **kwargs): ...
+
+            @property
+            def reward(self) -> float:
+                raise RuntimeError("`reward` must not be evaluated while discovering tools")
+
+            def echo(self, text: str) -> str:
+                """Echo the text back.
+
+                Args:
+                    text: Text to echo.
+
+                Returns:
+                    The text, unchanged.
+                """
+                return text
+
+        loop = self._make_loop(PropertyEnvironment)
+        try:
+            assert [tool.__name__ for tool in loop._env_tools[None]] == ["echo"]
+            assert [tool.__name__ for tool in loop.tools] == ["echo"]
         finally:
             loop._loop.close()
 
@@ -992,15 +1026,8 @@ class TestMetricReduction(TrlTestCase):
 class TestWorkerMetricPush(TrlTestCase):
     """The worker's payload has the same shape as the trainer's sink, so draining it is an append."""
 
-    def _loop(self):
-        loop = object.__new__(_AsyncRolloutLoop)
-        loop._metrics_queue = mp.Queue()
-        loop._counters = defaultdict(float)
-        loop._rates = defaultdict(lambda: [0.0, 0.0])
-        return loop
-
     def test_counters_and_rates_ride_along_and_reset(self):
-        loop = self._loop()
+        loop = _rollout_loop()
         loop._counters["tools/search_call_total"] += 2
         loop._rates["tools/latency_s"][0] += 3.0
         loop._rates["tools/latency_s"][1] += 2
@@ -1017,20 +1044,12 @@ class TestWorkerMetricPush(TrlTestCase):
         assert loop._metrics_queue.get(timeout=5) == {}
 
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
-        loop = self._loop()
-        loop._metrics_queue = mp.Queue(maxsize=1)
+        loop = _rollout_loop(metrics_queue=mp.Queue(maxsize=1))
         for _ in range(50):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
 
 class TestToolExecution(TrlTestCase):
-    def _loop(self):
-        loop = object.__new__(_AsyncRolloutLoop)
-        loop._counters = defaultdict(float)
-        loop._rates = defaultdict(lambda: [0.0, 0.0])
-        loop._tool_pool = ThreadPoolExecutor(max_workers=4)
-        return loop
-
     @staticmethod
     def _call(name, **arguments):
         return {"type": "function", "function": {"name": name, "arguments": arguments}}
@@ -1046,7 +1065,7 @@ class TestToolExecution(TrlTestCase):
         async def failing_tool(value: int) -> str:
             raise RuntimeError(f"boom:{value}")
 
-        loop = self._loop()
+        loop = _rollout_loop(max_inflight_tasks=4)
         tool_dict = {
             "sync_tool": sync_tool,
             "async_tool": async_tool,
@@ -1076,7 +1095,7 @@ class TestToolExecution(TrlTestCase):
             time.sleep(0.5)
             return "done"
 
-        loop = self._loop()
+        loop = _rollout_loop(max_inflight_tasks=4)
 
         async def scenario():
             ticks = 0
@@ -1098,6 +1117,16 @@ class TestToolExecution(TrlTestCase):
 
 
 class TestReconciler(TrlTestCase):
+    @pytest.mark.parametrize("mask", [None, [1, 0, 1], [0, 0, 0]])
+    def test_completion_masks_are_generic(self, mask):
+        rows = _finalize([TurnRecord([1, 2], [3, 4, 5], [-0.1, -0.2, -0.3], mask)])
+        if mask == [0, 0, 0]:
+            assert rows == []
+        else:
+            assert rows[0].completion_mask == [0, 0] + (mask if mask is not None else [1, 1, 1])
+            assert rows[0].input_ids == [1, 2, 3, 4, 5]
+            assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
+
     def test_common_prefix_len(self):
         assert _common_prefix_len([1, 2, 3], [1, 2, 3]) == 3  # identical
         assert _common_prefix_len([1, 2], [1, 2, 3, 4]) == 2  # old is a prefix of new
@@ -1127,8 +1156,8 @@ class TestReconciler(TrlTestCase):
     def test_rewrite_forks_into_two_rows(self):
         # Divergence inside turn 1's answer + a turn >= fork_threshold -> FORK. Every generated token is
         # trained in exactly one row (turn 1's tokens are context in row 2).
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
-        turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32])
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
+        turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32], [-0.2] * 3)
         rows = _finalize([turn1, turn2], fork_threshold=2)
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
@@ -1139,16 +1168,18 @@ class TestReconciler(TrlTestCase):
     def test_fork_when_divergence_precedes_last_response(self):
         # matched < last_response_start_idx -> FORK regardless of threshold (distinct from the length trigger).
         builder = _SampleBuilder(fork_threshold=1024)
-        builder.append_turn(TurnRecord([1, 2, 3], [10, 11]), DriftKind.CLEAN)  # last_response_start_idx == 3
+        builder.append_turn(
+            TurnRecord([1, 2, 3], [10, 11], [-0.2] * 2), DriftKind.CLEAN
+        )  # last_response_start_idx == 3
         # 5 held tokens, only the first matches -> 4 tokens of drift, reported alongside the kind.
-        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30])) == (DriftKind.FORK, 4)
+        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30], [-0.2] * 1)) == (DriftKind.FORK, 4)
 
     def test_drift_tally_counts_transitions(self):
         # The tally is what makes `fork_threshold_tokens` tunable: it reports the drift the threshold is compared
         # against. It counts turn TRANSITIONS, so a single-turn rollout has none.
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
-        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20])
-        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30])
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
+        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20], [-0.2] * 1)
+        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30], [-0.2] * 1)
 
         _rows, tally = _chain_to_sequences([turn1], "r0", 2)
         assert tally == {"clean": 0, "realign": 0, "fork": 0, "transitions": 0, "drift_tokens": 0, "drift_max": 0}
@@ -1173,8 +1204,8 @@ class TestReconciler(TrlTestCase):
         # the prompt diverges at the answer start (large drift) while turn 2's own answer is tiny. The decision must
         # key on the drift (6 tokens invalidated), not the incoming turn's length (1) -> FORK, so turn 1 keeps its
         # training signal. (fork_threshold sits between the two: gating on output length would wrongly REALIGN.)
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15])  # long trained answer
-        turn2 = TurnRecord([1, 2, 3, 99, 88], [30])  # answer dropped by the template; short next turn
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15], [-0.2] * 6)  # long trained answer
+        turn2 = TurnRecord([1, 2, 3, 99, 88], [30], [-0.2] * 1)  # answer dropped by the template; short next turn
         rows = _finalize([turn1, turn2], fork_threshold=3)
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13, 14, 15]
@@ -1183,117 +1214,60 @@ class TestReconciler(TrlTestCase):
         assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1]
 
 
-# A tool-calling assistant turn keeps the loop going; a plain turn ends it.
-_TOOL_CALL = {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [{"type": "function", "function": {"name": "t", "arguments": {}}}],
-}
-_FINAL = {"role": "assistant", "content": "done"}
+# The vLLM server's turns, opened by Qwen3's empty thinking block: a tool call continues the loop, an answer ends it
+_TOOL_CALL = '<think>\n\n</think>\n\n<tool_call>\n{"name": "t", "arguments": {}}\n</tool_call><|im_end|>'
+_FINAL = "<think>\n\n</think>\n\ndone<|im_end|>"
 
 
-def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max_iters=None):
-    """Drive _AsyncRolloutLoop._generate_one on scripted per-turn fixtures.
-
-    prompt_ids: list of the token list `apply_chat_template` returns each turn. turns: list of (turn_ids, logprobs)
-    `_generate_one_turn` returns each turn. assistants: list of the message `parse_response` returns each turn.
+def t() -> str:
     """
-    pq, tq, aq = list(prompt_ids), list(turns), list(assistants)
-    monkeypatch.setattr(worker, "parse_response", lambda tokenizer, ids, prefix=None: aq.pop(0))
+    Return ok.
+    """
+    return "ok"
 
-    class _StubTokenizer:
-        # `completions/clipped_ratio` reads these to decide whether the last turn ended on EOS. The scripted turn ids
-        # below never end on 0, so every fixture rollout counts as clipped — irrelevant to what these tests assert.
-        eos_token_id = 0
-        pad_token_id = 0
 
-        def apply_chat_template(self, messages, **kwargs):
-            return pq.pop(0)
-
-    loop = object.__new__(_AsyncRolloutLoop)  # skip the heavy __init__; set only what _generate_one reads
-    loop.tokenizer = _StubTokenizer()
-    loop.tools = []
-    loop.chat_template = None
-    loop.chat_template_kwargs = {}
-    loop.max_tool_calling_iterations = max_iters
-    loop._fork_threshold_tokens = fork_threshold
-    # `_generate_one` pushes its rollout-structure metrics; collect them instead of sending them to a queue.
-    loop._pushed_metrics = []
-    loop._counters = defaultdict(float)
-    loop._rates = defaultdict(lambda: [0.0, 0.0])
-    loop._push_metrics = loop._pushed_metrics.append
+def _run(*, turns, max_iters=None):
+    """
+    Drive `_AsyncRolloutLoop._generate_one` with the real tokenizer, chat template and response parser, scripting only
+    the vLLM server, which generates the text of `turns` one turn after the other.
+    """
+    loop = _rollout_loop(tools=[t], max_tool_calling_iterations=max_iters)
+    outputs = [loop.tokenizer.encode(text, add_special_tokens=False) for text in turns]
 
     async def _generate_one_turn(prompt_ids):
-        return tq.pop(0)
-
-    async def _execute_tool_calls(tool_calls, tool_dict):
-        return [{"role": "tool", "name": "t", "content": "ok"}], 1, 0
+        ids = outputs.pop(0)
+        return ids, [-0.1] * len(ids)
 
     loop._generate_one_turn = _generate_one_turn
-    loop._execute_tool_calls = _execute_tool_calls
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
-    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
+    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
 
 
+@require_response_parsing
 class TestRolloutLoop(TrlTestCase):
-    def test_single_turn_no_tool_call(self, monkeypatch):
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3]],
-            turns=[([10, 11], [-0.1, -0.2])],
-            assistants=[_FINAL],
-        )
+    def test_single_turn_no_tool_call(self):
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_FINAL])
         assert len(sequences) == 1
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1]
-        assert sequences[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2]
-        assert completion_ids == [10, 11]
+        n = len(completion_ids)
+        assert sequences[0].input_ids[-n:] == completion_ids
+        assert sequences[0].completion_mask == [0] * (len(sequences[0].input_ids) - n) + [1] * n
+        assert sequences[0].old_log_probs[-n:] == [-0.1] * n
         assert [m["role"] for m in completion] == ["assistant"]
         assert n_calls == 0 and n_failures == 0
 
-    def test_clean_two_turns_stay_one_row(self, monkeypatch):
-        # Turn 2's re-tokenized prompt starts with what we held (gen tokens + tool tokens) -> CLEAN.
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3], [1, 2, 3, 10, 11, 20, 21]],
-            turns=[([10, 11], [-0.1, -0.2]), ([30, 31], [-0.3, -0.4])],
-            assistants=[_TOOL_CALL, _FINAL],
-        )
+    def test_clean_two_turns_stay_one_row(self):
+        # The training chat template is prefix-preserving, so turn 2's re-tokenized prompt extends turn 1 -> one row
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_TOOL_CALL, _FINAL])
         assert len(sequences) == 1
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11, 20, 21, 30, 31]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1, 0, 0, 1, 1]  # prompt=0, gen=1, tool=0, gen=1
-        assert sequences[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2, 0.0, 0.0, -0.3, -0.4]
-        assert completion_ids == [10, 11, 30, 31]  # generated tokens only, both turns
+        assert sum(sequences[0].completion_mask) == len(completion_ids)  # every generated token is trained once
         assert [m["role"] for m in completion] == ["assistant", "tool", "assistant"]
+        assert completion[1]["content"] == "ok"
         assert n_calls == 1 and n_failures == 0
 
-    def test_history_rewrite_forks_into_two_rows(self, monkeypatch):
-        # Turn 2's prompt diverges inside turn 1's answer and the new turn is >= fork_threshold -> FORK.
-        _, _, sequences, _, _, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3], [1, 2, 3, 99, 88, 77]],
-            turns=[([10, 11, 12, 13], [-0.1] * 4), ([30, 31, 32], [-0.2] * 3)],
-            assistants=[_TOOL_CALL, _FINAL],
-            fork_threshold=2,
-        )
-        assert len(sequences) == 2
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1, 1, 1]
-        assert sequences[1].input_ids == [1, 2, 3, 99, 88, 77, 30, 31, 32]
-        assert sequences[1].completion_mask == [0, 0, 0, 0, 0, 0, 1, 1, 1]  # 6 context (rewritten history) + 3 gen
-        # Every generated token is trained exactly once across the rows.
-        assert sum(sum(s.completion_mask) for s in sequences) == 4 + 3
-
-    def test_max_tool_calling_iterations_caps_turns(self, monkeypatch):
+    def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
-        completion, _, sequences, n_calls, _, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3]],
-            turns=[([10, 11], [-0.1, -0.2])],
-            assistants=[_TOOL_CALL],
-            max_iters=0,
-        )
+        completion, _, sequences, n_calls, _, _ = _run(turns=[_TOOL_CALL], max_iters=0)
         assert len(sequences) == 1
         assert [m["role"] for m in completion] == ["assistant"]  # no tool message appended
         assert n_calls == 0
@@ -1309,16 +1283,6 @@ class AsyncTwoReward:
     # `inspect.iscoroutinefunction` does not see as asynchronous on its own.
     async def __call__(self, completions, **kwargs):
         return [1.0, 3.0]
-
-
-def _bare_loop(reward_funcs):
-    # _score_group only reads reward_funcs / reward_func_names / _env_reward_types off self, so we skip the heavy
-    # __init__ (tokenizer, asyncio loop, environments) and set just those.
-    loop = object.__new__(_AsyncRolloutLoop)
-    loop.reward_funcs = reward_funcs
-    loop.reward_func_names = [get_callable_name(f) for f in reward_funcs]
-    loop._env_reward_types = []  # no environment owns a reward in these tests
-    return loop
 
 
 def _group(completions_sequences, completions_ids):
@@ -1352,7 +1316,7 @@ class TestScoreGroupOptionThree(TrlTestCase):
         seq_b2 = TrainingSequence([1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10, 11], [20, 21, 30]])
 
-        samples = asyncio.run(_bare_loop([two_reward])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
         # 1 row for conv 0 + 2 rows for conv 1 = 3 samples.
         assert len(samples) == 3
@@ -1377,7 +1341,7 @@ class TestScoreGroupOptionThree(TrlTestCase):
         seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
-        samples = asyncio.run(_bare_loop([AsyncTwoReward()])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
 
         # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
         assert samples[0].metrics["rewards/AsyncTwoReward"] == 1.0
@@ -1391,7 +1355,7 @@ class TestScoreGroupOptionThree(TrlTestCase):
         seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10], [20, 30]])
 
-        samples = asyncio.run(_bare_loop([two_reward])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
         assert samples[0].metrics["reward"] == 1.0
         assert samples[1].metrics["reward"] == 3.0 and samples[2].metrics["reward"] == 3.0
@@ -1409,7 +1373,7 @@ class TestScoreGroupOptionThree(TrlTestCase):
         seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
-        samples = asyncio.run(_bare_loop([maybe_none])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
 
         assert len(samples) == 2
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
@@ -1616,11 +1580,7 @@ class TestSaveLoraAdapter(TrlTestCase):
 
 class TestRolloutRequestModel(TrlTestCase):
     def _loop(self, lora_name):
-        loop = _AsyncRolloutLoop.__new__(_AsyncRolloutLoop)
-        loop.model_name = "Qwen/Qwen3-4B"
-        loop.lora_name = lora_name
-        loop._model_version_value = mp.Value("i", 0)
-        return loop
+        return _rollout_loop(model_name="Qwen/Qwen3-4B", lora_name=lora_name)
 
     def test_dense_runs_request_the_base_model(self):
         assert self._loop(None)._request_model == "Qwen/Qwen3-4B"
@@ -1837,6 +1797,12 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         )
         assert trainer._lora_sync is False
         assert fake_vllm.requests == []
+
+    def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
+        # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
+        # would leave the other ranks waiting in the collective that shares the sync mode.
+        with pytest.raises(ValueError, match="--max-lora-rank"):
+            self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
