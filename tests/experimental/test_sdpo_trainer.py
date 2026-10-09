@@ -17,7 +17,7 @@ import logging
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, load_dataset
-from transformers import HfArgumentParser, TrainerCallback
+from transformers import AutoModelForCausalLM, HfArgumentParser, TrainerCallback
 
 from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
 
@@ -136,6 +136,33 @@ class TestSDPOTrainer(TrlTestCase):
 
         assert config.vllm_mode == "colocate"
         assert config.vllm_model_impl == "vllm"
+
+    def test_teacher_model_like_model_instance(self):
+        # A policy passed as an instance has no `model_init_kwargs`: the teacher is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = SDPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            distillation_mode="topk_logits",
+            distillation_topk=5,
+            distillation_is_clip=None,
+            report_to="none",
+        )
+        trainer = SDPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.teacher_model.dtype == torch.bfloat16
+        assert trainer.teacher_model.config._attn_implementation == "eager"
 
     def test_train(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
