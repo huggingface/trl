@@ -1024,6 +1024,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             implementation to disable trainer-side weight sync.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "async-grpo"]
     _name = "AsyncGRPO"
     _paper = {
@@ -1210,12 +1212,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         precision = self.accelerator.mixed_precision
         dtype = {

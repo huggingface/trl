@@ -1341,6 +1341,11 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    # transformers 5.2/5.3 pin a kernels<0.11 that fails to load the Hub kernels (fixed in 5.4.0, transformers#44887)
+    if kwargs.get("use_kernels") and Version("5.2.0") <= Version(transformers.__version__) < Version("5.4.0"):
+        raise ValueError(
+            "`use_kernels=True` requires transformers>=5.4.0: 5.2.0 and 5.3.0 fail to load the Hub kernels."
+        )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
     # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
@@ -1361,6 +1366,9 @@ def create_model_from_path(
             else:
                 architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
+    # transformers 5.3.0 skips tying remote-code tied embeddings, leaving them on meta (transformers#44469)
+    if Version(transformers.__version__) == Version("5.3.0"):
+        model.tie_weights()
     return model
 
 
