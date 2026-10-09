@@ -516,7 +516,8 @@ class TestChunkedLogProbFunction:
 
 @require_torch_accelerator
 class TestChunkedDivergenceFunction:
-    def test_torch_compile(self):
+    @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
+    def test_torch_compile(self, beta):
         # Inductor passes the float arguments (beta, temperature, logit scales, softcapping) as fp64
         torch.manual_seed(42)
         student_hidden = torch.randn(64, 32, device=torch_device, requires_grad=True)
@@ -526,7 +527,7 @@ class TestChunkedDivergenceFunction:
 
         def loss(student_hidden):
             divergence, _ = ChunkedDivergenceFunction.apply(
-                student_hidden, student_weight, None, teacher_hidden, teacher_weight, None, 0.5, 0.7, 0.5, 30.0
+                student_hidden, student_weight, None, teacher_hidden, teacher_weight, None, beta, 0.7, 0.5, 30.0
             )
             return divergence.sum()
 
