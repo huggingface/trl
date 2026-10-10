@@ -99,6 +99,25 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 > [!WARNING]
 > **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
 
+## Top-k and top-p sampling
+
+Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was actually drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
+    --max-model-len 4096 \
+    --logprobs-mode processed_logprobs \
+    --weight-transfer-config '{"backend":"nccl"}' \
+    --return-sampling-mask \
+    --enable-scale-out
+```
+
+```python
+config = AsyncGRPOConfig(top_p=0.95, top_k=512)
+```
+
+`--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts. An older vLLM cannot return the set, so the trainer keeps normalizing over the whole vocabulary and warns about the biased ratio.
+
 ## LoRA
 
 Pass a `peft_config` to train a LoRA adapter instead of the full model:

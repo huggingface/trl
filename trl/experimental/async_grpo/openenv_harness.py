@@ -275,8 +275,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
-        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
+        turn_ids, logprobs, sampling_mask = asyncio.run_coroutine_threadsafe(
+            self._generate_one_turn(prompt_ids), self._loop
+        ).result()
+        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs, output_sampling_mask=sampling_mask))
         message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
         return ModelStepResult(
             response=_msg_to_llm_response(message), prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs

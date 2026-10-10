@@ -396,6 +396,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "input_ids": sample.input_ids,
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
+                "sampling_mask": sample.sampling_mask,
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
                 "metrics": sample.metrics,  # per-sample rewards; aggregated by the collator, never sent to the model
@@ -559,6 +560,8 @@ class DataCollatorForRollout(DataCollatorMixin):
         (groups,) = examples
 
         input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
+        sampling_mask = []
+        mask_width = max(len(ids) for group in groups for example in group for ids in example["sampling_mask"])
         for group in groups:
             seq_lengths = [len(example["input_ids"]) for example in group]
             ids = [token for example in group for token in example["input_ids"]]
@@ -576,11 +579,18 @@ class DataCollatorForRollout(DataCollatorMixin):
                     [torch.full((n,), example["advantage"]) for example, n in zip(group, seq_lengths, strict=False)]
                 )
             )
+            sampling_mask.append(
+                torch.tensor(
+                    [ids + [-1] * (mask_width - len(ids)) for example in group for ids in example["sampling_mask"]],
+                    dtype=torch.long,
+                ).view(len(ids), mask_width)
+            )
 
         input_ids = pad(input_ids, padding_value=self.pad_token_id)
         attention_mask = pad(attention_mask, padding_value=0)
         completion_mask = pad(completion_mask, padding_value=0)
         old_log_probs = pad(old_log_probs, padding_value=0.0)
+        sampling_mask = pad(sampling_mask, padding_value=-1)
         position_ids = pad(position_ids, padding_value=0)
         advantages = pad(advantages, padding_value=0.0)
 
@@ -605,6 +615,7 @@ class DataCollatorForRollout(DataCollatorMixin):
             "attention_mask": attention_mask,
             "completion_mask": completion_mask,
             "old_log_probs": old_log_probs,
+            "sampling_mask": sampling_mask,
             "position_ids": position_ids,
             "advantages": advantages,
             "global_n_tokens": global_n_tokens,
@@ -1467,6 +1478,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "attention_mask",
                 "completion_mask",
                 "old_log_probs",
+                "sampling_mask",
                 "position_ids",
                 "advantages",
                 "global_n_tokens",
@@ -1485,6 +1497,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][mask_bool].unsqueeze(0)
         position_ids = inputs["position_ids"][mask_bool].unsqueeze(0)
         advantages = inputs["advantages"][mask_bool].unsqueeze(0)
+        sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
+        if sampling_mask.shape[-1] == 0:
+            sampling_mask = None
 
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
@@ -1493,6 +1508,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             input_ids=input_ids,
             position_ids=position_ids,
             labels=input_ids.masked_fill(completion_mask == 0, -100),
+            sampling_mask=sampling_mask,
             fused_lm_head=True,
             **router_kwargs,
         )
