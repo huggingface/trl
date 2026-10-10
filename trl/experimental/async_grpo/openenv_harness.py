@@ -152,14 +152,14 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 self._rates["rollout/correctness_mean"][0] += correctness
                 self._rates["rollout/correctness_mean"][1] += 1.0
             for name, count in metrics.pop("tool_calls_by_name").items():
-                self._counters[f"tools/{name}_call_total"] += count
+                self._counters[f"tools/{name}/call_total"] += count
             for name, count in metrics.pop("tool_failures_by_name").items():
-                self._counters[f"tools/{name}_failure_total"] += count
+                self._counters[f"tools/{name}/failure_total"] += count
             for name, elapsed in metrics.pop("tool_latency"):
                 self._rates["tools/latency_s"][0] += elapsed
                 self._rates["tools/latency_s"][1] += 1
-                self._rates[f"tools/{name}_latency_s"][0] += elapsed
-                self._rates[f"tools/{name}_latency_s"][1] += 1
+                self._rates[f"tools/{name}/latency_s"][0] += elapsed
+                self._rates[f"tools/{name}/latency_s"][1] += 1
             self._push_rollout_metrics(**metrics)
         return result
 
@@ -204,7 +204,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         tool_calls_by_name: dict[str, int] = {}
         tool_failures_by_name: dict[str, int] = {}
         tool_latency: list[tuple[str, float]] = []
-        generate_s = tool_s = None
         try:
             if self._stop_event.is_set():
                 return self._EMPTY_ROLLOUT, None
@@ -222,13 +221,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                         tool_failures_by_name[entry.tool_name] = tool_failures_by_name.get(entry.tool_name, 0) + 1
                 # A turn's tool calls run between its reply and the next request, so that gap (harness overhead
                 # included) is their latency. The trailing turn has no next request and is not timed.
-                gaps = [
-                    (names, t_request - t_reply)
+                tool_latency = [
+                    (name, t_request - t_reply)
                     for (_, t_reply, names), (t_request, _, _) in itertools.pairwise(turn_times)
+                    for name in names
                 ]
-                tool_latency = [(name, elapsed) for names, elapsed in gaps for name in names]
-                generate_s = sum(t_reply - t_request for t_request, t_reply, _ in turn_times)
-                tool_s = sum(elapsed for _, elapsed in gaps)
             else:
                 if not isinstance(session, TrainableSession):
                     raise CaptureContractError("loop-owning training requires OpenEnv fetch_training_trace()")
@@ -274,8 +271,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 tally=tally,
                 loop_exhausted=timed_out,
                 duration_s=time.monotonic() - t_dispatch,
-                generate_s=generate_s,
-                tool_s=tool_s,
                 tool_calls_by_name=tool_calls_by_name,
                 tool_failures_by_name=tool_failures_by_name,
                 tool_latency=tool_latency,

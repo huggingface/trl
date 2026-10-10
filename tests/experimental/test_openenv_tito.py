@@ -324,12 +324,10 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
     assert result[3:5] == (2, 1)
     payload = loop._metrics_queue.get_nowait()
-    assert payload["tools/bash_call_total"] == 1 and payload["tools/edit_call_total"] == 1
-    assert payload["tools/edit_failure_total"] == 1 and "tools/bash_failure_total" not in payload
+    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
+    assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
     assert payload["tools/latency_s"][1] == 2 and payload["tools/latency_s"][0] >= 0.04
-    assert payload["tools/bash_latency_s"][1] == 1 and payload["tools/edit_latency_s"][0] >= 0.04
-    assert payload["rollout/tool_s"] == (payload["tools/latency_s"][0] / 2, 1)
-    assert payload["rollout/generate_s"][1] == 1
+    assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.04
 
 
 def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
@@ -349,8 +347,8 @@ def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
     result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
     assert result[3:5] == (1, 1)
     payload = loop._metrics_queue.get_nowait()
-    assert payload["tools/bash_call_total"] == 1 and payload["tools/edit_failure_total"] == 1
-    assert "tools/latency_s" not in payload and "rollout/tool_s" not in payload
+    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
+    assert "tools/latency_s" not in payload
 
 
 def test_harness_worker_produces_scored_training_samples(make_loop):

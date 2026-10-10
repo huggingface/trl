@@ -577,12 +577,8 @@ class _AsyncRolloutLoop:
                         observation = await loop.run_in_executor(
                             self._tool_pool, functools.partial(environment.reset, **reset_kwargs)
                         )
-                        elapsed = time.monotonic() - t0
-                        self._rates["env/reset_s"][0] += elapsed
+                        self._rates["env/reset_s"][0] += time.monotonic() - t0
                         self._rates["env/reset_s"][1] += 1
-                        if self._multi_environment:
-                            self._rates[f"env/{name}_reset_s"][0] += elapsed
-                            self._rates[f"env/{name}_reset_s"][1] += 1
                     # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
                     # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
                     if "prompt" not in row and self.environment_factories is not None:
@@ -837,8 +833,6 @@ class _AsyncRolloutLoop:
         tally: dict[str, float],
         loop_exhausted: bool,
         duration_s: float,
-        generate_s: float | None = None,
-        tool_s: float | None = None,
     ) -> None:
         """One conversation's structure and its completion, aggregated per rollout."""
         transitions = tally["transitions"]
@@ -849,11 +843,6 @@ class _AsyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
-        if generate_s is not None:
-            self._rates["rollout/generate_s"][0] += generate_s
-            self._rates["rollout/generate_s"][1] += 1
-            self._rates["rollout/tool_s"][0] += tool_s
-            self._rates["rollout/tool_s"][1] += 1
         if completion_ids:
             # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
@@ -919,8 +908,6 @@ class _AsyncRolloutLoop:
         completion, completion_ids = [], []
         tool_call_count = 0
         tool_failure_count = 0
-        generate_s = 0.0
-        tool_s = 0.0
         iteration_num = 0
         loop_exhausted = False
         max_iterations = self.max_tool_calling_iterations
@@ -933,9 +920,7 @@ class _AsyncRolloutLoop:
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
             )
-            t0 = time.monotonic()
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            generate_s += time.monotonic() - t0
             assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
@@ -949,9 +934,7 @@ class _AsyncRolloutLoop:
                 # it had finished, so this is a silent truncation — hence the metric.
                 loop_exhausted = True
                 break
-            t0 = time.monotonic()
             tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
-            tool_s += time.monotonic() - t0
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
@@ -966,8 +949,6 @@ class _AsyncRolloutLoop:
             tally=tally,
             loop_exhausted=loop_exhausted,
             duration_s=time.monotonic() - t_dispatch,
-            generate_s=generate_s,
-            tool_s=tool_s,
         )
         return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 
@@ -982,14 +963,14 @@ class _AsyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
-            self._counters[f"tools/{name}_call_total"] += 1
+            self._counters[f"tools/{name}/call_total"] += 1
             tool = tool_dict.get(name)
             if tool is None:
                 # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
                 # and raised — which is an environment problem. Counted apart so the two are not one number.
                 n_failures += 1
                 self._counters["tools/unknown_name_total"] += 1
-                self._counters[f"tools/{name}_failure_total"] += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
             t0 = time.monotonic()
@@ -1001,13 +982,13 @@ class _AsyncRolloutLoop:
                     result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
-                self._counters[f"tools/{name}_failure_total"] += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
                 result = {"error": str(error)}
             elapsed = time.monotonic() - t0
             self._rates["tools/latency_s"][0] += elapsed
             self._rates["tools/latency_s"][1] += 1
-            self._rates[f"tools/{name}_latency_s"][0] += elapsed
-            self._rates[f"tools/{name}_latency_s"][1] += 1
+            self._rates[f"tools/{name}/latency_s"][0] += elapsed
+            self._rates[f"tools/{name}/latency_s"][1] += 1
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
         self._rates["tools/parallel_calls_mean"][0] += len(tool_calls)
         self._rates["tools/parallel_calls_mean"][1] += 1

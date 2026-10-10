@@ -786,7 +786,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             loop._loop.close()
 
     @require_response_parsing
-    def test_environment_and_tool_time_reach_the_metrics_queue(self):
+    def test_environment_calls_run_off_the_event_loop_and_are_timed(self):
         reset_threads = []
 
         class SlowEnvironment:
@@ -832,11 +832,8 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                     rates[key][0] += value[0]
                     rates[key][1] += value[1]
         assert reset_threads and all(t is not threading.main_thread() for t in reset_threads)
-        assert rates["env/reset_s"][1] >= 2 and rates["env/reset_s"][0] / rates["env/reset_s"][1] >= 0.02
-        assert rates["env/reward_s"][0] / rates["env/reward_s"][1] >= 0.02
-        assert rates["rollout/tool_s"][0] / rates["rollout/tool_s"][1] >= 0.02
-        assert rates["tools/step_latency_s"][0] / rates["tools/step_latency_s"][1] >= 0.02
-        assert rates["rollout/generate_s"][1] == rates["rollout/tool_s"][1]
+        for key in ("env/reset_s", "env/reward_s", "tools/step/latency_s"):
+            assert rates[key][0] / rates[key][1] >= 0.02
 
     def test_unknown_environment_raises(self):
         # An example whose `environment` field doesn't match any configured environment should fail with a clear error
@@ -1065,7 +1062,7 @@ class TestWorkerMetricPush(TrlTestCase):
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = _rollout_loop()
-        loop._counters["tools/search_call_total"] += 2
+        loop._counters["tools/search/call_total"] += 2
         loop._rates["tools/latency_s"][0] += 3.0
         loop._rates["tools/latency_s"][1] += 2
         loop._push_metrics({"rollout/score_s": 0.5})
@@ -1073,7 +1070,7 @@ class TestWorkerMetricPush(TrlTestCase):
         payload = loop._metrics_queue.get(timeout=5)
         assert payload == {
             "rollout/score_s": 0.5,
-            "tools/search_call_total": 2.0,
+            "tools/search/call_total": 2.0,
             "tools/latency_s": (3.0, 2.0),
         }
         # Counters carry deltas: whatever was pushed must not be pushed again.
@@ -1123,7 +1120,7 @@ class TestToolExecution(TrlTestCase):
         assert messages[1]["content"] == "async:2"
         assert "boom:3" in messages[2]["content"]
         assert "unknown tool" in messages[3]["content"]
-        assert loop._counters["tools/failing_tool_failure_total"] == 1
+        assert loop._counters["tools/failing_tool/failure_total"] == 1
         assert loop._counters["tools/unknown_name_total"] == 1
         assert loop._rates["tools/latency_s"][1] == 3
 
