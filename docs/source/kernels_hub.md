@@ -15,6 +15,24 @@ To use kernels with TRL, you'd need to install the library in your Python enviro
 pip install kernels
 ```
 
+## Enabling Hub kernels with `use_kernels`
+
+The quickest way to use Hub kernels is the `use_kernels` switch available in all trainer configs. It loads the model with the Hub kernels and a FlashAttention kernel (`kernels-community/flash-attn2`):
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., use_kernels=True)
+```
+
+Or from the command line:
+
+```bash
+trl sft ... --use_kernels
+```
+
+`use_kernels=True` is a shorthand for `model_init_kwargs={"use_kernels": True, "attn_implementation": "kernels-community/flash-attn2"}`. If you set `attn_implementation` in `model_init_kwargs`, your value is kept, so you can pick another kernel such as `kernels-community/vllm-flash-attn3`. The switch only applies when the trainer loads the model for you, that is, when `model` is passed as a string.
+
 ## Using Kernels from the Hub in TRL
 
 Kernels can directly replace attention implementations, removing the need to manually compile attention backends like Flash Attention and boosting training speed just by pulling the respective attention kernel from the Hub.

@@ -674,7 +674,7 @@ class RLOOTrainer(_BaseTrainer):
         if args.use_liger_kernel:
             warnings.warn(
                 "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
-                'with `model_init_kwargs={"use_kernels": True}`.',
+                "with `use_kernels=True`.",
                 FutureWarning,
                 stacklevel=2,
             )

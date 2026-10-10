@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 from transformers import TrainingArguments
 
+from ..import_utils import is_kernels_available
+
 
 @dataclass
 class _BaseConfig(TrainingArguments):
@@ -40,16 +42,25 @@ class _BaseConfig(TrainingArguments):
         lr_scheduler_kwargs (`dict` or `str`, *optional*):
             Additional parameters for the lr_scheduler, such as `{'num_cycles': 1}` for cosine with hard restarts. See
             the documentation of each scheduler for possible values.
+        use_kernels (`bool`, *optional*, defaults to `False`):
+            Whether to load the model with [Hub kernels](https://huggingface.co/kernels-community) and a FlashAttention
+            kernel. Shorthand for `model_init_kwargs={"use_kernels": True, "attn_implementation":
+            "kernels-community/flash-attn2"}`; an `attn_implementation` set in `model_init_kwargs` takes precedence.
+            Requires the `kernels` library (`pip install trl[kernels]`) and only applies when the `model` argument of
+            the trainer is a string.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
             Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations: transformers patches the
             model's layers with Liger's Triton kernels. Deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`],
-            [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0: use `model_init_kwargs={"use_kernels":
-            True}` instead.
+            [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0: use `use_kernels=True` instead.
         torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
             will not be emptied. This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of
             about [10% slower performance](https://github.com/huggingface/transformers/issues/31372).
     """
+
+    # FlashAttention kernel that `use_kernels=True` sets as `attn_implementation` when `model_init_kwargs` doesn't. Set
+    # to `None` in configs whose trainer fixes the attention implementation itself.
+    _USE_KERNELS_ATTN_IMPLEMENTATION = "kernels-community/flash-attn2"
 
     # Override fields from TrainingArguments to set defaults preferred by all TRL trainers.
     logging_steps: float = field(
@@ -84,6 +95,15 @@ class _BaseConfig(TrainingArguments):
         },
     )
 
+    use_kernels: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to load the model with Hub kernels and a FlashAttention kernel. Shorthand for "
+            "`model_init_kwargs={'use_kernels': True, 'attn_implementation': 'kernels-community/flash-attn2'}`; an "
+            "`attn_implementation` set in `model_init_kwargs` takes precedence. Requires the `kernels` library."
+        },
+    )
+
     # Override fields from TrainingArguments whose help strings contain unescaped "%" characters.
     # argparse interprets "%" as a format specifier, raising TypeError when rendering --help output.
     # Fixed upstream in transformers v5.3.0, but overridden here to support older versions.
@@ -93,7 +113,7 @@ class _BaseConfig(TrainingArguments):
         metadata={
             "help": "Enable Liger Kernel optimizations: transformers patches the model's layers with Liger's Triton kernels. "
             "Deprecated in `SFTTrainer`, `DPOTrainer`, `KTOTrainer`, `GRPOTrainer` and `RLOOTrainer`, and will be "
-            'removed in v2.0.0: use `model_init_kwargs={"use_kernels": True}` instead.'
+            "removed in v2.0.0: use `use_kernels=True` instead."
         },
     )
     # - Introduced in v4.54.1; fixed in v5.3.0
@@ -108,3 +128,30 @@ class _BaseConfig(TrainingArguments):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
+
+        self._apply_use_kernels()
+
+    def _apply_use_kernels(self):
+        """Fold `use_kernels` into `model_init_kwargs`, the single place trainers read the loading kwargs from."""
+        if not self.use_kernels:
+            return
+        if not hasattr(self, "model_init_kwargs"):
+            raise ValueError(
+                f"`use_kernels=True` is not supported by `{type(self).__name__}`: it has no `model_init_kwargs` to "
+                "load the model with the Hub kernels."
+            )
+        if not is_kernels_available():
+            raise ImportError(
+                "`use_kernels=True` requires the `kernels` library. Install it with `pip install kernels` (or "
+                "`pip install trl[kernels]`)."
+            )
+        model_init_kwargs = dict(self.model_init_kwargs or {})  # copy to avoid mutating the user's dict
+        if model_init_kwargs.get("use_kernels") is False:
+            raise ValueError(
+                "`use_kernels=True` conflicts with `model_init_kwargs={'use_kernels': False}`. Set it in only one "
+                "place, preferably as a config argument."
+            )
+        model_init_kwargs["use_kernels"] = True
+        if self._USE_KERNELS_ATTN_IMPLEMENTATION is not None:
+            model_init_kwargs.setdefault("attn_implementation", self._USE_KERNELS_ATTN_IMPLEMENTATION)
+        self.model_init_kwargs = model_init_kwargs

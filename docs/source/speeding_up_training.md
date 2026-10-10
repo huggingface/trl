@@ -128,8 +128,10 @@ You can use pre-optimized attention kernels from the Hub without manual compilat
 ```python
 from trl import SFTConfig
 
-training_args = SFTConfig(..., model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"})
+training_args = SFTConfig(..., use_kernels=True)
 ```
+
+`use_kernels=True` loads the model with the Hub kernels and the `kernels-community/flash-attn2` attention kernel. To choose the attention kernel yourself, set `model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"}` instead (or in addition: it takes precedence).
 
 Other options include `kernels-community/vllm-flash-attn3` and `kernels-community/paged-attention`.
 

@@ -164,6 +164,9 @@ class AsyncGRPOConfig(_BaseConfig):
     >   decaying schedule together with an explicit `max_steps`.
     """
 
+    # The trainer fixes `attn_implementation` to a FlashAttention 3 kernel, so `use_kernels=True` must not set it
+    _USE_KERNELS_ATTN_IMPLEMENTATION = None
+
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
 
     # Parameters that control the model

@@ -178,6 +178,9 @@ class AsyncDistillationConfig(_BaseConfig):
     > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
     """
 
+    # The trainer fixes `attn_implementation` to a FlashAttention 3 kernel, so `use_kernels=True` must not set it
+    _USE_KERNELS_ATTN_IMPLEMENTATION = None
+
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "teacher_server_urls",
