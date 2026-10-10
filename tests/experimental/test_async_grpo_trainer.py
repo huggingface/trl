@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import threading
 import time
 from collections import OrderedDict, defaultdict
 from types import SimpleNamespace
@@ -784,6 +785,56 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         finally:
             loop._loop.close()
 
+    @require_response_parsing
+    def test_environment_calls_run_off_the_event_loop_and_are_timed(self):
+        reset_threads = []
+
+        class SlowEnvironment:
+            def reset(self, **kwargs):
+                reset_threads.append(threading.current_thread())
+                time.sleep(0.02)
+
+            def step(self) -> str:
+                """
+                Take a step.
+                """
+                time.sleep(0.02)
+                return "ok"
+
+            def get_reward(self):
+                time.sleep(0.02)
+                loop._stop_event.set()
+                return 1.0
+
+        loop = self._make_loop(SlowEnvironment)
+        tool_call = loop.tokenizer.encode(_TOOL_CALL.replace('"t"', '"step"'), add_special_tokens=False)
+        final = loop.tokenizer.encode(_FINAL, add_special_tokens=False)
+
+        async def _generate_one_turn(prompt_ids):
+            ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
+            return ids, [-0.1] * len(ids)
+
+        loop._generate_one_turn = _generate_one_turn
+        PartialState()
+        try:
+            loop._loop.run_until_complete(loop._run_loops(stop_event=loop._stop_event))
+        finally:
+            loop._loop.close()
+
+        rates = defaultdict(lambda: [0.0, 0.0])
+        while True:
+            try:
+                payload = loop._metrics_queue.get(timeout=1)
+            except queue.Empty:
+                break
+            for key, value in payload.items():
+                if isinstance(value, tuple):
+                    rates[key][0] += value[0]
+                    rates[key][1] += value[1]
+        assert reset_threads and all(t is not threading.main_thread() for t in reset_threads)
+        for key in ("env/reset_s", "env/reward_s", "tools/step/latency_s"):
+            assert rates[key][0] / rates[key][1] >= 0.02
+
     def test_unknown_environment_raises(self):
         # An example whose `environment` field doesn't match any configured environment should fail with a clear error
         # rather than a bare KeyError mid-rollout. The check fires before any generation, so no vLLM is needed here.
@@ -1011,7 +1062,7 @@ class TestWorkerMetricPush(TrlTestCase):
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = _rollout_loop()
-        loop._counters["tools/search_call_total"] += 2
+        loop._counters["tools/search/call_total"] += 2
         loop._rates["tools/latency_s"][0] += 3.0
         loop._rates["tools/latency_s"][1] += 2
         loop._push_metrics({"rollout/score_s": 0.5})
@@ -1019,7 +1070,7 @@ class TestWorkerMetricPush(TrlTestCase):
         payload = loop._metrics_queue.get(timeout=5)
         assert payload == {
             "rollout/score_s": 0.5,
-            "tools/search_call_total": 2.0,
+            "tools/search/call_total": 2.0,
             "tools/latency_s": (3.0, 2.0),
         }
         # Counters carry deltas: whatever was pushed must not be pushed again.
@@ -1069,7 +1120,7 @@ class TestToolExecution(TrlTestCase):
         assert messages[1]["content"] == "async:2"
         assert "boom:3" in messages[2]["content"]
         assert "unknown tool" in messages[3]["content"]
-        assert loop._counters["tools/failing_tool_failure_total"] == 1
+        assert loop._counters["tools/failing_tool/failure_total"] == 1
         assert loop._counters["tools/unknown_name_total"] == 1
         assert loop._rates["tools/latency_s"][1] == 3
 

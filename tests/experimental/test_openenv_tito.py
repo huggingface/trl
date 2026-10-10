@@ -18,6 +18,7 @@ import asyncio
 import itertools
 import queue
 import threading
+import time
 from collections import defaultdict
 from functools import partial
 from types import SimpleNamespace
@@ -29,7 +30,7 @@ from accelerate import PartialState
 
 pytest.importorskip("openenv.core.harness.training")
 
-from openenv.core.harness import TrainingTrace
+from openenv.core.harness import HarnessRolloutResult, ToolResult, ToolTraceEntry, TrainingTrace
 
 from trl.experimental.async_grpo import openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
@@ -131,6 +132,7 @@ def make_loop():
             dataset=[{"prompt": [{"role": "user", "content": "task"}]}],
             reward_funcs=[],
             processing_class=tokenizer,
+            eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
             model_version_value=SimpleNamespace(value=0),
             heartbeat_value=SimpleNamespace(value=0.0),
@@ -293,6 +295,60 @@ def test_concurrent_correctness_metrics_stay_on_event_loop(make_loop):
     metrics = [loop._metrics_queue.get_nowait() for _ in results]
     assert sum(item["rollout/correctness_mean"][0] for item in metrics) == 8.0
     assert sum(item["rollout/correctness_mean"][1] for item in metrics) == 32
+
+
+def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch):
+    """The adapter runs the tools between two model turns; that gap is logged as their latency, by name."""
+    call = {"type": "function", "function": {"name": "bash", "arguments": {}}}
+    replies = iter([{"role": "assistant", "tool_calls": [call, {**call, "function": {"name": "edit"}}]}, {}])
+    monkeypatch.setattr(openenv_harness, "parse_response", lambda *args, **kwargs: next(replies))
+
+    class Adapter:
+        def run_white_box(self, step, session, limits):
+            trace = []
+            for tc in step([{"role": "user", "content": "task"}], [], {}).response.tool_calls:
+                time.sleep(0.02)
+                trace.append(ToolTraceEntry(tc.name, tc.args, ToolResult(error="boom" if tc.name == "edit" else None)))
+            step([{"role": "user", "content": "task"}], [], {})
+            return HarnessRolloutResult(messages=[{"role": "assistant", "content": "done"}], tool_trace=trace)
+
+    loop = make_loop(
+        SimpleNamespace(create=lambda *args, **kwargs: Session(captured_entry())), harness_adapter=Adapter()
+    )
+    loop.tokenizer.apply_chat_template = MagicMock(return_value=[1])
+
+    async def generate_one_turn(prompt_ids):
+        return [2, 3], [-0.1, -0.2]
+
+    loop._generate_one_turn = generate_one_turn
+    result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
+    assert result[3:5] == (2, 1)
+    payload = loop._metrics_queue.get_nowait()
+    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
+    assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
+    assert payload["tools/latency_s"][1] == 2 and payload["tools/latency_s"][0] >= 0.04
+    assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.04
+
+
+def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
+    """Captured tool results carry `tool_call_id`, not a name; failures still land on the right tool."""
+    row = captured_entry()
+    row["request"]["messages"] = [
+        {"role": "user", "content": "task"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "a", "function": {"name": "bash"}}, {"id": "b", "function": {"name": "edit"}}],
+        },
+        {"role": "tool", "tool_call_id": "a", "content": "ok"},
+        {"role": "tool", "tool_call_id": "b", "content": "Traceback: boom"},
+    ]
+    row["response"]["choices"][0]["message"]["tool_calls"] = [{"id": "c", "function": {"name": "bash"}}]
+    loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: Session(row)))
+    result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
+    assert result[3:5] == (1, 1)
+    payload = loop._metrics_queue.get_nowait()
+    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
+    assert "tools/latency_s" not in payload
 
 
 def test_harness_worker_produces_scored_training_samples(make_loop):
