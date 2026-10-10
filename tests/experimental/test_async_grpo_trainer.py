@@ -110,6 +110,7 @@ class _StubRolloutWorker:
                     input_ids=prompt_ids + completion_ids,
                     completion_mask=[0] * len(prompt_ids) + [1] * len(completion_ids),
                     old_log_probs=[0.0] * len(prompt_ids) + [-0.5] * len(completion_ids),
+                    sampling_mask=[[] for _ in prompt_ids + completion_ids],
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
@@ -818,6 +819,7 @@ def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) ->
         "input_ids": list(range(length)),
         "completion_mask": [0] + [1] * (length - 1),
         "old_log_probs": [0.0] * length,
+        "sampling_mask": [[] for _ in range(length)],
         "advantage": advantage,
         "group_id": 0,
         "metrics": {"reward": reward},
@@ -929,6 +931,23 @@ class TestPackingAwareBatching(TrlTestCase):
         assert batch["global_n_forward_tokens"].tolist() == [5.0, 5.0]  # every token forwarded, prompts included
         # Per-sample rewards are aggregated here on rank 0 rather than broadcast with the batch and reduced back.
         assert collator.metrics["reward"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
+
+    def test_collator_pads_sampling_masks_to_the_widest(self):
+        # Candidate sets are ragged across tokens and samples: padded with -1 to the widest in the micro-batch.
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
+        a = _rollout_sample(3)
+        a["sampling_mask"] = [[], [1, 5, 7], [2]]
+        b = _rollout_sample(2)
+        b["sampling_mask"] = [[], [1, 9]]
+
+        batch = collator([[[a], [b]]])
+
+        assert batch["sampling_mask"].tolist() == [
+            [[-1, -1, -1], [1, 5, 7], [2, -1, -1]],
+            [[-1, -1, -1], [1, 9, -1], [-1, -1, -1]],
+        ]
+        batch = collator([[[_rollout_sample(3)], [_rollout_sample(2)]]])
+        assert batch["sampling_mask"].shape == (2, 3, 0)
 
     def test_collator_packs_multiple_samples_per_row(self):
         # Two samples per row: position_ids reset at each sequence start and advantages expand per token.
@@ -1124,7 +1143,18 @@ class TestReconciler(TrlTestCase):
         assert rows[0].input_ids == [1, 2, 3, 10, 11]
         assert rows[0].completion_mask == [0, 0, 0, 1, 1]
         assert rows[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2]
+        assert rows[0].sampling_mask == [[], [], [], [], []]
         assert rows[0].rollout_id == "r0"
+
+    def test_sampling_mask_follows_the_sampled_tokens(self):
+        # Candidate sets ride with the sampled tokens; the prompt and a realigned tail are context and carry none.
+        turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2], output_sampling_mask=[[10, 12], [11]])
+        turn2 = TurnRecord([1, 2, 3, 10, 99, 20], [30], [-0.3], output_sampling_mask=[[30, 31, 32]])
+        rows = _finalize([turn1, turn2])
+        assert len(rows) == 1
+        assert rows[0].input_ids == [1, 2, 3, 10, 99, 20, 30]
+        assert rows[0].completion_mask == [0, 0, 0, 1, 0, 0, 1]
+        assert rows[0].sampling_mask == [[], [], [], [10, 12], [], [], [30, 31, 32]]
 
     def test_clean_chain_stays_one_row(self):
         # Turn 2's re-tokenized prompt starts with the held tokens (gen [10,11] + tool [20,21]) -> CLEAN.
@@ -1219,12 +1249,96 @@ def _run(*, turns, max_iters=None):
 
     async def _generate_one_turn(prompt_ids):
         ids = outputs.pop(0)
-        return ids, [-0.1] * len(ids)
+        return ids, [-0.1] * len(ids), None
 
     loop._generate_one_turn = _generate_one_turn
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
     return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
+
+
+class TestGenerateOneTurn(TrlTestCase):
+    def _generate(self, loop, response):
+        requests = []
+
+        async def fake_post(path, payload, timeout):
+            requests.append((path, payload))
+            return response
+
+        loop._post = fake_post
+        return requests, asyncio.run(loop._generate_one_turn([1, 2, 3]))
+
+    def test_full_vocabulary_sampling_uses_the_completions_endpoint(self):
+        loop = _rollout_loop()
+        response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        assert requests[0][0] == "/v1/completions"
+        assert requests[0][1]["prompt"] == [1, 2, 3]
+        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], None)
+
+    def test_truncated_sampling_returns_the_candidate_sets(self):
+        loop = _rollout_loop(top_p=0.9, top_k=4)
+        response = {
+            "choices": [
+                {
+                    "token_ids": [4, 5],
+                    "logprobs": {
+                        "content": [{"token": "token_id:4", "logprob": -0.1}, {"token": "token_id:5", "logprob": -0.2}]
+                    },
+                    "sampling_mask": [[4, 7], [5]],
+                }
+            ]
+        }
+        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        assert requests[0][0] == "/inference/v1/generate"
+        assert requests[0][1]["token_ids"] == [1, 2, 3]
+        assert requests[0][1]["sampling_params"]["top_p"] == 0.9
+        assert requests[0][1]["sampling_params"]["top_k"] == 4
+        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]])
+
+    def _check(self, loop, model_config, paths):
+        class FakeSession:
+            def get(self, url, **kwargs):
+                body = (
+                    {"vllm_config": {"model_config": model_config}}
+                    if url.endswith("/server_info")
+                    else {"paths": paths}
+                )
+
+                class Response:
+                    async def __aenter__(self):
+                        return self
+
+                    async def __aexit__(self, *exc):
+                        pass
+
+                    def raise_for_status(self):
+                        pass
+
+                    async def json(self):
+                        return body
+
+                return Response()
+
+        loop.session = FakeSession()
+        asyncio.run(loop._check_sampling_replay())
+
+    def test_truncated_sampling_checks_the_server_up_front(self):
+        loop = _rollout_loop(top_p=0.9, top_k=4)
+        self._check(loop, {"return_sampling_mask": True}, {"/inference/v1/generate": {}})
+        with pytest.raises(RuntimeError, match="--return-sampling-mask"):
+            self._check(loop, {"return_sampling_mask": False}, {"/inference/v1/generate": {}})
+        with pytest.raises(RuntimeError, match="--enable-scale-out"):
+            self._check(loop, {"return_sampling_mask": True}, {"/v1/completions": {}})
+        with pytest.raises(RuntimeError, match="vLLM server \\(>= 0.28\\)"):
+            self._check(loop, {}, {"/inference/v1/generate": {}})
+        loop = _rollout_loop()
+        loop.session = None
+        asyncio.run(loop._check_sampling_replay())
+
+    def test_top_p_requires_top_k(self):
+        with pytest.raises(ValueError, match="top_k"):
+            AsyncGRPOConfig(top_p=0.9)
 
 
 @require_response_parsing
@@ -1294,9 +1408,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
     def test_one_advantage_per_conversation_stamped_on_every_row(self):
         # conv 0: one row; conv 1: two rows (a fork).
-        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], "c0")
-        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], "c1")
-        seq_b2 = TrainingSequence([1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], "c1")
+        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], [[]] * 5, "c0")
+        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], [[]] * 5, "c1")
+        seq_b2 = TrainingSequence([1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], [[]] * 6, "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10, 11], [20, 21, 30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
@@ -1320,8 +1434,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert all(s.model_version == 7 for s in samples)
 
     def test_async_callable_class_reward_func_is_awaited(self):
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
-        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
@@ -1333,9 +1447,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[1].advantage == pytest.approx(1.0)
 
     def test_metrics_are_per_conversation_and_independent(self):
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
-        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
-        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
+        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
+        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], [[]] * 4, "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10], [20, 30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
@@ -1352,8 +1466,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         def maybe_none(completions, **kwargs):
             return [None, 2.0]
 
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
-        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
