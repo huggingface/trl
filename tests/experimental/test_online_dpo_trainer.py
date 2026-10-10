@@ -169,6 +169,29 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    @pytest.mark.parametrize("model_as_str", [True, False])
+    def test_train_without_processing_class(self, model_as_str):
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        trainer = OnlineDPOTrainer(
+            model=self.model_id if model_as_str else self.model,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+        assert trainer.processing_class.name_or_path == self.model_id
+        trainer.train()
+
+        assert "train_loss" in trainer.state.log_history[-1]
+
     def test_train_with_ref_model(self):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
