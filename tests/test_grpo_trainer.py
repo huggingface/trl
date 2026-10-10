@@ -1927,6 +1927,109 @@ class TestGRPOTrainer(TrlTestCase):
                 "threshold is high enough to keep every sequence"
             )
 
+    @pytest.mark.parametrize("vllm_importance_sampling_mode", ["sequence_truncate", "sequence_mask"])
+    def test_sequence_level_vllm_is_ratio_uses_mean(self, vllm_importance_sampling_mode):
+        # Regression test for #5814: the vLLM importance-sampling correction aggregated per-token log-prob
+        # differences with sum instead of a masked mean in the sequence-level modes. The summed difference has
+        # variance that scales with completion length, so after exp() and the clamp the ratio was deflated and
+        # noisy even when the vLLM and trainer logprobs agreed -- unlike the policy importance sampling in the
+        # same file, which uses a masked mean at sequence level.
+        #
+        # This drives the real trainer instead of re-deriving the arithmetic: the sampling logprobs are the
+        # trainer's own recomputed logprobs plus small noise, so with the fix the ratio is ~1.0 with tight
+        # spread, while the old sum-based aggregation deflates the mean and widens the spread.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            num_generations=4,
+            max_completion_length=64,
+            max_steps=1,
+            report_to="none",
+        )
+
+        def varied_reward(completions, **kwargs):
+            return [float(i) for i in range(len(completions))]
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Enable the correction after construction so that no vLLM server is required.
+        trainer.use_vllm = True
+        trainer.vllm_importance_sampling_correction = True
+        trainer.vllm_importance_sampling_mode = vllm_importance_sampling_mode
+
+        original_generate = trainer._generate
+
+        def generate_with_noisy_sampling_logps(prompts):
+            # Generation itself must take the ordinary path, so drop the flag for the duration of the call and
+            # restore it afterwards for the loss, which is where the correction is applied.
+            trainer.use_vllm = False
+            try:
+                outputs = list(original_generate(prompts))
+            finally:
+                trainer.use_vllm = True
+            prompt_ids, completion_ids = outputs[0], outputs[1]
+            device = trainer.accelerator.device
+            pad_id = trainer.processing_class.pad_token_id
+            # Mirror the trainer's right-padding so the recomputed logprobs line up with the completion tokens.
+            max_prompt_len = max(len(ids) for ids in prompt_ids)
+            max_completion_len = max(len(ids) for ids in completion_ids)
+            padded_prompts = [ids + [pad_id] * (max_prompt_len - len(ids)) for ids in prompt_ids]
+            padded_completions = [ids + [pad_id] * (max_completion_len - len(ids)) for ids in completion_ids]
+            input_ids = torch.tensor(
+                [prompt + completion for prompt, completion in zip(padded_prompts, padded_completions)],
+                device=device,
+            )
+            attention_mask = torch.ones_like(input_ids)
+            with torch.no_grad():
+                old_per_token_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                    trainer.model, input_ids, attention_mask, max_completion_len
+                )
+            # Sampling logprobs that agree with the trainer up to small noise: the per-token difference is
+            # ~N(0, 0.1), so a masked-mean aggregation must yield a ratio ~1.0 with tight spread.
+            torch.manual_seed(0)
+            sampling_logps = old_per_token_logps + torch.randn_like(old_per_token_logps) * 0.1
+            outputs[4] = [sampling_logps[i, : len(ids)].tolist() for i, ids in enumerate(completion_ids)]
+            return tuple(outputs)
+
+        trainer._generate = generate_with_noisy_sampling_logps
+
+        # Capture the importance-sampling ratio the trainer actually produces.
+        original_score = trainer._generate_and_score_completions
+        recorded_ratios = []
+
+        def record_ratio(inputs):
+            outputs = original_score(inputs)
+            recorded_ratios.append(outputs["importance_sampling_ratio"].detach().cpu())
+            return outputs
+
+        trainer._generate_and_score_completions = record_ratio
+
+        trainer.train()
+
+        assert recorded_ratios, "no importance-sampling ratio was recorded, so nothing was verified"
+        ratio = torch.cat([r.flatten() for r in recorded_ratios])
+        # A masked mean keeps the ratio at ~1.0 with tight spread; the old sum let the variance grow with
+        # completion length, deflating the mean and widening the spread (and tripping the clamp).
+        assert abs(ratio.mean().item() - 1.0) < 0.2, (
+            f"sequence-level IS ratio mean is {ratio.mean().item():.3f} in {vllm_importance_sampling_mode} mode: "
+            f"the per-token differences must be averaged, not summed"
+        )
+        assert ratio.std().item() < 0.2, (
+            f"sequence-level IS ratio std is {ratio.std().item():.3f} in {vllm_importance_sampling_mode} mode: "
+            f"its variance must not scale with completion length"
+        )
+        assert ratio.min().item() > 0.3, (
+            f"sequence-level IS ratio min is {ratio.min().item():.3f} in {vllm_importance_sampling_mode} mode: "
+            f"the clamp must not be deflating agreeing logprobs"
+        )
+
     def test_train_with_off_policy_mask(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
