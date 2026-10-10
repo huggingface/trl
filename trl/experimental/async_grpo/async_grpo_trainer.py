@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import contextlib
 import contextvars
 import itertools
 import json
@@ -1225,6 +1226,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        self._filtered_groups: set[int] = set()
         # Tracks restart to match `num_train_epochs`
         self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
@@ -1846,9 +1848,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            trained = self._trained_groups
-            first_untrained = next(g for g in itertools.count() if g not in trained)
-            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            with contextlib.suppress(queue.Empty):
+                while True:
+                    self._filtered_groups.add(self.rollout_worker.filtered_groups.get_nowait())
+            done = self._trained_groups | self._filtered_groups
+            first_undone = next(g for g in itertools.count() if g not in done)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_undone
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}

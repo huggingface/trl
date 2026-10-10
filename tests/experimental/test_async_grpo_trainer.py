@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import contextlib
 import itertools
 import json
 import math
@@ -581,6 +582,7 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
     # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    trainer.rollout_worker.filtered_groups = queue.Queue()
     return trainer
 
 
@@ -615,6 +617,16 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
+
+    def test_save_checkpoint_skips_filtered_groups(self):
+        trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=10)
+        trainer.rollout_worker.filtered_groups.put(2)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(trainer.model, None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == 15
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
@@ -697,6 +709,7 @@ def _rollout_loop(**kwargs):
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
         "metrics_queue": mp.Queue(),
+        "filtered_groups": mp.Queue(),
         **kwargs,
     }
     return _AsyncRolloutLoop(**kwargs)
@@ -1340,8 +1353,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
-        assert samples[0].metrics["reward"] == 1.0
-        assert samples[1].metrics["reward"] == 3.0 and samples[2].metrics["reward"] == 3.0
+        assert samples[0].metrics["reward_kept"] == 1.0
+        assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
         assert samples[0].metrics["reward_std"] == pytest.approx(1.0)
         assert samples[1].metrics["rewards/two_reward"] == 3.0
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
@@ -1350,19 +1363,59 @@ class TestScoreGroupOptionThree(TrlTestCase):
     def test_all_none_reward_conversation_is_unscorable(self):
         # A conversation for which every reward func returns None gets advantage 0 and NaN reward.
         def maybe_none(completions, **kwargs):
-            return [None, 2.0]
+            return [None, 2.0, 4.0]
 
         seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
         seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
-        group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+        seq_c = TrainingSequence([1, 2, 30], [0, 0, 1], [0, 0, -0.3], "c2")
+        group = _group([[seq_a], [seq_b], [seq_c]], completions_ids=[[10], [20], [30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
 
-        assert len(samples) == 2
+        assert len(samples) == 3
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
-        assert math.isnan(samples[0].metrics["reward"])
-        assert samples[1].advantage == 0.0  # only one scorable row -> zero-centered
-        assert samples[1].metrics["reward"] == 2.0
+        assert math.isnan(samples[0].metrics["reward_kept"])
+        assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
+        assert samples[1].metrics["reward_kept"] == 2.0
+
+
+def constant_reward(completions, **kwargs):
+    return [1.0] * len(completions)
+
+
+class TestFilterZeroAdvantageGroups(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
+    def _score(self, loop):
+        for group_id, reward_func in enumerate([constant_reward, two_reward]):
+            seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
+            seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+            group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+            group.group_id = group_id
+            group.queued_at = time.monotonic()
+            loop.reward_funcs = [reward_func]
+            loop._groups_to_score.put_nowait(group)
+            loop._groups_to_score.put_nowait(None)
+            loop._loop.run_until_complete(loop._score_loop(asyncio.Event()))
+        samples, metrics = [], defaultdict(list)
+        with contextlib.suppress(queue.Empty):
+            while True:
+                samples.append(loop.rollout_buffer.get(timeout=1))
+        with contextlib.suppress(queue.Empty):
+            while True:
+                for key, value in loop._metrics_queue.get(timeout=1).items():
+                    metrics[key].append(value)
+        return samples, metrics
+
+    def test_constant_reward_group_never_reaches_the_buffer(self):
+        loop = _rollout_loop()
+        samples, metrics = self._score(loop)
+        assert [s.group_id for s in samples] == [1, 1]
+        assert sum(metrics["rollout/zero_advantage_groups_total"]) == 1
+        assert loop._filtered_groups.get(timeout=1) == 0
+        assert metrics["reward"] == [(2.0, 2), (4.0, 2)]  # both groups, the filtered one included
 
 
 @pytest.mark.skipif(

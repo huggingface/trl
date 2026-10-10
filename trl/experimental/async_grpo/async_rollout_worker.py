@@ -277,6 +277,7 @@ def _child_main(
     failed_event: MPEvent,
     exception_info_queue: MPQueue,
     metrics_queue: MPQueue,
+    filtered_groups: MPQueue,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -292,6 +293,7 @@ def _child_main(
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
         metrics_queue=metrics_queue,
+        filtered_groups=filtered_groups,
     )
     child_ready_event.set()
     _spawn_stop_watcher(rollout_loop, stop_event)
@@ -327,6 +329,7 @@ class _AsyncRolloutLoop:
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         metrics_queue: MPQueue,
+        filtered_groups: MPQueue,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
         num_generations: int = 8,
@@ -380,6 +383,7 @@ class _AsyncRolloutLoop:
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
         self._metrics_queue = metrics_queue  # shared mp.Queue; drained by the trainer in `log()`
+        self._filtered_groups = filtered_groups  # shared mp.Queue; drained by the trainer in `_save_checkpoint()`
         # Metric accumulators
         self._counters: dict[str, float] = defaultdict(float)
         self._rates: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
@@ -752,7 +756,7 @@ class _AsyncRolloutLoop:
                 print_prompt_completions_sample(
                     prompts=[s.prompt for s in samples],
                     completions=[s.completion for s in samples],
-                    rewards={"reward": [s.metrics["reward"] for s in samples]},
+                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,
                     num_samples=self.num_completions_to_print,
@@ -1055,6 +1059,13 @@ class _AsyncRolloutLoop:
             reward_mean = reward_std = float("nan")
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
+        self._rates["reward"][0] += float(np.nansum(rewards))
+        self._rates["reward"][1] += int(scored_mask.sum())
+        if not scored_mask.any() or reward_std == 0.0:
+            self._counters["rollout/zero_advantage_groups_total"] += 1
+            self._filtered_groups.put_nowait(group.group_id)
+            return []
+
         total_calls = sum(group.tool_call_counts)
         tool_metrics = (
             [
@@ -1085,7 +1096,7 @@ class _AsyncRolloutLoop:
             )
         ):
             metrics = {
-                "reward": float(reward),
+                "reward_kept": float(reward),
                 "reward_std": reward_std,
                 **{
                     f"rewards/{name}": float(func_reward)
@@ -1164,6 +1175,7 @@ class AsyncRolloutWorker:
         # Metrics the child measures, drained by the trainer in `log()`. Bounded and dropped-on-full in the child, so a
         # trainer that stops draining can never block generation.
         self.metrics_queue = ctx.Queue(maxsize=4096)
+        self.filtered_groups = ctx.Queue()
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
@@ -1214,6 +1226,7 @@ class AsyncRolloutWorker:
                 self._failed_event,
                 self._exception_info_queue,
                 self.metrics_queue,
+                self.filtered_groups,
             ),
             name="grpo-rollout-worker-child",
             daemon=True,

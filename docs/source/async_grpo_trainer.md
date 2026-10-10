@@ -261,6 +261,9 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full                                                                                                         |
 | `rollout/vllm_retry_total`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |
 | `rollout/backpressure_s`                                           | how long generation was blocked because the rollout queue was full. See [the rollout queue](#the-rollout-queue)                                                                                                                              |
+| `rollout/zero_advantage_groups_total`, `reward_kept`               | groups dropped because every rollout got the same reward, and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track                      |
+
+A group whose rollouts all received the same reward (or none of which could be scored) has zero advantage everywhere, so the worker drops it instead of enqueuing it: it would cost a forward and backward and move nothing. The loop does not resample to replace a dropped group, so `batch/groups_per_step` goes down while the batch keeps its `samples_per_step` samples. Filtered groups never reach the collator, so an epoch takes more prompts than `len(train_dataset)`.
 
 ### Tools
 
