@@ -2595,7 +2595,11 @@ class GRPOTrainer(_BaseTrainer):
 
                 sequence_level_is = self.vllm_importance_sampling_mode in ["sequence_mask", "sequence_truncate"]
                 if sequence_level_is:
-                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True)
+                    # Masked mean (not sum): matches the policy importance-sampling aggregation at
+                    # sequence level, so the ratio's variance doesn't scale with completion length.
+                    per_sequence_logps_diff = per_token_logps_diff.sum(dim=-1, keepdim=True) / mask.sum(
+                        dim=-1, keepdim=True
+                    ).clamp(min=1.0)
                     logps_diff = per_sequence_logps_diff
                 else:
                     logps_diff = per_token_logps_diff
