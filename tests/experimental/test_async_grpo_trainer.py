@@ -1296,14 +1296,15 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][1]["sampling_params"]["top_k"] == 4
         assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]])
 
-    def _check(self, loop, model_config, paths):
+    def _check(self, loop, model_config, paths, version="0.31.0"):
         class FakeSession:
             def get(self, url, **kwargs):
-                body = (
-                    {"vllm_config": {"model_config": model_config}}
-                    if url.endswith("/server_info")
-                    else {"paths": paths}
-                )
+                if url.endswith("/version"):
+                    body = {"version": version}
+                elif url.endswith("/server_info"):
+                    body = {"vllm_config": {"model_config": model_config}}
+                else:
+                    body = {"paths": paths}
 
                 class Response:
                     async def __aenter__(self):
@@ -1335,6 +1336,19 @@ class TestGenerateOneTurn(TrlTestCase):
         loop = _rollout_loop()
         loop.session = None
         asyncio.run(loop._check_sampling_replay())
+
+    def test_older_vllm_keeps_the_full_vocabulary(self, caplog):
+        # A vLLM too old to record the set keeps the completions path, with a warning about the biased ratio
+        PartialState()  # accelerate's logger reads it
+        loop = _rollout_loop(top_p=0.9, top_k=4)
+        with caplog.at_level("WARNING"):
+            self._check(loop, {}, {"/v1/completions": {}}, version="0.27.1")
+        assert "vLLM 0.27.1" in caplog.text
+        response = {"choices": [{"token_ids": [4], "logprobs": {"token_logprobs": [-0.1]}}]}
+        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        assert requests[0][0] == "/v1/completions"
+        assert requests[0][1]["top_p"] == 0.9
+        assert sampling_mask is None
 
     def test_top_p_requires_top_k(self):
         with pytest.raises(ValueError, match="top_k"):

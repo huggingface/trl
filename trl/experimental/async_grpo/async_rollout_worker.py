@@ -38,6 +38,7 @@ from typing import Any, TypeAlias
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
+from packaging.version import Version
 from transformers import PreTrainedTokenizerBase
 
 from ...chat_template_utils import (
@@ -413,6 +414,7 @@ class _AsyncRolloutLoop:
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        self.sampling_replay = top_p < 1.0 or top_k > 0
         self.min_p = min_p
         self.repetition_penalty = repetition_penalty
         self.request_timeout = request_timeout
@@ -541,9 +543,21 @@ class _AsyncRolloutLoop:
 
         That takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and `--enable-scale-out`
         (the endpoint that returns the set). Checked once up front: without them the first rollout would fail on a
-        route that does not exist, after retrying it for minutes.
+        route that does not exist, after retrying it for minutes. An older vLLM cannot return the set at all, so it
+        keeps the full-vocabulary normalization, with a warning about the bias.
         """
-        if self.top_p == 1.0 and self.top_k == 0:
+        if not self.sampling_replay:
+            return
+        async with self.session.get(f"{self.vllm_server_url}/version") as r:
+            r.raise_for_status()
+            version = (await r.json())["version"]
+        if Version(version) < Version("0.28.0"):
+            logger.warning(
+                f"vLLM {version} cannot return the candidate set a token was sampled from (vLLM >= 0.28), so with "
+                "top_k/top_p the log-probabilities are normalized over the whole vocabulary and the importance ratio "
+                "is biased."
+            )
+            self.sampling_replay = False
             return
         async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
             r.raise_for_status()
@@ -1041,7 +1055,7 @@ class _AsyncRolloutLoop:
         }
         if self.min_p is not None:
             sampling_params["min_p"] = self.min_p
-        if self.top_p == 1.0 and self.top_k == 0:
+        if not self.sampling_replay:
             payload = {"model": self._request_model, "prompt": prompt_ids, "return_token_ids": True, **sampling_params}
             output = await self._retry(
                 lambda: self._post("/v1/completions", payload, self.request_timeout),

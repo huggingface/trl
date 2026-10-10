@@ -116,7 +116,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 config = AsyncGRPOConfig(top_p=0.95, top_k=512)
 ```
 
-`--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts.
+`--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts. An older vLLM cannot return the set, so the trainer keeps normalizing over the whole vocabulary and warns about the biased ratio.
 
 ## LoRA
 

@@ -60,9 +60,9 @@ class AsyncGRPOConfig(_BaseConfig):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
-            to consider all tokens. Below `1.0`, `top_k` must be set too, and the vLLM server started with
+            to consider all tokens. Below `1.0`, `top_k` must be set too, and the vLLM server (>= 0.28) started with
             `--return-sampling-mask --enable-scale-out`: the trainer renormalizes its log-probabilities over the
-            candidate set each token was sampled from, as the server does.
+            candidate set each token was sampled from, as the server does. An older vLLM keeps the whole vocabulary.
         top_k (`int`, *optional*, defaults to `0`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
             disabled and all tokens are considered. Any other value needs the server flags described under `top_p`.
