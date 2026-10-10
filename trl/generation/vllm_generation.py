@@ -26,6 +26,7 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, is_bitsandbytes_available
 from transformers.utils import (
+    is_peft_available,
     is_torch_mlu_available,
     is_torch_mps_available,
     is_torch_npu_available,
@@ -106,6 +107,9 @@ if TYPE_CHECKING:
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
+
+if is_peft_available():
+    from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 class VLLMGeneration:
@@ -445,6 +449,13 @@ class VLLMGeneration:
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
             with self._dist.gather_params(list(model.parameters())):
+                # Unmerging is lossy, so keep exact copies to restore
+                originals = [
+                    (module.get_base_layer(), name, param, param.data.to("cpu", copy=True))
+                    for module in model.modules()
+                    if isinstance(module, BaseTunerLayer) and not self._dist.is_zero3
+                    for name, param in module.get_base_layer().named_parameters(recurse=False)
+                ]
                 model.merge_adapter()
 
                 # Read the vLLM weights while parameters are gathered
@@ -467,6 +478,10 @@ class VLLMGeneration:
                         yield name, param.data
                 # Unmerge adapters while parameters are still gathered
                 model.unmerge_adapter()
+                # bitsandbytes merges replace the parameter, so re-register the original
+                for base_layer, name, param, data in originals:
+                    param.data.copy_(data)
+                    base_layer.register_parameter(name, param)
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and read each parameter individually.
