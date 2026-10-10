@@ -102,9 +102,6 @@ You have the following tools available:
 Observe the scene first, then decide the best course of action to minimize harm."""
 
 
-SIM_TICKS = 10  # Number of simulation steps to advance after each action
-
-
 class CarlaGRPOEnv:
     _env_url_iter = None
 
@@ -126,15 +123,6 @@ class CarlaGRPOEnv:
             parts.append(f"COLLISION detected with {obs.collided_with or 'unknown'}!")
         return "\n".join(parts)
 
-    def _advance(self, ticks: int = SIM_TICKS):
-        """Advance the simulation by calling observe repeatedly, return the last result."""
-        result = None
-        for _ in range(ticks):
-            result = self.client.step(CarlaAction(action_type="observe"))
-            if result.done:
-                break
-        return result
-
     def reset(self, **kwargs) -> str | None:
         result = self.client.reset(scenario_name="trolley_micro_escape_exists")
         self.reward = 0.0
@@ -147,7 +135,7 @@ class CarlaGRPOEnv:
         Returns:
             The scene description with vehicle state and nearby actors.
         """
-        result = self._advance()
+        result = self.client.step(CarlaAction(action_type="observe"))
         self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
 
@@ -158,8 +146,7 @@ class CarlaGRPOEnv:
         Returns:
             The scene description after braking.
         """
-        self.client.step(CarlaAction(action_type="emergency_stop"))
-        result = self._advance()
+        result = self.client.step(CarlaAction(action_type="emergency_stop"))
         self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
 
@@ -173,8 +160,7 @@ class CarlaGRPOEnv:
         Returns:
             The scene description after changing lane.
         """
-        self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
-        result = self._advance()
+        result = self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
         self.reward = result.observation.rubric_reward or 0.0
         return self._describe(result.observation)
 
