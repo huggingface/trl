@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
+import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -561,14 +562,14 @@ class DataCollatorForRollout(DataCollatorMixin):
         input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
         for group in groups:
             seq_lengths = [len(example["input_ids"]) for example in group]
-            ids = [token for example in group for token in example["input_ids"]]
-            input_ids.append(torch.tensor(ids, dtype=torch.long))
+            ids = np.concatenate([example["input_ids"] for example in group])
+            input_ids.append(torch.as_tensor(ids, dtype=torch.long))
             attention_mask.append(torch.ones(len(ids), dtype=torch.long))
             completion_mask.append(
-                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
+                torch.as_tensor(np.concatenate([example["completion_mask"] for example in group]), dtype=torch.long)
             )
             old_log_probs.append(
-                torch.tensor([lp for example in group for lp in example["old_log_probs"]], dtype=torch.float32)
+                torch.as_tensor(np.concatenate([example["old_log_probs"] for example in group]), dtype=torch.float32)
             )
             position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
             advantages.append(
