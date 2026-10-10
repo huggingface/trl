@@ -1341,6 +1341,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                             "shapes": weight_shapes,
                         },
                         weight_sync_timeout=self.args.weight_sync_timeout,
+                        compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                     )
 
             if rollout_worker is not None:
