@@ -565,6 +565,7 @@ class _AsyncRolloutLoop:
         resets the server's caches, which preempts every running request.
         """
         rollouts_at_change = 0
+        preemptions_seen = 0.0
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
@@ -596,9 +597,10 @@ class _AsyncRolloutLoop:
                     "rollout/kv_cache_usage": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
-                    "rollout/vllm_preemptions_total": preemptions,
+                    "rollout/vllm_preemptions_total": preemptions - preemptions_seen,
                 }
             )
+            preemptions_seen = preemptions
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
