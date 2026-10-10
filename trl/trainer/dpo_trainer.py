@@ -899,6 +899,9 @@ class DPOTrainer(_BaseTrainer):
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
                 ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+                ref_model_init_kwargs.setdefault("dtype", self.model.dtype)
+                ref_model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
                 ref_model_path = get_config_model_id(self.model.config)
                 self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
