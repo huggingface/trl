@@ -752,7 +752,7 @@ class _AsyncRolloutLoop:
                 print_prompt_completions_sample(
                     prompts=[s.prompt for s in samples],
                     completions=[s.completion for s in samples],
-                    rewards={"reward": [s.metrics["reward"] for s in samples]},
+                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,
                     num_samples=self.num_completions_to_print,
@@ -1055,10 +1055,10 @@ class _AsyncRolloutLoop:
             reward_mean = reward_std = float("nan")
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
+        self._rates["reward"][0] += float(np.nansum(rewards))
+        self._rates["reward"][1] += int(scored_mask.sum())
         if not scored_mask.any() or reward_std == 0.0:
             self._counters["rollout/groups_filtered_zero_advantage"] += 1
-            self._rates["reward_filtered"][0] += float(np.nansum(rewards))
-            self._rates["reward_filtered"][1] += int(scored_mask.sum())
             return []
 
         total_calls = sum(group.tool_call_counts)
@@ -1091,7 +1091,7 @@ class _AsyncRolloutLoop:
             )
         ):
             metrics = {
-                "reward": float(reward),
+                "reward_kept": float(reward),
                 "reward_std": reward_std,
                 **{
                     f"rewards/{name}": float(func_reward)

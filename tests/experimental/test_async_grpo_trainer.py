@@ -1341,8 +1341,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
-        assert samples[0].metrics["reward"] == 1.0
-        assert samples[1].metrics["reward"] == 3.0 and samples[2].metrics["reward"] == 3.0
+        assert samples[0].metrics["reward_kept"] == 1.0
+        assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
         assert samples[0].metrics["reward_std"] == pytest.approx(1.0)
         assert samples[1].metrics["rewards/two_reward"] == 3.0
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
@@ -1362,9 +1362,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         assert len(samples) == 3
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
-        assert math.isnan(samples[0].metrics["reward"])
+        assert math.isnan(samples[0].metrics["reward_kept"])
         assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
-        assert samples[1].metrics["reward"] == 2.0
+        assert samples[1].metrics["reward_kept"] == 2.0
 
 
 def constant_reward(completions, **kwargs):
@@ -1401,7 +1401,7 @@ class TestFilterZeroAdvantageGroups(TrlTestCase):
         samples, metrics = self._score(_rollout_loop())
         assert [s.group_id for s in samples] == [1, 1]
         assert sum(metrics["rollout/groups_filtered_zero_advantage"]) == 1
-        assert metrics["reward_filtered"] == [(2.0, 2)]
+        assert metrics["reward"] == [(2.0, 2), (4.0, 2)]  # both groups, the filtered one included
 
 
 @pytest.mark.skipif(
