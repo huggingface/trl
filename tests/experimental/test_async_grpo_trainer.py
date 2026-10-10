@@ -582,6 +582,7 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
     # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    trainer.rollout_worker.filtered_groups = queue.Queue()
     return trainer
 
 
@@ -616,6 +617,16 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
+
+    def test_save_checkpoint_skips_filtered_groups(self):
+        trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=10)
+        trainer.rollout_worker.filtered_groups.put(2)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(trainer.model, None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == 15
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
@@ -698,6 +709,7 @@ def _rollout_loop(**kwargs):
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
         "metrics_queue": mp.Queue(),
+        "filtered_groups": mp.Queue(),
         **kwargs,
     }
     return _AsyncRolloutLoop(**kwargs)
@@ -1398,9 +1410,11 @@ class TestFilterZeroAdvantageGroups(TrlTestCase):
         return samples, metrics
 
     def test_constant_reward_group_never_reaches_the_buffer(self):
-        samples, metrics = self._score(_rollout_loop())
+        loop = _rollout_loop()
+        samples, metrics = self._score(loop)
         assert [s.group_id for s in samples] == [1, 1]
-        assert sum(metrics["rollout/groups_filtered_zero_advantage"]) == 1
+        assert sum(metrics["rollout/zero_advantage_groups_total"]) == 1
+        assert loop._filtered_groups.get(timeout=1) == 0
         assert metrics["reward"] == [(2.0, 2), (4.0, 2)]  # both groups, the filtered one included
 
 
