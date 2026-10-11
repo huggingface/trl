@@ -42,7 +42,7 @@ CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
     --max-model-len 8192 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}' \
-    --enable-lora --max-lora-rank 32 --max-loras 6
+    --enable-lora --max-lora-rank 32 --max-loras 18
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch examples/async_grpo_prophet_arena/async_grpo_prophet_arena.py
 """
@@ -104,12 +104,15 @@ def main() -> None:
         output_dir="/tmp/async_grpo_prophet_arena",
         save_strategy="no",
         per_device_train_batch_size=16,
-        # Higher than async_grpo_math's LoRA example (4): Qwen3-0.6B is small enough that each step, and so each
-        # weight sync, was completing in well under a second -- fast enough that a real FileNotFoundError race
-        # showed up in vLLM's adapter loading (see the PR discussion). More accumulation spaces syncs out in time
+        # Higher than async_grpo_math's LoRA example (4): spaces weight syncs further apart in wall-clock time
         # without changing num_generations/group size.
         gradient_accumulation_steps=8,
         num_generations=32,
+        # Default (4) sizes the adapter-file retention window in sync *counts*, not wall-clock time: a long
+        # completion can outlive several syncs, get evicted from vLLM's LRU adapter cache mid-generation, and hit
+        # a FileNotFoundError when the engine tries to reload files the trainer already deleted. 16 gives much more
+        # slack; `--max-loras` on the vLLM server must be raised to max_staleness + 2 (see the PR discussion).
+        max_staleness=16,
         # Capped well under their 24,576 (tuned for a 27B reasoning model at high effort); Qwen3-0.6B needs nowhere
         # near that, so raise it (and `--max-model-len` in the vLLM command above) only for a larger/more
         # reasoning-heavy model.
