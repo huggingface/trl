@@ -160,7 +160,7 @@ class _StubWeightTransfer:
 
 
 class FakeVLLMServer:
-    """The state a vLLM server has and a mocked dict does not, behind the eight paths [`VLLMClient`] uses.
+    """The state a vLLM server has and a mocked dict does not, behind the nine paths [`VLLMClient`] uses.
 
     Configure it after construction (`fake.lora_config = ...`) and before the trainer is built; the trainer probes
     `/server_info` in its constructor. Read `loaded`, `evicted` and `paused` afterwards to see what the trainer did
@@ -236,6 +236,11 @@ class FakeVLLMServer:
                 return 404, {"detail": "Not Found"}
             self.loaded.pop(body["lora_name"], None)
             return 200, "Success"
+        if path == "/v1/completions":
+            model = body.get("model")
+            if model not in self.loaded and model != "base":
+                return 404, {"error": {"message": f"The model `{model}` does not exist."}}
+            return 200, {"choices": [{"text": "", "finish_reason": "length"}]}
         return 404, {"detail": f"no route for {method} {path}"}
 
     def _load(self, name: str, path: str, load_inplace: bool) -> tuple[int, object]:
