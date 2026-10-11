@@ -100,13 +100,15 @@ def main() -> None:
     # repeating-token loop -- lowering the rate only delayed it, never fixed it. LoRA is the actual fix.
     config = AsyncGRPOConfig(
         # Local, not network storage: with peft_config set, the trainer writes LoRA adapters here for vLLM to load
-        # from disk, and an NFS home directory's write-visibility lag made that race -- vLLM's engine would get a
-        # FileNotFoundError for a directory the trainer had already written. save_strategy="no" means nothing here
-        # needs to survive the run anyway.
+        # from disk. save_strategy="no" means nothing here needs to survive the run anyway.
         output_dir="/tmp/async_grpo_prophet_arena",
         save_strategy="no",
         per_device_train_batch_size=16,
-        gradient_accumulation_steps=2,
+        # Higher than async_grpo_math's LoRA example (4): Qwen3-0.6B is small enough that each step, and so each
+        # weight sync, was completing in well under a second -- fast enough that a real FileNotFoundError race
+        # showed up in vLLM's adapter loading (see the PR discussion). More accumulation spaces syncs out in time
+        # without changing num_generations/group size.
+        gradient_accumulation_steps=8,
         num_generations=32,
         # Capped well under their 24,576 (tuned for a 27B reasoning model at high effort); Qwen3-0.6B needs nowhere
         # near that, so raise it (and `--max-model-len` in the vLLM command above) only for a larger/more
