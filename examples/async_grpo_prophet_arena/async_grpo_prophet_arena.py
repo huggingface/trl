@@ -95,13 +95,9 @@ def main() -> None:
     # `gradient_accumulation_steps` still means what it always does (accumulate over that many packed micro-batches
     # before stepping) regardless of how those micro-batches were packed, so it's set the same as
     # `examples/async_grpo_math` rather than left at `1`, to avoid an effective-batch-size regression.
-    # `learning_rate=1e-4` and `num_train_epochs=2` (matching their `max_steps=128`, 2 passes over the 1,024-question
-    # training set) are theirs exactly, now that AsyncGRPOTrainer has `peft_config` support. Full fine-tuning at
-    # these settings has none of LoRA's implicit regularization and AsyncGRPOTrainer has no KL penalty or entropy
-    # bonus either, so it reliably collapsed into a repeating-token loop (verified directly against the live
-    # server, at 1e-4 within ~6 steps, at 1e-5 within ~100, and even at 5e-6 with `num_train_epochs=1` by step
-    # ~580) -- lowering the rate only pushed the same collapse further out, never avoided it. LoRA is the fix
-    # tinker-cookbook actually uses, not a smaller version of what was already breaking.
+    # `learning_rate=1e-4` and `num_train_epochs=2` (matching their `max_steps=128`) are theirs exactly, now that
+    # AsyncGRPOTrainer has `peft_config` support. Full fine-tuning at these settings reliably collapsed into a
+    # repeating-token loop -- lowering the rate only delayed it, never fixed it. LoRA is the actual fix.
     config = AsyncGRPOConfig(
         output_dir="async_grpo_prophet_arena",
         save_strategy="no",
@@ -127,9 +123,8 @@ def main() -> None:
         args=config,
         train_dataset=dataset,
         reward_funcs=[brier_reward],
-        # Rank 32, matching tinker-cookbook. Plain LoRA only: no `modules_to_save`, no DoRA, no trained bias, and no
-        # adapter on `lm_head`/`embed_tokens` -- any of those would make the adapter unservable by vLLM and silently
-        # fall back to merged-weight sync.
+        # Rank 32, matching tinker-cookbook. Plain LoRA only -- no modules_to_save/DoRA/bias, nothing on
+        # lm_head/embed_tokens -- or vLLM can't serve the adapter and silently falls back to merged-weight sync.
         peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
     )
     trainer.train()
