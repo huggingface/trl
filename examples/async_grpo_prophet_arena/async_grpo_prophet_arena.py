@@ -42,7 +42,7 @@ CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
     --max-model-len 8192 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}' \
-    --enable-lora --max-lora-rank 32 --max-loras 6
+    --enable-lora --max-lora-rank 32 --max-loras 18
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch examples/async_grpo_prophet_arena/async_grpo_prophet_arena.py
 """
@@ -111,6 +111,10 @@ def main() -> None:
         num_train_epochs=2,
         learning_rate=1e-4,
         temperature=1.0,
+        # Default (4) leaves only a few sync cycles of adapter-file retention, counted in sync cycles rather than
+        # wall-clock time -- on a shared Slurm node, a queued generation request can outlive that and hit a
+        # FileNotFoundError when vLLM finally loads it. Larger value trades a bit of on-policy-ness for headroom.
+        max_staleness=16,
         # Default port 8000 collides with other jobs on shared Slurm nodes.
         vllm_server_base_url="http://localhost:8317",
         report_to="trackio",
