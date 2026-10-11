@@ -42,7 +42,7 @@ CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1
     --max-model-len 8192 \
     --logprobs-mode processed_logprobs \
     --weight-transfer-config '{"backend":"nccl"}' \
-    --enable-lora --max-lora-rank 32 --max-loras 18
+    --enable-lora --max-lora-rank 32 --max-loras 6
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch examples/async_grpo_prophet_arena/async_grpo_prophet_arena.py
 """
@@ -99,7 +99,11 @@ def main() -> None:
     # AsyncGRPOTrainer has `peft_config` support. Full fine-tuning at these settings reliably collapsed into a
     # repeating-token loop -- lowering the rate only delayed it, never fixed it. LoRA is the actual fix.
     config = AsyncGRPOConfig(
-        output_dir="async_grpo_prophet_arena",
+        # Local, not network storage: with peft_config set, the trainer writes LoRA adapters here for vLLM to load
+        # from disk, and an NFS home directory's write-visibility lag made that race -- vLLM's engine would get a
+        # FileNotFoundError for a directory the trainer had already written. save_strategy="no" means nothing here
+        # needs to survive the run anyway.
+        output_dir="/tmp/async_grpo_prophet_arena",
         save_strategy="no",
         per_device_train_batch_size=16,
         gradient_accumulation_steps=2,
@@ -111,10 +115,6 @@ def main() -> None:
         num_train_epochs=2,
         learning_rate=1e-4,
         temperature=1.0,
-        # Default (4) leaves only a few sync cycles of adapter-file retention, counted in sync cycles rather than
-        # wall-clock time -- on a shared Slurm node, a queued generation request can outlive that and hit a
-        # FileNotFoundError when vLLM finally loads it. Larger value trades a bit of on-policy-ness for headroom.
-        max_staleness=16,
         # Default port 8000 collides with other jobs on shared Slurm nodes.
         vllm_server_base_url="http://localhost:8317",
         report_to="trackio",
