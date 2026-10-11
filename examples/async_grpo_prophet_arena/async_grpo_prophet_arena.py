@@ -15,6 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
+#     "peft",
 #     "trackio",
 # ]
 # ///
@@ -36,11 +37,12 @@ leaderboard grades, so the resulting checkpoint could be served as a real Prophe
 Data is loaded via `datasets.load_dataset` from https://huggingface.co/datasets/prophetarena/Prophet-Arena-Subset-1200
 (MIT-licensed). See `data.py` for the chronological, event-level train/validation split.
 
-CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-0.6B \
+CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3-0.6B \
     --port 8317 \
     --max-model-len 8192 \
     --logprobs-mode processed_logprobs \
-    --weight-transfer-config '{"backend":"nccl"}'
+    --weight-transfer-config '{"backend":"nccl"}' \
+    --enable-lora --max-lora-rank 32 --max-loras 1
 
 CUDA_VISIBLE_DEVICES=0 accelerate launch examples/async_grpo_prophet_arena/async_grpo_prophet_arena.py
 """
@@ -49,6 +51,7 @@ from __future__ import annotations
 
 from data import load_prophet_arena_split, parse_probability, render_prompt
 from datasets import Dataset
+from peft import LoraConfig
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 
@@ -92,14 +95,13 @@ def main() -> None:
     # `gradient_accumulation_steps` still means what it always does (accumulate over that many packed micro-batches
     # before stepping) regardless of how those micro-batches were packed, so it's set the same as
     # `examples/async_grpo_math` rather than left at `1`, to avoid an effective-batch-size regression.
-    # Their `learning_rate=1e-4` and `num_train_epochs=2` (matching their `max_steps=128`) are tuned for LoRA rank
-    # 32; AsyncGRPOTrainer has no `peft_config` yet, so this is full fine-tuning, which has none of LoRA's implicit
-    # regularization, and no KL penalty or entropy bonus either -- so nothing here stops the policy drifting into a
-    # repeating-token loop given enough gradient steps. Verified directly (real generation against the live
-    # server): it happened at 1e-4 within ~6 steps, at 1e-5 within ~100, and even at 5e-6 with `num_train_epochs=1`
-    # by step ~580 (packing made "one epoch" much longer than tinker-cookbook's 64-step equivalent). Since lower LR
-    # only pushed the same collapse further out rather than avoiding it, `max_steps` caps total exposure directly,
-    # comfortably under where it broke down at 5e-6.
+    # `learning_rate=1e-4` and `num_train_epochs=2` (matching their `max_steps=128`, 2 passes over the 1,024-question
+    # training set) are theirs exactly, now that AsyncGRPOTrainer has `peft_config` support. Full fine-tuning at
+    # these settings has none of LoRA's implicit regularization and AsyncGRPOTrainer has no KL penalty or entropy
+    # bonus either, so it reliably collapsed into a repeating-token loop (verified directly against the live
+    # server, at 1e-4 within ~6 steps, at 1e-5 within ~100, and even at 5e-6 with `num_train_epochs=1` by step
+    # ~580) -- lowering the rate only pushed the same collapse further out, never avoided it. LoRA is the fix
+    # tinker-cookbook actually uses, not a smaller version of what was already breaking.
     config = AsyncGRPOConfig(
         output_dir="async_grpo_prophet_arena",
         save_strategy="no",
@@ -110,8 +112,8 @@ def main() -> None:
         # near that, so raise it (and `--max-model-len` in the vLLM command above) only for a larger/more
         # reasoning-heavy model.
         max_completion_length=2048,
-        max_steps=150,
-        learning_rate=5e-6,
+        num_train_epochs=2,
+        learning_rate=1e-4,
         temperature=1.0,
         # Default port 8000 collides with other jobs on shared Slurm nodes.
         vllm_server_base_url="http://localhost:8317",
@@ -125,8 +127,13 @@ def main() -> None:
         args=config,
         train_dataset=dataset,
         reward_funcs=[brier_reward],
+        # Rank 32, matching tinker-cookbook. Plain LoRA only: no `modules_to_save`, no DoRA, no trained bias, and no
+        # adapter on `lm_head`/`embed_tokens` -- any of those would make the adapter unservable by vLLM and silently
+        # fall back to merged-weight sync.
+        peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
     )
     trainer.train()
+    trainer.end()
 
 
 if __name__ == "__main__":

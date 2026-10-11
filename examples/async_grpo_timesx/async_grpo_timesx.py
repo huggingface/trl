@@ -166,6 +166,7 @@ def main() -> None:
         reward_funcs=[mase_reward],
     )
     trainer.train()
+    trainer.end()
 
 
 if __name__ == "__main__":
