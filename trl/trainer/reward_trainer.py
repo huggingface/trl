@@ -29,7 +29,6 @@ import accelerate
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import is_peft_model
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
@@ -54,7 +53,13 @@ from ..data_utils import _tokenize, get_dataset_column_names, is_conversational
 from ..models import get_act_offloading_ctx_manager
 from .base_trainer import _BaseTrainer
 from .reward_config import RewardConfig
-from .utils import create_model_from_path, disable_dropout_in_model, get_config_model_id, pad
+from .utils import (
+    create_model_from_path,
+    disable_dropout_in_model,
+    get_config_model_id,
+    global_then_local_main_first,
+    pad,
+)
 
 
 if is_peft_available():
@@ -322,6 +327,8 @@ class RewardTrainer(_BaseTrainer):
             to ensure that the reward head is properly trained.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
     _template_file = "rm_model_card.md"
@@ -430,7 +437,7 @@ class RewardTrainer(_BaseTrainer):
             processing_class.eos_token = args.eos_token
             # The model must agree with the tokenizer on the eos token from construction, so mirror it onto the model
             # config (a sequence classification model has no generation config).
-            model.config.eos_token_id = processing_class.eos_token_id
+            model.config.get_text_config().eos_token_id = processing_class.eos_token_id
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -527,9 +534,11 @@ class RewardTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Disable dropout in the model
@@ -548,7 +557,7 @@ class RewardTrainer(_BaseTrainer):
             )
         processing_class.pad_token = pad_token
         # SequenceClassification models need `config.pad_token_id` to locate the last non-pad token.
-        model.config.pad_token_id = processing_class.pad_token_id
+        model.config.get_text_config().pad_token_id = processing_class.pad_token_id
 
         # Data collator
         if data_collator is None:
@@ -590,6 +599,16 @@ class RewardTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # TRL doesn't support `nn.DataParallel`, which `Trainer` uses when several GPUs are visible and no distributed
+        # launcher is used. Checked after `Trainer.__init__`, which sets `n_gpu` to 1 for a model split across devices
+        # with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # During evaluation, Trainer calls compute_loss() only if can_return_loss is True and label_names is empty.
         self.can_return_loss = True
         self.label_names = []
@@ -611,11 +630,6 @@ class RewardTrainer(_BaseTrainer):
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
@@ -647,7 +661,7 @@ class RewardTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             if not is_processed:
                 # Add EOS token if needed: non-conversational only
                 first_example = next(iter(dataset))

@@ -21,6 +21,7 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
@@ -29,6 +30,8 @@ from .._common import (
 # transformers floor, so unlike the other tiny models this one can't be loaded by the floor CI job, and the tests
 # using it are skipped there.
 check_transformers_version("5.0.0")
+
+set_seed()
 
 MODEL_ID = "LiquidAI/LFM2.5-VL-3B"
 

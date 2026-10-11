@@ -63,6 +63,12 @@ Concretely:
 - Avoid `hasattr` and `getattr`. Their use is almost always a symptom of overly defensive programming or a disguised version check (e.g., "this attribute was added in version X"). Instead, either drop the conditional entirely or express the version check explicitly with a version comparison. There is nearly always a cleaner alternative.
 - When in doubt, prefer less code. Every new function, parameter, or branch is maintenance burden. The best abstraction is often no abstraction.
 
+### Tests
+
+Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, `object.__new__` (building an instance without its `__init__`), or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
+
+There are no `slow` tests: use tiny models, and put tests that need several GPUs in `tests/distributed`. Tests that need an optional dependency or specific hardware are gated by the `require_*` decorators in `tests/testing_utils.py`, so they skip where they cannot run.
+
 ## Documentation
 
 ### Docstrings

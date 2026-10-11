@@ -18,6 +18,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -29,20 +30,23 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
 from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from ...import_utils import is_vllm_available
+from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
-
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 @dataclass(slots=True)
@@ -195,6 +199,7 @@ class _AsyncRolloutLoop:
         model_name: str,
         dataset: Dataset,
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
@@ -204,6 +209,7 @@ class _AsyncRolloutLoop:
         max_inflight_tasks: int = 128,
         queue_maxsize: int = 0,
         vllm_server_url: str = "http://localhost:8000",
+        lora_name: str | None = None,
         teacher_server_urls: dict[str, str] | None = None,
         teacher_top_k: int = 8,
         teacher_temperature: float = 1.0,
@@ -221,6 +227,7 @@ class _AsyncRolloutLoop:
         dataset_start_index: int = 0,
     ):
         self.model_name = model_name
+        self.lora_name = lora_name
         self.dataset = dataset
         if dataset_start_index > 0:
             start = dataset_start_index % len(dataset)
@@ -228,6 +235,7 @@ class _AsyncRolloutLoop:
         else:
             self._dataset_iter = iter(dataset)
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -274,6 +282,15 @@ class _AsyncRolloutLoop:
     @property
     def model_version(self) -> int:
         return int(self._model_version_value.value)
+
+    @property
+    def _request_model(self) -> str:
+        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
+        # serves the base model, so the published version has to be part of the request. `model_version` reads the
+        # shared `mp.Value`, so a sync is picked up without extra IPC.
+        if self.lora_name is None:
+            return self.model_name
+        return f"{self.lora_name}-v{self.model_version}"
 
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -460,7 +477,7 @@ class _AsyncRolloutLoop:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
-            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
         self._push_metrics(
@@ -547,7 +564,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> list[int]:
         payload = {
-            "model": self.model_name,
+            "model": self._request_model,
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -556,6 +573,10 @@ class _AsyncRolloutLoop:
             "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
@@ -647,6 +668,8 @@ class AsyncRolloutWorker:
             raise ImportError(
                 "vLLM >= 0.22.0 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.22.0'"
             )
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
