@@ -117,6 +117,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         super().__init__(**loop_kwargs)
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
+        if harness_adapter is None and (self.top_p < 1.0 or self.top_k > 0):
+            raise ValueError(
+                "`top_p < 1.0` or `top_k > 0` needs the candidate set of every sampled token, which an agent-owned "
+                "loop does not record. Pass a `harness_adapter` so TRL samples each turn, or sample the full vocabulary."
+            )
         if harness_adapter is None:
             sampling_kwargs = {
                 "temperature": self.temperature,
