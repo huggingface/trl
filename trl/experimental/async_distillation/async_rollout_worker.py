@@ -30,20 +30,23 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
 from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from ...import_utils import is_vllm_available
+from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
-
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 @dataclass(slots=True)
@@ -665,6 +668,8 @@ class AsyncRolloutWorker:
             raise ImportError(
                 "vLLM >= 0.22.0 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.22.0'"
             )
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)

@@ -18,10 +18,15 @@ import pytest
 import torch
 import torch.nn.functional as F
 from transformers.testing_utils import torch_device
+from transformers.utils import is_triton_available
 
-from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
+from .testing_utils import require_torch_accelerator, require_triton
 
-from .testing_utils import require_torch_accelerator
+
+if is_triton_available():
+    from trl.kernels import ChunkedLogProbFunction, selective_log_softmax_and_entropy
+    from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+    from trl.kernels.chunked_logprob import _addmm_fp32
 
 
 def reference(logits, index, temperature, row_mask):
@@ -36,6 +41,7 @@ def reference(logits, index, temperature, row_mask):
 
 
 @require_torch_accelerator
+@require_triton
 class TestLogProbEntropy:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
     @pytest.mark.parametrize(
@@ -103,9 +109,29 @@ class TestLogProbEntropy:
 
 
 @require_torch_accelerator
+@require_triton
 class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
+
+    def test_torch_compile(self):
+        # Inductor passes the float arguments (temperature, logit scale, softcapping) as fp64
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, device=torch_device, requires_grad=True)
+        weight = torch.randn(self.V, self.H, device=torch_device)
+        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+
+        def loss(hidden):
+            logprobs, entropy, *_ = ChunkedLogProbFunction.apply(
+                hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, 30.0, 0.5
+            )
+            return logprobs.sum() + entropy.sum()
+
+        loss(hidden).backward()
+        expected_grad, hidden.grad = hidden.grad, None
+        torch.compile(loss)(hidden).backward()
+
+        torch.testing.assert_close(hidden.grad, expected_grad)
 
     def _reference_logprobs_and_entropy(
         self, hidden, weight, labels, temperature, bias=None, logit_scale=1.0, final_logit_softcapping=None
@@ -478,3 +504,41 @@ class TestChunkedLogProbFunction:
         for actual, expected in zip(chunked_grads, (hidden_ref.grad, weight_ref.grad, bias_ref.grad), strict=True):
             if expected is not None:
                 torch.testing.assert_close(actual, expected, atol=1e-5, rtol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+    def test_addmm_fp32(self, dtype):
+        # Accumulates the product in fp32, without rounding it to `dtype` first
+        torch.manual_seed(42)
+        a = torch.randn(64, 256, device=torch_device, dtype=dtype)
+        b = torch.randn(256, 32, device=torch_device, dtype=dtype)
+        acc = torch.randn(64, 32, device=torch_device)
+        expected = acc.double() + a.double() @ b.double()
+
+        _addmm_fp32(acc, a, b)
+
+        torch.testing.assert_close(acc.double(), expected, atol=1e-3, rtol=1e-4)
+
+
+@require_torch_accelerator
+@require_triton
+class TestChunkedDivergenceFunction:
+    @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
+    def test_torch_compile(self, beta):
+        # Inductor passes the float arguments (beta, temperature, logit scales, softcapping) as fp64
+        torch.manual_seed(42)
+        student_hidden = torch.randn(64, 32, device=torch_device, requires_grad=True)
+        student_weight = torch.randn(128, 32, device=torch_device)
+        teacher_hidden = torch.randn(64, 48, device=torch_device)
+        teacher_weight = torch.randn(128, 48, device=torch_device)
+
+        def loss(student_hidden):
+            divergence, _ = ChunkedDivergenceFunction.apply(
+                student_hidden, student_weight, None, teacher_hidden, teacher_weight, None, beta, 0.7, 0.5, 30.0
+            )
+            return divergence.sum()
+
+        loss(student_hidden).backward()
+        expected_grad, student_hidden.grad = student_hidden.grad, None
+        torch.compile(loss)(student_hidden).backward()
+
+        torch.testing.assert_close(student_hidden.grad, expected_grad)

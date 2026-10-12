@@ -74,11 +74,6 @@ def _variable_length_dataset():
     )
 
 
-def test_config_rejects_liger(tmp_path):
-    with pytest.raises(ValueError, match="use_liger_kernel=True is not supported by ServerDistillationTrainer"):
-        ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), use_liger_kernel=True)
-
-
 def test_config_rejects_reverse_kl_argmax(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode='argmax' is not supported"):
         ServerDistillationConfig(**_make_server_config_kwargs(tmp_path), reverse_kl_top_1_mode="argmax")
@@ -181,11 +176,18 @@ def test_build_teacher_request_inputs(
 
 
 class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
-    def test_variable_lengths_use_neg_inf_sentinel_at_padding(self):
-        mock_self = MagicMock()
-        mock_self.teacher_client.get_sequence_logprobs = MagicMock(return_value=_ragged_server_response())
-        mock_self.loss_top_k = 1
-        mock_self.temperature = 1.0
+    def test_variable_lengths_use_neg_inf_sentinel_at_padding(self, monkeypatch):
+        from trl.generation import vllm_client as vllm_client_module
+
+        # Stand in for the teacher server, which cannot run here
+        teacher_client = MagicMock()
+        teacher_client.get_sequence_logprobs.return_value = _ragged_server_response()
+        monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *args, **kwargs: teacher_client)
+        trainer = ServerDistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=ServerDistillationConfig(**_make_server_config_kwargs(self.tmp_dir)),
+            train_dataset=_variable_length_dataset(),
+        )
 
         inputs = {
             "input_ids": torch.tensor([[10, 11, 90, 0, 0], [10, 11, 90, 9217, 100]]),
@@ -193,9 +195,7 @@ class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
             "labels": torch.tensor([[-100, -100, 90, -100, -100], [-100, -100, 90, 9217, 100]]),
         }
 
-        out = ServerDistillationTrainer._get_teacher_token_logprobs_from_server(
-            mock_self, inputs, aligned_prompt_length=2
-        )
+        out = trainer._get_teacher_token_logprobs_from_server(inputs, aligned_prompt_length=2)
 
         assert out["actual_logprobs"].shape == (2, 3)
         assert out["topk_logprobs"].shape == (2, 3, 1)

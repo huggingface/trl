@@ -106,8 +106,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
     to `False`, the following key is also returned:
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following key is also returned:
+    If `padding_free` is set to `True`, the following keys are also returned:
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
+    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths of the flattened sequence.
+    - `"max_length_q"`, `"max_length_k"`: Length of the longest sequence.
+    - `"seq_idx"`: Tensor of the sequence index of each token.
 
     Args:
         pad_token_id (`int`):
@@ -156,7 +159,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[-100, 2, 3, -100, 5]])}
+     'labels': tensor([[-100, 2, 3, -100, 5]]),
+     'cu_seq_lens_q': tensor([0, 3, 5], dtype=torch.int32),
+     'cu_seq_lens_k': tensor([0, 3, 5], dtype=torch.int32),
+     'max_length_q': 3,
+     'max_length_k': 3,
+     'seq_idx': tensor([[0, 0, 0, 1, 1]], dtype=torch.int32)}
     ```
     """
 
@@ -207,6 +215,16 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
             output["labels"][output["position_ids"] == 0] = -100
+            # Sequence boundaries for the varlen kernels (flash attention, linear attention). Computed here, on CPU,
+            # since the model would otherwise derive them from `position_ids` with device-to-host syncs in every layer.
+            seq_starts = (output["position_ids"][0] == 0).nonzero().flatten()
+            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].size(1)])]).to(torch.int32)
+            output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
+            output["max_length_q"] = output["max_length_k"] = int(cu_seq_lens.diff().max())
+            # Sequence index of each token, for the short convolutions of linear-attention layers
+            output["seq_idx"] = torch.repeat_interleave(
+                torch.arange(cu_seq_lens.numel() - 1, dtype=torch.int32), cu_seq_lens.diff()
+            )[None]
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(
@@ -1569,6 +1587,7 @@ class SFTTrainer(_BaseTrainer):
         # The forwards that build the full logits leave the loss to the caller, like in `Trainer.compute_loss`
         logits_inputs = {k: v for k, v in inputs.items() if k != "labels"}
 
+        weighted_aux_loss = None
         try:
             parallelism_config = (
                 self.accelerator.parallelism_config if Version(accelerate.__version__) >= Version("1.12.0") else None
@@ -1614,11 +1633,16 @@ class SFTTrainer(_BaseTrainer):
                     # Clamped so that a batch without trainable tokens reduces to a finite zero rather than `0 / 0`
                     loss = per_token_loss.sum() / torch.as_tensor(num_tokens).clamp(min=1)
                     if self.aux_loss_enabled:
-                        loss = loss + self.router_aux_loss_coef * outputs.aux_loss
+                        weighted_aux_loss = self.router_aux_loss_coef * outputs.aux_loss
                 # Like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages
                 # the gradients across ranks
                 if self.args.average_tokens_across_devices and num_items_in_batch is not None:
                     loss = loss * (self.accelerator.num_processes // self.get_tp_size())
+                # The MoE aux loss is a per-micro-batch mean that DDP averages across ranks. With `num_items_in_batch`,
+                # `Trainer` leaves gradient accumulation to the loss, so average it over the accumulation steps
+                if weighted_aux_loss is not None:
+                    steps = self.current_gradient_accumulation_steps if num_items_in_batch is not None else 1
+                    loss = loss + weighted_aux_loss / steps
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
                 raise ValueError(

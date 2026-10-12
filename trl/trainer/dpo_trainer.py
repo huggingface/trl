@@ -492,6 +492,8 @@ class DPOTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "dpo"]
     _name = "DPO"
     _paper = {
@@ -897,6 +899,9 @@ class DPOTrainer(_BaseTrainer):
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
                 ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+                ref_model_init_kwargs.setdefault("dtype", self.model.dtype)
+                ref_model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
                 ref_model_path = get_config_model_id(self.model.config)
                 self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
@@ -946,11 +951,6 @@ class DPOTrainer(_BaseTrainer):
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)

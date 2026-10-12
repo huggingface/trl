@@ -20,8 +20,6 @@ those raw, unverified samples with standard cross-entropy loss. No reward model,
 reinforcement learning is needed.
 """
 
-from __future__ import annotations
-
 import inspect
 import math
 import textwrap
@@ -79,6 +77,8 @@ class SSDTrainer(_BaseTrainer):
     ``prompt`` column.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "ssd"]
     _name = "SSD"
     config_cls = SSDConfig
@@ -104,7 +104,7 @@ class SSDTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
@@ -237,15 +237,12 @@ class SSDTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
         self.model.add_model_tags(self._tag_names)
-
-        self.model_accepts_loss_kwargs = False
 
         if self.use_vllm:
             from ...generation.vllm_generation import VLLMGeneration
