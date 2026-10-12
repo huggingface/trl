@@ -1129,18 +1129,19 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
         assert student_span == teacher_span
 
 
-def test_on_policy_completion_byte_offsets_match_encode_offsets(smollm_tokenizer, qwen_tokenizer):
+def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, smollm_tokenizer):
     """On-policy offsets are derived from the generated token ids directly (per-token piece byte length, no
     decode-then-re-encode round-trip). For ByteLevel BPE — the family of every cross-tokenizer pair GOLD targets
     (SmolLM, Qwen, Llama 3+, …) — those per-token spans match what `encode_with_byte_offsets` produces on the same
     text, so student and teacher offsets share one byte coordinate system."""
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.use_uld_loss = True
-    trainer.teacher_tokenizer = qwen_tokenizer
-    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
-    trainer.processing_class = smollm_tokenizer
-    trainer._tokenizer = smollm_tokenizer
-    trainer._is_vlm = False
+    # There is no tiny SmolLM3 model; tiny Llama 3.2 shares SmolLM3's 128k vocabulary, so it pairs with its tokenizer
+    trainer = GOLDTrainer(
+        model=_TINY_LLAMA,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True, use_extended_uld=True),
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
+        processing_class=smollm_tokenizer,
+    )
 
     completion_text = "hello 你好 😊"
     [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
@@ -1360,8 +1361,7 @@ def test_initialize_vocabulary_mapping_contains_common_tokens(llama_tokenizer, q
 
 
 def test_get_start_and_size_answers_skips_prompt_tokens():
-    trainer = ULDLoss.__new__(ULDLoss)
-    trainer.ignore_index = -100
+    loss_fn = ULDLoss(build_config(), student_tokenizer=None, teacher_tokenizer=None)
 
     answers = torch.tensor(
         [
@@ -1371,7 +1371,7 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
         ]
     )
 
-    starts, sizes = trainer._get_start_and_size_answers(answers)
+    starts, sizes = loss_fn._get_start_and_size_answers(answers)
 
     assert starts == [3, 1, 0]
     assert sizes == [3, 3, 0]
@@ -1808,15 +1808,16 @@ def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor
     _assert_alignment_covers_completion(loss, batch, teacher_input_ids, teacher_labels, teacher_byte_offsets)
 
 
-def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(qwen3_vl_processor, vlm_examples):
+def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(tmp_path, vlm_dataset, vlm_examples):
     """Cross-architecture VLM ULD must render the teacher prompt through the teacher processor (so it
     actually sees the image via pixel_values) while keeping completion byte offsets relative to the original completion
     text — the coordinate system shared with the student."""
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer._teacher_processor = qwen3_vl_processor
-    trainer.teacher_tokenizer = qwen3_vl_processor.tokenizer
-    trainer.uld_loss_fn = SimpleNamespace(use_extended_uld=True)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
+    trainer = GOLDTrainer(
+        model=_TINY_SMOLVLM,
+        teacher_model=_TINY_QWEN3_VL,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True, use_extended_uld=True),
+        train_dataset=vlm_dataset,
+    )
 
     images, prompts = trainer._extract_images_and_prompts(vlm_examples)
     completion_texts = _get_assistant_texts(vlm_examples)
@@ -1836,7 +1837,7 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(qwen3
     # The teacher actually receives the image, not just text.
     assert "pixel_values" in teacher_forward_kwargs
 
-    backend = qwen3_vl_processor.tokenizer.backend_tokenizer
+    backend = trainer._teacher_processor.tokenizer.backend_tokenizer
     for row in range(batch_size):
         completion_positions = teacher_labels[row] != -100
         # The prompt (image placeholders + text) is masked; the completion is supervised.
