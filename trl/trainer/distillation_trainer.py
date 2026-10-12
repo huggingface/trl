@@ -1287,7 +1287,9 @@ class DistillationTrainer(_BaseTrainer):
 
             # Decode post-tool completions
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=self.tools)
+                if ids
+                else {}
                 for idx, ids in enumerate(post_tool_ids)
             ]
 
@@ -1325,7 +1327,7 @@ class DistillationTrainer(_BaseTrainer):
                     or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
                 ):
                     completions = [
-                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=self.tools)]
                         for i, ids in enumerate(completion_ids)
                     ]
                 else:
