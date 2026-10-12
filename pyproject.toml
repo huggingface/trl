@@ -32,6 +32,7 @@ dependencies = [
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
     "jinja2",
     "packaging>20.0",
+    "torch>=2.6.0",  # torch.accelerator, and the public FSDP2 API
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]

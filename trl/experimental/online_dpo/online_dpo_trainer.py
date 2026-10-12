@@ -464,10 +464,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                     )
 
                     # Determine device type (supports cuda, xpu, etc.)
-                    if Version(torch.__version__) >= Version("2.6.0"):
-                        accelerator_type = torch.accelerator.current_accelerator().type
-                    else:  # `torch.accelerator` was introduced in torch 2.6
-                        accelerator_type = "cuda"
+                    accelerator_type = torch.accelerator.current_accelerator().type
                     current_device = getattr(torch, accelerator_type).current_device()
                     self.vllm_client.init_communicator(device=current_device)
                 else:
