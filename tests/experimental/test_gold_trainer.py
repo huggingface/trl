@@ -1377,9 +1377,18 @@ def test_get_start_and_size_answers_skips_prompt_tokens():
     assert sizes == [3, 3, 0]
 
 
-def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = llama_tokenizer
+def _llama_trainer(tmp_path, tokenizer):
+    return GOLDTrainer(
+        model=_TINY_LLAMA,
+        teacher_model=_TINY_LLAMA,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
+        processing_class=tokenizer,
+    )
+
+
+def test_generate_on_policy_outputs_masks_prompt(tmp_path, llama_tokenizer):
+    trainer = _llama_trainer(tmp_path, llama_tokenizer)
 
     prompt_text = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello?<|eot_id|>"
     completion_text = "<|start_header_id|>assistant<|end_header_id|>\nHi there!"
@@ -1404,8 +1413,7 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
             return SimpleNamespace(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
-    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
-        trainer,
+    new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
         DummyModel(),
         {"prompts": prompt_tensor, "prompt_attention_mask": prompt_mask},
         generation_config,
@@ -1436,20 +1444,13 @@ def test_generate_on_policy_outputs_masks_prompt(llama_tokenizer):
     )
 
 
-class _DummyDecodeTokenizer:
-    def __init__(self, pad_token_id):
-        self.pad_token_id = pad_token_id
-
-    def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-        return " ".join(str(i) for i in ids)
-
-
-def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos():
-    # pad == eos here: identity-based pad masking used to erase the terminating EOS label on every
-    # row and zero attention on pad-id tokens inside the prompt.
-    pad_id = eos_id = 2
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = _DummyDecodeTokenizer(pad_id)
+def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(tmp_path, llama_tokenizer):
+    # pad == eos here (the fixture ties them): identity-based pad masking used to erase the terminating EOS label on
+    # every row and zero attention on pad-id tokens inside the prompt.
+    trainer = _llama_trainer(tmp_path, llama_tokenizer)
+    eos_id = llama_tokenizer.eos_token_id
+    pad_id = llama_tokenizer.pad_token_id
+    assert pad_id == eos_id
 
     # Row 0 stops on EOS and is right-padded; row 1 runs to max_new_tokens (no padding).
     prompts = torch.tensor([[pad_id, 11, eos_id, 13], [pad_id, 11, eos_id, 13]])
@@ -1483,12 +1484,10 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos():
     assert torch.all(new_labels[:, :prompt_width] == -100)
 
 
-def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion():
+def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(tmp_path, llama_tokenizer):
     # GenerationConfig defaults eos_token_id to None; torch.tensor(None) would raise, so the
     # None guard must keep the whole completion instead of trying to find a stop token.
-    pad_id = 0
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = _DummyDecodeTokenizer(pad_id)
+    trainer = _llama_trainer(tmp_path, llama_tokenizer)
 
     prompts = torch.tensor([[11, 12, 13], [14, 15, 16]])
     prompt_mask = torch.ones_like(prompts)
@@ -1532,29 +1531,24 @@ def test_build_teacher_inputs_pad_equals_eos_keeps_terminating_eos(llama_tokeniz
         assert teacher_attention_mask[row, last]
 
 
-def test_decode_completion_texts_from_labels_keeps_eos_when_pad_equals_eos():
+def test_decode_completion_texts_from_labels_keeps_eos_when_pad_equals_eos(tmp_path, llama_tokenizer):
     # pad == eos: the old pad-id filter dropped the terminating EOS from the reconstructed completion.
-    pad_id = eos_id = 2
-    captured = {}
-
-    class DummyProcessor:
-        @staticmethod
-        def batch_decode(token_id_lists, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            captured["ids"] = [list(ids) for ids in token_id_lists]
-            return [" ".join(str(t) for t in ids) for ids in token_id_lists]
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.pad_token_id = pad_id
-    trainer.processing_class = DummyProcessor()
+    trainer = _llama_trainer(tmp_path, llama_tokenizer)
+    eos_id = llama_tokenizer.eos_token_id
+    assert trainer.pad_token_id == eos_id
 
     labels = torch.tensor([[-100, -100, 21, 22, eos_id]])
-    trainer._decode_completion_texts_from_labels({"labels": labels})
-    assert captured["ids"] == [[21, 22, eos_id]]
+    completion_texts = trainer._decode_completion_texts_from_labels({"labels": labels})
+
+    assert completion_texts == [
+        llama_tokenizer.decode([21, 22, eos_id], skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    ]
+    assert completion_texts[0].endswith(llama_tokenizer.eos_token)
 
 
-def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1_examples):
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.processing_class = smollm_tokenizer
+def test_generate_on_policy_outputs_masks_prompt_smollm(tmp_path, smollm_tokenizer, openr1_examples):
+    # There is no tiny SmolLM3 model; tiny Llama 3.2 shares SmolLM3's 128k vocabulary, so it pairs with its tokenizer
+    trainer = _llama_trainer(tmp_path, smollm_tokenizer)
 
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
     batch = collator([openr1_examples[0]])
@@ -1567,8 +1561,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(smollm_tokenizer, openr1
             return SimpleNamespace(sequences=batch["input_ids"])
 
     generation_config = GenerationConfig()
-    new_ids, new_mask, new_labels, prompt_texts, completion_texts = GOLDTrainer.generate_on_policy_outputs(
-        trainer,
+    new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
         DummyModel(),
         {
             "prompts": batch["prompts"],
