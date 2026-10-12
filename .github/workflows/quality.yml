@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - ci-*
   pull_request:
 
 concurrency:
@@ -17,7 +18,10 @@ jobs:
     permissions:
       contents: read
     name: Check code quality
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
     if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -25,11 +29,16 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
+      - name: Show runner OS and Python
+        run: |
+          cat /etc/os-release
+          which python
+          python -VV
       - name: Cache pre-commit environments
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-3|${{ matrix.os }}|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Install pre-commit
         run: python -m pip install pre-commit
