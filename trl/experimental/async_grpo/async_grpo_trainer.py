@@ -55,7 +55,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import TREE_ATTENTION, TreeRow, register_tree_attention, tree_attention_kwargs
+from .packing import TREE_ATTENTION, TreeRow, register_tree_attention
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -590,7 +590,14 @@ class DataCollatorForRollout(DataCollatorMixin):
         (rows,) = examples
 
         packed = [row.pack() for row in rows]
-        padding = {"input_ids": self.pad_token_id, "shift_labels": -100, "token_index": -1, "tree_segment_parents": -1}
+        padding = {
+            "input_ids": self.pad_token_id,
+            "shift_labels": -100,
+            "token_index": -1,
+            "tree_kv_index": -1,
+            "tree_cu_seqlens_q": -1,
+            "tree_cu_seqlens_k": -1,
+        }
         batch = {key: pad([p[key] for p in packed], padding_value=padding.get(key, 0)) for key in packed[0]}
         batch["attention_mask"] = pad([torch.ones_like(p["input_ids"]) for p in packed], padding_value=0)
 
@@ -1449,8 +1456,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "global_n_tokens",
                 "global_n_forward_tokens",
                 "mean_seq_len",
-                "tree_segment_lengths",
-                "tree_segment_parents",
+                "tree_kv_index",
+                "tree_cu_seqlens_q",
+                "tree_cu_seqlens_k",
+                "tree_max_seqlens",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1463,6 +1472,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
+        tree_kwargs = {
+            key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
+        }
+        tree_kwargs["tree_max_seqlen_q"], tree_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
 
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
@@ -1473,7 +1486,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             shift_labels=shift_labels,
             fused_lm_head=True,
             **router_kwargs,
-            **tree_attention_kwargs(inputs, input_ids.device),
+            **tree_kwargs,
         )
         log_probs = outputs.log_probs.flatten()[token_index]
         entropy = outputs.entropy.flatten()[token_index]

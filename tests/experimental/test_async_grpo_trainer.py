@@ -62,7 +62,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
-from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow, tree_attention_kwargs
+from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
 from trl.trainer.base_trainer import _BaseTrainer
 from trl.trainer.utils import get_callable_name
 
@@ -1008,21 +1008,16 @@ class TestTreePacking(TrlTestCase):
 
     def test_every_row_sees_exactly_its_own_causal_mask(self):
         row = _tree_row(self.ROWS).pack()
-        inputs = {
-            "tree_segment_lengths": row["tree_segment_lengths"][None],
-            "tree_segment_parents": row["tree_segment_parents"][None],
-        }
-        plan = tree_attention_kwargs(inputs, "cpu")
 
         seen = []
         for q_start, q_end, k_start, k_end in zip(
-            plan["tree_cu_seqlens_q"][:-1],
-            plan["tree_cu_seqlens_q"][1:],
-            plan["tree_cu_seqlens_k"][:-1],
-            plan["tree_cu_seqlens_k"][1:],
+            row["tree_cu_seqlens_q"][:-1],
+            row["tree_cu_seqlens_q"][1:],
+            row["tree_cu_seqlens_k"][:-1],
+            row["tree_cu_seqlens_k"][1:],
             strict=True,
         ):
-            path = plan["tree_kv_index"][k_start:k_end]
+            path = row["tree_kv_index"][k_start:k_end]
             for q in range(q_start, q_end):
                 visible = path[: len(path) - (q_end - q) + 1]
                 assert visible[-1] == q
@@ -1042,8 +1037,9 @@ class TestTreePacking(TrlTestCase):
             [101, 102, 103, 201, 202, 0, 0, 0, 0, 0],
         ]
         assert batch["attention_mask"].tolist() == [[1] * 10, [1] * 5 + [0] * 5]
-        assert batch["tree_segment_lengths"].tolist() == [[2, 2, 1, 2, 3], [5, 0, 0, 0, 0]]
-        assert batch["tree_segment_parents"].tolist() == [[-1, 0, 1, 1, 0], [-1, -1, -1, -1, -1]]
+        assert batch["tree_cu_seqlens_q"].tolist() == [[0, 2, 4, 5, 7, 10], [0, 5, -1, -1, -1, -1]]
+        assert batch["tree_cu_seqlens_k"].tolist() == [[0, 2, 6, 11, 17, 22], [0, 5, -1, -1, -1, -1]]
+        assert batch["tree_max_seqlens"].tolist() == [[3, 6], [5, 5]]
         assert batch["shift_labels"][1].tolist() == [-100, -100, 201, 202] + [-100] * 6
         assert collator.metrics["batch/packing_ratio"] == [(21, 15)]  # 21 raw tokens forwarded as 15
 
@@ -1138,8 +1134,10 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
         [row["token_index"] + offset for row, offset in zip(rows, offsets, strict=False)]
     )[None]
     batch["segment_id"] = torch.cat([row["segment_id"] + i for i, row in enumerate(rows)])[None]
-    batch["tree_segment_lengths"] = torch.tensor([offsets[1:]]) - torch.tensor([offsets[:-1]])
-    batch["tree_segment_parents"] = torch.full_like(batch["tree_segment_lengths"], -1)
+    batch["tree_kv_index"] = torch.arange(offsets[-1])[None]
+    batch["tree_cu_seqlens_q"] = batch["tree_cu_seqlens_k"] = torch.tensor([offsets], dtype=torch.int32)
+    longest = max(len(sample["input_ids"]) for sample in samples)
+    batch["tree_max_seqlens"] = torch.tensor([[longest, longest]])
     batch["attention_mask"] = torch.ones_like(batch["input_ids"])
     batch["global_n_tokens"] = torch.tensor([float(batch["token_index"].numel())])
     batch["global_n_forward_tokens"] = torch.tensor([float(offsets[-1])])

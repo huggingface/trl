@@ -226,10 +226,9 @@ Where it happens:
 ```
 planner    TreeRow.add            the trie grows sample by sample; a sample is priced by its novel tokens
    │                              (TreeRow.fits), so `token_budget` bounds unique tokens, not raw ones
-collator   TreeRow.pack           DFS layout: unique tokens, depth as position_ids, segments + parents,
-   │                              and one loss term per original trained token (token_index)
-forward    tree_attention_kwargs  per segment: its queries and the K/V indices of its root-to-segment path
-   │
+collator   TreeRow.pack           DFS layout: unique tokens, depth as position_ids, one loss term per
+   │                              original trained token (token_index), and per segment its queries and
+   │                              the K/V indices of its root-to-segment path, all built on CPU
 attention  tree_attention         gather K/V along the paths, one FA3 varlen call, causal
 ```
 

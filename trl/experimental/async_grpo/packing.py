@@ -94,20 +94,23 @@ class TreeRow:
                 - `input_ids` (`N`): the unique tokens.
                 - `position_ids` (`N`): each token's position in its samples, which is its depth in the trie.
                 - `shift_labels` (`N`): next token each position predicts, `-100` where it is not trained.
-                - `tree_segment_lengths` (`S`): tokens of each segment.
-                - `tree_segment_parents` (`S`): segment each segment hangs off, `-1` for a root.
+                - `tree_kv_index` (`K`): packed position of every K/V row [`tree_attention`] gathers, the
+                  root-to-segment paths of all segments laid end to end.
+                - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
+                  boundaries in `tree_kv_index`.
+                - `tree_max_seqlens` (`2`): longest segment and longest path.
                 - `token_index` (`M`): position whose prediction is each trained token. A shared position serves every
                   sample that shares it, so there are more loss terms than labelled positions.
                 - `old_log_probs` (`M`), `advantages` (`M`): generator log-probability and advantage of each target.
                 - `segment_id` (`M`): index of the sample each target came from.
         """
-        input_ids, position_ids, offsets, parents = [], [], [0], []
+        input_ids, position_ids, offsets, paths, kv_index, cu_seqlens_k = [], [], [0], [], [], [0]
         packed = [0] * len(self.tokens)
-        stack = [(node, -1, 0) for node in reversed(self.roots.values())]
+        stack = [(node, None, 0) for node in reversed(self.roots.values())]
         while stack:
             node, parent, depth = stack.pop()
-            segment = len(parents)
-            parents.append(parent)
+            segment = len(paths)
+            start = len(input_ids)
             while True:
                 packed[node] = len(input_ids)
                 input_ids.append(self.tokens[node])
@@ -117,6 +120,9 @@ class TreeRow:
                     break
                 node = next(iter(self.children[node].values()))
             offsets.append(len(input_ids))
+            paths.append((paths[parent] if parent is not None else []) + list(range(start, len(input_ids))))
+            kv_index.extend(paths[-1])
+            cu_seqlens_k.append(len(kv_index))
             stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
 
         shift_labels = [-100] * len(input_ids)
@@ -133,8 +139,12 @@ class TreeRow:
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
             "shift_labels": torch.tensor(shift_labels),
-            "tree_segment_lengths": torch.tensor(offsets[1:]) - torch.tensor(offsets[:-1]),
-            "tree_segment_parents": torch.tensor(parents),
+            "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
+            "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
+            "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
+            "tree_max_seqlens": torch.tensor(
+                [max(b - a for a, b in zip(offsets[:-1], offsets[1:], strict=True)), max(map(len, paths))]
+            ),
             "token_index": torch.tensor(token_index, dtype=torch.long),
             "old_log_probs": torch.tensor(old_log_probs, dtype=torch.float32),
             "advantages": torch.tensor(advantages, dtype=torch.float32),
@@ -143,43 +153,6 @@ class TreeRow:
 
 
 TREE_ATTENTION = "tree_fa3"
-
-
-def tree_attention_kwargs(inputs: dict[str, torch.Tensor], device: torch.device) -> dict[str, Any]:
-    """
-    Tree attention as plain FA3 varlen attention: each segment's queries attend to the K/V of its root-to-segment path.
-
-    FA3 aligns the causal mask bottom-right when a sequence has fewer queries than keys, so a segment's queries, which
-    are the last tokens of their path, see exactly their ancestors plus their own causal past. The K/V of shared
-    prefixes is gathered once per descendant segment, but every other layer still runs once per unique token.
-
-    Args:
-        inputs (`dict[str, torch.Tensor]`):
-            This rank's batch, holding the padded `tree_segment_lengths` and `tree_segment_parents` of its row.
-        device (`torch.device`):
-            Device the attention runs on.
-
-    Returns:
-        `dict[str, Any]`, the keyword arguments [`tree_attention`] reads:
-            - `tree_kv_index`: packed position of every K/V row, the paths of all segments laid end to end.
-            - `tree_cu_seqlens_q`, `tree_cu_seqlens_k`: segment boundaries in the row, path boundaries in the index.
-            - `tree_max_seqlen_q`, `tree_max_seqlen_k`: longest segment, longest path.
-    """
-    lengths = inputs["tree_segment_lengths"][0]
-    segments = lengths > 0
-    offsets = [0, *lengths[segments].cumsum(0).tolist()]
-    paths, kv_index, cu_seqlens_k = [], [], [0]
-    for segment, parent in enumerate(inputs["tree_segment_parents"][0][segments].tolist()):
-        paths.append((paths[parent] if parent != -1 else []) + list(range(offsets[segment], offsets[segment + 1])))
-        kv_index.extend(paths[-1])
-        cu_seqlens_k.append(len(kv_index))
-    return {
-        "tree_kv_index": torch.tensor(kv_index, dtype=torch.long, device=device),
-        "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32, device=device),
-        "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32, device=device),
-        "tree_max_seqlen_q": int(lengths.max()),
-        "tree_max_seqlen_k": max(len(path) for path in paths),
-    }
 
 
 @cache
