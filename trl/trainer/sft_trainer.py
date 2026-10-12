@@ -44,7 +44,6 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from .._compat import _is_package_version_below
 from ..chat_template_utils import (
     clone_chat_template,
     get_training_chat_template,
@@ -1162,19 +1161,14 @@ class SFTTrainer(_BaseTrainer):
         # from attending to each other, so a packed batch would silently train with documents attending across
         # their boundaries. Read the parallelism config off the accelerator rather than off `args`: when
         # context parallelism is configured through an accelerate YAML, `args.parallelism_config` stays None.
-        if not _is_package_version_below("accelerate", "1.10.1"):
-            parallelism_config = self.accelerator.parallelism_config
-            if (
-                parallelism_config is not None
-                and parallelism_config.cp_enabled
-                and (args.packing or args.eval_packing)
-            ):
-                raise ValueError(
-                    "Packing is not compatible with context parallelism (`cp_size > 1`). Packing relies on a "
-                    "block-diagonal attention mask to keep packed documents separate, and context parallelism "
-                    "drops that mask, so documents would attend across their boundaries. Set `packing=False` "
-                    "and `eval_packing=False`, or disable context parallelism."
-                )
+        parallelism_config = self.accelerator.parallelism_config
+        if parallelism_config is not None and parallelism_config.cp_enabled and (args.packing or args.eval_packing):
+            raise ValueError(
+                "Packing is not compatible with context parallelism (`cp_size > 1`). Packing relies on a "
+                "block-diagonal attention mask to keep packed documents separate, and context parallelism "
+                "drops that mask, so documents would attend across their boundaries. Set `packing=False` "
+                "and `eval_packing=False`, or disable context parallelism."
+            )
 
         # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
         # `position_ids` in every batch to preserve each token's global position. Sequence parallelism was added in
@@ -1232,8 +1226,8 @@ class SFTTrainer(_BaseTrainer):
 
         # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
         # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
-        # computed, so they need no such correction. `ParallelismConfig.tp_size` requires accelerate 1.10.0.
-        if Version(accelerate.__version__) >= Version("1.10.0") and self.accelerator.parallelism_config is not None:
+        # computed, so they need no such correction.
+        if self.accelerator.parallelism_config is not None:
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
