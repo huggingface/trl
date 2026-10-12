@@ -1432,6 +1432,13 @@ _FUSED_LM_HEAD_MODEL_IDS = [
 ]
 
 
+def test_add_fused_lm_head_without_triton():
+    """Without Triton, attaching the head names the missing dependency instead of failing on `None` at first call."""
+    model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+    with patch("trl.trainer.utils._ChunkedLogProbFunction", None), pytest.raises(ImportError, match="Triton"):
+        add_fused_lm_head(model)
+
+
 @require_torch_accelerator
 class TestAddFusedLMHead:
     def test_masked_labels(self):
