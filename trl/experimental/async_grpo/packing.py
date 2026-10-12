@@ -18,7 +18,7 @@ from typing import Any, Protocol
 
 import torch
 
-from .tree import TREE_ATTENTION, PrefixForest, build_tree_block_mask, dfs_intervals
+from .tree import TREE_ATTENTION, PrefixForest, TreeAttentionPlan, TreeLayout
 
 
 @dataclass
@@ -46,11 +46,11 @@ class TrainingRow:
         segment_id (`torch.Tensor`):
             Index of the original rollout row each target came from, shape `(M,)`. Kept explicit because packing
             destroys any way of reading completion boundaries back off `position_ids`.
-        tree_enter (`torch.Tensor`, *optional*):
-            DFS entry clock of each forwarded token, shape `(N,)`. Only tree packing fills these; together with
-            `tree_leave` they are the whole attention mask.
-        tree_leave (`torch.Tensor`, *optional*):
-            DFS exit clock of each forwarded token, shape `(N,)`.
+        tree_segment_lengths (`torch.Tensor`, *optional*):
+            Number of tokens in each segment of the packed forest, shape `(S,)`. Only tree packing fills these;
+            together with `tree_segment_parents` they are the whole attention mask.
+        tree_segment_parents (`torch.Tensor`, *optional*):
+            Segment each segment hangs off, `-1` for a root, shape `(S,)`.
     """
 
     input_ids: torch.Tensor
@@ -60,8 +60,8 @@ class TrainingRow:
     old_log_probs: torch.Tensor
     advantages: torch.Tensor
     segment_id: torch.Tensor
-    tree_enter: torch.Tensor | None = None
-    tree_leave: torch.Tensor | None = None
+    tree_segment_lengths: torch.Tensor | None = None
+    tree_segment_parents: torch.Tensor | None = None
 
 
 class PackingProtocol(Protocol):
@@ -242,7 +242,7 @@ class TreePacking:
 
     Multi-turn rollouts overlap heavily — a shared prompt, and after a fork a shared conversation — so the decoder's
     per-token work drops by the packing ratio (total tokens ÷ unique tokens). Attention still sees exactly what each
-    row saw, through a FlexAttention block mask built from the forest's DFS stamps.
+    row saw: each segment attends to the K/V of its root-to-segment path through FA3 varlen attention.
 
     Sharing only ever happens inside a `group_id` (the packer keeps one trie per group), so a sample is only ever cheap
     in the row that already holds its group. That is what keeps the planner a greedy bin-packer rather than a
@@ -278,15 +278,17 @@ class TreePacking:
         return TreeRow()
 
     def forward_kwargs(self, inputs: dict[str, torch.Tensor], tokens: torch.Tensor) -> dict[str, Any]:
-        enter, leave = inputs["tree_enter"][tokens], inputs["tree_leave"][tokens]
-        return {"tree_block_mask": build_tree_block_mask(enter, leave)}
+        lengths = inputs["tree_segment_lengths"][0]
+        segments = lengths > 0
+        offsets = (0, *lengths[segments].cumsum(0).tolist())
+        parents = tuple(inputs["tree_segment_parents"][0][segments].tolist())
+        return {"tree_attention_plan": TreeAttentionPlan.build(TreeLayout(offsets, parents), tokens.device)}
 
     def pack(self, samples: list[dict[str, Any]]) -> TrainingRow:
         forest = PrefixForest()
         for sample in samples:
             forest.insert(sample["input_ids"], sample["group_id"])
         tokens, layout, node_to_packed = forest.linearize()
-        enter, leave = dfs_intervals(layout)
 
         packed_samples = [
             [node_to_packed[node] for node in forest.walk(sample["input_ids"], sample["group_id"])]
@@ -296,7 +298,7 @@ class TreePacking:
         return TrainingRow(
             input_ids=torch.tensor(tokens, dtype=torch.long),
             position_ids=layout.position_ids,
-            tree_enter=torch.tensor(enter, dtype=torch.int32),
-            tree_leave=torch.tensor(leave, dtype=torch.int32),
+            tree_segment_lengths=torch.tensor(layout.offsets[1:]) - torch.tensor(layout.offsets[:-1]),
+            tree_segment_parents=torch.tensor(layout.parents),
             **loss_terms,
         )

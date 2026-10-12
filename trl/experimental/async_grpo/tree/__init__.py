@@ -12,5 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .flex import TREE_ATTENTION, build_tree_block_mask, dfs_intervals, register_tree_attention
+from .fa3 import TREE_ATTENTION, TreeAttentionPlan, register_tree_attention
 from .layout import PrefixForest, TreeLayout

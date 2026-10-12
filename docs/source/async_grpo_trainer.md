@@ -225,12 +225,12 @@ How it works:
 
 - **Sharing is per prompt**: one trie per `group_id`, so a group's cost does not depend on what else is in the row and the planner stays a greedy bin-packer.
 - **The planner places by affinity**: a sample goes to the row holding its group, where it costs only its novel tokens. `token_budget` bounds a row's unique tokens and its loss terms. A group is split only when a rank would otherwise forward nothing.
-- **The collator linearizes the forest** depth-first. A token's `position_id` is its depth, and two DFS stamps define the mask — `k` is visible to `q` iff `enter[k] <= enter[q] < leave[k]` — which FlexAttention evaluates as a block mask.
+- **The collator linearizes the forest** depth-first into segments, runs of tokens with no fork inside. A token's `position_id` is its depth. Attention is plain FA3 varlen: each segment's queries attend to the K/V gathered along its root-to-segment path, and FA3's bottom-right causal alignment makes that exactly the segment's ancestors plus its own causal past. Every other layer runs once per unique token, and the gathered K/V is about what unpacked training would hold.
 - **Every position predicts one token**: the trie shares a token only between rows that agree on the next one, so it forks one token before they diverge (one extra token per extra branch). The fused head then scores the row through plain `shift_labels`, and a `token_index` from the packer maps the per-position log-probs back to each rollout token.
 
-When it pays: `speed-up ≈ packing ratio ÷ overhead`, where the overhead of FlexAttention over FlashAttention and of the longer ancestries is about 1.3–1.6 on 4–8B models and shrinks with model size. Below a `batch/packing_ratio` of ~1.6 tree packing is a loss. The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
+When it pays: with nothing shared, tree packing runs at about the speed of `"sequence"` packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 
-Judge it on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/mfu_*`, which divides by forwarded tokens, falls — neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so. The first step compiles the FlexAttention kernel; it is not a hang.
+Judge it on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/mfu_*`, which divides by forwarded tokens, falls — neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so.
 
 <Tip warning={true}>
 

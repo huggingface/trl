@@ -109,9 +109,9 @@ class AsyncGRPOConfig(_BaseConfig):
             How a micro-batch is packed into one row per DP rank. `"sequence"` concatenates the samples end to end and
             attends block-diagonally. `"tree"` packs them into a prefix forest, so a token shared by several samples —
             a prompt, or a conversation up to a fork — is forwarded once instead of once per sample, and attends
-            through a FlexAttention mask that still shows each sample exactly what it saw. Tree packing speeds up the
-            step roughly by `packing_ratio / 1.57` (measured on Qwen3-4B / H100), so it is a loss below a packing ratio
-            of ~1.6; watch `batch/packing_ratio` to see where a workload sits. It also lets `token_budget` bound unique
+            through FA3 over each segment's root-to-segment path, so each sample still sees exactly what it saw. With
+            nothing shared it runs at about the speed of `"sequence"`, and the step speeds up roughly with the packing
+            ratio; watch `batch/packing_ratio` to see where a workload sits. It also lets `token_budget` bound unique
             tokens rather than raw ones, fitting more samples per row.
         token_budget (`int`, *optional*):
             Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic token-budgeted
@@ -346,10 +346,10 @@ class AsyncGRPOConfig(_BaseConfig):
             "help": "How a micro-batch is packed into one row per DP rank. `'sequence'` concatenates the samples "
             "end to end and attends block-diagonally. `'tree'` packs them into a prefix forest, so a token shared "
             "by several samples — a prompt, or a conversation up to a fork — is forwarded once instead of once per "
-            "sample, and attends through a FlexAttention mask that still shows each sample exactly what it saw. "
-            "Tree packing speeds up the step roughly by `packing_ratio / 1.57` (measured on Qwen3-4B / H100), so it "
-            "is a loss below a packing ratio of ~1.6; watch `batch/packing_ratio` to see where a workload sits. It "
-            "also lets `token_budget` bound unique tokens rather than raw ones, fitting more samples per row."
+            "sample, and attends through FA3 over each segment's root-to-segment path, so each sample still sees "
+            "exactly what it saw. With nothing shared it runs at about the speed of `'sequence'`, and the step speeds "
+            "up roughly with the packing ratio; watch `batch/packing_ratio` to see where a workload sits. It also "
+            "lets `token_budget` bound unique tokens rather than raw ones, fitting more samples per row."
         },
     )
     token_budget: int | None = field(

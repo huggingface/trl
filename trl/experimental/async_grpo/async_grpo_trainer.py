@@ -661,9 +661,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             "global_n_forward_tokens": global_n_forward_tokens,
             "mean_seq_len": mean_seq_len_t,
         }
-        if rows[0].tree_enter is not None:
-            batch["tree_enter"] = pad([row.tree_enter for row in rows], padding_value=0)
-            batch["tree_leave"] = pad([row.tree_leave for row in rows], padding_value=0)
+        if rows[0].tree_segment_lengths is not None:
+            batch["tree_segment_lengths"] = pad([row.tree_segment_lengths for row in rows], padding_value=0)
+            batch["tree_segment_parents"] = pad([row.tree_segment_parents for row in rows], padding_value=-1)
         return batch
 
     def _log_metrics(
@@ -1508,8 +1508,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "global_n_tokens",
                 "global_n_forward_tokens",
                 "mean_seq_len",
-                "tree_enter",
-                "tree_leave",
+                "tree_segment_lengths",
+                "tree_segment_parents",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
