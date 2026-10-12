@@ -378,6 +378,23 @@ The deprecation and removal schedule is based on each feature's usage and impact
 
 These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.
 
+### Dependency version floors
+
+Raising the minimum supported version of a dependency is a breaking change for anyone still on an older release, so it needs a reason beyond tidying the code. The question is not "does this bump let us delete something", but "what does keeping the old version cost us, and who pays if we drop it".
+
+* **Floor older than 2 years**: fine to drop, no further justification needed. It is unlikely anyone is still on a release that old.
+* **Floor younger than 2 years**: weigh how hard the old version is to keep working against how many users depend on it.
+    * Cheap to keep: keep it until it reaches 2 years. A warning filter or a one-line version guard costs us nothing.
+    * Hard to keep, few users: raise the floor.
+    * Hard to keep, many users: keep it, and accept that it takes real work. That is where the effort should go. `transformers` is a core dependency that everyone is on, so it is almost always this case, even when it means a lot of branching.
+* **Never require a release younger than 1 year**, however expensive the old one is to keep. Users on lagging stacks (conda-forge, cluster images, another library's upper bound) cannot move to it yet.
+
+Some dependencies have their own agreed window. `vLLM` is still unstable, moves fast, and is only used by the online trainers, so we use 5 months there.
+
+Declaring a first floor for a dependency that has none is not covered by the above: it drops support for nothing, it only records what we already test.
+
+When TRL needs an API newer than the floor, the default is a version guard, not a bump. Put a floor change in its own PR and say in the description which version guards, compatibility shims or warning filters it retires.
+
 ### Working with warnings
 
 Warnings play a critical role in guiding users toward resolving potential issues, but they should be used thoughtfully to avoid unnecessary noise. Unlike logging, which provides informational context or operational details, warnings signal conditions that require attention and action. Overusing warnings can dilute their importance, leading users to ignore them entirely.
