@@ -338,14 +338,21 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
             report_to="none",
         )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype=training_args.dtype,
+            device_map=None,
+            attn_implementation="kernels-community/flash-attn3",
+        )
         trainer = AsyncGRPOTrainer(
-            model=model_id,
+            model=model,
             reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires this argument
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             weight_transfer=_StubWeightTransfer(),
         )
+        assert trainer.model is model
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

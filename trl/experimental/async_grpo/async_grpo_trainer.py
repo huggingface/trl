@@ -929,14 +929,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ```
 
     Args:
-        model (`str`):
-            Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
-            repo on huggingface.co, or a path to a *directory* containing model weights saved using
-            [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
-            vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
-            models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise. The
-            model name is also used to identify the model on the vLLM server used for generation.
+        model (`str` or [`~transformers.PreTrainedModel`] or `torch.nn.Module`):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
+              vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
+              models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise.
+            - An instantiated model. It must expose `config` and `generation_config` attributes and already use an
+              attention implementation that supports padding-free training.
+
+            The model name from the config is used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
@@ -1043,7 +1048,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: str,
+        model: str | PreTrainedModel | torch.nn.Module,
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -1058,7 +1063,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model.split("/")[-1]
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
@@ -1070,18 +1076,25 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
-        model_init_kwargs = args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-        model_init_kwargs.setdefault("dtype", args.dtype)
-        model_revision = model_init_kwargs.get("revision")
-        # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
-        # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
-        model = create_model_from_path(
-            model,
-            device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
-            **model_init_kwargs,
-        )
+        model_revision = None
+        if isinstance(model, str):
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_init_kwargs.setdefault("dtype", args.dtype)
+            model_revision = model_init_kwargs.get("revision")
+            # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
+            # single row and `cu_seq_lens` are derived from `position_ids` resets. SDPA/eager can't handle this.
+            model = create_model_from_path(
+                model,
+                device_map=None,
+                attn_implementation="kernels-community/flash-attn3",
+                **model_init_kwargs,
+            )
+        elif args.model_init_kwargs is not None:
+            logger.warning(
+                "You passed `model_init_kwargs` to `AsyncGRPOConfig`, but `model` is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
