@@ -508,6 +508,55 @@ except ImportError:  # Triton ships with PyTorch on Linux only
     _ChunkedLogProbFunction = None
     _fused_logprob_entropy = None
 
+# Tokens per chunk for the pure-PyTorch fallback, which materializes `[chunk, V]` logits
+_TORCH_LOGPROB_TOKEN_CHUNK_SIZE = 1024
+OPTIONAL_LOGPROB_OUTPUTS = ("entropy", "log_sum_sq_probs", "mean_logits", "is_top1")
+
+
+def _chunked_logprob_torch(
+    hidden: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    targets: torch.Tensor,
+    temperature: float,
+    chunk_size: int,
+    final_logit_softcapping: float | None = None,
+    logit_scale: float = 1.0,
+    outputs: tuple[str, ...] = OPTIONAL_LOGPROB_OUTPUTS,
+) -> tuple[torch.Tensor | None, ...]:
+    """
+    Pure-PyTorch equivalent of `ChunkedLogProbFunction.apply`, used when Triton is unavailable (e.g. macOS / MPS).
+
+    Tokens are processed in chunks under activation checkpointing, so the `[chunk, V]` logits are recomputed in the
+    backward instead of being kept for the whole sequence. `chunk_size` (a vocabulary tile size for the Triton kernel)
+    is unused.
+    """
+
+    def chunk_stats(hidden, targets):
+        z = F.linear(hidden, weight, bias).float() * logit_scale
+        if final_logit_softcapping is not None:
+            z = final_logit_softcapping * torch.tanh(z / final_logit_softcapping)
+        z = z / temperature
+        logp = z.log_softmax(-1)
+        return (
+            logp.gather(-1, targets.unsqueeze(-1)).squeeze(-1),
+            -(logp.exp() * logp).sum(-1) if "entropy" in outputs else None,
+            (2 * logp).logsumexp(-1) if "log_sum_sq_probs" in outputs else None,
+            z.mean(-1) if "mean_logits" in outputs else None,
+            z.argmax(-1) == targets if "is_top1" in outputs else None,
+        )
+
+    n = _TORCH_LOGPROB_TOKEN_CHUNK_SIZE
+    chunks = [
+        torch.utils.checkpoint.checkpoint(chunk_stats, h, t, use_reentrant=False)
+        for h, t in zip(hidden.split(n), targets.split(n), strict=True)
+    ]
+    if not chunks:  # no valid label: keep the output connected to the graph
+        return (hidden.sum(-1) * 0.0,) + tuple(
+            hidden.new_zeros(0) if name in outputs else None for name in OPTIONAL_LOGPROB_OUTPUTS
+        )
+    return tuple(None if parts[0] is None else torch.cat(parts) for parts in zip(*chunks, strict=True))
+
 
 def _supports_trl_loss_kernel(
     logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
@@ -1640,7 +1689,10 @@ def add_fused_lm_head(
             if bias is not None:
                 bias = bias.full_tensor()
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
-            per_token = _ChunkedLogProbFunction.apply(
+            chunked_logprob = (
+                _chunked_logprob_torch if _ChunkedLogProbFunction is None else _ChunkedLogProbFunction.apply
+            )
+            per_token = chunked_logprob(
                 hidden_states[mask],
                 weight,
                 bias,

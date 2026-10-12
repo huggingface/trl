@@ -2175,3 +2175,51 @@ class TestAdjustedMfu(TrlTestCase):
         derived = adjusted_mfu(100.0, cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
+
+
+class TestChunkedLogprobTorch:
+    N, H, V = 2500, 32, 128  # N spans several token chunks
+
+    def _inputs(self):
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, device=torch_device, requires_grad=True)
+        weight = torch.randn(self.V, self.H, device=torch_device, requires_grad=True)
+        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+        return hidden, weight, labels
+
+    @pytest.mark.parametrize("logit_scale, final_logit_softcapping", [(1.0, None), (0.5, 30.0)])
+    def test_matches_reference(self, logit_scale, final_logit_softcapping):
+        hidden, weight, labels = self._inputs()
+
+        logprobs, entropy, log_sum_sq_probs, mean_logits, is_top1 = trainer_utils._chunked_logprob_torch(
+            hidden, weight, None, labels, 0.7, 32768, final_logit_softcapping, logit_scale
+        )
+        logits = (hidden @ weight.t()) * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / 0.7
+        log_p = F.log_softmax(logits, dim=-1)
+        logprobs_ref = log_p.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+
+        torch.testing.assert_close(logprobs, logprobs_ref)
+        torch.testing.assert_close(entropy, -(log_p.exp() * log_p).sum(-1))
+        torch.testing.assert_close(log_sum_sq_probs, (2 * log_p).logsumexp(-1))
+        torch.testing.assert_close(mean_logits, logits.mean(-1))
+        assert torch.equal(is_top1, logits.argmax(-1) == labels)
+
+        grads = torch.autograd.grad(logprobs.sum() + entropy.sum(), (hidden, weight))
+        grads_ref = torch.autograd.grad(logprobs_ref.sum() - (log_p.exp() * log_p).sum(), (hidden, weight))
+        for grad, grad_ref in zip(grads, grads_ref, strict=True):
+            # chunking changes the float summation order of the weight gradient
+            torch.testing.assert_close(grad, grad_ref, rtol=1e-4, atol=1e-3)
+
+    def test_outputs_subset(self):
+        hidden, weight, labels = self._inputs()
+        out = trainer_utils._chunked_logprob_torch(hidden, weight, None, labels, 1.0, 32768, outputs=("entropy",))
+        assert out[1] is not None and out[2:] == (None, None, None)
+
+    def test_no_valid_tokens(self):
+        hidden, weight, labels = self._inputs()
+        logprobs, *_ = trainer_utils._chunked_logprob_torch(hidden[:0], weight, None, labels[:0], 1.0, 32768)
+        assert logprobs.shape == (0,)
+        logprobs.sum().backward()  # stays connected to the graph
