@@ -990,20 +990,17 @@ def test_prepare_dataset_extended_uld_keeps_seam_token(tmp_path, qwen_tokenizer)
     assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
 
-def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
+def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
-    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset,
+    row = _prepared_row(
+        tmp_path,
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
         gemma4_tokenizer,
-        args,
-        packing=False,
-        formatting_func=None,
-        dataset_name="train",
+        dataset,
+        max_length=64,
+        max_completion_length=16,
+        use_extended_uld=False,
     )
-    row = prepared[0]
 
     completion_ids = [
         token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
