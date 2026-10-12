@@ -736,8 +736,12 @@ class DPOTrainer(_BaseTrainer):
         # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
         # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
         # this by default without gradient checkpointing, which TRL turns on by default
-        # (huggingface/transformers#49443).
-        if self._is_vlm and args.ddp_find_unused_parameters is None:
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
             args.ddp_find_unused_parameters = True
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
