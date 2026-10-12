@@ -1506,7 +1506,7 @@ class TestManifestWeightStream:
             torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
             torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
         )
-        original = [(name, param.detach().clone()) for name, param in model.named_parameters() if param.requires_grad]
+        original = [(name, param.detach().clone()) for name, param in _iter_vllm_named_params(model)]
         info = {
             "names": [name for name, _ in original],
             "dtype_names": [str(tensor.dtype).split(".")[-1] for _, tensor in original],
@@ -1514,7 +1514,7 @@ class TestManifestWeightStream:
         }
         # Accelerate upcasts low-precision FSDP2 parameters to fp32 after the manifest is collected.
         model.to(dtype=torch.float32)
-        streamed = [(name, param.detach()) for name, param in model.named_parameters() if param.requires_grad]
+        streamed = [(name, param.detach()) for name, param in _iter_vllm_named_params(model)]
 
         sent = _tensors_handed_to_producer(info, streamed)
 
