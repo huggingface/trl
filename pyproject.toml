@@ -232,4 +232,12 @@ filterwarnings = [
     # Upstream issue: https://github.com/pytorch/pytorch/issues/175484
     # Remove once: no supported torch version emits it
     "ignore:TensorFloat32 tensor cores for float32 matrix multiplication available but not enabled:UserWarning",
+
+    # peft warns on every generate step of prompt learning models (prompt tuning, P-tuning) that it ignores
+    # position_ids, which transformers' generate builds itself (upstream, not actionable in TRL)
+    # Triggered by the GRPO prompt tuning test, the only prompt tuning test that generates
+    # Tracking issue: https://github.com/huggingface/trl/issues/7585
+    # Upstream issue: https://github.com/huggingface/peft/issues/3911
+    # Remove once: no supported peft version emits it
+    "ignore:Position ids are not supported for parameter efficient tuning:UserWarning",
 ]

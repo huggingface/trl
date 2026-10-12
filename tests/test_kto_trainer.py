@@ -787,6 +787,18 @@ class TestKTOTrainer(TrlTestCase):
             new_ref_param = trainer.ref_model.get_parameter(n)
             assert not torch.equal(previous_ref_params[n], new_ref_param), f"Ref Parameter {n} has not changed."
 
+    def test_ref_model_like_model_instance(self):
+        # A policy passed as an instance has no `model_init_kwargs`: the reference is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        assert trainer.ref_model.dtype == torch.bfloat16
+        assert trainer.ref_model.config._attn_implementation == "eager"
+
     def test_train_model_dtype(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
 

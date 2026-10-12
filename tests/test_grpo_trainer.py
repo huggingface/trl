@@ -169,6 +169,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
             rollout_func=rollout_func,
         )
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_prefers_rollout_func(self):
         rollout_func = self._make_rollout_func(
             prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[-0.1]], env_mask=[[1]]
@@ -182,6 +183,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert result[2] == [[1]]  # tool_mask (from env_mask)
         assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
         rollout_func = self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[0.0]])
         trainer = self._make_trainer(rollout_func)
@@ -196,6 +198,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert trainer._last_loaded_step == trainer.state.global_step
         assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
         trainer = self._make_trainer(self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]]))
 
@@ -1100,6 +1103,27 @@ class TestGRPOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_ref_model_like_model_instance(self):
+        # A policy passed as an instance has no `model_init_kwargs`: the reference is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # set beta to a non-zero value so that the trainer needs a reference model
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.ref_model.dtype == torch.bfloat16
+        assert trainer.ref_model.config._attn_implementation == "eager"
 
     @require_peft_target_parameters
     def test_train_moe_peft_model(self):

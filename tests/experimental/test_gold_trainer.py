@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import warnings
 from contextlib import nullcontext
 from functools import partial
 from types import SimpleNamespace
@@ -20,7 +21,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoModelForImageTextToText, AutoProcessor, AutoTokenizer, GenerationConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoProcessor,
+    AutoTokenizer,
+    GenerationConfig,
+)
 
 from trl.experimental.gold import GOLDConfig
 from trl.experimental.gold import gold_trainer as gold_trainer_module
@@ -762,119 +769,26 @@ def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(mon
     assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 0, 7, 42]], dtype=torch.long))
 
 
-def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch):
+def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch, tmp_path):
     captured = {}
 
-    class DummyStudentModel:
-        def __init__(self):
-            config = SimpleNamespace(_name_or_path="student", vocab_size=17)
-            config.get_text_config = lambda: config
-            self.config = config
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    class DummyProcessingClass:
-        pad_token_id = 0
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        del (
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            compute_metrics,
-            callbacks,
-            optimizers,
-        )
-        del preprocess_logits_for_metrics, peft_config
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
+    # Stand in for vLLM, which cannot run here
     class CapturingVLLMGeneration:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
     monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
     monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", CapturingVLLMGeneration)
 
-    args = SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        use_liger_kernel=False,
-        trust_remote_code=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=1.0,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=True,
-        vllm_mode="colocate",
-        vllm_structured_outputs_regex=None,
-        vllm_server_base_url=None,
-        vllm_server_host="0.0.0.0",
-        vllm_server_port=8001,
-        vllm_group_port=51216,
-        vllm_server_timeout=240.0,
-        vllm_tensor_parallel_size=1,
-        vllm_gpu_memory_utilization=0.2,
-        vllm_max_model_length=None,
-        vllm_enable_sleep_mode=False,
-        vllm_model_impl="vllm",
-        vllm_sync_frequency=1,
-    )
-
-    teacher_model = DummyTeacherModel()
     GOLDTrainer(
-        model=DummyStudentModel(),
-        teacher_model=teacher_model,
-        args=args,
-        data_collator=object(),
-        processing_class=DummyProcessingClass(),
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path), report_to="none", max_length=128, max_completion_length=16, use_vllm=True
+        ),
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
     )
 
-    assert teacher_model.resized_to == 17
     assert captured["max_model_length"] == 128
 
 
@@ -1939,99 +1853,14 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(qwen3
         assert row_completion_offs[-1] == [content_len, content_len]
 
 
-def test_gold_trainer_init_rejects_llm_with_vision_dataset(monkeypatch):
+def test_gold_trainer_init_rejects_llm_with_vision_dataset(tmp_path, vlm_dataset):
     """GOLDTrainer should raise ValueError when a text-only model receives a vision dataset."""
-
-    class DummyStudentModel:
-        def __init__(self):
-            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        del (
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            compute_metrics,
-            callbacks,
-            optimizers,
-        )
-        del preprocess_logits_for_metrics, peft_config
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # Dataset with an "image" key triggers vision detection
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-
-    args = SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        use_liger_kernel=False,
-        trust_remote_code=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=1.0,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=False,
-    )
-
     with pytest.raises(ValueError, match="vision-related"):
         GOLDTrainer(
-            model=DummyStudentModel(),
-            teacher_model=DummyTeacherModel(),
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=tokenizer,
+            model=_TINY_QWEN2,
+            teacher_model=_TINY_QWEN2,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+            train_dataset=vlm_dataset,
         )
 
 
@@ -2269,618 +2098,109 @@ def test_vlm_collator_original_text_is_untemplated(smolvlm_processor, vlm_exampl
             )
 
 
-def test_gold_trainer_init_rejects_non_vlm_teacher(monkeypatch):
-    """GOLDTrainer should raise ValueError when the student is a VLM but the teacher is not."""
-
-    class DummyStudentModel:
-        def __init__(self):
-            self.config = SimpleNamespace(_name_or_path="student", vocab_size=17)
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            # vision_config=None — looks like a text-only model
-            self.config = SimpleNamespace(vision_config=None)
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        del (
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            compute_metrics,
-            callbacks,
-            optimizers,
-        )
-        del preprocess_logits_for_metrics, peft_config
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-
-    args = SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        truncation_mode="keep_start",
-        use_liger_kernel=False,
-        trust_remote_code=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=1.0,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=False,
-    )
+def test_gold_trainer_init_rejects_non_vlm_teacher(tmp_path, vlm_dataset):
+    """GOLDTrainer should raise ValueError when the student is a VLM but the instantiated teacher is not."""
+    teacher_model = AutoModelForCausalLM.from_pretrained(_TINY_QWEN2)
 
     with pytest.raises(ValueError, match="VLM distillation requires both student and teacher"):
         GOLDTrainer(
-            model=DummyStudentModel(),
-            teacher_model=DummyTeacherModel(),
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=processor,
+            model=_TINY_SMOLVLM,
+            teacher_model=teacher_model,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+            train_dataset=vlm_dataset,
         )
 
 
-def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(monkeypatch):
+def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(tmp_path, vlm_dataset):
     """GOLDTrainer should raise ValueError when truncation_mode='keep_end' is used with a VLM."""
-
-    class DummyStudentModel:
-        def __init__(self):
-            self.config = SimpleNamespace(
-                _name_or_path="student", vocab_size=17, vision_config=True, model_type="dummy_vlm"
-            )
-            self.config.get_text_config = lambda: self.config
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            self.config = SimpleNamespace(vision_config=True, model_type="dummy_vlm")
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        del data_collator, train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
-        del preprocess_logits_for_metrics, peft_config
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-
-    args = SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        truncation_mode="keep_end",
-        use_liger_kernel=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=1.0,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=False,
-    )
-
     with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
         GOLDTrainer(
-            model=DummyStudentModel(),
-            teacher_model=DummyTeacherModel(),
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=processor,
+            model=_TINY_SMOLVLM,
+            teacher_model=_TINY_SMOLVLM,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none", truncation_mode="keep_end"),
+            train_dataset=vlm_dataset,
         )
 
 
-def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch):
+def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch, tmp_path, vlm_dataset):
     """When a VLM processor is used with lmbda > 0 and use_vllm=True, GOLDTrainer should use the identity collator
     and store a _vlm_collator for on-the-fly collation. vLLM should be initialized with max_model_length from args.
     """
     captured = {}
 
-    class DummyStudentModel:
-        def __init__(self):
-            self.config = SimpleNamespace(
-                _name_or_path="student",
-                vocab_size=17,
-                vision_config=True,
-                model_type="dummy_vlm",
-            )
-            self.config.get_text_config = lambda: self.config
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            self.config = SimpleNamespace(vision_config=True, model_type="dummy_vlm")
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        self.data_collator = data_collator
-        del train_dataset, eval_dataset, compute_metrics, callbacks, optimizers
-        del preprocess_logits_for_metrics, peft_config
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
+    # Stand in for vLLM, which cannot run here
     class CapturingVLLMGeneration:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
     monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
     monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", CapturingVLLMGeneration)
 
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-
-    args = SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        truncation_mode="keep_start",
-        use_liger_kernel=False,
-        trust_remote_code=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=1.0,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=True,
-        vllm_mode="colocate",
-        vllm_structured_outputs_regex=None,
-        vllm_server_base_url=None,
-        vllm_server_host="0.0.0.0",
-        vllm_server_port=8001,
-        vllm_group_port=51216,
-        vllm_server_timeout=240.0,
-        vllm_tensor_parallel_size=1,
-        vllm_gpu_memory_utilization=0.2,
-        vllm_max_model_length=None,
-        vllm_enable_sleep_mode=False,
-        vllm_model_impl="vllm",
-        vllm_sync_frequency=1,
-    )
-
-    teacher_model = DummyTeacherModel()
     trainer = GOLDTrainer(
-        model=DummyStudentModel(),
-        teacher_model=teacher_model,
-        args=args,
-        train_dataset=vision_dataset,
-        processing_class=processor,
+        model=_TINY_SMOLVLM,
+        teacher_model=_TINY_SMOLVLM,
+        args=GOLDConfig(
+            output_dir=str(tmp_path), report_to="none", max_length=128, max_completion_length=16, use_vllm=True
+        ),
+        train_dataset=vlm_dataset,
     )
 
-    # Same assertions as text-only vLLM test
-    assert teacher_model.resized_to == 17
     assert captured["max_model_length"] == 128
-
     # VLM-specific: identity collator + _vlm_collator for on-the-fly use
     assert trainer.data_collator is identity
-    assert trainer._vlm_collator is not None
     assert isinstance(trainer._vlm_collator, DataCollatorForVisionLanguageChatML)
 
 
-def _make_dummy_vlm_models(student_model_type, teacher_model_type):
-    """Helper to create dummy student/teacher VLM models with specified model_type."""
-
-    class DummyStudentModel:
-        def __init__(self):
-            self.config = SimpleNamespace(
-                _name_or_path="student",
-                vocab_size=17,
-                vision_config=True,
-                model_type=student_model_type,
-            )
-            self.config.get_text_config = lambda: self.config
-            self.generation_config = SimpleNamespace(eos_token_id=2)
-            self.name_or_path = "student"
-
-    class DummyTeacherModel:
-        def __init__(self):
-            self.config = SimpleNamespace(
-                _name_or_path="teacher",
-                vision_config=True,
-                model_type=teacher_model_type,
-            )
-            self.resized_to = None
-
-        def resize_token_embeddings(self, vocab_size):
-            self.resized_to = vocab_size
-
-    return DummyStudentModel(), DummyTeacherModel()
-
-
-def _make_vlm_trainer_args(use_vllm=False):
-    """Helper to create minimal GOLDTrainer args for VLM tests."""
-    return SimpleNamespace(
-        model_init_kwargs=None,
-        max_length=128,
-        truncation_mode="keep_start",
-        use_liger_kernel=False,
-        trust_remote_code=False,
-        teacher_model_init_kwargs=None,
-        use_uld_loss=False,
-        teacher_tokenizer_name_or_path=None,
-        teacher_model_revision=None,
-        disable_dropout=False,
-        lmbda=0.5,
-        beta=0.5,
-        temperature=1.0,
-        top_p=1.0,
-        seq_kd=False,
-        num_generations=1,
-        max_completion_length=16,
-        top_k=0,
-        log_completions=False,
-        log_completions_steps=100,
-        wandb_log_unique_prompts=True,
-        num_completions_to_print=None,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        use_vllm=use_vllm,
-        vllm_mode="colocate",
-        vllm_structured_outputs_regex=None,
-        vllm_server_base_url=None,
-        vllm_server_host="0.0.0.0",
-        vllm_server_port=8001,
-        vllm_group_port=51216,
-        vllm_server_timeout=240.0,
-        vllm_tensor_parallel_size=1,
-        vllm_gpu_memory_utilization=0.2,
-        vllm_max_model_length=None,
-        vllm_enable_sleep_mode=False,
-        vllm_model_impl="vllm",
-        vllm_sync_frequency=1,
-        # ULD-specific defaults (needed when use_uld_loss=True)
-        uld_crossentropy_weight=0.5,
-        uld_distillation_weight=0.5,
-        uld_student_temperature=1.0,
-        uld_teacher_temperature=1.0,
-        uld_skip_student_eos=False,
-        uld_skip_teacher_eos=False,
-        use_extended_uld=False,
-        uld_token_merge_strategy="observed",
-    )
-
-
-def test_cross_architecture_vlm_without_uld_raises_error(monkeypatch):
+def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=False, GOLDTrainer should raise
     a ValueError telling the user to enable ULD loss."""
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        self.data_collator = data_collator
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    sentinel_processor = SimpleNamespace(_is_sentinel=True)
-    real_auto_processor_from_pretrained = AutoProcessor.from_pretrained
-
-    def patched_auto_processor(name, **kwargs):
-        if name == "teacher":
-            return sentinel_processor
-        return real_auto_processor_from_pretrained(name, **kwargs)
-
-    monkeypatch.setattr(
-        gold_trainer_module.AutoProcessor,
-        "from_pretrained",
-        staticmethod(patched_auto_processor),
-    )
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-    student, teacher = _make_dummy_vlm_models("smolvlm", "qwen2_5_vl")
-    args = _make_vlm_trainer_args()  # use_uld_loss=False by default
-
     with pytest.warns(UserWarning, match="Cross-architecture VLM distillation"):
         with pytest.raises(ValueError, match="Cross-architecture VLM distillation.*use_uld_loss=True"):
             GOLDTrainer(
-                model=student,
-                teacher_model=teacher,
-                args=args,
-                train_dataset=vision_dataset,
-                processing_class=processor,
+                model=_TINY_SMOLVLM,
+                teacher_model=_TINY_QWEN3_VL,
+                args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+                train_dataset=vlm_dataset,
             )
 
 
-def test_cross_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
+def test_cross_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=True, GOLDTrainer should store
-    a separate _teacher_processor and emit a warning."""
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        self.data_collator = data_collator
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    sentinel_processor = SimpleNamespace(_is_sentinel=True)
-    real_auto_processor_from_pretrained = AutoProcessor.from_pretrained
-
-    def patched_auto_processor(name, **kwargs):
-        if name == "teacher":
-            return sentinel_processor
-        return real_auto_processor_from_pretrained(name, **kwargs)
-
-    monkeypatch.setattr(
-        gold_trainer_module.AutoProcessor,
-        "from_pretrained",
-        staticmethod(patched_auto_processor),
-    )
-
-    # Monkeypatch AutoTokenizer.from_pretrained for ULD teacher tokenizer loading
-    sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>")
-    sentinel_processor.tokenizer = sentinel_tokenizer
-    real_auto_tokenizer_from_pretrained = AutoTokenizer.from_pretrained
-
-    def patched_auto_tokenizer(name, **kwargs):
-        if name == "teacher":
-            return sentinel_tokenizer
-        return real_auto_tokenizer_from_pretrained(name, **kwargs)
-
-    monkeypatch.setattr(
-        gold_trainer_module.AutoTokenizer,
-        "from_pretrained",
-        staticmethod(patched_auto_tokenizer),
-    )
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-    student, teacher = _make_dummy_vlm_models("smolvlm", "qwen2_5_vl")
-    args = _make_vlm_trainer_args()
-    args.use_uld_loss = True
-    args.teacher_tokenizer_name_or_path = "teacher"
-
-    import warnings
-
+    the teacher's processor and emit a warning about cross-architecture distillation."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         trainer = GOLDTrainer(
-            model=student,
-            teacher_model=teacher,
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=processor,
+            model=_TINY_SMOLVLM,
+            teacher_model=_TINY_QWEN3_VL,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True),
+            train_dataset=vlm_dataset,
         )
 
-    # _teacher_processor should be set for cross-architecture
-    assert trainer._teacher_processor is not None
-    assert trainer._teacher_processor is sentinel_processor
+    # The teacher's own processor and tokenizer are used for cross-architecture
+    assert trainer._teacher_processor.tokenizer.name_or_path == _TINY_QWEN3_VL
+    assert trainer.teacher_tokenizer is trainer._teacher_processor.tokenizer
     assert trainer._is_cross_architecture_vlm is True
 
     # A cross-architecture warning should have been emitted
     cross_arch_warnings = [w for w in caught if "Cross-architecture VLM distillation" in str(w.message)]
     assert len(cross_arch_warnings) == 1
     assert "smolvlm" in str(cross_arch_warnings[0].message)
-    assert "qwen2_5_vl" in str(cross_arch_warnings[0].message)
+    assert "qwen3_vl" in str(cross_arch_warnings[0].message)
 
     # Identity collator and VLM collator should still be set
     assert trainer.data_collator is identity
     assert trainer._vlm_collator is not None
 
 
-def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
-    """When student and teacher have the same model_type, GOLDTrainer should NOT store a _teacher_processor
-    (zero overhead -- both models share the same forward_kwargs)."""
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        self.data_collator = data_collator
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-    student, teacher = _make_dummy_vlm_models("smolvlm", "smolvlm")
-    args = _make_vlm_trainer_args()
-
-    import warnings
-
+def test_same_architecture_vlm_no_teacher_processor(tmp_path, vlm_dataset):
+    """When student and teacher have the same model_type, GOLDTrainer should not load a teacher processor."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         trainer = GOLDTrainer(
-            model=student,
-            teacher_model=teacher,
-            args=args,
-            train_dataset=vision_dataset,
-            processing_class=processor,
+            model=_TINY_SMOLVLM,
+            teacher_model=_TINY_SMOLVLM,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+            train_dataset=vlm_dataset,
         )
 
     # _teacher_processor should be None for same architecture (zero overhead)
@@ -2896,87 +2216,18 @@ def test_same_architecture_vlm_no_teacher_processor(monkeypatch):
     assert trainer._vlm_collator is not None
 
 
-def test_same_architecture_vlm_with_uld_sets_teacher_processor(monkeypatch):
+def test_same_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dataset):
     """ULD VLM distillation should use a teacher processor even when the VLM model_type matches."""
-
-    def fake_sft_init(
-        self,
-        model,
-        args=None,
-        data_collator=None,
-        train_dataset=None,
-        eval_dataset=None,
-        processing_class=None,
-        compute_metrics=None,
-        callbacks=None,
-        optimizers=None,
-        preprocess_logits_for_metrics=None,
-        peft_config=None,
-    ):
-        self.data_collator = data_collator
-        self.model = model
-        self.args = args
-        self.processing_class = processing_class
-        self.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            num_processes=1,
-            prepare_model=lambda module, evaluation_mode=True: module,
-        )
-        self.is_deepspeed_enabled = False
-        self.is_fsdp_enabled = False
-
-    monkeypatch.setattr(gold_trainer_module.SFTTrainer, "__init__", fake_sft_init)
-
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
-    if processor.tokenizer.pad_token is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    sentinel_processor = SimpleNamespace(_is_sentinel=True)
-    real_auto_processor_from_pretrained = AutoProcessor.from_pretrained
-
-    def patched_auto_processor(name, **kwargs):
-        if name == "teacher":
-            return sentinel_processor
-        return real_auto_processor_from_pretrained(name, **kwargs)
-
-    monkeypatch.setattr(
-        gold_trainer_module.AutoProcessor,
-        "from_pretrained",
-        staticmethod(patched_auto_processor),
-    )
-
-    sentinel_tokenizer = SimpleNamespace(pad_token="<pad>", eos_token="</s>")
-    sentinel_processor.tokenizer = sentinel_tokenizer
-    real_auto_tokenizer_from_pretrained = AutoTokenizer.from_pretrained
-
-    def patched_auto_tokenizer(name, **kwargs):
-        if name == "teacher":
-            return sentinel_tokenizer
-        return real_auto_tokenizer_from_pretrained(name, **kwargs)
-
-    monkeypatch.setattr(
-        gold_trainer_module.AutoTokenizer,
-        "from_pretrained",
-        staticmethod(patched_auto_tokenizer),
-    )
-
-    vision_dataset = Dataset.from_dict({"messages": [["dummy"]], "image": ["fake_image"]})
-    student, teacher = _make_dummy_vlm_models("smolvlm", "smolvlm")
-    args = _make_vlm_trainer_args()
-    args.use_uld_loss = True
-    args.teacher_tokenizer_name_or_path = "teacher"
-
     trainer = GOLDTrainer(
-        model=student,
-        teacher_model=teacher,
-        args=args,
-        train_dataset=vision_dataset,
-        processing_class=processor,
+        model=_TINY_SMOLVLM,
+        teacher_model=_TINY_SMOLVLM,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True),
+        train_dataset=vlm_dataset,
     )
 
-    assert trainer._teacher_processor is sentinel_processor
+    assert trainer._teacher_processor.tokenizer.name_or_path == _TINY_SMOLVLM
     assert trainer._is_cross_architecture_vlm is False
-    assert trainer.teacher_tokenizer is sentinel_tokenizer
+    assert trainer.teacher_tokenizer is trainer._teacher_processor.tokenizer
     assert trainer.data_collator is identity
     assert trainer._vlm_collator is not None
 
