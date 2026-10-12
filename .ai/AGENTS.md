@@ -118,3 +118,13 @@ def method(self, param1: str, param2: int = 1, param3: float | None = None):
 ### Links to papers
 
 When linking to papers, use `https://huggingface.co/papers/<id>` instead of `https://arxiv.org/abs/<id>` (same ID suffix system).
+
+## Cursor Cloud specific instructions
+
+The default Cloud Agent image has no GPU. Setup installs CPU PyTorch into `/opt/trl-venv` and puts `python`, `trl`, `pytest`, `pre-commit`, `hf`, and `accelerate` on `PATH`. `/usr/local/bin/python` is a wrapper script around `/opt/trl-venv/bin/python`. Do not replace that wrapper with a symlink: Python would resolve it to `/usr/bin/python3.12` and drop the virtualenv. Recreate the venv with `/usr/bin/python3.12`, not `python3` on `PATH`, or the interpreter symlinks cycle.
+
+- Refresh dependencies with `uv pip install --python /opt/trl-venv/bin/python --torch-backend cpu -e ".[dev]"`. vLLM is not part of the `dev` extra.
+- `trl env` prints the installed stack.
+- `pre-commit run --all-files` is the quality check. `make precommit` also rewrites copyright headers.
+- SFT, DPO, GRPO, KTO, and RLOO score tokens with a fused LM head that launches a Triton kernel. On this CPU image those training steps fail with `0 active drivers`. `RewardTrainer` trains on CPU. A real training check is `pytest tests/test_reward_trainer.py::TestRewardTrainer::test_train -k tiny-Qwen2ForCausalLM-2.5`. CLI parsing is `pytest tests/test_cli.py::test_help_no_type_error`.
+- `make test` is the full suite. CI runs it on a CUDA machine. Tests marked `require_torch_accelerator` skip when no accelerator is visible.
