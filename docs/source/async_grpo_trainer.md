@@ -159,10 +159,10 @@ Dataset row = PROMPT (message list + reward kwargs)
 ════════════ Trainer process boundary: `rollout_buffer` (mp.Queue) ════════════
 
                  └─ SAMPLE (Pulled 1 at a time; dropped if staleness > `max_staleness`)
-                     └─ ROW            (Planner assigns it to one of `dp` rows, Σ Lᵢ²-balanced)
+                     └─ ROW            (Planner inserts it into one of `dp` prefix tries, attention-cost-balanced)
                          └─ MICRO-BATCH (`dp` rows, one per rank)
-                             └─ PACKED ROW (1 concat sequence, `position_ids` reset per sample)
-                                 └─ FORWARD (`compute_loss`, bs=1, inter-rank padding stripped)
+                             └─ PACKED ROW (Collator lays each trie out: unique tokens, depth as `position_ids`)
+                                 └─ FORWARD (`compute_loss`, bs=1, padding stripped, FA3 per trie segment)
                      └─ OPTIMIZER STEP (from `grad_accum` micro-batches)
 ```
 
@@ -172,7 +172,7 @@ Reading it top to bottom:
 - a **rollout** is one conversation. Every turn re-tokenizes the whole message list, so drift between turns has to be reconciled at the end.
 - reconciling can **fork** one rollout into several **sequences**, which is why a single conversation can produce more than one training sample.
 - a **sample** is a sequence plus its advantage, reward and metrics. This is what crosses the process boundary.
-- past the boundary the trainer plans samples into **rows** (one per DP rank), packs each row into one concatenated sequence, and accumulates `grad_accum` micro-batches into a single optimizer step.
+- past the boundary the trainer plans samples into **rows** (one per DP rank), folds each row into a prefix trie so shared tokens are forwarded once, and accumulates `grad_accum` micro-batches into a single optimizer step.
 
 So we split our metrics based on which stage (or _entity_) they are about:
 
@@ -193,7 +193,7 @@ Let's also define some terms to make token metrics unambiguous:
 
 ### How the batch numbers compose
 
-A **row** is what **one** DP rank forwards in one micro-batch: several samples concatenated into a single sequence, with `position_ids` restarting at each sample boundary. The planner decides which samples land in which row (balancing attention cost so no rank straggles), and a data collator does the concatenating. Under `packing="tree"` the row is a prefix forest rather than a concatenation — see [Tree packing](#tree-packing).
+A **row** is what **one** DP rank forwards in one micro-batch: several samples packed into a single prefix forest, so tokens they share are forwarded once — see [Tree packing](#tree-packing). The planner decides which samples land in which row (balancing attention cost so no rank straggles), and a data collator does the packing.
 
 In all our metrics **a "step" always means one FULL optimizer step**, never a micro-batch. `gradient_accumulation_steps` micro-batches make one step, and every metric named `_per_step` is per optimizer step, matching `global_step`, `logging_steps` and the rest of the [`Trainer`] vocabulary. Where a metric is per micro-batch it says so (`batch/microbatches_per_step`) or it is a per-row quantity (`batch/row_*`, `batch/samples_per_row`).
 
@@ -219,16 +219,57 @@ So `batch/samples_per_step ≈ row-slots x batch/samples_per_row`, and likewise 
 
 ### Tree packing
 
-With `packing="tree"`, a rank's row is a **prefix forest** rather than a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own row. Multi-turn rollouts are mostly such tokens — every turn re-sends the conversation, and the `num_generations` rollouts of a prompt all repeat it — so the decoder's work drops by the **packing ratio** (raw tokens ÷ forwarded tokens). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and the loss matches `"sequence"` packing up to floating point.
+A row is a **prefix trie**, not a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own history. Rollouts of one prompt all repeat it, and every turn of a multi-turn rollout re-sends the conversation, so the decoder's work drops by the **packing ratio** (raw tokens ÷ forwarded tokens). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and its log-probability matches forwarding the sample on its own.
 
-How it works:
+Where it happens:
 
-- **Sharing is per prompt**: one trie per `group_id`, so a group's cost does not depend on what else is in the row and the planner stays a greedy bin-packer.
-- **The planner places by affinity**: a sample goes to the row holding its group, where it costs only its novel tokens. `token_budget` bounds a row's unique tokens and its loss terms. A group is split only when a rank would otherwise forward nothing.
-- **The collator linearizes the forest** depth-first into segments, runs of tokens with no fork inside. A token's `position_id` is its depth. Attention is plain FA3 varlen: each segment's queries attend to the K/V gathered along its root-to-segment path, and FA3's bottom-right causal alignment makes that exactly the segment's ancestors plus its own causal past. Every other layer runs once per unique token, and the gathered K/V is about what unpacked training would hold.
-- **Every position predicts one token**: the trie shares a token only between rows that agree on the next one, so it forks one token before they diverge (one extra token per extra branch). The fused head then scores the row through plain `shift_labels`, and a `token_index` from the packer maps the per-position log-probs back to each rollout token.
+```
+planner    TreeRow.add            the trie grows sample by sample; a sample is priced by its novel tokens
+   │                              (TreeRow.fits), so `token_budget` bounds unique tokens, not raw ones
+collator   TreeRow.pack           DFS layout: unique tokens, depth as position_ids, segments + parents,
+   │                              and one loss term per original trained token (token_index)
+forward    tree_attention_kwargs  per segment: its queries and the K/V indices of its root-to-segment path
+   │
+attention  tree_attention         gather K/V along the paths, one FA3 varlen call, causal
+```
 
-When it pays: with nothing shared, tree packing runs at about the speed of `"sequence"` packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
+How it works, on two rollouts of one prompt:
+
+```
+1. Rollouts             r0:  p1 p2 p3 a1 a2
+                        r1:  p1 p2 p3 b1 b2                      10 raw tokens
+
+2. Trie (one per row)   S0 [p1 p2] ─┬─ S1 [p3 a1 a2]          nodes are keyed on (token, next token),
+                                   └─ S2 [p3 b1 b2]          so the fork happens one token early and
+                                                              every node predicts exactly one token;
+                                                              chains without a fork become segments
+
+3. Packed row           idx           0  1 | 2  3  4 | 5  6  7
+   (DFS order)          input_ids    p1 p2 | p3 a1 a2 | p3 b1 b2  8 tokens: MLPs, norms and projections
+                        position_ids  0  1 |  2  3  4 |  2  3  4  run once per unique token
+                        segment      S0    | S1       | S2
+
+4. Attention            seg   queries      K/V gathered            kv_index
+   (one FA3 call)       S0    [p1 p2]      [p1 p2]                 0 1
+                        S1    [p3 a1 a2]   [p1 p2 | p3 a1 a2]      0 1 2 3 4
+                        S2    [p3 b1 b2]   [p1 p2 | p3 b1 b2]      0 1 5 6 7
+
+                        FA3 aligns the causal mask bottom-right      K:  p1 p2 p3 a1 a2
+                        when queries are fewer than keys, so a       Q: p3   ■  ■  ■  ·  ·
+                        segment's queries see their ancestors and       a1   ■  ■  ■  ■  ·
+                        their own causal past, and nothing else.        a2   ■  ■  ■  ■  ■
+
+5. Loss                 p2 (idx 1) predicts p3 for both rollouts; token_index points every trained
+                        token of every rollout at the position that predicts it
+```
+
+A few consequences:
+
+- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is, and splits a group only when a rank would otherwise forward nothing.
+- **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
+- **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
+
+What it buys: with nothing shared, it runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 
 Judge it on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A packed micro-batch holds more samples, so `perf/fwd_bwd_s` rises and `perf/mfu_*`, which divides by forwarded tokens, falls — neither is a regression. More samples per row also means more rollouts drawn per step, so a generation-bound run becomes more so.
 
@@ -322,7 +363,7 @@ One micro-batch is `world_size` rows (remember packing flattens into 1 sequence)
 | `batch/samples_per_row`, `batch/row_tokens_mean`, `batch/row_tokens_max` | how densely the planner packed each rank's row                                                                                       |
 | `batch/row_fill_frac`                                                    | row tokens against `token_budget`. Low means the budget is not being used                                                            |
 | `batch/row_imbalance`                                                    | `max cost / mean cost` across rows, where the cost is the row's attention work. This predicts which rank stalls the gradient all-reduce. 1.0 is perfect |
-| `batch/packing_ratio`                                                    | raw tokens per forwarded token. 1.0 under `packing="sequence"`; under `"tree"` the factor by which the decoder's work shrinks       |
+| `batch/packing_ratio`                                                    | raw tokens per forwarded token: the factor by which the decoder's work shrinks, 1.0 when nothing is shared                              |
 | `batch/pad_frac`                                                         | inter-rank padding. Costs broadcast bytes only; it is stripped before the forward                                                    |
 | `batch/dropped_oversize_total`                                           | samples dropped for exceeding `token_budget`                                                                                         |
 
