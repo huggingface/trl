@@ -18,6 +18,7 @@ import functools
 import hashlib
 import importlib.resources as pkg_resources
 import inspect
+import json
 import os
 import random
 import re
@@ -644,6 +645,32 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
     return entropies.reshape(original_shape)
 
 
+def strip_images_from_messages(messages):
+    """
+    Drop the image objects from a conversation, keeping its structure.
+
+    Each `{"type": "image", "image": <PIL.Image>}` content block becomes `{"type": "image"}`, so the conversation can
+    be logged or serialized. Messages with string content are returned unchanged.
+
+    Args:
+        messages (`list[dict]` or `str`):
+            Conversation to strip. Anything other than a list is returned as is.
+
+    Returns:
+        `list[dict]` or `str`: The conversation without the image objects.
+    """
+    if not isinstance(messages, list):
+        return messages
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = [{"type": block["type"]} if block.get("type") == "image" else block for block in content]
+            msg = {**msg, "content": content}
+        result.append(msg)
+    return result
+
+
 def selective_log_softmax_and_entropy(
     logits: torch.Tensor,
     index: torch.Tensor,
@@ -767,23 +794,33 @@ def print_prompt_completions_sample(
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                if "content" in msg or "reasoning_content" in msg or "thinking" in msg:
-                    # Chat message
-                    t.append(f"{role.upper()}\n", style="bold red")
+                t.append(f"{role.upper()}\n", style="bold red")
+                if "reasoning_content" in msg or "thinking" in msg:
                     reasoning = msg.get("reasoning_content") or msg.get("thinking")
                     if reasoning:
                         t.append(reasoning, style="italic dim white")
                         t.append("\n")
-                    if "content" in msg:
-                        # Tool-only assistant messages may have null content.
-                        t.append(msg["content"] or "")
-                elif "name" in msg and "args" in msg:
-                    # Tool call
-                    t.append(f"{role.upper()}\n", style="bold red")
-                    t.append(f"{msg['name']}({msg['args']})")
-                else:
-                    # Fallback
-                    t.append(str(msg))
+                if "content" in msg:
+                    content = msg["content"]
+                    if isinstance(content, list):
+                        # VLM format: content is a list of typed blocks, e.g.
+                        # [{"type": "image", ...}, {"type": "text", "text": "..."}]
+                        for block in content:
+                            if block.get("type") == "text":
+                                t.append(block["text"])
+                            elif block.get("type") == "image":
+                                t.append("[IMAGE]", style="bold cyan")
+                    elif isinstance(content, str):
+                        t.append(content)
+                if "tool_calls" in msg:
+                    for k, tc in enumerate(msg["tool_calls"]):
+                        if k > 0:
+                            t.append("\n")
+                        fn = tc.get("function", {})
+                        raw = fn.get("arguments", {})
+                        args = raw if isinstance(raw, dict) else json.loads(raw)
+                        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                        t.append(f"{fn.get('name', '?')}({args_str})")
                 if j < len(entry) - 1:
                     t.append("\n\n")
         else:
@@ -1304,6 +1341,11 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    # transformers 5.2/5.3 pin a kernels<0.11 that fails to load the Hub kernels (fixed in 5.4.0, transformers#44887)
+    if kwargs.get("use_kernels") and Version("5.2.0") <= Version(transformers.__version__) < Version("5.4.0"):
+        raise ValueError(
+            "`use_kernels=True` requires transformers>=5.4.0: 5.2.0 and 5.3.0 fail to load the Hub kernels."
+        )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
     # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
@@ -1324,6 +1366,9 @@ def create_model_from_path(
             else:
                 architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
+    # transformers 5.3.0 skips tying remote-code tied embeddings, leaving them on meta (transformers#44469)
+    if Version(transformers.__version__) == Version("5.3.0"):
+        model.tie_weights()
     return model
 
 
@@ -1467,7 +1512,7 @@ _CHUNKED_LOGPROB_CHUNK_SIZE = 32768
 class FusedCausalLMOutput(ModelOutput):
     """
     Output of a model given a fused LM head with [`add_fused_lm_head`] and called with `fused_lm_head=True`. Every
-    per-token field is zero where the label is `-100`.
+    per-token field is zero where the label is `-100`. Per-token fields not listed in `outputs` are `None`.
 
     Args:
         loss (`torch.Tensor`):
@@ -1479,6 +1524,12 @@ class FusedCausalLMOutput(ModelOutput):
             Log-probability of each next-token label.
         entropy (`torch.Tensor`, same shape as `log_probs`):
             Entropy of the next-token distribution.
+        log_sum_sq_probs (`torch.Tensor`, same shape as `log_probs`):
+            `log(sum_v p_v^2)` of the next-token distribution, without gradient.
+        mean_logits (`torch.Tensor`, same shape as `log_probs`):
+            Mean of the temperature-scaled next-token logits over the vocabulary, without gradient.
+        is_top1 (`torch.Tensor`, same shape as `log_probs`):
+            Whether the label is the most likely next token.
         label_mask (`torch.Tensor`, same shape as `log_probs`):
             Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
             sequence than the caller's labels.
@@ -1489,11 +1540,19 @@ class FusedCausalLMOutput(ModelOutput):
     loss: torch.Tensor | None = None
     log_probs: torch.Tensor | None = None
     entropy: torch.Tensor | None = None
+    log_sum_sq_probs: torch.Tensor | None = None
+    mean_logits: torch.Tensor | None = None
+    is_top1: torch.Tensor | None = None
     label_mask: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
 
 
-def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_head_to_fp32: bool = False) -> None:
+def add_fused_lm_head(
+    model: PreTrainedModel,
+    temperature: float = 1.0,
+    cast_lm_head_to_fp32: bool = False,
+    outputs: tuple[str, ...] = ("log_probs",),
+) -> None:
     """
     Add a fused LM head to `model`: `model(..., labels=labels, fused_lm_head=True)` returns per-token log-probabilities
     instead of logits, without materializing the `(batch, seq_len, vocab)` logits.
@@ -1510,6 +1569,10 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
             Temperature the logits are divided by.
         cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
             Whether to run the LM head projection in float32, outside autocast.
+        outputs (`tuple[str, ...]`, *optional*, defaults to `("log_probs",)`):
+            Per-token fields of [`FusedCausalLMOutput`] the kernel computes, among `"log_probs"`, `"entropy"`,
+            `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
+            is always computed; each extra field costs a little on every call.
     """
     original_forward = model.forward
     text_config = model.config.get_text_config()
@@ -1552,12 +1615,12 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
         # MoE models: like the model's own forward, request router logits when the config asks for them
         if getattr(text_config, "output_router_logits", False):
             kwargs.setdefault("output_router_logits", True)
-        outputs = getattr(self, backbone_attr)(*args, **kwargs)
+        backbone_outputs = getattr(self, backbone_attr)(*args, **kwargs)
         if shift_labels is None:
-            hidden_states = outputs.last_hidden_state[:, :-1]
+            hidden_states = backbone_outputs.last_hidden_state[:, :-1]
             labels = labels[:, 1:]
         else:
-            hidden_states = outputs.last_hidden_state
+            hidden_states = backbone_outputs.last_hidden_state
             labels = shift_labels
         lm_head = self.get_output_embeddings()
         # With the model split across devices (`device_map`), the backbone can end on another device than the head
@@ -1586,10 +1649,13 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
                 _CHUNKED_LOGPROB_CHUNK_SIZE,
                 final_logit_softcapping,
                 logit_scale,
+                outputs,
             )
         # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
         # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy = (x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
+            None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
+        )
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
@@ -1611,11 +1677,20 @@ def add_fused_lm_head(model: PreTrainedModel, temperature: float = 1.0, cast_lm_
                 num_experts_per_tok = text_config.num_experts_per_tok
             # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(
-                outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                backbone_outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
             )
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
-        return FusedCausalLMOutput(loss=loss, log_probs=log_probs, entropy=entropy, label_mask=mask, aux_loss=aux_loss)
+        return FusedCausalLMOutput(
+            loss=loss,
+            log_probs=log_probs,
+            entropy=entropy,
+            log_sum_sq_probs=log_sum_sq_probs,
+            mean_logits=mean_logits,
+            is_top1=is_top1,
+            label_mask=mask,
+            aux_loss=aux_loss,
+        )
 
     model.forward = types.MethodType(_fused_forward, model)
 

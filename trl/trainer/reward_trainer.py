@@ -327,6 +327,8 @@ class RewardTrainer(_BaseTrainer):
             to ensure that the reward head is properly trained.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
     _template_file = "rm_model_card.md"
@@ -597,6 +599,16 @@ class RewardTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # TRL doesn't support `nn.DataParallel`, which `Trainer` uses when several GPUs are visible and no distributed
+        # launcher is used. Checked after `Trainer.__init__`, which sets `n_gpu` to 1 for a model split across devices
+        # with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # During evaluation, Trainer calls compute_loss() only if can_return_loss is True and label_names is empty.
         self.can_return_loss = True
         self.label_names = []
@@ -618,11 +630,6 @@ class RewardTrainer(_BaseTrainer):
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)

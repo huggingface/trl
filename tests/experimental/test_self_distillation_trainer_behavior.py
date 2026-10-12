@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
@@ -39,9 +38,7 @@ if is_peft_available():
 
 
 class TestSelfDistillationTrainerBehavior(TrlTestCase):
-    @staticmethod
-    def _make_loss_test_trainer(**args_overrides):
-        trainer = object.__new__(SDFTTrainer)
+    def _make_loss_test_trainer(self, **args_overrides):
         args = {
             "distillation_mode": "sampled_token",
             "distillation_topk": None,
@@ -50,13 +47,12 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
             "distillation_is_clip": None,
         }
         args.update(args_overrides)
-        trainer.args = SimpleNamespace(**args)
-        trainer.accelerator = SimpleNamespace(gather=lambda tensor: tensor)
-        trainer._metrics = {
-            "train": defaultdict(list),
-            "eval": defaultdict(list),
-        }
-        trainer._name = "SDFT"
+        trainer = SDFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", **args),
+            train_dataset=Dataset.from_dict({"prompt": ["Solve 2+2."]}),
+        )
+        trainer.model.train()  # the loss is logged under the mode of the model it is computed for
         return trainer
 
     def test_full_logit_loss_matches_forward_kl(self):
@@ -278,7 +274,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
             distillation_mode="full_logits",
             distillation_alpha=0.0,
         )
-        model = SimpleNamespace(training=True)
+        model = trainer.model
 
         student_probs = torch.tensor([[[0.8, 0.2], [0.01, 0.99]]], dtype=torch.float32)
         teacher_probs = torch.tensor([[[0.5, 0.5], [0.99, 0.01]]], dtype=torch.float32)
@@ -302,7 +298,7 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
 
     def test_compute_self_distillation_loss_applies_importance_sampling_clip(self):
         trainer = self._make_loss_test_trainer(distillation_is_clip=2.0)
-        model = SimpleNamespace(training=True)
+        model = trainer.model
 
         student_token_probs = torch.tensor([[0.2, 0.4]], dtype=torch.float32)
         teacher_token_probs = torch.tensor([[0.5, 0.5]], dtype=torch.float32)

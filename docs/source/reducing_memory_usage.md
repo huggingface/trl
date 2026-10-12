@@ -124,69 +124,6 @@ trainer = SFTTrainer(
 
 PEFT can be combined with other memory reduction techniques such as quantization (4-bit or 8-bit) for even greater memory savings. See [PEFT Integration](peft_integration) for quantization examples.
 
-## Liger for reducing peak memory usage
-
-[Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduce memory usage by 60%.
-
-For more information, see [Liger Kernel Integration](liger_kernel_integration).
-
-To use Liger for reducing peak memory usage, use the following code snippet:
-
-<hfoptions id="liger">
-<hfoption id="SFT">
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="DPO">
-
-```python
-from trl import DPOConfig
-
-training_args = DPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="GRPO">
-
-```python
-from trl import GRPOConfig
-
-training_args = GRPOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-<hfoption id="KTO">
-
-```python
-from trl import KTOConfig
-
-training_args = KTOConfig(..., use_liger_kernel=True)
-```
-
-</hfoption>
-</hfoptions>
-
-## Chunked cross-entropy for reducing peak memory usage
-
-At large vocabulary sizes, the `[batch × seq_len × vocab]` logits tensor produced by the LM head is one of the dominant activations held in memory across forward and backward. `loss_type="chunked_nll"` in [`SFTTrainer`] avoids materializing it all at once: positions with `labels == -100` are dropped *before* the `lm_head` matmul, and the cross-entropy is computed in chunks of tokens using gradient checkpointing, so peak activation memory scales with `chunk_size × vocab_size` instead of `(batch × seq_len) × vocab_size`.
-
-Same math as the standard `"nll"` loss — this is a memory optimization, not a new loss. It is the **default** in [`SFTTrainer`]; to opt out, set `loss_type="nll"`:
-
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(..., loss_type="nll")  # opt out of the default chunked path
-```
-
-Expect **typically ~30 % less peak VRAM, up to ~50 %** on large-vocab models (measured on `Qwen3-1.7B`, vocab ≈ 151k — ~30 % on single-GPU, up to ~50 % under FSDP2 × 4 GPUs) with wall time typically neutral or slightly faster. See the [PR #5575](https://github.com/huggingface/trl/pull/5575) for the full benchmark across single-GPU, DDP, FSDP2, packing, long-context, and fp32 configurations.
-
-Not compatible with `use_liger_kernel=True`, PEFT, or VLM.
-
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
