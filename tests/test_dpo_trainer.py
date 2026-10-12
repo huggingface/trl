@@ -532,15 +532,12 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_with_wpo_sft(self):
-        # The "sft" loss is a scalar expanded to the batch size, so the WPO weighting must not multiply it in place.
-        # See https://github.com/huggingface/trl/issues/7630.
+    def test_train_with_wpo(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            loss_type=["sigmoid", "sft"],
             report_to="none",
             use_weighting=True,
         )
@@ -561,12 +558,15 @@ class TestDPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_(self):
+    def test_train_with_wpo_sft(self):
+        # The "sft" loss is a scalar expanded to the batch size, so the WPO weighting must not multiply it in place.
+        # See https://github.com/huggingface/trl/issues/7630.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            loss_type=["sigmoid", "sft"],
             report_to="none",
             use_weighting=True,
         )
