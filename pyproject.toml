@@ -71,7 +71,7 @@ quality = [
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes"
+    "bitsandbytes>=0.43.1"  # lowest version transformers 4.56.2 loads
 ]
 test = [
     "pytest-cov",
@@ -106,7 +106,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    "bitsandbytes>=0.43.1",  # lowest version transformers 4.56.2 loads
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
