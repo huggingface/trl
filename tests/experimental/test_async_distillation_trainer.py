@@ -637,10 +637,8 @@ class TestBetaRange:
 
     @pytest.mark.parametrize("beta", [-0.1, 1.1, 2.0])
     def test_out_of_range_beta_raises(self, beta):
-        # use_cpu/bf16 avoid an unrelated `TrainingArguments` validation error on machines without a bf16-capable
-        # GPU; irrelevant to what this test checks.
         with pytest.raises(ValueError, match=r"beta must be in \[0.0, 1.0\]"):
-            AsyncDistillationConfig(output_dir="/tmp/unused", report_to="none", use_cpu=True, bf16=False, beta=beta)
+            AsyncDistillationConfig(output_dir="/tmp/unused", report_to="none", beta=beta)
 
 
 class TestNarrowTop1ActualSupport:
@@ -1092,9 +1090,10 @@ class TestEpochStop(TrlTestCase):
         trainer._prompts_before_resume = before_resume
         control = TrainerControl()
 
-        _EpochStopCallback(trainer, target_prompts=4).on_step_end(None, None, control)
+        _EpochStopCallback(trainer, target_prompts=4).on_step_end(trainer.args, None, control)
 
         assert control.should_training_stop is should_stop
+        assert control.should_save is should_stop  # the final step is saved, as when training reaches `max_steps`
 
 
 class TestRolloutStartIndex(TrlTestCase):
