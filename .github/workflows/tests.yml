@@ -246,7 +246,7 @@ jobs:
           source .venv/bin/activate
           uv pip install \
             ".[dev]" \
-            "accelerate==1.4.0" \
+            "accelerate==1.10.1" \
             "datasets==4.7.0" \
             "transformers==4.56.2"
 
@@ -263,10 +263,10 @@ jobs:
           title: Tests with minimum versions
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
-  distributed_smoke:
+  distributed:
     permissions:
       contents: read
-    name: Distributed smoke tests
+    name: Distributed tests
     runs-on:
       group: aws-g5-12xlarge-cache
     container:
@@ -304,7 +304,7 @@ jobs:
           source .venv/bin/activate
           uv pip install ".[dev]"
 
-      - name: Run distributed smoke tests
+      - name: Run distributed tests
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
@@ -314,5 +314,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Distributed smoke tests
+          title: Distributed tests
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
