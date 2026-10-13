@@ -248,7 +248,11 @@ class A2POTrainer(_BaseTrainer):
                     max_length=self.args.max_prompt_length,
                     add_special_tokens=False,
                 ).to(self.accelerator.device)
-                with unwrap_model_for_generation(self.ref_model, self.accelerator) as ref_model:
+                with unwrap_model_for_generation(
+                    self.ref_model,
+                    self.accelerator,
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
+                ) as ref_model:
                     completion_ids = ref_model.generate(**inputs, generation_config=self.value_generation_config)
 
                 prompt_length = inputs["input_ids"].size(1)
@@ -306,7 +310,9 @@ class A2POTrainer(_BaseTrainer):
             max_length=self.args.max_prompt_length,
             add_special_tokens=False,
         ).to(device)
-        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+        with unwrap_model_for_generation(
+            self.model, self.accelerator, gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs
+        ) as unwrapped_model:
             prompt_completion_ids = unwrapped_model.generate(**prompt_inputs, generation_config=self.generation_config)
         prompt_length = prompt_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
