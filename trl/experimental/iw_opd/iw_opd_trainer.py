@@ -645,6 +645,7 @@ class IWOPDTrainer(_BaseTrainer):
                 mode=args.vllm_mode,
                 structured_outputs_regex=args.vllm_structured_outputs_regex,
                 server_base_url=args.vllm_server_base_url,
+                server_api_key_env=args.vllm_server_api_key_env,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
                 group_port=args.vllm_group_port,

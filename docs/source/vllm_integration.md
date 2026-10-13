@@ -29,7 +29,7 @@ pip install "trl[vllm]"
 Then run the server on specific GPUs (e.g., GPUs 0-3):
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --tensor-parallel-size 4 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --host 127.0.0.1 --tensor-parallel-size 4 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
@@ -139,6 +139,16 @@ Only the following are required by TRL:
 > [!WARNING]
 > `trl vllm-serve` is deprecated: it now only builds this command and runs vLLM's server. It prints the exact `vllm serve` command it runs, so you can copy it and drop the wrapper.
 
+### Server addresses and API keys
+
+The examples bind vLLM to `127.0.0.1` for a trainer on the same machine. TRL's client, trainer configurations, and deprecated `trl vllm-serve` wrapper also default to `127.0.0.1`. For trainers on another machine, explicitly set the server's `--host` to the intended interface and configure the trainer's `vllm_server_base_url` or `vllm_server_host` to reach it. Keep this traffic on a trusted network.
+
+When the server uses vLLM's `--api-key` or `VLLM_API_KEY`, set `VLLM_API_KEY` in the trainer process to the matching key. TRL reads it when constructing its client and sends it as an `Authorization: Bearer` header, including on readiness checks. To use a different environment variable, set `vllm_server_api_key_env="TRAINING_VLLM_API_KEY"` in the trainer configuration. The configuration stores the variable name, not the key value. Separate teacher clients constructed internally use the default `VLLM_API_KEY`; this setting selects the training server's credential only. These settings apply to the shared `VLLMClient` path; the experimental asynchronous trainers use separate clients.
+
+Direct users of [`generation.vllm_client.VLLMClient`] can pass `api_key` explicitly or select `api_key_env`. An explicit key takes precedence over the environment; `api_key=""` disables the header. HTTP 401 and 403 responses raise an error immediately rather than waiting for the readiness timeout.
+
+API-key support here authenticates the client; it does not change vLLM's server-side access policy. vLLM's native API key does not protect all routes, including some development endpoints enabled for weight transfer. Follow the [vLLM security guidance](https://docs.vllm.ai/en/latest/usage/security.html#api-key-authentication-limitations) and use network isolation or an appropriately configured authenticated gateway for the full service. HTTP authentication does not protect the separate NCCL weight-transfer channel.
+
 ### 💆🏻‍♀️ What's the best distributed setup?
 
 Scale generation with `--tensor-parallel-size`. Data parallelism no longer helps dense models: since [vLLM PR #30739](https://github.com/vllm-project/vllm/pull/30739) (released in `0.14.0`), offline data parallel scaling for non-MoE models is not supported.
@@ -153,7 +163,7 @@ For more details, check out [vLLM Transformers Backend](https://blog.vllm.ai/202
 Example:
 
 ```sh
-CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-VL-3B-Instruct \
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-VL-3B-Instruct --host 127.0.0.1 \
     --tensor-parallel-size 1 --port 8000 --enforce-eager --model-impl transformers \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \

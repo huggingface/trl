@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from datasets import Dataset
+from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import backend_device_count, torch_device
 
 from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
@@ -199,13 +201,19 @@ class TestVLLMClientServer(TrlTestCase):
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
         env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
         env["VLLM_SERVER_DEV_MODE"] = "1"
+        env["VLLM_API_KEY"] = "trl-integration-test-key"
 
         # Start the server process
         cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240, host="localhost")
+        cls.client = VLLMClient(connection_timeout=240, host="localhost", api_key="trl-integration-test-key")
         cls.client.init_communicator()
+
+    def test_rejects_wrong_api_key(self):
+        with pytest.raises(requests.HTTPError) as error:
+            VLLMClient(connection_timeout=240, host="localhost", api_key="wrong-test-key")
+        assert error.value.response.status_code == 401
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -427,6 +435,70 @@ class TestVLLMClientServer(TrlTestCase):
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
         kill_process(cls.server_process)
+
+
+@require_torch_multi_accelerator
+@require_vllm
+@pytest.mark.xdist_group("vllm_server")
+@pytest.mark.parametrize("name", ["sdft", "sdpo"])
+def test_teacher_trainer_uses_generation_api_key(name, monkeypatch, tmp_path):
+    # Exercise the actual trainer constructors and both clients, including native weight-transfer initialization.
+    module = importlib.import_module(f"trl.experimental.{name}")
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+    # The Hub model's head size is 2; use 64 for the native attention kernels.
+    model_config = AutoConfig.from_pretrained(
+        model_id, hidden_size=128, intermediate_size=256, num_attention_heads=2, num_key_value_heads=2
+    )
+    model_path = tmp_path / "model"
+    AutoModelForCausalLM.from_config(model_config).save_pretrained(model_path)
+    AutoTokenizer.from_pretrained(model_id).save_pretrained(model_path)
+    monkeypatch.setenv("VLLM_API_KEY", "wrong-default-key")
+    monkeypatch.setenv("TRAINING_VLLM_API_KEY", "trl-teacher-test-key")
+    env = os.environ.copy()
+    visible_devices = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+    env[visible_devices] = "1"
+    env["VLLM_SERVER_DEV_MODE"] = "1"
+    env["VLLM_API_KEY"] = "trl-teacher-test-key"
+    process = subprocess.Popen(
+        ["vllm", "serve", str(model_path), "--host", "127.0.0.1", *VLLM_SERVE_TRL_ARGS], env=env
+    )
+    trainer = None
+    try:
+        config_kwargs = {"distillation_weight": 1.0} if name == "sdpo" else {}
+        args = getattr(module, f"{name.upper()}Config")(
+            output_dir=str(tmp_path),
+            report_to="none",
+            bf16=False,
+            use_vllm=True,
+            vllm_mode="server",
+            use_teacher_server=True,
+            teacher_model_kind="live",
+            distillation_mode="sampled_token",
+            distillation_alpha=1.0,
+            vllm_server_api_key_env="TRAINING_VLLM_API_KEY",
+            vllm_server_base_url="http://localhost:8000" if name == "sdft" else None,
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=4,
+            **config_kwargs,
+        )
+        trainer_kwargs = {"reward_funcs": lambda prompts, **kwargs: [0.0] * len(prompts)} if name == "sdpo" else {}
+        trainer = getattr(module, f"{name.upper()}Trainer")(
+            model=str(model_path),
+            args=args,
+            train_dataset=Dataset.from_dict({"prompt": ["Solve 2+2."], "privileged_context": ["The answer is 4."]}),
+            **trainer_kwargs,
+        )
+        generated = trainer.vllm_generation.vllm_client.generate([[1]], max_tokens=1, logprobs=None)
+        assert len(generated["completion_ids"]) == 1
+        scores = trainer.teacher_client.get_sequence_logprobs([[1, 2]], prompt_lengths=[1], top_logprobs=1)
+        assert scores["actual_token_ids"] == [[[2]]]
+    finally:
+        if trainer is not None:
+            trainer.teacher_client.session.close()
+            trainer.vllm_generation.vllm_client.close_communicator()
+            trainer.vllm_generation.vllm_client.session.close()
+        kill_process(process)
 
 
 # Same as above but using base_url to instantiate the client.

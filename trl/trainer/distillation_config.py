@@ -110,7 +110,10 @@ class DistillationConfig(_BaseConfig):
 
         vllm_server_base_url (`str`, *optional*):
             Base URL for the student vLLM server. If provided, `vllm_server_host` and `vllm_server_port` are ignored.
-        vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        vllm_server_api_key_env (`str`, *optional*, defaults to `"VLLM_API_KEY"`):
+            Environment variable containing the vLLM server Bearer API key. Only the variable name is stored in
+            training arguments; the client reads its value when it is created.
+        vllm_server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the student vLLM server.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
             Port of the student vLLM server.
@@ -319,8 +322,12 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={"help": "Base URL for the student vLLM server."},
     )
+    vllm_server_api_key_env: str = field(
+        default="VLLM_API_KEY",
+        metadata={"help": "Environment variable containing the vLLM server Bearer API key."},
+    )
     vllm_server_host: str = field(
-        default="0.0.0.0",
+        default="127.0.0.1",
         metadata={"help": "Host of the student vLLM server."},
     )
     vllm_server_port: int = field(

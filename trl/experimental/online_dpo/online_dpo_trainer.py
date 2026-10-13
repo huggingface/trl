@@ -460,7 +460,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     else:
                         base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                     self.vllm_client = VLLMClient(
-                        base_url=base_url, group_port=args.vllm_group_port, connection_timeout=args.vllm_server_timeout
+                        base_url=base_url,
+                        group_port=args.vllm_group_port,
+                        connection_timeout=args.vllm_server_timeout,
+                        api_key_env=args.vllm_server_api_key_env,
                     )
 
                     # Determine device type (supports cuda, xpu, etc.)

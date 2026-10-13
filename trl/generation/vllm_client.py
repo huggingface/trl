@@ -17,6 +17,7 @@ import base64
 import copy
 import logging
 import math
+import os
 import time
 import uuid
 from collections.abc import Iterator
@@ -37,6 +38,7 @@ if is_requests_available():
     from requests import ConnectionError
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
+    from urllib3.util.timeout import Timeout
 
 
 if is_vllm_available():
@@ -141,14 +143,15 @@ class VLLMClient:
     A client class to interact with a vLLM server.
 
     This class provides methods to generate completions, initialize and manage weight update groups, and update model
-    weights in a distributed setting. Before using it, start a vLLM server with `vllm serve`, see the vLLM integration
-    guide for the required flags.
+    weights in a distributed setting. Local vLLM installation is required for weight transfer, but not for HTTP
+    generation requests. Before using it, start a vLLM server with `vllm serve`, see the vLLM integration guide for the
+    required flags.
 
     Args:
         base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `host` and `server_port` are
             ignored.
-        host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        host (`str`, *optional*, defaults to `"127.0.0.1"`):
             IP address of the vLLM server. Ignored if `base_url` is provided.
         server_port (`int`, *optional*, defaults to `8000`):
             Port number of the vLLM server. Ignored if `base_url` is provided.
@@ -156,17 +159,22 @@ class VLLMClient:
             Port number for the weight update group.
         connection_timeout (`float`, *optional*, defaults to `0.0`):
             Total timeout duration in seconds to wait for the server to be up. If the server is not up after the
-            timeout, a `ConnectionError` is raised.
+            timeout, a `ConnectionError` is raised. Zero performs one readiness probe without retries.
+        api_key (`str`, *optional*):
+            Bearer token sent to the server. If omitted, reads the environment variable named by `api_key_env` when the
+            client is created. An empty string disables the Authorization header.
+        api_key_env (`str`, *optional*, defaults to `"VLLM_API_KEY"`):
+            Environment variable containing the server API key. An explicit `api_key` takes precedence.
 
     Examples:
         Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
 
         ```
-        $ VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --weight-transfer-config '{"backend": "nccl"}' \
+        $ VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-7B --host 127.0.0.1 --weight-transfer-config '{"backend": "nccl"}' \
               --logprobs-mode processed_logprobs --max-logprobs -1
         ...
         INFO:     Application startup complete.
-        INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+        INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
         ```
 
         Use the client to generate completions and update model weights:
@@ -205,17 +213,21 @@ class VLLMClient:
     def __init__(
         self,
         base_url: str | None = None,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         server_port: int = 8000,
         group_port: int = 51216,
         connection_timeout: float = 0.0,
+        api_key: str | None = None,
+        api_key_env: str = "VLLM_API_KEY",
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
-        if not is_vllm_available():
-            raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
+        if api_key is None:
+            api_key = os.environ.get(api_key_env)
+        if api_key:
+            self.session.headers["Authorization"] = f"Bearer {api_key}"
 
         # Configure retries for HTTP requests made through this session.
         # This is not strictly required for correctness, but it helps make training more robust to rare, transient
@@ -246,20 +258,30 @@ class VLLMClient:
             self.host = host
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
+        # Readiness owns its retry deadline; do not inherit API request retries and backoff.
+        self.session.mount(f"{self.base_url}/health", HTTPAdapter(max_retries=0))
         self.group_port = group_port
         self.communicator = None
         self._updating_weights = False  # set while inside `weight_update`
-        self.check_server(connection_timeout)  # check server and fail after timeout
-        self.model = self._get(f"{self.base_url}/v1/models")["data"][0]["id"]
+        try:
+            self.check_server(connection_timeout)  # check server and fail after timeout
+            self.model = self._get(f"{self.base_url}/v1/models")["data"][0]["id"]
+        except Exception:
+            self.session.close()
+            raise
 
     def _get(self, url: str, **kwargs) -> dict:
         response = self.session.get(url, **kwargs)
+        if response.status_code in (401, 403):
+            response.raise_for_status()
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
         return response.json()
 
     def _post(self, url: str, **kwargs) -> dict:
         response = self.session.post(url, **kwargs)
+        if response.status_code in (401, 403):
+            response.raise_for_status()
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
         return response.json()
@@ -273,32 +295,43 @@ class VLLMClient:
             retry_interval (`float`, *optional*, defaults to `2.0`):
                 Interval in seconds between retries.
             total_timeout (`float`, *optional*, defaults to `0.0`):
-                Total timeout duration in seconds.
+                Readiness retry budget in seconds. Zero performs one probe without retries; positive values also set a
+                connect/read timeout from the remaining budget.
         """
         url = f"{self.base_url}/health"
-        start_time = time.time()  # Record the start time
+        deadline = time.monotonic() + total_timeout
 
         while True:
+            # Zero retains the single-probe behavior. Positive deadlines also bound connect/read waiting.
+            timeout = Timeout(total=max(deadline - time.monotonic(), 1e-6)) if total_timeout > 0 else None
             try:
-                response = requests.get(url)
+                response = self.session.get(url, timeout=timeout, stream=True)
             except requests.exceptions.RequestException as exc:
-                # Check if the total timeout duration has passed
-                elapsed_time = time.time() - start_time
-                if elapsed_time >= total_timeout:
-                    raise ConnectionError(
-                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} seconds. Make "
-                        "sure the server is running by running `vllm serve`."
-                    ) from exc
+                last_error = exc
             else:
-                if response.status_code == 200:
-                    if "X-Forwarded-For" in response.headers:
-                        self.host = response.headers["X-Forwarded-For"]
-                    logger.info("Server is up!")
-                    return
+                # Readiness needs only the status/headers, not the response body.
+                with response:
+                    if response.status_code in (401, 403):
+                        response.raise_for_status()
+                    if response.status_code == 200:
+                        if "X-Forwarded-For" in response.headers:
+                            self.host = response.headers["X-Forwarded-For"]
+                        logger.info("Server is up!")
+                        return
+                    last_error = ConnectionError(f"HTTP {response.status_code}")
 
-            # Retry logic: wait before trying again
-            logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
-            time.sleep(retry_interval)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            delay = min(retry_interval, remaining)
+            logger.info(f"Server is not up yet. Retrying in {delay} seconds...")
+            time.sleep(delay)
+            if time.monotonic() >= deadline:
+                break
+
+        raise ConnectionError(
+            f"The vLLM server at {self.base_url} is not ready after {total_timeout} seconds: {last_error}"
+        ) from last_error
 
     def get_world_size(self) -> int:
         """
@@ -708,6 +741,9 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
+        if not is_vllm_available():
+            raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
+
         # The trainer joins the vLLM workers as an extra rank; it is rank 0, so the workers are offset by one.
         world_size = self.get_world_size() + 1
         init_info = {
@@ -849,6 +885,8 @@ class VLLMClient:
             self._post(f"{self.base_url}/reset_prefix_cache")
         else:
             response = self.session.post(f"{self.base_url}/reset_prefix_cache")
+            if response.status_code in (401, 403):
+                response.raise_for_status()
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
 

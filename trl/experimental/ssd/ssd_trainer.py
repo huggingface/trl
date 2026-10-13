@@ -253,6 +253,7 @@ class SSDTrainer(_BaseTrainer):
                 processing_class=self.processing_class,
                 mode=args.vllm_mode,
                 server_base_url=args.vllm_server_base_url,
+                server_api_key_env=args.vllm_server_api_key_env,
                 server_host=args.vllm_server_host,
                 server_port=args.vllm_server_port,
                 group_port=args.vllm_group_port,

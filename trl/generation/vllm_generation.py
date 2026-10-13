@@ -140,7 +140,9 @@ class VLLMGeneration:
         server_base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `server_host` and
             `server_port` are ignored.
-        server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+        server_api_key_env (`str`, *optional*, defaults to `"VLLM_API_KEY"`):
+            Environment variable containing the vLLM server Bearer API key.
+        server_host (`str`, *optional*, defaults to `"127.0.0.1"`):
             Host of the vLLM server to connect to. Ignored if `server_base_url` is provided.
         server_port (`int`, *optional*, defaults to `8000`):
             Port of the vLLM server to connect to. Ignored if `server_base_url` is provided.
@@ -223,7 +225,7 @@ class VLLMGeneration:
         structured_outputs_regex: str | None = None,
         # Server mode configuration
         server_base_url: str | None = None,
-        server_host: str = "0.0.0.0",
+        server_host: str = "127.0.0.1",
         server_port: int = 8000,
         server_timeout: float = 240.0,
         group_port: int = 51216,
@@ -244,6 +246,7 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        server_api_key_env: str = "VLLM_API_KEY",
     ):
         self.model = model
         self.accelerator = accelerator
@@ -256,6 +259,7 @@ class VLLMGeneration:
 
         # Server mode configuration
         self.server_base_url = server_base_url
+        self.server_api_key_env = server_api_key_env
         self.server_host = server_host
         self.server_port = server_port
         self.group_port = group_port
@@ -304,7 +308,10 @@ class VLLMGeneration:
                 else:
                     base_url = f"http://{self.server_host}:{self.server_port}"
                 self.vllm_client = VLLMClient(
-                    base_url=base_url, group_port=self.group_port, connection_timeout=self.server_timeout
+                    base_url=base_url,
+                    group_port=self.group_port,
+                    connection_timeout=self.server_timeout,
+                    api_key_env=self.server_api_key_env,
                 )
                 self.vllm_client.init_communicator(device=accelerator.device)
 
