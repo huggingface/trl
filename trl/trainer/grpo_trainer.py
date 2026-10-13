@@ -3277,7 +3277,12 @@ class GRPOTrainer(_BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            # Tool-calling rollouts produce messages whose fields vary in type between rows (assistant `content` is
+            # a string, tool `content` is a list of content blocks, parsed tool-call arguments are dicts but their
+            # stringified form may differ between calls). pandas infers one nested type per column and rejects the
+            # write when the types disagree, so route the parquet through `datasets` with `on_mixed_types="use_json"`,
+            # matching the pattern already used by the toolcall and harmony dataset scripts.
+            Dataset.from_dict(table, on_mixed_types="use_json").to_parquet(
                 os.path.join(
                     self.args.output_dir,
                     "completions",

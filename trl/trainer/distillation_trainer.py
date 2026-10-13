@@ -1920,7 +1920,9 @@ class DistillationTrainer(_BaseTrainer):
                 "completion": self._logs["completion"],
             }
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            # Mirror GRPO: route the parquet through `datasets` so tool-calling or multimodal completions whose
+            # message fields vary in type between rows do not trip pandas' nested-type inference.
+            Dataset.from_dict(table, on_mixed_types="use_json").to_parquet(
                 os.path.join(
                     self.args.output_dir,
                     "completions",
