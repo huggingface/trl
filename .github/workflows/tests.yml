@@ -58,7 +58,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci branch: only the min-versions job
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -110,7 +110,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci branch: only the min-versions job
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -167,7 +167,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci branch: only the min-versions job
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -210,7 +210,11 @@ jobs:
   tests_min_versions:
     permissions:
       contents: read
-    name: Tests with minimum versions
+    name: Tests with minimum versions (bitsandbytes ${{ matrix.bitsandbytes }})
+    strategy:
+      fail-fast: false
+      matrix:
+        bitsandbytes: ["0.43.1", "0.44.1", "0.45.0", "0.46.1"]
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -248,12 +252,18 @@ jobs:
             ".[dev]" \
             "accelerate==1.4.0" \
             "datasets==4.7.0" \
-            "transformers==4.56.2"
+            "transformers==4.56.2" \
+            "bitsandbytes==${{ matrix.bitsandbytes }}"
+
+      - name: Check bitsandbytes is actually available
+        run: |
+          source .venv/bin/activate
+          python -c "import bitsandbytes, transformers; from transformers import is_bitsandbytes_available; print('transformers', transformers.__version__, 'bitsandbytes', bitsandbytes.__version__); assert is_bitsandbytes_available(), 'bitsandbytes not available: the quantization tests would silently skip'"
 
       - name: Test with pytest
         run: |
           source .venv/bin/activate
-          make test
+          pytest -n auto --dist loadgroup -s -v -rs -k "quantization or qlora" tests
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -275,7 +285,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false  # ci branch: only the min-versions job
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
