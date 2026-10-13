@@ -77,28 +77,33 @@ def tree_chunk_gated_delta_rule(q, k, v, g, beta, tree, use_qk_l2norm_in_kernel)
     return TreeGatedDeltaRule.apply(q, k, v, g, beta, tree_plan(tree), q.shape[-1] ** -0.5, use_qk_l2norm_in_kernel)
 
 
-def tree_causal_conv1d(hidden_states, weight, bias, tree):
-    """Depthwise causal convolution + SiLU over `(1, channels, tokens)`, each tap reading a predecessor in the tree."""
+def tree_causal_conv1d(hidden_states, weight, bias, activation, tree, conv):
+    """
+    Causal convolution over a packed tree `(1, channels, tokens)`, run by the model's own `conv`.
+
+    Each segment is preceded by the `kernel_size - 1` tokens before it on its root path, so every window reads the
+    sample's own history; the outputs at those inserted positions are dropped.
+    """
     cu_seqlens, parents = tree["tree_cu_seqlens_q"], tree["tree_segment_parents"].long()
-    n_tokens = hidden_states.shape[-1]
+    width, n_tokens, n_segments = weight.shape[-1] - 1, hidden_states.shape[-1], parents.numel()
     tokens = torch.arange(n_tokens, device=hidden_states.device)
-    segment = torch.arange(parents.numel(), device=tokens.device).repeat_interleave(
+    segment = torch.arange(n_segments, device=tokens.device).repeat_interleave(
         cu_seqlens[1:] - cu_seqlens[:-1], output_size=n_tokens
     )
     token_parents = torch.where(tokens == cu_seqlens[segment], cu_seqlens[parents + 1][segment] - 1, tokens - 1)
-    return _tree_causal_conv1d(hidden_states, weight, bias, token_parents)
-
-
-@torch.compile(dynamic=True, fullgraph=True)
-def _tree_causal_conv1d(hidden_states, weight, bias, token_parents):
-    x = F.pad(hidden_states[0].T.float(), (0, 0, 0, 1))
-    parents = F.pad(token_parents, (0, 1), value=-1)
-    index = torch.arange(hidden_states.shape[-1], device=x.device)
-    out = torch.zeros_like(x[:-1]) if bias is None else bias.float().expand_as(x[:-1])
-    for tap in reversed(range(weight.shape[-1])):
-        out = out + x[index] * weight[:, tap].float()
-        index = parents[index]
-    return F.silu(out.to(hidden_states.dtype)).T[None]
+    history = [cu_seqlens[parents + 1].long() - 1]
+    for _ in range(width - 1):
+        history.insert(0, torch.where(history[0] >= 0, token_parents[history[0]], -1))
+    history = torch.stack(history, dim=1)
+    starts = cu_seqlens[:-1] + width * torch.arange(n_segments, device=tokens.device)
+    positions = tokens + width * (segment + 1)
+    source = torch.empty(n_tokens + width * n_segments, dtype=torch.long, device=tokens.device)
+    source[(starts[:, None] + torch.arange(width, device=tokens.device)).flatten()] = history.where(
+        history >= 0, n_tokens
+    ).flatten()
+    source[positions] = tokens
+    x = F.pad(hidden_states.transpose(1, 2), (0, 0, 0, 1))[:, source].transpose(1, 2)
+    return conv(x, weight, bias, activation=activation).transpose(1, 2)[:, positions].transpose(1, 2)
 
 
 # --- Device/compiler checks and FP32 exponential ---
