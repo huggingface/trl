@@ -58,6 +58,7 @@ from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available, is_triton_available
 
 from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..trainer.model_config import ModelConfig
 
 
@@ -1638,7 +1639,7 @@ def add_fused_lm_head(
                 bias = bias.full_tensor()
         # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
         # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
-        compact = hidden_states.device.type in ("cuda", "xpu")
+        compact = _use_triton(hidden_states.device)
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
             per_token = _ChunkedLogProbFunction.apply(
                 hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
