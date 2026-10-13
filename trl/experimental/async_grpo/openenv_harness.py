@@ -222,7 +222,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 # A turn's tool calls run between its reply and the next request, so that gap (harness overhead
                 # included) is their latency. The trailing turn has no next request and is not timed.
                 tool_latency = [
-                    (name, t_request - t_reply)
+                    (name, (t_request - t_reply) / len(names))
                     for (_, t_reply, names), (t_request, _, _) in itertools.pairwise(turn_times)
                     for name in names
                 ]

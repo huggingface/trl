@@ -803,7 +803,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
 
             def get_reward(self):
                 time.sleep(0.02)
-                loop._stop_event.set()
+                loop._loop.call_soon_threadsafe(loop._stop_event.set)
                 return 1.0
 
         loop = self._make_loop(SlowEnvironment)

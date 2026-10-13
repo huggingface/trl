@@ -327,7 +327,7 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
     assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
     assert payload["tools/latency_s"][1] == 2 and payload["tools/latency_s"][0] >= 0.04
-    assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.04
+    assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.02
 
 
 def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
