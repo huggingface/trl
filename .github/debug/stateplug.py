@@ -36,6 +36,18 @@ def pytest_configure(config):
 
     modeling_llava_next.LlavaNextModel.pack_image_features = pack_image_features
 
+    original_forward = modeling_llava_next.LlavaNextModel.forward
+
+    def forward(self, input_ids=None, *args, **kwargs):
+        if input_ids is not None and kwargs.get("pixel_values") is not None:
+            mask = input_ids == self.config.image_token_id
+            last = [int(row.nonzero().max()) if row.any() else -1 for row in mask]
+            runs = [int((row[1:] & ~row[:-1]).sum() + row[0]) for row in mask]
+            _log(f"   llava_next_forward seq_len={input_ids.shape[1]} image_tokens={mask.sum(-1).tolist()} last_image_pos={last} image_runs={runs}")
+        return original_forward(self, input_ids, *args, **kwargs)
+
+    modeling_llava_next.LlavaNextModel.forward = forward
+
     from transformers.models.llava_next import processing_llava_next
 
     original_call = processing_llava_next.LlavaNextProcessor.__call__
