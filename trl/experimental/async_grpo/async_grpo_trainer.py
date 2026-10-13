@@ -285,8 +285,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
-                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
-                    "completion_tokens": int(sum(sample.completion_mask)),
+                    "prompt_tokens": len(sample.input_ids) - int(sample.completion_mask.sum()),
+                    "completion_tokens": int(sample.completion_mask.sum()),
                 },
             )
             for sample in samples[:max_traces]
@@ -590,7 +590,7 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        n_trained_tokens = sum(int(example["completion_mask"].sum()) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
         sample_tokens = [len(example["input_ids"]) for example in all_examples]
@@ -626,7 +626,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         # forwarded — the prompt, tool results, and any tail a realign demoted to context. FLOPs are spent on both, so
         # both are worth a number, and their ratio is what says how much of the forward earns no gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
-        trained = [sum(example["completion_mask"]) for example in all_examples]
+        trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
         self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))

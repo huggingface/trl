@@ -76,7 +76,7 @@ class TurnRecord:
 
 @dataclass
 class TrainingSequence:
-    """One training row. Maps 1:1 onto the list fields of `RolloutSample`."""
+    """One training row. Maps 1:1 onto the array fields of `RolloutSample`."""
 
     input_ids: list[int]  # full tokens (prompt included)
     completion_mask: list[int]  # 1 = train this token, 0 = context
