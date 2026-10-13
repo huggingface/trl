@@ -59,6 +59,8 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_vllm_available
+from ..kernels.chunked_divergence import ChunkedDivergenceFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..models import prepare_deepspeed
 from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
 from .base_trainer import _BaseTrainer
@@ -169,15 +171,17 @@ def _chunked_divergence_loss(
         if teacher_lm_head_bias is not None:
             teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
 
-    # Triton ships with PyTorch on Linux only, so the kernel is imported here rather than with `trl`
-    from ..kernels.chunked_divergence import ChunkedDivergenceFunction
-
     # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
     # vocabulary must match), and each projects through its own `lm_head`.
     valid = completion_mask.reshape(-1) != 0
     n_valid_tensor = valid.sum()
-    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))[valid]
-    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))[valid]
+    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
+    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))
+    # On Triton devices, only the valid positions are projected. Elsewhere (e.g. Neuron), the number of valid positions
+    # would change the tile shapes on every batch and trigger a recompilation, so every position is projected instead.
+    compact = _use_triton(student_hidden_states.device)
+    if compact:
+        h_s, h_t = h_s[valid], h_t[valid]
     per_token_divergence, per_token_entropy = ChunkedDivergenceFunction.apply(
         h_s,
         student_lm_head_weight,
@@ -192,6 +196,9 @@ def _chunked_divergence_loss(
         teacher_logit_scale,
         teacher_final_logit_softcapping,
     )
+    if not compact:
+        per_token_divergence = per_token_divergence.masked_fill(~valid, 0)
+        per_token_entropy = per_token_entropy.masked_fill(~valid, 0)
     loss = per_token_divergence.sum()
     entropy_sum = per_token_entropy.sum()
 
