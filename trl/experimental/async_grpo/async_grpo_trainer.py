@@ -56,7 +56,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import TREE_ATTENTION, TreeRow, register_tree_attention
+from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -607,9 +607,6 @@ class DataCollatorForRollout(DataCollatorMixin):
             "sampling_mask": -1,
             "sampler_ids": -1,
             "sampler_log_probs": -math.inf,
-            "tree_kv_index": -1,
-            "tree_cu_seqlens_q": -1,
-            "tree_cu_seqlens_k": -1,
         }
         batch = {key: pad([p[key] for p in packed], padding_value=padding.get(key, 0)) for key in packed[0]}
         batch["attention_mask"] = pad([torch.ones_like(p["input_ids"]) for p in packed], padding_value=0)
@@ -1117,10 +1114,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
         # Check tree attention compat
         if layer_types:
-            raise ValueError(
-                f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing only routes attention layers "
-                "along each sample's own path; a recurrent or convolutional layer would scan across samples."
-            )
+            if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
+                raise ValueError(
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
+                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
+                    "convolutional layer would scan across samples."
+                )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
@@ -1520,7 +1519,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "tree_kv_index",
                 "tree_cu_seqlens_q",
                 "tree_cu_seqlens_k",
-                "tree_max_seqlens",
+                "tree_segment_parents",
+                "tree_segment_depths",
+                "tree_sizes",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1546,10 +1547,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             sampling_mask[row, col] = candidates
             sampling_mask = sampling_mask.unsqueeze(0)
         sampler_ids = inputs["sampler_ids"][mask_bool].unsqueeze(0) if self.args.score_centering else None
-        tree_kwargs = {
-            key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
-        }
-        tree_kwargs["tree_max_seqlen_q"], tree_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
 
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
@@ -1562,7 +1559,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             score_ids=sampler_ids,
             fused_lm_head=True,
             **router_kwargs,
-            **tree_kwargs,
+            **unpad_tree(inputs),
         )
         log_probs = outputs.log_probs.flatten()[token_index]
         entropy = outputs.entropy.flatten()[token_index]
