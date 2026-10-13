@@ -621,7 +621,19 @@ def test_chatml_collator_raises_when_completion_fills_window(llama_tokenizer):
         collator(examples)
 
 
-def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenizer):
+def _prepared_row(tmp_path, model_id, tokenizer, dataset, **config_kwargs):
+    # `GOLDTrainer.__init__` prepares the train dataset, so its first row is what training sees
+    trainer = GOLDTrainer(
+        model=model_id,
+        teacher_model=model_id,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", **config_kwargs),
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
+    return trainer.train_dataset[0]
+
+
+def test_prepared_tokenized_rows_keep_completion_after_truncation(tmp_path, llama_tokenizer):
     """When a GOLD row's prompt overflows max_length, dataset prep must keep the LAST max_length tokens (the
     completion end), tracking the prompt/completion boundary via completion_mask so the collator labels the completion
     instead of masking the whole sequence."""
@@ -639,17 +651,15 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
     )
 
     max_length = 64
-    args = GOLDConfig(max_length=max_length, max_completion_length=16, use_extended_uld=True)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset,
+    row = _prepared_row(
+        tmp_path,
+        _TINY_LLAMA,
         llama_tokenizer,
-        args,
-        packing=False,
-        formatting_func=None,
-        dataset_name="train",
+        dataset,
+        max_length=max_length,
+        max_completion_length=16,
+        use_extended_uld=True,
     )
-    row = prepared[0]
 
     assert len(row["input_ids"]) == max_length  # truncated, not dropped
     assert 1 in row["completion_mask"]  # completion survived front-truncation
@@ -675,9 +685,7 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(llama_tokenize
     assert assistant in llama_tokenizer.decode(completion_ids)
 
 
-def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_completion(
-    llama_tokenizer,
-):
+def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_completion(tmp_path, llama_tokenizer):
     """When truncation drops the front of the completion (``drop > completion_start``), the kept byte_offsets
     reference bytes in the original completion text — but ``original_completion_text`` is decoded fresh from the kept
     ids and starts at byte 0. The kept offsets must be rebased so they match the teacher's re-encoding.
@@ -687,17 +695,15 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
     dataset = Dataset.from_dict({"prompt": [short_prompt], "completion": [long_completion]})
 
     max_length = 32
-    args = GOLDConfig(max_length=max_length, max_completion_length=16, use_extended_uld=True)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset,
+    row = _prepared_row(
+        tmp_path,
+        _TINY_LLAMA,
         llama_tokenizer,
-        args,
-        packing=False,
-        formatting_func=None,
-        dataset_name="train",
+        dataset,
+        max_length=max_length,
+        max_completion_length=16,
+        use_extended_uld=True,
     )
-    row = prepared[0]
 
     assert len(row["input_ids"]) == max_length
     # Prompt is so short that truncation ate into the completion: no prompt tokens survive.
@@ -707,7 +713,7 @@ def test_prepared_tokenized_rows_rebase_byte_offsets_when_truncation_eats_into_c
     assert tuple(row["byte_offsets"][0]) == (0, len(b"word "))
 
 
-def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
+def test_prepare_dataset_messages_uses_last_assistant_turn(tmp_path, qwen_tokenizer):
     messages = [
         {"role": "system", "content": "Be terse."},
         {"role": "user", "content": "First?"},
@@ -716,18 +722,7 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
         {"role": "assistant", "content": "Two."},
     ]
     dataset = Dataset.from_dict({"messages": [messages]})
-    args = GOLDConfig(max_length=512, use_extended_uld=True)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset,
-        qwen_tokenizer,
-        args,
-        packing=False,
-        formatting_func=None,
-        dataset_name="train",
-    )
-    row = prepared[0]
+    row = _prepared_row(tmp_path, _TINY_QWEN2, qwen_tokenizer, dataset, max_length=512, use_extended_uld=True)
     expected_prompt = qwen_tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
     expected_full = qwen_tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
 
@@ -743,19 +738,11 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(qwen_tokenizer):
     assert decoded_completion == row["original_completion_text"]
 
 
-def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
+def test_prepare_dataset_extended_uld_keeps_seam_token(tmp_path, qwen_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
-    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=True)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-
-    row = trainer._prepare_dataset_with_original_text(
-        dataset,
-        qwen_tokenizer,
-        args,
-        packing=False,
-        formatting_func=None,
-        dataset_name="train",
-    )[0]
+    row = _prepared_row(
+        tmp_path, _TINY_QWEN2, qwen_tokenizer, dataset, max_length=64, max_completion_length=16, use_extended_uld=True
+    )
 
     completion_ids = [
         token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
@@ -779,20 +766,17 @@ def test_prepare_dataset_extended_uld_keeps_seam_token(qwen_tokenizer):
     assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
 
-def test_prepare_dataset_positional_uld_supports_sentencepiece(gemma4_tokenizer, qwen_tokenizer):
+def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
-    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset,
+    row = _prepared_row(
+        tmp_path,
+        "trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
         gemma4_tokenizer,
-        args,
-        packing=False,
-        formatting_func=None,
-        dataset_name="train",
+        dataset,
+        max_length=64,
+        max_completion_length=16,
+        use_extended_uld=False,
     )
-    row = prepared[0]
 
     completion_ids = [
         token_id for token_id, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1
