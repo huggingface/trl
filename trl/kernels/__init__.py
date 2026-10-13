@@ -17,8 +17,10 @@ from transformers.utils import is_triton_available
 from .chunked_logprob import ChunkedLogProbFunction
 
 
+__all__ = ["ChunkedLogProbFunction"]
+
+
 if is_triton_available():
     from .logprob_entropy import selective_log_softmax_and_entropy
 
-
-__all__ = ["ChunkedLogProbFunction", "selective_log_softmax_and_entropy"]
+    __all__ += ["selective_log_softmax_and_entropy"]
