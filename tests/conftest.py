@@ -259,11 +259,19 @@ def cleanup_vllm_dist_env():
     `torch.distributed.destroy_process_group()` so that vLLM's internal parallel-state globals (`_TP`, `_WORLD`, ...)
     are reset too, letting the next colocate test reinitialize cleanly.
     """
+    dist_env = {
+        name: os.environ.get(name) for name in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT")
+    }
     yield
     if torch.distributed.is_initialized():
         from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
         cleanup_dist_env_and_memory()
+    for name, value in dist_env.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 @pytest.fixture(autouse=True)
