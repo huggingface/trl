@@ -36,6 +36,21 @@ def pytest_configure(config):
 
     modeling_llava_next.LlavaNextModel.pack_image_features = pack_image_features
 
+    from transformers.models.llava_next import processing_llava_next
+
+    original_call = processing_llava_next.LlavaNextProcessor.__call__
+
+    def processor_call(self, *args, **kwargs):
+        out = original_call(self, *args, **kwargs)
+        if "image_sizes" in out:
+            n_tokens = [sum(int(t) == self.image_token_id for t in row) for row in out["input_ids"]]
+            sizes = out["image_sizes"]
+            sizes = sizes.tolist() if hasattr(sizes, "tolist") else sizes
+            _log(f"   llava_next_processor image_sizes={sizes} image_tokens={n_tokens}")
+        return out
+
+    processing_llava_next.LlavaNextProcessor.__call__ = processor_call
+
 
 def _log(msg):
     with open(os.environ["STATE_LOG"], "a") as f:

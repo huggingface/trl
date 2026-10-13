@@ -28,8 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         seq: [gw8]
-        variant: [baseline, cudnn-off, cudnn-9.5]
-        shard: [1, 2]
+        variant: [baseline]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -84,5 +84,4 @@ jobs:
       - name: Report per-test state
         if: always()
         run: |
-          grep -c '^CHANGED' /tmp/state.txt || true
-          cat /tmp/state.txt || echo "no state log"
+          grep -E '^### iteration|llava_next|^(same|CHANGED) .*LlavaNext' /tmp/state.txt || echo "no state log"
