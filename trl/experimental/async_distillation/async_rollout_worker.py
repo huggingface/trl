@@ -99,6 +99,8 @@ def _scrub_child_env() -> None:
     # The child has no business touching CUDA; any library that imports torch
     # and lazily probes devices would race the parent's allocator.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # On ROCm, an empty CUDA_VISIBLE_DEVICES is ignored when HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES is set.
+    os.environ["HIP_VISIBLE_DEVICES"] = ""
     for k in _CHILD_ENV_TO_STRIP:
         os.environ.pop(k, None)
 
