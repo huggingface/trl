@@ -1542,8 +1542,7 @@ class TestDistillationTrainerVLM(TrlTestCase):
         assert torch.isfinite(torch.tensor(train_loss))
 
     def test_generation_suppresses_image_token(self):
-        # A sampled image placeholder token would make the forward pass over prompt + completion fail. Gemma3 is used
-        # because its processor's `image_token_id` is not the placeholder token, unlike its config's.
+        # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
         training_args = DistillationConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = DistillationTrainer(

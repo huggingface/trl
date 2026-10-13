@@ -724,8 +724,7 @@ class DistillationTrainer(_BaseTrainer):
             "cache_implementation": args.cache_implementation,
         }
         if isinstance(processing_class, ProcessorMixin):
-            # A sampled image placeholder token would leave more image tokens than image features in the forward pass
-            # over prompt + completion, making it fail
+            # A sampled image token would mismatch the image features
             generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
         if args.generation_kwargs is not None:
             generation_kwargs.update(args.generation_kwargs)
