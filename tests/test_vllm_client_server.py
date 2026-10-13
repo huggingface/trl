@@ -119,6 +119,12 @@ class TestMissingServerSettings(TrlTestCase):
     def server_info(self, weight_transfer_config):
         return self.make_response(200, {"vllm_config": {"weight_transfer_config": weight_transfer_config}})
 
+    def test_get_server_info(self):
+        client = self.make_client()
+        response = self.server_info(weight_transfer_config={"backend": "nccl"})
+        with patch.object(client.session, "get", return_value=response):
+            assert client.get_server_info() == {"weight_transfer_config": {"backend": "nccl"}}
+
     def test_init_communicator_without_dev_mode(self):
         client = self.make_client()
         with patch.object(client.session, "get", return_value=self.make_response(404)):
