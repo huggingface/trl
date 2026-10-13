@@ -34,6 +34,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -358,12 +359,17 @@ class SDPOTrainer(_BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config=None,
     ):
         if reward_funcs is None or (isinstance(reward_funcs, list) and len(reward_funcs) == 0):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        if not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
@@ -371,16 +377,31 @@ class SDPOTrainer(_BaseTrainer):
         model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -414,6 +435,31 @@ class SDPOTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
+        if is_quantized_model:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
+                    param.data = param.data.to(torch.bfloat16)
+
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            # Resuming from a checkpoint (or loading a PEFT model that already bundles the teacher adapter) can
+            # mean "teacher" is already registered here; PEFT rejects re-adding an existing adapter name, and
+            # PEFTAdapterEMACallback._initialize_teacher_adapter already guards this same call for that reason.
+            if "teacher" not in model.peft_config:
+                model.add_adapter("teacher", model.peft_config[active_adapter])
+            # `PEFTAdapterEMACallback` zeroes the adapter too, but not until `Trainer.train()` starts; without
+            # this, a teacher forward before training (e.g. an early `evaluate()`) would see the adapter's
+            # default, non-zero PEFT init instead of the intended zero (no-op) EMA teacher.
+            PEFTAdapterEMACallback(model=model)._initialize_teacher_adapter()
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -1216,12 +1262,15 @@ class SDPOTrainer(_BaseTrainer):
                 distillation_topk=self.args.distillation_topk,
                 distillation_alpha=self.args.distillation_alpha,
                 distillation_add_tail=self.args.distillation_add_tail,
+                distillation_kl_clip=self.args.distillation_kl_clip,
+                topk_support=self.args.distillation_topk_support,
             )
         elif self.args.distillation_mode == "full_logits":
             per_token_loss = compute_full_logit_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
                 distillation_alpha=self.args.distillation_alpha,
+                distillation_kl_clip=self.args.distillation_kl_clip,
             )
         elif self.args.distillation_mode == "sampled_token":
             per_token_loss = compute_sampled_token_self_distillation_loss(
@@ -1255,12 +1304,9 @@ class SDPOTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
+            self._global_masked_mean(per_token_loss, distillation_logits.loss_mask),
         )
         return loss
 
@@ -1315,11 +1361,9 @@ class SDPOTrainer(_BaseTrainer):
 
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
-        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
-            loss_mask.sum().clamp(min=1.0)
-        )
+        abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
         self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self.accelerator.gather(abs_diff).mean().item()
+            self._global_masked_mean(abs_diff, loss_mask)
         )
 
         if self.args.distillation_mode == "sampled_token":
@@ -1342,7 +1386,9 @@ class SDPOTrainer(_BaseTrainer):
             else:
                 student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
                 teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
-            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+            per_token_loss = compute_divergence(
+                student_topk_logps, teacher_topk_logps, self.args.distillation_alpha, self.args.distillation_kl_clip
+            )
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
@@ -1352,8 +1398,7 @@ class SDPOTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        self._log_self_distillation_metric(mode, self._global_masked_mean(per_token_loss, loss_mask))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
@@ -1525,6 +1570,22 @@ class SDPOTrainer(_BaseTrainer):
         metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
+
+    def _global_masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> float:
+        """Cross-rank weighted mean of `values` under `mask`, weighted by each rank's valid-token count.
+
+        Averaging each rank's own masked mean with an unweighted `gather(...).mean()` is biased whenever ranks hold
+        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would
+        count as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
+        `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
+        """
+        # Cast to float32 before stacking: `values` may be bf16/fp16 under mixed precision while `local_count` is
+        # float32, and `torch.stack` requires matching dtypes (also avoids precision loss summing many low-precision
+        # values).
+        local_sum = (values * mask).sum().float()
+        local_count = mask.sum().float()
+        totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+        return (totals[0] / totals[1].clamp(min=1.0)).item()
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
