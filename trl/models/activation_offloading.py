@@ -151,15 +151,12 @@ class OffloadActivations(saved_tensors_hooks):
         self.accelerator_type = (
             torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
         )
+        # `torch.cuda`, `torch.xpu`, `torch.npu`, `torch.neuron`, ...: they share the stream and cache API used below
+        self.device_module = torch.get_device_module(self.accelerator_type)
 
         # For streaming
         if self.use_streams:
-            if self.accelerator_type == "xpu":  # comms stream
-                self.s1 = torch.xpu.Stream()
-            elif self.accelerator_type == "npu":
-                self.s1 = torch.npu.Stream()
-            else:
-                self.s1 = torch.cuda.Stream()
+            self.s1 = self.device_module.Stream()  # comms stream
             self.fwd_stash = {}  # tensor_id => (activation, ev1)
             if max_fwd_stash_size < 1:
                 raise ValueError(f"max_fwd_stash_size should be at least 1 but is {max_fwd_stash_size}")
@@ -226,7 +223,7 @@ class OffloadActivations(saved_tensors_hooks):
                 return tensor_id
 
             # Check if tensor is on CPU (skip offloading)
-            if activation.device.type not in ["cuda", "xpu", "npu"]:
+            if activation.device.type != self.accelerator_type:
                 self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
@@ -299,13 +296,7 @@ class OffloadActivations(saved_tensors_hooks):
             original_shape = activation.size()
 
             stream = self.s1 if self.use_streams else self.s0
-            if self.accelerator_type == "xpu":
-                stream_ctx = torch.xpu.stream(stream)
-            elif self.accelerator_type == "npu":
-                stream_ctx = torch.npu.stream(stream)
-            else:
-                stream_ctx = torch.cuda.stream(stream)
-            with stream_ctx:
+            with self.device_module.stream(stream):
                 if has_broadcast:
                     # Copy only the actual underlying storage, not the materialized broadcast
                     # Create CPU tensor with same storage size as original
@@ -440,13 +431,7 @@ class OffloadActivations(saved_tensors_hooks):
                     brought_back_from_cpu = False
                 else:
                     # Kick off the process to bring tensors back
-                    if self.accelerator_type == "xpu":
-                        stream_ctx = torch.xpu.stream(self.s1)
-                    elif self.accelerator_type == "npu":
-                        stream_ctx = torch.npu.stream(self.s1)
-                    else:
-                        stream_ctx = torch.cuda.stream(self.s1)
-                    with stream_ctx:
+                    with self.device_module.stream(self.s1):
                         # Restore tensor to GPU
                         accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
                         # Restore original stride if we saved it (handles both broadcast and non-broadcast cases)
@@ -553,11 +538,7 @@ class OffloadActivations(saved_tensors_hooks):
     def s0(self) -> torch.Stream:
         # Compute stream. Queried live, not cached: under FSDP2, checkpoint recompute, or a custom autograd
         # Function, the current stream when packing/unpacking may differ from the one at construction time.
-        if self.accelerator_type == "xpu":
-            return torch.xpu.current_stream()
-        elif is_torch_npu_available() and self.accelerator_type == "npu":
-            return torch.npu.current_stream()
-        return torch.cuda.current_stream()
+        return self.device_module.current_stream()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -617,12 +598,7 @@ class OffloadActivations(saved_tensors_hooks):
             self.bwd_ev_stash.clear()
             self.fwd_stash.clear()
         if "bitsandbytes" in sys.modules:
-            if self.accelerator_type == "xpu":
-                torch.xpu.empty_cache()
-            elif is_torch_npu_available() and self.accelerator_type == "npu":
-                torch.npu.empty_cache()
-            else:
-                torch.cuda.empty_cache()
+            self.device_module.empty_cache()
         return super().__enter__()
 
     def __exit__(self, *args, **kwargs):
