@@ -26,6 +26,7 @@ from importlib.metadata import version
 def print_env():
     import torch
     from accelerate.commands.config import default_config_file, load_config_from_file
+    from packaging.version import Version
     from transformers import is_bitsandbytes_available
     from transformers.utils import is_peft_available
 
@@ -40,6 +41,13 @@ def print_env():
         devices = ["MPS"]
     elif torch.xpu.is_available():
         devices = [torch.xpu.get_device_name(i) for i in range(torch.xpu.device_count())]
+    elif (
+        Version(torch.__version__) >= Version("2.6.0")
+        and torch.accelerator.is_available()
+        and torch.accelerator.current_accelerator().type == "neuron"
+    ):
+        # `get_device_name` returns "neuron:<index>"; the properties name the chip (e.g. "trn2")
+        devices = [torch.neuron.get_device_properties(i).name for i in range(torch.neuron.device_count())]
 
     accelerate_config = accelerate_config_str = "not found"
 
