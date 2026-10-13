@@ -30,8 +30,14 @@ requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "huggingface_hub",  # trl/trainer/base_trainer.py, trl/trainer/grpo_trainer.py, trl/trainer/utils.py
     "jinja2",
+    "numpy",  # trl/data_utils.py, trl/trainer/grpo_trainer.py
     "packaging>20.0",
+    "pandas",  # trl/trainer/callbacks.py, trl/trainer/grpo_trainer.py
+    "psutil",  # trl/models/activation_offloading.py
+    "pyarrow",  # trl/data_utils.py
+    "pyyaml",  # trl/scripts/_hf_argparser.py
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]
