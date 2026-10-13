@@ -1,0 +1,73 @@
+name: Debug torch 2.6 ordered replay
+
+on:
+  push:
+    branches:
+      - debug-torch26-*
+
+env:
+  TQDM_DISABLE: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  PYTORCH_ALLOC_CONF: "expandable_segments:True"
+
+jobs:
+  replay:
+    permissions:
+      contents: read
+    name: Replay ${{ matrix.seq }}
+    runs-on:
+      group: aws-g6e-4xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        seq: [gw14, gw5, gw1, gw2, gw8, trigger_qwen2vl, trigger_llavanext]
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install \
+            ".[dev]" \
+            "accelerate==1.4.0" \
+            "datasets==4.7.0" \
+            "torch==2.6.0" \
+            "transformers==4.56.2"
+
+      - name: Replay ordered tests in one process
+        run: |
+          source .venv/bin/activate
+          nvidia-smi --query-gpu=name,driver_version --format=csv
+          STATE_LOG=/tmp/state.txt PYTHONPATH=.github/debug python -m pytest -p stateplug -p no:cacheprovider -v -rf \
+            $(cat .github/debug/prefix_${{ matrix.seq }}.txt)
+
+      - name: Report per-test state
+        if: always()
+        run: |
+          grep -c '^CHANGED' /tmp/state.txt || true
+          cat /tmp/state.txt || echo "no state log"

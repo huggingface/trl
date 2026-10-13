@@ -1,0 +1,1 @@
+tests/test_distillation_trainer.py::TestDistillationTrainerVLM::test_train_vlm[trl-internal-testing/tiny-Qwen2VLForConditionalGeneration]

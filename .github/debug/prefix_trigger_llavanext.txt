@@ -1,0 +1,1 @@
+tests/test_grpo_trainer.py::TestGRPOTrainerVLM::test_train_vlm[trl-internal-testing/tiny-LlavaNextForConditionalGeneration]
