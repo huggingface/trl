@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
+import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -288,8 +289,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
-                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
-                    "completion_tokens": int(sum(sample.completion_mask)),
+                    "prompt_tokens": len(sample.input_ids) - int(sample.completion_mask.sum()),
+                    "completion_tokens": int(sample.completion_mask.sum()),
                 },
             )
             for sample in samples[:max_traces]
@@ -565,14 +566,14 @@ class DataCollatorForRollout(DataCollatorMixin):
         input_ids, attention_mask, completion_mask, old_log_probs, position_ids, advantages = [], [], [], [], [], []
         for group in groups:
             seq_lengths = [len(example["input_ids"]) for example in group]
-            ids = [token for example in group for token in example["input_ids"]]
-            input_ids.append(torch.tensor(ids, dtype=torch.long))
+            ids = np.concatenate([example["input_ids"] for example in group])
+            input_ids.append(torch.as_tensor(ids, dtype=torch.long))
             attention_mask.append(torch.ones(len(ids), dtype=torch.long))
             completion_mask.append(
-                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
+                torch.as_tensor(np.concatenate([example["completion_mask"] for example in group]), dtype=torch.long)
             )
             old_log_probs.append(
-                torch.tensor([lp for example in group for lp in example["old_log_probs"]], dtype=torch.float32)
+                torch.as_tensor(np.concatenate([example["old_log_probs"] for example in group]), dtype=torch.float32)
             )
             position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
             advantages.append(
@@ -593,7 +594,7 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Total valid completion tokens across all samples in the full batch.
         # Repeated per rank so that DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0
-        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        n_trained_tokens = sum(int(example["completion_mask"].sum()) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
         sample_tokens = [len(example["input_ids"]) for example in all_examples]
@@ -629,7 +630,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         # forwarded — the prompt, tool results, and any tail a realign demoted to context. FLOPs are spent on both, so
         # both are worth a number, and their ratio is what says how much of the forward earns no gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
-        trained = [sum(example["completion_mask"]) for example in all_examples]
+        trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
         self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
