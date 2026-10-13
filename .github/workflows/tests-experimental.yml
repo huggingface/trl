@@ -8,17 +8,20 @@ on:
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests-experimental.yml"
+      - ".github/actions/**"
       - "trl/experimental/**"
       - "tests/experimental/**"
   pull_request:
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests-experimental.yml"
+      - ".github/actions/**"
       - "trl/experimental/**"
       - "tests/experimental/**"
 
 env:
   TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
@@ -73,3 +76,11 @@ jobs:
         run: |
           source .venv/bin/activate
           make test_experimental
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests (experimental)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
