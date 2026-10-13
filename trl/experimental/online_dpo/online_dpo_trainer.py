@@ -1013,9 +1013,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         prompt_ids = prompt_inputs["input_ids"].repeat(2, 1)
         prompt_mask = prompt_inputs["attention_mask"].repeat(2, 1)
 
-        # Prepare vision inputs if available, duplicated along the batch dimension like the prompt IDs. They are
-        # concatenated rather than repeated, as their number of dimensions depends on the model (e.g. 5D pixel values
-        # for Idefics2)
+        # Prepare vision inputs if available, concatenated as their number of dimensions varies (5D for Idefics2)
         vision_generation_kwargs = {}
         if self.is_vision_model and images is not None:
             if "pixel_values" in prompt_inputs:
@@ -1055,9 +1053,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         completion_ids = output[:, prompt_ids.size(1) :]
         completion_ids, completion_mask = truncate_right(completion_ids, self.eos_token_ids, pad_token_id)
 
-        # Return the vision inputs too, so the forward pass gets the same image features as generation
-        vision_inputs = vision_generation_kwargs or None
-        return prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs
+        return prompt_ids, prompt_mask, completion_ids, completion_mask, vision_generation_kwargs or None
 
     def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list, **reward_kwargs):
         """
