@@ -1802,6 +1802,13 @@ class DistillationTrainer(_BaseTrainer):
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
 
+        # The loss compares the student and teacher logits chunk by chunk, so both heads must share a device
+        if student_lm_head.weight.device != teacher_lm_head.weight.device:
+            raise ValueError(
+                f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
+                f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
+            )
+
         # With the model split across devices (`device_map`), the backbone can end on another device than the head
         student_hidden_states = student_hidden_states.to(student_lm_head.weight.device)
         teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
