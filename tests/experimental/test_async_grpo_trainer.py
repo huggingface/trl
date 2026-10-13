@@ -108,9 +108,9 @@ class _StubRolloutWorker:
                 sample = RolloutSample(
                     prompt=row["prompt"],
                     completion=completions[idx],
-                    input_ids=prompt_ids + completion_ids,
-                    completion_mask=[0] * len(prompt_ids) + [1] * len(completion_ids),
-                    old_log_probs=[0.0] * len(prompt_ids) + [-0.5] * len(completion_ids),
+                    input_ids=np.array(prompt_ids + completion_ids, dtype=np.int64),
+                    completion_mask=np.array([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64),
+                    old_log_probs=np.array([0.0] * len(prompt_ids) + [-0.5] * len(completion_ids), dtype=np.float32),
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
@@ -866,9 +866,9 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
 def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) -> dict:
     # First token is a prompt token (completion_mask 0); the rest are completion tokens.
     return {
-        "input_ids": list(range(length)),
-        "completion_mask": [0] + [1] * (length - 1),
-        "old_log_probs": [0.0] * length,
+        "input_ids": np.arange(length, dtype=np.int64),
+        "completion_mask": np.array([0] + [1] * (length - 1), dtype=np.int64),
+        "old_log_probs": np.zeros(length, dtype=np.float32),
         "advantage": advantage,
         "group_id": 0,
         "metrics": {"reward": reward},
@@ -1363,10 +1363,13 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[1].advantage == samples[2].advantage
 
         # Each sample maps 1:1 onto its source TrainingSequence.
-        assert samples[0].input_ids == seq_a.input_ids and samples[0].completion_mask == seq_a.completion_mask
-        assert samples[0].old_log_probs == seq_a.old_log_probs
-        assert samples[1].input_ids == seq_b1.input_ids
-        assert samples[2].input_ids == seq_b2.input_ids
+        assert (
+            samples[0].input_ids.tolist() == seq_a.input_ids
+            and samples[0].completion_mask.tolist() == seq_a.completion_mask
+        )
+        assert samples[0].old_log_probs.tolist() == pytest.approx(seq_a.old_log_probs)
+        assert samples[1].input_ids.tolist() == seq_b1.input_ids
+        assert samples[2].input_ids.tolist() == seq_b2.input_ids
 
         assert all(s.model_version == 7 for s in samples)
 

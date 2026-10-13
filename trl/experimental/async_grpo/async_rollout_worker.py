@@ -76,7 +76,7 @@ class TurnRecord:
 
 @dataclass
 class TrainingSequence:
-    """One training row. Maps 1:1 onto the list fields of `RolloutSample`."""
+    """One training row. Maps 1:1 onto the array fields of `RolloutSample`."""
 
     input_ids: list[int]  # full tokens (prompt included)
     completion_mask: list[int]  # 1 = train this token, 0 = context
@@ -214,9 +214,9 @@ class RolloutGroup:
 class RolloutSample:
     prompt: Messages
     completion: Messages
-    input_ids: list[int]
-    completion_mask: list[int]
-    old_log_probs: list[float]
+    input_ids: np.ndarray
+    completion_mask: np.ndarray
+    old_log_probs: np.ndarray
     advantage: float
     model_version: int
     group_id: int
@@ -1110,9 +1110,9 @@ class _AsyncRolloutLoop:
                     RolloutSample(
                         prompt=prompt,
                         completion=completion,
-                        input_ids=seq.input_ids,
-                        completion_mask=seq.completion_mask,
-                        old_log_probs=seq.old_log_probs,
+                        input_ids=np.asarray(seq.input_ids, dtype=np.int64),
+                        completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
+                        old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
                         advantage=float(advantage),
                         model_version=group.model_version,
                         group_id=group.group_id,
