@@ -15,7 +15,7 @@ jobs:
   replay:
     permissions:
       contents: read
-    name: Replay ${{ matrix.seq }} (${{ matrix.variant }})
+    name: Replay ${{ matrix.seq }} (${{ matrix.variant }}, ${{ matrix.shard }})
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -28,7 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         seq: [gw8]
-        variant: [baseline-1, baseline-2, cudnn-off, cudnn-9.5]
+        variant: [baseline, cudnn-off, cudnn-9.5]
+        shard: [1, 2]
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -68,8 +69,17 @@ jobs:
           nvidia-smi --query-gpu=name,driver_version --format=csv
           if [ "${{ matrix.variant }}" = "cudnn-off" ]; then export DISABLE_CUDNN=1; fi
           python -c "import torch; print('cudnn', torch.backends.cudnn.version())"
-          STATE_LOG=/tmp/state.txt PYTHONPATH=.github/debug python -m pytest -p stateplug -p no:cacheprovider -v -rf \
-            $(cat .github/debug/prefix_${{ matrix.seq }}.txt)
+          fails=0
+          for i in 1 2 3 4 5; do
+            echo "### iteration $i" >> /tmp/state.txt
+            if STATE_LOG=/tmp/state.txt PYTHONPATH=.github/debug python -m pytest -p stateplug -p no:cacheprovider -q -rf \
+                $(cat .github/debug/prefix_${{ matrix.seq }}.txt) > /tmp/iter_$i.txt 2>&1; then
+              echo "iteration $i: PASS $(tail -1 /tmp/iter_$i.txt)"
+            else
+              fails=$((fails + 1)); echo "iteration $i: FAIL $(tail -1 /tmp/iter_$i.txt)"; grep -E '^FAILED' /tmp/iter_$i.txt
+            fi
+          done
+          echo "RESULT ${{ matrix.variant }} shard ${{ matrix.shard }}: $fails/5 failed"
 
       - name: Report per-test state
         if: always()

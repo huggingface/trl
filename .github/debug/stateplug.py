@@ -20,10 +20,21 @@ _last, _last_libs = None, set()
 
 
 def pytest_configure(config):
-    if os.environ.get("DISABLE_CUDNN") == "1":
-        import torch
+    import torch
+    from transformers.models.llava_next import modeling_llava_next
 
+    if os.environ.get("DISABLE_CUDNN") == "1":
         torch.backends.cudnn.enabled = False
+
+    original = modeling_llava_next.LlavaNextModel.pack_image_features
+
+    def pack_image_features(self, image_features, image_sizes, *args, **kwargs):
+        out = original(self, image_features, image_sizes, *args, **kwargs)
+        shapes = [tuple(f.shape) for f in image_features]
+        _log(f"   llava_next image_sizes={image_sizes.tolist()} ({image_sizes.device}, {image_sizes.dtype}) features={shapes} -> feature_lens={out[1].tolist()}")
+        return out
+
+    modeling_llava_next.LlavaNextModel.pack_image_features = pack_image_features
 
 
 def _log(msg):
