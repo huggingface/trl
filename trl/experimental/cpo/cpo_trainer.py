@@ -904,10 +904,10 @@ class CPOTrainer(_BaseTrainer):
             self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean().item()
         )
         metrics[f"{prefix}logits/rejected"] = (
-            self.accelerator.gather_for_metrics(policy_rejected_logits.detach().mean()).mean().item()
+            self.accelerator.gather_for_metrics(policy_rejected_logits.detach()).mean().item()
         )
         metrics[f"{prefix}logits/chosen"] = (
-            self.accelerator.gather_for_metrics(policy_chosen_logits.detach().mean()).mean().item()
+            self.accelerator.gather_for_metrics(policy_chosen_logits.detach()).mean().item()
         )
         metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean().item()
 
