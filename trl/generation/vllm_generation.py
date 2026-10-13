@@ -280,8 +280,7 @@ class VLLMGeneration:
         self.logprobs = logprobs
         self.generation_kwargs = {}
         if isinstance(processing_class, ProcessorMixin):
-            # A sampled image placeholder token would leave more image tokens than image features in the forward pass
-            # over prompt + completion, making it fail. -100 is the lowest bias vLLM accepts.
+            # A sampled image token would mismatch the image features; -100 is the lowest bias vLLM accepts
             self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
         self.generation_kwargs.update(generation_kwargs or {})
 
