@@ -2609,7 +2609,6 @@ def _tool_prompt_only_dataset():
 # --- Off-policy collator tool masking (runs on any transformers: no trainer, only apply_chat_template) ---------------
 
 
-@pytest.mark.slow
 def test_smollm3_collator_masks_tool_results_supervises_assistant(smollm_tokenizer):
     """Same-family off-policy tool masking in `DataCollatorForChatML`.
 
@@ -3109,12 +3108,15 @@ def test_gold_tools_reject_multimodal_tool_response(tmp_path):
             trainer.train()
 
 
-def test_prepare_dataset_with_tools_keeps_all_columns():
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) < Version("5.0.0"),
+    reason="Tool parsing is not supported in transformers versions below 5.0.0",
+    strict=True,
+)
+@require_response_parsing
+def test_prepare_dataset_with_tools_keeps_all_columns(tmp_path):
     # With tools, the collator re-renders the prompt from the raw `messages`/`tools` columns and forwards the full
     # example dicts to `environment.reset(**kwargs)`, so dataset prep must keep every column, custom ones included.
-    from trl.chat_template_utils import get_training_chat_template
-
-    tokenizer = _tool_tokenizer()
     messages = [
         {"role": "user", "content": "What is 3 times 4?"},
         {
@@ -3126,21 +3128,15 @@ def test_prepare_dataset_with_tools_keeps_all_columns():
         {"role": "assistant", "content": "The answer is 12."},
     ]
     dataset = Dataset.from_dict({"messages": [messages], "tools": [_MULTIPLY_TOOL_SCHEMA], "difficulty": ["easy"]})
-    args = SimpleNamespace(
-        dataset_num_proc=None,
-        dataset_text_field="text",
-        max_length=1024,
-        packing_strategy="bfd",
-        use_liger_kernel=False,
-        use_extended_uld=True,
-    )
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.tools = [multiply]
-    trainer._tool_chat_template = get_training_chat_template(tokenizer)
-    prepared = trainer._prepare_dataset_with_original_text(
-        dataset, tokenizer, args, packing=False, formatting_func=None, dataset_name="train"
+    # `GOLDTrainer.__init__` prepares the train dataset, so its columns are what training sees
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN3,
+        teacher_model=_TINY_QWEN3,
+        args=_gold_tool_config(tmp_path, max_length=1024),
+        train_dataset=dataset,
+        processing_class=_tool_tokenizer(),
+        tools=[multiply],
     )
     # The raw conversational columns, the tool mask, and the custom column all survive.
     for column in ("messages", "tools", "tool_mask", "input_ids", "difficulty"):
-        assert column in prepared.column_names, f"{column} dropped by dataset preparation"
+        assert column in trainer.train_dataset.column_names, f"{column} dropped by dataset preparation"

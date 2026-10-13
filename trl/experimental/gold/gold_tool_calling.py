@@ -17,7 +17,6 @@
 #     "trl[peft] @ git+https://github.com/huggingface/trl.git",
 #     "trackio",
 #     "vllm",
-#     "liger-kernel",
 # ]
 # ///
 
@@ -249,9 +248,8 @@ if __name__ == "__main__":
         teacher_model_name_or_path=cli_args.teacher_model_name,
         num_generations=1,
         max_tool_calling_iterations=10,  # cap the on-policy tool loop so a stuck rollout can't run to the token limit
-        # vLLM + fused loss
+        # vLLM
         use_vllm=True,
-        use_liger_kernel=True,  # fused JSD avoids materializing full-vocab logits (Qwen3 vocab is ~150k)
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
         vllm_max_model_length=8192,
