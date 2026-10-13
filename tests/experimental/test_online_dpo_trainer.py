@@ -510,23 +510,30 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
+                marks=pytest.mark.xfail(
+                    reason="Online DPO does not support processors with 5D pixel values, such as Idefics2. See "
+                    "https://github.com/huggingface/trl/issues/7702",
+                    strict=True,
+                ),
+            ),
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
         ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
         dataset_dict = {
             "prompt": [
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image."}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What do you see?"}]}],
+                [{"role": "user", "content": "Describe the image."}],
+                [{"role": "user", "content": "What do you see?"}],
             ],
-            "images": [
-                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+            "image": [
+                Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)),
+                Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)),
             ],
         }
         dataset = Dataset.from_dict(dataset_dict)
-        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+        dataset = dataset.cast_column("image", features.Image())
 
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         reward_model = AutoModelForSequenceClassification.from_pretrained(
