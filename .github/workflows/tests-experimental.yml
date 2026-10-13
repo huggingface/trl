@@ -7,6 +7,8 @@ on:
       - ".github/workflows/tests-experimental.yml"
       - "trl/experimental/**"
       - "tests/experimental/**"
+  schedule:
+    - cron: '0 2 * * *'  # Runs daily at 2am UTC
 
 env:
   TQDM_DISABLE: 1
