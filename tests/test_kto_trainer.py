@@ -388,6 +388,32 @@ class TestKTOTrainer(TrlTestCase):
         assert len(trainer.train_dataset) == 1
         assert trainer.train_dataset[0]["prompt_ids"] == trainer.processing_class("Hi")["input_ids"]
 
+    def test_paired_dataset_batches_mix_labels(self):
+        """`unpair_preference_dataset` writes all `chosen` rows of a map-batch before its `rejected` rows, so the
+        unpaired dataset lands as single-label blocks; without a shuffle, every batch picks one contiguous slice and
+        neither label ever reaches the trainer. https://github.com/huggingface/trl/issues/7682."""
+        # Build a paired dataset long enough that the unpaired order is unambiguous: at least 8 `chosen` rows
+        # followed by 8 `rejected` rows is the canonical unpair artifact.
+        n = 8
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["What is 2+2?"] * n,
+                "rejected": ["I do not know."] * n,
+                "chosen": ["The answer is 4."] * n,
+            }
+        )
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, seed=42, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        labels = trainer.train_dataset["label"]
+        # The prepared dataset has 2 * n rows; both labels must appear, and the first row alone cannot summarize the
+        # whole order (the first half is not all one label).
+        assert len(labels) == 2 * n
+        assert True in labels and False in labels
+        assert not all(label is True for label in labels[:n])
+        assert not all(label is False for label in labels[:n])
+
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     @pytest.mark.parametrize(
         "eval_dataset_type",

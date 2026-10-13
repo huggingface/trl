@@ -1046,6 +1046,13 @@ class KTOTrainer(_BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Unpairing {dataset_name} dataset"
                 dataset = unpair_preference_dataset(dataset, **map_kwargs)
+                # `unpair_preference_dataset` writes all `chosen` rows of a map-batch before its `rejected` rows,
+                # so the unpaired dataset lands as single-label blocks; with `train_sampling_strategy="sequential"`
+                # (the default that KL loss types require) every batch picks one contiguous slice, so no batch mixes
+                # desirable and undesirable examples and the `rewards/rejected`, `rewards/margins` metrics never
+                # appear. Shuffle once with the trainer seed to break the blocks.
+                if isinstance(dataset, Dataset):
+                    dataset = dataset.shuffle(seed=args.seed)
 
             # Add EOS token if needed: non-conversational only
             first_example = next(iter(dataset))
