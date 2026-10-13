@@ -839,16 +839,27 @@ def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gem
     assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
 
 
-def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
-    slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
+def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path, gemma4_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
-    args = GOLDConfig(max_length=64, max_completion_length=16, use_extended_uld=False)
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            report_to="none",
+            max_length=64,
+            max_completion_length=16,
+            use_extended_uld=False,
+        ),
+        train_dataset=dataset,
+        processing_class=gemma4_tokenizer,
+    )
 
+    # The trainer only accepts real tokenizer classes, so the wrapper goes straight to the dataset preparation
     row = trainer._prepare_dataset_with_original_text(
         dataset,
-        slow_tokenizer,
-        args,
+        _NoBackendTokenizer(gemma4_tokenizer),
+        trainer.args,
         packing=False,
         formatting_func=None,
         dataset_name="train",
