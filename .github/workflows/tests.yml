@@ -254,7 +254,6 @@ jobs:
             "psutil==5.9.4" \
             "pyarrow==21.0.0" \
             "pyyaml==6.0.1" \
-            "torch==2.6.0" \
             "transformers==4.56.2"
 
       - name: Test with pytest
