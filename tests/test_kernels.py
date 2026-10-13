@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import torch.nn.functional as F
+from packaging.version import Version
 from transformers.testing_utils import torch_device
 from transformers.utils import is_triton_available
 
@@ -92,6 +93,11 @@ class TestLogProbEntropy:
         torch.testing.assert_close(entropy, reference_entropy, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(actual_grad, reference_logits.grad, rtol=1e-3, atol=1e-3)
 
+    @pytest.mark.xfail(
+        condition=Version(torch.__version__) < Version("2.7.0"),
+        reason="Before torch 2.7, Dynamo cannot trace tensor.stride() in an autograd.Function backward with fullgraph",
+        strict=True,
+    )
     def test_torch_compile_fullgraph(self):
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
         index = torch.randint(257, (2, 3), device=torch_device)
@@ -114,6 +120,11 @@ class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
 
+    @pytest.mark.xfail(
+        condition=Version(torch.__version__) < Version("2.11.0"),
+        reason="Before torch 2.11, Inductor fails to analyze the kernel's .to() on scalar arguments and miscompiles it",
+        strict=True,
+    )
     def test_torch_compile(self):
         # Inductor passes the float arguments (temperature, logit scale, softcapping) as fp64
         torch.manual_seed(42)
@@ -522,6 +533,11 @@ class TestChunkedLogProbFunction:
 @require_torch_accelerator
 @require_triton
 class TestChunkedDivergenceFunction:
+    @pytest.mark.xfail(
+        condition=Version(torch.__version__) < Version("2.11.0"),
+        reason="Before torch 2.11, Inductor fails to analyze the kernel's .to() on scalar arguments and miscompiles it",
+        strict=True,
+    )
     @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
     def test_torch_compile(self, beta):
         # Inductor passes the float arguments (beta, temperature, logit scales, softcapping) as fp64
