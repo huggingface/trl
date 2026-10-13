@@ -389,7 +389,7 @@ Raising the minimum supported version of a dependency is a breaking change for a
     * Hard to keep, many users: keep it, and accept that it takes real work. That is where the effort should go. `transformers` is a core dependency that everyone is on, so it is almost always this case, even when it means a lot of branching.
 * **Never require a release younger than 1 year**, however expensive the old one is to keep. Users on lagging stacks (conda-forge, cluster images, another library's upper bound) cannot move to it yet.
 
-Some dependencies have their own agreed window. `vLLM` is still unstable, moves fast, and is only used by the online trainers, so we use 5 months there.
+Some dependencies have their own agreed window. `vLLM` is still unstable, moves fast, and is only used by the online trainers, so its window is 5 months: older releases can be dropped freely, and the 1-year minimum does not apply.
 
 Declaring a first floor for a dependency that has none is not covered by the above: it drops support for nothing, it only records what we already test.
 
