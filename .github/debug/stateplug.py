@@ -19,6 +19,13 @@ def _libs():
 _last, _last_libs = None, set()
 
 
+def pytest_configure(config):
+    if os.environ.get("DISABLE_CUDNN") == "1":
+        import torch
+
+        torch.backends.cudnn.enabled = False
+
+
 def _log(msg):
     with open(os.environ["STATE_LOG"], "a") as f:
         f.write(msg + "\n")

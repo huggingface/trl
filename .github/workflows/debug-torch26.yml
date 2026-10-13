@@ -15,7 +15,7 @@ jobs:
   replay:
     permissions:
       contents: read
-    name: Replay ${{ matrix.seq }}
+    name: Replay ${{ matrix.seq }} (${{ matrix.variant }})
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -27,7 +27,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seq: [gw14, gw5, gw1, gw2, gw8, trigger_qwen2vl, trigger_llavanext]
+        seq: [gw8]
+        variant: [baseline-1, baseline-2, cudnn-off, cudnn-9.5]
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -58,11 +59,15 @@ jobs:
             "datasets==4.7.0" \
             "torch==2.6.0" \
             "transformers==4.56.2"
+          if [ "${{ matrix.variant }}" = "cudnn-9.5" ]; then uv pip install --no-deps "nvidia-cudnn-cu12==9.5.1.17"; fi
+          uv pip list | grep -iE "^(torch|nvidia-cudnn-cu12|nvidia-cuda-nvrtc-cu12) "
 
       - name: Replay ordered tests in one process
         run: |
           source .venv/bin/activate
           nvidia-smi --query-gpu=name,driver_version --format=csv
+          if [ "${{ matrix.variant }}" = "cudnn-off" ]; then export DISABLE_CUDNN=1; fi
+          python -c "import torch; print('cudnn', torch.backends.cudnn.version())"
           STATE_LOG=/tmp/state.txt PYTHONPATH=.github/debug python -m pytest -p stateplug -p no:cacheprovider -v -rf \
             $(cat .github/debug/prefix_${{ matrix.seq }}.txt)
 
