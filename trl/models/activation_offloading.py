@@ -151,7 +151,6 @@ class OffloadActivations(saved_tensors_hooks):
         self.accelerator_type = (
             torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
         )
-        # `torch.cuda`, `torch.xpu`, `torch.npu`, `torch.neuron`, ...: they share the stream and cache API used below
         self.device_module = torch.get_device_module(self.accelerator_type)
 
         # For streaming
