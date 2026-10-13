@@ -29,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+import accelerate
 import numpy as np
 import pandas as pd
 import torch
@@ -1236,10 +1237,26 @@ class GRPOTrainer(_BaseTrainer):
             # RepeatSampler becomes a buffered shuffle here.
             if self.shuffle_dataset:
                 dataset = dataset.shuffle(seed=self.args.seed)
+            num_prompts = self.args.generation_batch_size // self.num_generations
+            # With enough shards, Accelerate gives each process its own shards instead of one shared stream (see
+            # `accelerate.data_loader.prepare_data_loader`), so each process must group only its own share of prompts
+            if Version(accelerate.__version__) >= Version("1.14.0"):
+                own_shards = dataset.n_shards >= self.accelerator.num_processes
+            else:
+                own_shards = dataset.n_shards > self.accelerator.num_processes
+            if own_shards and not self.accelerator.split_batches:
+                if num_prompts % self.accelerator.num_processes != 0:
+                    raise ValueError(
+                        f"The iterable train dataset has {dataset.n_shards} shards, so each of the "
+                        f"{self.accelerator.num_processes} processes reads its own shards and a prompt's generations "
+                        "can't be split across processes. `generation_batch_size // num_generations` "
+                        f"({num_prompts}) must be divisible by the number of processes."
+                    )
+                num_prompts //= self.accelerator.num_processes
             dataset = repeat_iterable_dataset(
                 dataset,
                 mini_repeat_count=self.num_generations,
-                batch_size=self.args.generation_batch_size // self.num_generations,
+                batch_size=num_prompts,
                 repeat_count=self.num_iterations * self.args.steps_per_generation,
             )
         return self._get_dataloader(
