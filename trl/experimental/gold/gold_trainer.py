@@ -1045,8 +1045,7 @@ class GOLDTrainer(SFTTrainer):
             "pad_token_id": self.pad_token_id,
         }
         if isinstance(processing_class, ProcessorMixin):
-            # A sampled image placeholder token would leave more image tokens than image features in the forward pass
-            # over prompt + completion, making it fail
+            # A sampled image token would mismatch the image features
             generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
