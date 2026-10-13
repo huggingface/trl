@@ -116,14 +116,8 @@ class TestMissingServerSettings(TrlTestCase):
         response._content = json.dumps(body).encode() if body is not None else b""
         return response
 
-    def server_info(self, weight_transfer_config, logprobs_mode):
-        body = {
-            "vllm_config": {
-                "weight_transfer_config": weight_transfer_config,
-                "model_config": {"logprobs_mode": logprobs_mode},
-            }
-        }
-        return self.make_response(200, body)
+    def server_info(self, weight_transfer_config):
+        return self.make_response(200, {"vllm_config": {"weight_transfer_config": weight_transfer_config}})
 
     def test_init_communicator_without_dev_mode(self):
         client = self.make_client()
@@ -133,25 +127,10 @@ class TestMissingServerSettings(TrlTestCase):
 
     def test_init_communicator_without_weight_transfer_config(self):
         client = self.make_client()
-        response = self.server_info(weight_transfer_config=None, logprobs_mode="processed_logprobs")
+        response = self.server_info(weight_transfer_config=None)
         with patch.object(client.session, "get", return_value=response):
             with pytest.raises(RuntimeError, match="--weight-transfer-config"):
                 client.init_communicator()
-
-    def test_init_communicator_warns_on_raw_logprobs(self, caplog):
-        client = self.make_client()
-        # The world size request fails, which stops `init_communicator` right after the settings checks.
-        responses = [
-            self.server_info(weight_transfer_config={"backend": "nccl"}, logprobs_mode="raw_logprobs"),
-            self.make_response(500),
-        ]
-        with patch.object(client.session, "get", side_effect=responses):
-            with (
-                caplog.at_level("WARNING", logger="trl.generation.vllm_client"),
-                pytest.raises(Exception, match="Request failed: 500"),
-            ):
-                client.init_communicator()
-        assert "--logprobs-mode processed_logprobs" in caplog.text
 
     @require_vision
     def test_image_features_without_scale_out(self):

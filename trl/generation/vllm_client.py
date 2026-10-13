@@ -300,6 +300,23 @@ class VLLMClient:
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
+    def get_server_info(self) -> dict:
+        """
+        Returns the resolved configuration of the vLLM server, as reported by its `/server_info` endpoint.
+
+        Returns:
+            `dict`: The server's `VllmConfig`, as a JSON tree.
+        """
+        response = self.session.get(f"{self.base_url}/server_info", params={"config_format": "json"})
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} does not expose its development endpoints, which TRL uses to "
+                "synchronize weights. Restart it with `VLLM_SERVER_DEV_MODE=1` in its environment."
+            )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        return response.json()["vllm_config"]
+
     def get_world_size(self) -> int:
         """
         Returns the number of workers of the vLLM server, i.e. `tensor_parallel_size * data_parallel_size`.
@@ -715,27 +732,11 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
-        # Weight synchronization needs these server settings, so name the missing one instead of failing later.
-        response = self.session.get(f"{self.base_url}/server_info", params={"config_format": "json"})
-        if response.status_code == 404:
-            raise RuntimeError(
-                f"The vLLM server at {self.base_url} does not expose its development endpoints, which weight "
-                "synchronization uses. Restart it with `VLLM_SERVER_DEV_MODE=1` in its environment."
-            )
-        if response.status_code != 200:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
-        vllm_config = response.json()["vllm_config"]
-        if vllm_config["weight_transfer_config"] is None:
+        # Weight synchronization needs a weight-transfer engine, so name the missing setting instead of failing later.
+        if self.get_server_info()["weight_transfer_config"] is None:
             raise RuntimeError(
                 f"The vLLM server at {self.base_url} has no weight-transfer engine. Restart it with "
                 """`--weight-transfer-config '{"backend": "nccl"}'`."""
-            )
-        if vllm_config["model_config"]["logprobs_mode"] != "processed_logprobs":
-            logger.warning(
-                f"The vLLM server at {self.base_url} runs with `--logprobs-mode "
-                f"{vllm_config['model_config']['logprobs_mode']}`: its logprobs ignore temperature and logit "
-                "processing, which biases the importance sampling correction. Restart it with `--logprobs-mode "
-                "processed_logprobs`."
             )
 
         # The trainer joins the vLLM workers as an extra rank; it is rank 0, so the workers are offset by one.
