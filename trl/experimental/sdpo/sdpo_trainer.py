@@ -1259,10 +1259,14 @@ class SDPOTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        self._log_self_distillation_metric(
-            mode,
-            self._global_masked_mean(per_token_loss, distillation_logits.loss_mask),
-        )
+        mask = distillation_logits.loss_mask
+
+        def global_masked_mean(x):
+            local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
+        self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
         return loss
 
     def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
@@ -1314,12 +1318,15 @@ class SDPOTrainer(_BaseTrainer):
             required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
         )
 
+        def global_masked_mean(x):
+            local_sum, local_count = (x * loss_mask).sum(), loss_mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
         abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
-        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self._global_masked_mean(abs_diff, loss_mask)
-        )
+        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(global_masked_mean(abs_diff))
 
         if self.args.distillation_mode == "sampled_token":
             # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
@@ -1351,7 +1358,7 @@ class SDPOTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        self._log_self_distillation_metric(mode, self._global_masked_mean(per_token_loss, loss_mask))
+        self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
@@ -1523,22 +1530,6 @@ class SDPOTrainer(_BaseTrainer):
         metric_prefix = self._name.lower().replace(" ", "_")
         self._metrics[mode]["self_distillation/distillation_loss"].append(value)
         self._metrics[mode][f"{metric_prefix}/distillation_loss"].append(value)
-
-    def _global_masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> float:
-        """Cross-rank weighted mean of `values` under `mask`, weighted by each rank's valid-token count.
-
-        Averaging each rank's own masked mean with an unweighted `gather(...).mean()` is biased whenever ranks hold
-        different numbers of valid tokens (e.g. variable completion lengths): a rank with few valid tokens would
-        count as much as one with many. Summing the local numerator/denominator and dividing once (GRPO/RLOO's
-        `global_masked_mean` pattern) weights every token equally regardless of which rank it landed on.
-        """
-        # Cast to float32 before stacking: `values` may be bf16/fp16 under mixed precision while `local_count` is
-        # float32, and `torch.stack` requires matching dtypes (also avoids precision loss summing many low-precision
-        # values).
-        local_sum = (values * mask).sum().float()
-        local_count = mask.sum().float()
-        totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
-        return (totals[0] / totals[1].clamp(min=1.0)).item()
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
