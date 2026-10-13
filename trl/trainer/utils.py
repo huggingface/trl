@@ -55,15 +55,18 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import ModelOutput, is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available, is_triton_available
 
 from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
-from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 from ..trainer.model_config import ModelConfig
 
 
 if is_comet_available():
     import comet_ml
+
+
+if is_triton_available():
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 
 
 if is_peft_available():
@@ -565,7 +568,7 @@ def selective_log_softmax(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs
 
@@ -618,7 +621,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits):
+    if is_triton_available() and _supports_trl_loss_kernel(logits):
         index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
         _, entropy = _fused_logprob_entropy(logits, index)
         return entropy
@@ -692,7 +695,7 @@ def selective_log_softmax_and_entropy(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs, entropy if entropy_requires_grad else entropy.detach()
     if temperature != 1.0:

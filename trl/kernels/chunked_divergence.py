@@ -17,16 +17,15 @@ from __future__ import annotations
 import math
 
 import torch
+from transformers.utils import is_triton_available
 
 from ..trainer.utils import maybe_gather_lm_head_ctx
 from .chunked_logprob import _BLOCK_SIZE, _MM_OUT_DTYPE, _addmm_fp32, _jit, _torch_transform, _transform, _use_triton
 
 
-try:
+if is_triton_available():
     import triton
     import triton.language as tl
-except ImportError:  # Triton ships with PyTorch on Linux only; without it, the tiles are folded in torch
-    triton = None
 
 
 # The projections run on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles, so neither model's logits exist in full

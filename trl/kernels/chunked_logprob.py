@@ -18,13 +18,12 @@ import math
 
 import torch
 from packaging.version import Version
+from transformers.utils import is_triton_available
 
 
-try:
+if is_triton_available():
     import triton
     import triton.language as tl
-except ImportError:  # Triton ships with PyTorch on Linux only; without it, the tiles are folded in torch
-    triton = None
 
 
 # Tokens per projection tile; the caller sets the vocabulary width with `chunk_size`
@@ -37,11 +36,12 @@ _MM_OUT_DTYPE = Version(torch.__version__) >= Version("2.8.0")
 
 
 def _jit(fn):
-    return triton.jit(fn) if triton is not None else fn
+    # Triton ships with PyTorch on Linux only; without it, the tiles are folded in torch
+    return triton.jit(fn) if is_triton_available() else fn
 
 
 def _use_triton(device: torch.device) -> bool:
-    return triton is not None and device.type in ("cuda", "xpu")
+    return is_triton_available() and device.type in ("cuda", "xpu")
 
 
 def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
