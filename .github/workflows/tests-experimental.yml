@@ -7,6 +7,7 @@ on:
       - ".github/workflows/tests-experimental.yml"
       - "trl/experimental/**"
       - "tests/experimental/**"
+  workflow_dispatch:
 
 env:
   TQDM_DISABLE: 1
