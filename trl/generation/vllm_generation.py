@@ -407,8 +407,7 @@ class VLLMGeneration:
 
     def _iter_fsdp2_params(self, module: nn.Module):
         """FSDP2-specific parameter iteration."""
-        # For FSDP2, module.named_parameters() already covers all parameters, so no need for recursion. Unlike
-        # module.state_dict(), it yields tied weights once, which vLLM requires when loading them one at a time
+        # For FSDP2, module.named_parameters() covers all parameters and yields tied weights once, as vLLM requires
         for name, param in module.named_parameters():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
