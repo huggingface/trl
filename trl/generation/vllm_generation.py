@@ -278,7 +278,12 @@ class VLLMGeneration:
         self.min_p = min_p
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
-        self.generation_kwargs = generation_kwargs or {}
+        self.generation_kwargs = {}
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image placeholder token would leave more image tokens than image features in the forward pass
+            # over prompt + completion, making it fail. -100 is the lowest bias vLLM accepts.
+            self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
+        self.generation_kwargs.update(generation_kwargs or {})
 
         # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
         # it requires gathering the parameters, and constant afterwards.

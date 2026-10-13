@@ -4660,6 +4660,21 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_vllm
+    @require_torch_accelerator
+    def test_vllm_generation_suppresses_image_token(self):
+        # A sampled image placeholder token would make the forward pass over prompt + completion fail
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True, vllm_mode="colocate")
+        trainer = GRPOTrainer(
+            model="HuggingFaceTB/SmolVLM-256M-Instruct",  # tiny models are too small for vLLM
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.vllm_generation.generation_kwargs["logit_bias"] == {trainer.model.config.image_token_id: -100}
+
     @pytest.mark.parametrize(
         "model_id",
         [
