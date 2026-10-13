@@ -1013,17 +1013,21 @@ class OnlineDPOTrainer(_BaseTrainer):
         prompt_ids = prompt_inputs["input_ids"].repeat(2, 1)
         prompt_mask = prompt_inputs["attention_mask"].repeat(2, 1)
 
-        # Prepare vision inputs if available
+        # Prepare vision inputs if available, duplicated along the batch dimension like the prompt IDs. They are
+        # concatenated rather than repeated, as their number of dimensions depends on the model (e.g. 5D pixel values
+        # for Idefics2)
         vision_generation_kwargs = {}
         if self.is_vision_model and images is not None:
             if "pixel_values" in prompt_inputs:
-                vision_generation_kwargs["pixel_values"] = prompt_inputs["pixel_values"].repeat(2, 1, 1, 1)
+                vision_generation_kwargs["pixel_values"] = torch.cat([prompt_inputs["pixel_values"]] * 2)
             if "pixel_attention_mask" in prompt_inputs:
-                vision_generation_kwargs["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"].repeat(2, 1)
+                vision_generation_kwargs["pixel_attention_mask"] = torch.cat(
+                    [prompt_inputs["pixel_attention_mask"]] * 2
+                )
             if "image_sizes" in prompt_inputs:
-                vision_generation_kwargs["image_sizes"] = prompt_inputs["image_sizes"].repeat(2, 1)
+                vision_generation_kwargs["image_sizes"] = torch.cat([prompt_inputs["image_sizes"]] * 2)
             if "image_grid_thw" in prompt_inputs:
-                vision_generation_kwargs["image_grid_thw"] = prompt_inputs["image_grid_thw"].repeat(2, 1)
+                vision_generation_kwargs["image_grid_thw"] = torch.cat([prompt_inputs["image_grid_thw"]] * 2)
 
         with (
             profiling_context(self, "transformers.generate"),
@@ -1051,7 +1055,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         completion_ids = output[:, prompt_ids.size(1) :]
         completion_ids, completion_mask = truncate_right(completion_ids, self.eos_token_ids, pad_token_id)
 
-        return prompt_ids, prompt_mask, completion_ids, completion_mask
+        # Return the vision inputs too, so the forward pass gets the same image features as generation
+        vision_inputs = vision_generation_kwargs or None
+        return prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs
 
     def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list, **reward_kwargs):
         """
@@ -1163,45 +1169,17 @@ class OnlineDPOTrainer(_BaseTrainer):
                             elif role == "system":
                                 message["content"] = [{"type": "text", "text": content}]
 
+        vision_inputs = None
         if self.args.use_vllm:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts, images)
         else:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs = self._generate(
+                model, prompts, images
+            )
 
         contain_eos_token = torch.any(
             torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=completion_ids.device)), dim=-1
         )
-
-        # Extract vision inputs if available for VLM support
-        vision_inputs = None
-        if has_images and self.is_vision_model and not self.args.use_vllm:
-            # For vision models with transformers generation, we need to prepare vision inputs
-            # Process the images to get vision inputs that can be passed through the forward pass
-            vision_inputs = {}
-            kwargs = {"images": [[img] for img in images]}
-            processed = self.processing_class(
-                text=[""] * len(images),  # Dummy text for vision processing
-                return_tensors="pt",
-                **kwargs,
-            )
-            # Handle DataParallel wrapped models
-            model_device = getattr(model, "device", None)
-            model_dtype = getattr(model, "dtype", None)
-            if model_device is None and hasattr(model, "module"):
-                model_device = model.module.device
-                model_dtype = model.module.dtype
-            # Move vision tensors to device and convert to model dtype
-            # Need to duplicate for 2 completions per prompt
-            if "pixel_values" in processed:
-                vision_inputs["pixel_values"] = (
-                    processed["pixel_values"].to(model_device, dtype=model_dtype).repeat(2, 1, 1, 1)
-                )
-            if "pixel_attention_mask" in processed:
-                vision_inputs["pixel_attention_mask"] = processed["pixel_attention_mask"].to(model_device).repeat(2, 1)
-            if "image_sizes" in processed:
-                vision_inputs["image_sizes"] = processed["image_sizes"].to(model_device).repeat(2, 1)
-            if "image_grid_thw" in processed:
-                vision_inputs["image_grid_thw"] = processed["image_grid_thw"].to(model_device).repeat(2, 1)
 
         logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs)
         with torch.no_grad():
