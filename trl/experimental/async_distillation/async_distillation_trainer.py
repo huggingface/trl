@@ -38,7 +38,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
 from ...models.utils import _ForwardRedirection
@@ -541,12 +541,16 @@ class _EpochStopCallback(TrainerCallback):
         self._trainer = trainer
         self._target = target_prompts
 
-    def on_step_end(self, _args, _state, control, **_kwargs):
+    def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
         trained = self._trainer._prompts_before_resume + len(self._trainer._trained_prompts)
         reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
+            # `max_steps` is only a safety ceiling here, so `DefaultFlowCallback` never reaches its end-of-training save.
+            # Save the final step the same way, or the steps since the last multiple of `save_steps` are lost.
+            if args.save_strategy == SaveStrategy.STEPS:
+                control.should_save = True
 
 
 def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:

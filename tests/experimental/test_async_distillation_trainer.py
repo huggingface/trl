@@ -1090,9 +1090,10 @@ class TestEpochStop(TrlTestCase):
         trainer._prompts_before_resume = before_resume
         control = TrainerControl()
 
-        _EpochStopCallback(trainer, target_prompts=4).on_step_end(None, None, control)
+        _EpochStopCallback(trainer, target_prompts=4).on_step_end(trainer.args, None, control)
 
         assert control.should_training_stop is should_stop
+        assert control.should_save is should_stop  # the final step is saved, as when training reaches `max_steps`
 
 
 class TestRolloutStartIndex(TrlTestCase):
