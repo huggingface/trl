@@ -20,6 +20,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -34,7 +35,6 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
@@ -47,16 +47,20 @@ from ...chat_template_utils import (
     is_chat_template_prefix_preserving,
     parse_response,
 )
-from ...import_utils import is_vllm_available
+from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
-
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 @dataclass(frozen=True)
@@ -316,6 +320,7 @@ class _AsyncRolloutLoop:
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
@@ -368,6 +373,7 @@ class _AsyncRolloutLoop:
                 FutureWarning,
             )
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -830,7 +836,7 @@ class _AsyncRolloutLoop:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
-            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
         if self.tools:
@@ -988,6 +994,10 @@ class _AsyncRolloutLoop:
             "n": 1,
             "return_token_ids": True,
             "logprobs": 0,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
@@ -1139,6 +1149,8 @@ class AsyncRolloutWorker:
     ):
         if not is_vllm_available():
             raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)

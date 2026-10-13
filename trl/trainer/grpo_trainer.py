@@ -103,7 +103,7 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -282,6 +282,8 @@ class GRPOTrainer(_BaseTrainer):
             any time without prior notice.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "grpo"]
     _name = "GRPO"
     _paper = {
@@ -448,6 +450,18 @@ class GRPOTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
+            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if (
+                isinstance(peft_config, PrefixTuningConfig)
+                and Version(peft.__version__) <= Version("0.17.1")
+                and hasattr(model, "hf_device_map")
+            ):
+                raise ValueError(
+                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
+                    "peft, or load the model with `device_map=None`. See "
+                    "https://github.com/huggingface/peft/issues/2821."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model) and args.beta != 0.0:
@@ -942,12 +956,6 @@ class GRPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
-            # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
-            # global accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The
-            # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
-            # that behavior without rewriting `training_step`.
-            compute_loss_func="non-None value to disable scaling",
         )
 
         # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
@@ -978,6 +986,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+            model_init_kwargs.setdefault("dtype", self.model.dtype)
+            model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
@@ -1042,10 +1053,12 @@ class GRPOTrainer(_BaseTrainer):
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        # `entropy` feeds the `entropy` metric, the high-entropy token mask and the entropy bonus
         add_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             temperature=self.temperature,
             cast_lm_head_to_fp32=args.cast_lm_head_to_fp32,
+            outputs=("log_probs", "entropy"),
         )
         if self.ref_model is not None:
             add_fused_lm_head(
@@ -1134,10 +1147,6 @@ class GRPOTrainer(_BaseTrainer):
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
         self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model

@@ -117,6 +117,8 @@ class CPOTrainer(_BaseTrainer):
             metric values.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "cpo"]
     _name = "CPO"
     _paper = {
@@ -412,11 +414,6 @@ class CPOTrainer(_BaseTrainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
