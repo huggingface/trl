@@ -30,6 +30,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -187,7 +188,12 @@ class DemonstrationTeacherContextBuilder:
             self._compose_teacher_prompt(prompt, privileged_context)
             for prompt, privileged_context in zip(prompts, privileged_contexts, strict=True)
         ]
-        teacher_prompt_ids_list = self.trainer._tokenize_prompts(teacher_prompts)
+        # Score the teacher on the full prompt: the problem leads the teacher template, so left-truncating
+        # would drop it. Generation also uses the untruncated teacher prompt for consistency, so teacher
+        # logits and on-policy completions always see the same context.
+        teacher_prompt_ids_list = self.trainer._tokenize_prompts_untruncated(
+            teacher_prompts, chat_template_kwargs=self.trainer.teacher_chat_template_kwargs
+        )
         device = completion_ids.device
         teacher_prompt_ids = [torch.tensor(ids) for ids in teacher_prompt_ids_list]
         teacher_prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in teacher_prompt_ids]
@@ -233,6 +239,7 @@ class SDFTTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        quantization_config: "BitsAndBytesConfig | None" = None,
         peft_config: "PeftConfig | None" = None,
     ):
         if isinstance(train_dataset, IterableDataset):
@@ -254,16 +261,31 @@ class SDFTTrainer(_BaseTrainer):
         model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
+            if quantization_config is not None:
+                if "quantization_config" in model_init_kwargs:
+                    raise ValueError(
+                        "You set `quantization_config` both as a trainer argument and in `args.model_init_kwargs`. "
+                        "Please set it in only one place, preferably as a trainer argument."
+                    )
+                model_init_kwargs["quantization_config"] = quantization_config
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
-        elif args.model_init_kwargs is not None:
-            logger.warning(
-                "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
-                "instantiated. The `model_init_kwargs` will be ignored."
-            )
+        else:
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the self-distillation config, but `model` is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
+            if quantization_config is not None:
+                logger.warning(
+                    "You passed `quantization_config` to the trainer, but your model is already instantiated. "
+                    "The `quantization_config` will be ignored."
+                )
+        # Non-quantized models do not have the `is_loaded_in_{8,4}bit` attributes, whereas quantized models do.
+        is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
         self.model_kwarg_keys = (
             inspect.signature(model.forward).parameters.keys()
@@ -297,6 +319,31 @@ class SDFTTrainer(_BaseTrainer):
                 )
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
+        if is_quantized_model:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
+                    param.data = param.data.to(torch.bfloat16)
+
+        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
+        # module exactly once at initialization and cannot adopt modules added afterwards.
+        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
+            active_adapter = model.active_adapter or "default"
+            # Resuming from a checkpoint (or loading a PEFT model that already bundles the teacher adapter) can
+            # mean "teacher" is already registered here; PEFT rejects re-adding an existing adapter name, and
+            # PEFTAdapterEMACallback._initialize_teacher_adapter already guards this same call for that reason.
+            if "teacher" not in model.peft_config:
+                model.add_adapter("teacher", model.peft_config[active_adapter])
+            # `PEFTAdapterEMACallback` zeroes the adapter too, but not until `Trainer.train()` starts; without
+            # this, a teacher forward before training (e.g. an early `evaluate()`) would see the adapter's
+            # default, non-zero PEFT init instead of the intended zero (no-op) EMA teacher.
+            PEFTAdapterEMACallback(model=model)._initialize_teacher_adapter()
 
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
@@ -341,6 +388,11 @@ class SDFTTrainer(_BaseTrainer):
         self.generate_from_teacher = args.generate_from_teacher
         self.use_vllm = args.use_vllm
         self.chat_template_kwargs = args.chat_template_kwargs or {}
+        self.teacher_chat_template_kwargs = (
+            args.teacher_chat_template_kwargs
+            if args.teacher_chat_template_kwargs is not None
+            else self.chat_template_kwargs
+        )
         self._step = 0
         self._buffered_inputs = None
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -659,7 +711,9 @@ class SDFTTrainer(_BaseTrainer):
         student_prompt_ids_list = self._tokenize_prompts(prompts)
         if self.generate_from_teacher:
             generation_prompts = self.teacher_context_builder.select_generation_prompts(prompts, privileged_contexts)
-            generation_prompt_ids_list = self._tokenize_prompts(generation_prompts)
+            generation_prompt_ids_list = self._tokenize_prompts_untruncated(
+                generation_prompts, chat_template_kwargs=self.teacher_chat_template_kwargs
+            )
         else:
             generation_prompts = prompts
             generation_prompt_ids_list = student_prompt_ids_list
@@ -712,18 +766,26 @@ class SDFTTrainer(_BaseTrainer):
             for ids, length in zip(batch["completion_ids"].detach().cpu(), raw_completion_lengths, strict=True)
         ]
 
-    def _tokenize_prompts(self, prompts: list[Any]) -> list[list[int]]:
+    def _tokenize_prompts_untruncated(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
         if is_conversational({"prompt": prompts[0]}):
             tokenized = self.processing_class.apply_chat_template(
                 conversation=prompts,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_dict=True,
-                **self.chat_template_kwargs,
+                **(self.chat_template_kwargs if chat_template_kwargs is None else chat_template_kwargs),
             )
             prompt_ids = tokenized["input_ids"]
         else:
             prompt_ids = self.processing_class(text=prompts)["input_ids"]
+        return prompt_ids
+
+    def _tokenize_prompts(
+        self, prompts: list[Any], chat_template_kwargs: dict[str, Any] | None = None
+    ) -> list[list[int]]:
+        prompt_ids = self._tokenize_prompts_untruncated(prompts, chat_template_kwargs=chat_template_kwargs)
         if self.max_prompt_length is not None:
             prompt_ids = [ids[-self.max_prompt_length :] for ids in prompt_ids]
         return prompt_ids
@@ -854,12 +916,15 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_topk=self.args.distillation_topk,
                 distillation_alpha=self.args.distillation_alpha,
                 distillation_add_tail=self.args.distillation_add_tail,
+                distillation_kl_clip=self.args.distillation_kl_clip,
+                topk_support=self.args.distillation_topk_support,
             )
         elif self.args.distillation_mode == "full_logits":
             per_token_loss = compute_full_logit_self_distillation_loss(
                 distillation_logits.student_logits,
                 distillation_logits.teacher_logits,
                 distillation_alpha=self.args.distillation_alpha,
+                distillation_kl_clip=self.args.distillation_kl_clip,
             )
         elif self.args.distillation_mode == "sampled_token":
             per_token_loss = compute_sampled_token_self_distillation_loss(
@@ -980,7 +1045,9 @@ class SDFTTrainer(_BaseTrainer):
             else:
                 student_topk_logps = student_topk_logps - torch.logsumexp(student_topk_logps, dim=-1, keepdim=True)
                 teacher_topk_logps = teacher_topk_logps - torch.logsumexp(teacher_topk_logps, dim=-1, keepdim=True)
-            per_token_loss = compute_divergence(student_topk_logps, teacher_topk_logps, self.args.distillation_alpha)
+            per_token_loss = compute_divergence(
+                student_topk_logps, teacher_topk_logps, self.args.distillation_alpha, self.args.distillation_kl_clip
+            )
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
