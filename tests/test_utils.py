@@ -1434,6 +1434,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
 
 @require_torch_accelerator
 class TestAddFusedLMHead:
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
     @pytest.mark.parametrize("device", [torch_device, "cpu"])
     def test_masked_labels(self, device):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
@@ -1476,6 +1477,7 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
         assert (out_shifted["log_probs"][:, -1] == 0).all()
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
     @pytest.mark.parametrize("device", [torch_device, "cpu"])
     def test_all_masked_labels_backward(self, device):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)

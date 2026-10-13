@@ -135,6 +135,7 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         completion_mask.reshape(-1)[torch.randperm(B * K, generator=g, device=device)[:n_masked]] = 0
         return student_hidden, teacher_hidden, student_w, teacher_w, completion_mask
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
     @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
     def test_matches_naive_full_vocab(self, beta, device):

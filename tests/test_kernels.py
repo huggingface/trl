@@ -149,6 +149,7 @@ class TestChunkedLogProbFunction:
         entropy = -(p * log_p).sum(dim=-1)
         return logprobs, entropy
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
     @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, device, temperature):
@@ -269,6 +270,7 @@ class TestChunkedLogProbFunction:
 
         torch.testing.assert_close(is_top1, argmax == labels)
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
     @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize(
         ("logit_scale", "final_logit_softcapping"),
@@ -294,6 +296,7 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
     @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward(self, device, temperature):
