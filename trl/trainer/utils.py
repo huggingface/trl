@@ -1578,6 +1578,12 @@ def add_fused_lm_head(
             `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
             is always computed; each extra field costs a little on every call.
     """
+    if _ChunkedLogProbFunction is None:
+        raise ImportError(
+            "Triton is not installed. Please install it with `pip install triton`. The fused LM head requires it, "
+            "and it is only available on Linux with a CUDA, ROCm or XPU GPU."
+        )
+
     original_forward = model.forward
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)

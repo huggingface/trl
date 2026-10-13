@@ -62,6 +62,7 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 
 if is_peft_available():
+    import peft
     from peft import (
         AutoPeftModelForCausalLM,
         LoraConfig,
@@ -1432,6 +1433,13 @@ _FUSED_LM_HEAD_MODEL_IDS = [
 ]
 
 
+def test_add_fused_lm_head_without_triton():
+    """Without Triton, attaching the head names the missing dependency instead of failing on `None` at first call."""
+    model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+    with patch("trl.trainer.utils._ChunkedLogProbFunction", None), pytest.raises(ImportError, match="Triton"):
+        add_fused_lm_head(model)
+
+
 @require_torch_accelerator
 class TestAddFusedLMHead:
     def test_masked_labels(self):
@@ -1959,7 +1967,14 @@ class TestAddFusedLMHeadLoss:
                 lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
             ),
             pytest.param(
-                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+                id="prefix_tuning",
+                marks=pytest.mark.xfail(
+                    condition=is_peft_available() and Version(peft.__version__) <= Version("0.17.1"),
+                    reason="Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
+                    "https://github.com/huggingface/peft/issues/2821",
+                    strict=True,
+                ),
             ),
         ],
     )

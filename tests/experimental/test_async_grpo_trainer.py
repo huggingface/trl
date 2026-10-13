@@ -1547,6 +1547,12 @@ class TestEpochStop(TrlTestCase):
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
 
+    def test_epoch_stop_saves_the_final_step(self):
+        trainer, _ = self._train(fork_k=1)
+
+        # The run stops long before the default `save_steps=500`, so this checkpoint comes from the epoch stop alone.
+        assert os.listdir(self.tmp_dir) == [f"checkpoint-{trainer.state.global_step}"]
+
 
 @require_peft
 class TestValidateLoraForVLLMSync(TrlTestCase):
