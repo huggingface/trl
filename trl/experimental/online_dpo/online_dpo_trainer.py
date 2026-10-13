@@ -1100,7 +1100,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         return total_rewards
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs=None):
-        # Truncate left to avoid oom. Not for VLMs: it would drop image tokens while keeping their image features
+        # Truncate left to avoid oom, except with images, as it would drop image tokens
         if vision_inputs is None:
             num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
             prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
