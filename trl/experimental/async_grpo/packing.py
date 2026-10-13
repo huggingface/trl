@@ -271,7 +271,7 @@ def patch_tree_gdn(model) -> bool:
     def causal_conv1d_fn(hidden_states, weight, bias=None, activation=None, **kwargs):
         if "tree_segment_parents" not in kwargs:
             return conv(hidden_states, weight, bias, activation=activation, **kwargs)
-        return tree_causal_conv1d(hidden_states, weight, bias, kwargs)
+        return tree_causal_conv1d(hidden_states, weight, bias, activation, kwargs, conv)
 
     def torch_chunk_gated_delta_rule(query, key, value, g, beta, use_qk_l2norm_in_kernel=False, **kwargs):
         if "tree_segment_parents" not in kwargs:
