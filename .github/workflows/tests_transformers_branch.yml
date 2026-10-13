@@ -73,10 +73,10 @@ jobs:
           title: Tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
-  distributed_smoke:
+  distributed:
     permissions:
       contents: read
-    name: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
+    name: Distributed tests with Transformers ${{ inputs.transformers_ref }}
     runs-on:
       group: aws-g5-12xlarge-cache
     container:
@@ -117,7 +117,7 @@ jobs:
             ".[dev]" \
             "transformers @ git+https://github.com/huggingface/transformers.git@${TRANSFORMERS_REF}"
 
-      - name: Run distributed smoke tests
+      - name: Run distributed tests
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
@@ -127,5 +127,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
+          title: Distributed tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

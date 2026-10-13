@@ -1,0 +1,50 @@
+name: Check chat templates against the Hub
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Runs weekly on Monday at 2am UTC
+
+  workflow_dispatch:
+
+  pull_request:
+    paths:
+      - ".github/workflows/chat_templates_check.yml"
+      - "scripts/check_chat_templates.py"
+      - "trl/chat_templates/**"
+
+env:
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+permissions: {}
+
+jobs:
+  check_chat_templates:
+    permissions:
+      contents: read
+    name: Check chat templates against the Hub
+    runs-on: ubuntu-latest
+    # Pull requests from forks get no `HF_TOKEN`, which the gated reference repos require
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install huggingface_hub
+
+      - name: Check chat templates
+        run: python scripts/check_chat_templates.py
+
+      - name: Post to Slack
+        if: always() && github.event_name != 'pull_request'
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Check chat templates against the Hub
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

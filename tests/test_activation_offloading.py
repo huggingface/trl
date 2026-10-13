@@ -64,7 +64,9 @@ class TestActivationOffloading(TrlTestCase):
 
         # Second forward-backward pass with offloading
         torch.manual_seed(42)
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             loss_c = model(inp, labels=inp).loss
         loss_c.backward()
 
@@ -84,7 +86,9 @@ class TestActivationOffloading(TrlTestCase):
         inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
         # Run with offloading but disable for specific section
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             # First forward-backward with normal offloading
             torch.manual_seed(42)
             out1 = model(inp, labels=inp)
@@ -144,7 +148,9 @@ class TestActivationOffloading(TrlTestCase):
             p.grad = None
 
         # With offloading
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             torch.manual_seed(42)
             out2 = model(inp, labels=inp).loss
             out2.backward()

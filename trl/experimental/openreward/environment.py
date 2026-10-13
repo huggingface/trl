@@ -131,7 +131,8 @@ class _RolloutEnvironment:
 
     Attributes:
         reward (`float`):
-            Last non-null reward in the trajectory (outcome-only convention).
+            Last non-null reward in the trajectory (outcome-only convention). Initialized to `0.0`; use `rewards` to
+            distinguish an unscored rollout from an observed zero reward.
         rewards (`list[float | None]`):
             Per-step reward sequence in tool-call order.
         metadata (`list[dict | None]`):

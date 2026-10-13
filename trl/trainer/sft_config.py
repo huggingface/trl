@@ -103,15 +103,13 @@ class SFTConfig(_BaseConfig):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*, defaults to `"chunked_nll"`):
-            Type of loss to use. When left unset, it defaults to `"chunked_nll"`, except when `use_liger_kernel=True`,
-            in which case it defaults to `"nll"`. Possible values are:
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are:
 
             - `"nll"`: standard negative log-likelihood.
             - `"dft"`: Dynamic Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629).
-            - `"chunked_nll"`: same math as `"nll"`, but the `lm_head` projection is computed on non-ignored tokens
-              only (positions with `labels == -100` are dropped before the matmul) and the cross-entropy is processed
-              in chunks of tokens to reduce peak activation memory. Not compatible with `use_liger_kernel`.
+            - `"chunked_nll"`: deprecated alias of `"nll"`, which computes the loss the same way. It will be removed in
+              v2.0.0.
 
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
@@ -278,17 +276,12 @@ class SFTConfig(_BaseConfig):
             )
         },
     )
-    loss_type: str | None = field(
-        default=None,
+    loss_type: str = field(
+        default="nll",
         metadata={
-            "help": "Type of loss to use. When left unset, it defaults to `'chunked_nll'`, except when "
-            "`use_liger_kernel=True`, in which case it defaults to `'nll'`. Possible values are `'nll'` (standard "
-            "negative log-likelihood), `'dft'` (Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629), and "
-            "`'chunked_nll'` (same math as `'nll'`, but the `lm_head` projection is computed on non-ignored tokens "
-            "only — positions with `labels == -100` are dropped before the matmul — and the cross-entropy is "
-            "processed in chunks of tokens to reduce peak activation memory; not compatible with `use_liger_kernel`; "
-            "the patched `lm_head` path covers standard causal LMs and VLMs whose language model exposes a top-level "
-            "`lm_head`, architectures with a non-standard head are not supported)."
+            "help": "Type of loss to use. Possible values are `'nll'` (standard negative log-likelihood) and `'dft'` "
+            "(Dynamic Fine-Tuning, https://huggingface.co/papers/2508.05629).",
+            "choices": ["nll", "dft", "chunked_nll"],
         },
     )
     activation_offloading: bool = field(
@@ -306,6 +299,14 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if self.loss_type == "chunked_nll":
+            warnings.warn(
+                "`loss_type='chunked_nll'` is deprecated and will be removed in v2.0.0. Use `loss_type='nll'` (the "
+                "default), which computes the loss the same way, without materializing the full logits.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            self.loss_type = "nll"
         if self.pad_token is not None:
             warnings.warn(
                 "`pad_token` is deprecated and will be removed in v2.0.0. "
@@ -328,7 +329,3 @@ class SFTConfig(_BaseConfig):
                 stacklevel=3,
             )
             self.packing_strategy = "bfd_split"
-
-        # When unset, default to "chunked_nll" unless `use_liger_kernel=True`, in which case default to "nll".
-        if self.loss_type is None:
-            self.loss_type = "nll" if self.use_liger_kernel else "chunked_nll"
