@@ -306,3 +306,26 @@ def undo_liger_kernel_patching(monkeypatch):
     yield
     for module, snapshot in snapshots.values():
         vars(module).update(snapshot)
+
+
+# Diagnostic (CI branch only): report the first test after which the locale encoding stops being UTF-8
+import collections
+import locale
+
+
+_recent_tests = collections.deque(maxlen=8)
+_locale_flipped = False
+
+
+def pytest_runtest_teardown(item):
+    global _locale_flipped
+    _recent_tests.append(item.nodeid)
+    encoding = locale.getpreferredencoding(False)
+    if not _locale_flipped and encoding.lower() not in ("utf-8", "utf8"):
+        _locale_flipped = True
+        env = {k: v for k, v in os.environ.items() if k.startswith(("LANG", "LC_", "PYTHONUTF8"))}
+        with open("/tmp/locflip.txt", "a") as f:
+            f.write(
+                f"{os.environ.get('PYTEST_XDIST_WORKER')} FLIP after {item.nodeid}: encoding={encoding} "
+                f"LC_ALL={locale.setlocale(locale.LC_ALL)} env={env}\n  recent: {list(_recent_tests)}\n"
+            )
