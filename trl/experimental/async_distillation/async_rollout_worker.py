@@ -30,6 +30,7 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
+import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
@@ -64,10 +65,10 @@ class RolloutSample:
 
     prompt: Messages
     completion: Messages
-    input_ids: list[int]
-    completion_mask: list[int]
-    teacher_topk_ids: list[list[int]]  # per completion position; empty list where mask is 0
-    teacher_topk_logprobs: list[list[float]]  # per completion position; empty list where mask is 0
+    input_ids: np.ndarray
+    completion_mask: np.ndarray
+    teacher_topk_ids: np.ndarray  # (len(input_ids), teacher_top_k + 1), padded with -1
+    teacher_topk_logprobs: np.ndarray  # (len(input_ids), teacher_top_k + 1), padded with -inf
     model_version: int
     metrics: dict[str, float]
     teacher_id: str  # which teacher_server_urls entry scored this sample (see _resolve_teacher_server_url)
@@ -540,10 +541,13 @@ class _AsyncRolloutLoop:
         )
         score_s = time.monotonic() - t_score
 
-        input_ids = prompt_ids + completion_ids
-        completion_mask = [0] * len(prompt_ids) + [1] * len(completion_ids)
-        full_teacher_ids = [[] for _ in prompt_ids] + teacher_topk_ids
-        full_teacher_logprobs = [[] for _ in prompt_ids] + teacher_topk_logprobs
+        input_ids = np.asarray(prompt_ids + completion_ids, dtype=np.int64)
+        completion_mask = np.asarray([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64)
+        full_teacher_ids = np.full((len(input_ids), self.teacher_top_k + 1), -1, dtype=np.int64)
+        full_teacher_logprobs = np.full((len(input_ids), self.teacher_top_k + 1), -np.inf, dtype=np.float32)
+        for i, (cand_ids, cand_lps) in enumerate(zip(teacher_topk_ids, teacher_topk_logprobs, strict=True)):
+            full_teacher_ids[len(prompt_ids) + i, : len(cand_ids)] = cand_ids
+            full_teacher_logprobs[len(prompt_ids) + i, : len(cand_lps)] = cand_lps
 
         self._push_rollout_metrics(
             completion_ids=completion_ids,
