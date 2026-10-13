@@ -79,3 +79,34 @@ def pytest_runtest_teardown(item):
     new = sorted(os.path.basename(p) for p in libs - _last_libs)
     tag = "CHANGED" if s != _last else "same"
     _log(f"{tag} {item.nodeid}\n   before: {_last}\n   after:  {s}" + (f"\n   new libs: {new}" if new else ""))
+
+
+import sys
+import traceback
+
+import pytest
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    match = os.environ.get("FLIP_TRACE_MATCH")
+    if not match or match not in item.nodeid:
+        yield
+        return
+    found = []
+
+    def profiler(frame, event, arg):
+        if found or event not in ("c_return", "return"):
+            return
+        if locale.nl_langinfo(locale.CODESET) != "UTF-8":
+            name = getattr(arg, "__qualname__", None) or getattr(arg, "__name__", repr(arg)) if event == "c_return" else frame.f_code.co_name
+            module = getattr(arg, "__module__", None) if event == "c_return" else frame.f_code.co_filename
+            found.append(f"FLIP at {event} {module}.{name}\n" + "".join(traceback.format_stack(frame)))
+            sys.setprofile(None)
+
+    sys.setprofile(profiler)
+    try:
+        yield
+    finally:
+        sys.setprofile(None)
+        _log("FLIP-TRACE " + (found[0] if found else "no flip during call"))

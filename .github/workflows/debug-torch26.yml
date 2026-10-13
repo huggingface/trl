@@ -27,8 +27,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seq: [gw14, gw1, gw2]
-        variant: [baseline, cudnn-off]
+        seq: [gw14, trigger_qwen2vl]
+        variant: [baseline]
         shard: [1]
     steps:
       - name: Git checkout
@@ -63,16 +63,12 @@ jobs:
           if [ "${{ matrix.variant }}" = "cudnn-9.5" ]; then uv pip install --no-deps "nvidia-cudnn-cu12==9.5.1.17"; fi
           uv pip list | grep -iE "^(torch|nvidia-cudnn-cu12|nvidia-cuda-nvrtc-cu12) "
 
-      - name: Conv3d locale probe
-        run: |
-          source .venv/bin/activate
-          python .github/debug/conv3d_probe.py
-
       - name: Replay ordered tests in one process
         run: |
           source .venv/bin/activate
           nvidia-smi --query-gpu=name,driver_version --format=csv
           if [ "${{ matrix.variant }}" = "cudnn-off" ]; then export DISABLE_CUDNN=1; fi
+          export FLIP_TRACE_MATCH="TestDistillationTrainerVLM::test_train_vlm"
           python -c "import torch; print('cudnn', torch.backends.cudnn.version())"
           fails=0
           for i in 1 2 3 4 5; do
@@ -89,5 +85,5 @@ jobs:
       - name: Report per-test state
         if: always()
         run: |
-          grep -E '^### iteration' /tmp/state.txt || true
+          awk '/^FLIP-TRACE/{f=1} f&&/^(same|CHANGED|###)/{f=0} f' /tmp/state.txt | head -80
           grep -B1 -A2 -E '^(same|CHANGED) ' /tmp/state.txt | grep -E '^### iteration|^(same|CHANGED) |enc=' | awk '/^###/{print; next} /^(same|CHANGED)/{t=$0; next} /after:/ && !/enc=UTF-8/{print "NON-UTF8 after " t; print}' | cut -c1-400 | head -40
