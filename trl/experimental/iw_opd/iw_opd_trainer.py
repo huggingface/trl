@@ -889,10 +889,7 @@ class IWOPDTrainer(_BaseTrainer):
     def _generate_with_model(self, slices: list[dict[str, torch.Tensor | Any]], on_policy_indices: list[int]):
         """Fallback generation using model.generate() (no vLLM)."""
         with unwrap_model_for_generation(
-            self.model,
-            self.accelerator,
-            generation_kwargs=self.generation_kwargs,
-            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
+            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
         ) as unwrapped_model:
             for slice_idx in on_policy_indices:
                 slice_inputs = slices[slice_idx]

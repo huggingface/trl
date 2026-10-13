@@ -416,7 +416,6 @@ class SSDTrainer(_BaseTrainer):
                 self.model_wrapped,
                 self.accelerator,
                 gather_deepspeed3_params=self.args.ds3_gather_for_generation,
-                gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
             ) as unwrapped_model,
             torch.no_grad(),
         ):
