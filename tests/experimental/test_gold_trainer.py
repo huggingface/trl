@@ -2291,6 +2291,19 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 
+def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
+    # A sampled image placeholder token would make the forward pass over prompt + completion fail. Gemma3 is used
+    # because its processor's `image_token_id` is not the placeholder token, unlike its config's.
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=False),
+        train_dataset=vlm_dataset,
+    )
+
+    assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
+
+
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
