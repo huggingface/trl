@@ -3290,8 +3290,6 @@ class GRPOTrainer(_BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
-            # Messages mix types within a field (`content` is a string or a list, a tool argument can be a string in
-            # one call and a list in another), so they are stored as JSON
             pq.write_table(
                 Dataset.from_dict(table, on_mixed_types="use_json").data.table,
                 os.path.join(
