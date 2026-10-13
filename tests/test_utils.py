@@ -62,6 +62,7 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 
 if is_peft_available():
+    import peft
     from peft import (
         AutoPeftModelForCausalLM,
         LoraConfig,
@@ -1966,7 +1967,14 @@ class TestAddFusedLMHeadLoss:
                 lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
             ),
             pytest.param(
-                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+                id="prefix_tuning",
+                marks=pytest.mark.xfail(
+                    condition=is_peft_available() and Version(peft.__version__) <= Version("0.17.1"),
+                    reason="Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
+                    "https://github.com/huggingface/peft/issues/2821",
+                    strict=True,
+                ),
             ),
         ],
     )
