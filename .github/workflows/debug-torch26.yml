@@ -27,8 +27,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        seq: [gw14, trigger_qwen2vl]
-        variant: [baseline]
+        seq: [trigger_qwen2vl]
+        variant: [baseline, jit-cache-off]
         shard: [1]
     steps:
       - name: Git checkout
@@ -63,11 +63,19 @@ jobs:
           if [ "${{ matrix.variant }}" = "cudnn-9.5" ]; then uv pip install --no-deps "nvidia-cudnn-cu12==9.5.1.17"; fi
           uv pip list | grep -iE "^(torch|nvidia-cudnn-cu12|nvidia-cuda-nvrtc-cu12) "
 
+      - name: JIT probe on a fresh runner
+        run: |
+          source .venv/bin/activate
+          du -sh ~/.nv/ComputeCache 2>/dev/null || echo "ComputeCache: none"
+          python .github/debug/jit_probe.py
+          du -sh ~/.nv/ComputeCache 2>/dev/null || echo "ComputeCache: none"
+
       - name: Replay ordered tests in one process
         run: |
           source .venv/bin/activate
           nvidia-smi --query-gpu=name,driver_version --format=csv
           if [ "${{ matrix.variant }}" = "cudnn-off" ]; then export DISABLE_CUDNN=1; fi
+          if [ "${{ matrix.variant }}" = "jit-cache-off" ]; then export CUDA_CACHE_DISABLE=1; fi
           export FLIP_TRACE_MATCH="TestDistillationTrainerVLM::test_train_vlm"
           python -c "import torch; print('cudnn', torch.backends.cudnn.version())"
           fails=0
@@ -75,7 +83,7 @@ jobs:
             echo "### iteration $i" >> /tmp/state.txt
             if STATE_LOG=/tmp/state.txt PYTHONPATH=.github/debug python -m pytest -p stateplug -p no:cacheprovider -q -rf \
                 $(cat .github/debug/prefix_${{ matrix.seq }}.txt) > /tmp/iter_$i.txt 2>&1; then
-              echo "iteration $i: PASS $(tail -1 /tmp/iter_$i.txt)"
+              echo "iteration $i: PASS $(tail -1 /tmp/iter_$i.txt) | ComputeCache: $(du -sh ~/.nv/ComputeCache 2>/dev/null | cut -f1)"
             else
               fails=$((fails + 1)); echo "iteration $i: FAIL $(tail -1 /tmp/iter_$i.txt)"; grep -E '^FAILED' /tmp/iter_$i.txt
             fi
@@ -85,5 +93,5 @@ jobs:
       - name: Report per-test state
         if: always()
         run: |
-          awk '/^FLIP-TRACE/{f=1} f&&/^(same|CHANGED|###)/{f=0} f' /tmp/state.txt | head -80
+          grep -E '^### iteration|^FLIP-TRACE' /tmp/state.txt || true
           grep -B1 -A2 -E '^(same|CHANGED) ' /tmp/state.txt | grep -E '^### iteration|^(same|CHANGED) |enc=' | awk '/^###/{print; next} /^(same|CHANGED)/{t=$0; next} /after:/ && !/enc=UTF-8/{print "NON-UTF8 after " t; print}' | cut -c1-400 | head -40
