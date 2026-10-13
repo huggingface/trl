@@ -1508,7 +1508,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             input_ids=input_ids,
             position_ids=position_ids,
             labels=input_ids.masked_fill(completion_mask == 0, -100),
-            sampling_mask=sampling_mask,
+            support_ids=sampling_mask,
             fused_lm_head=True,
             **router_kwargs,
         )

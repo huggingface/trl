@@ -1562,9 +1562,9 @@ def add_fused_lm_head(
     as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
     original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
-    `sampling_mask`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, is the candidate set each token was
-    sampled from (top-k/top-p truncation). Given, the log-probabilities are normalized over that set rather than the
-    whole vocabulary, as the sampler's were. It is aligned with `input_ids` and shifted like `labels`.
+    `support_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, is the support each token was sampled
+    from: the tokens left after top-k/top-p truncation. Given, the log-probabilities are normalized over that set
+    rather than the whole vocabulary, as the sampler's were. It is aligned with `input_ids` and shifted like `labels`.
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
@@ -1609,7 +1609,7 @@ def add_fused_lm_head(
         labels=None,
         shift_labels=None,
         num_items_in_batch=None,
-        sampling_mask=None,
+        support_ids=None,
         **kwargs,
     ):
         if not fused_lm_head:
@@ -1630,8 +1630,8 @@ def add_fused_lm_head(
         if shift_labels is None:
             hidden_states = backbone_outputs.last_hidden_state[:, :-1]
             labels = labels[:, 1:]
-            if sampling_mask is not None:
-                sampling_mask = sampling_mask[:, 1:]
+            if support_ids is not None:
+                support_ids = support_ids[:, 1:]
         else:
             hidden_states = backbone_outputs.last_hidden_state
             labels = shift_labels
@@ -1640,8 +1640,8 @@ def add_fused_lm_head(
         hidden_states = hidden_states.to(lm_head.weight.device)
         labels = labels.to(lm_head.weight.device)
         mask = labels != -100
-        if sampling_mask is not None:
-            sampling_mask = sampling_mask.to(lm_head.weight.device)[mask]
+        if support_ids is not None:
+            support_ids = support_ids.to(lm_head.weight.device)[mask]
         autocast_ctx = nullcontext()
         if cast_lm_head_to_fp32:
             hidden_states = hidden_states.float()
@@ -1665,7 +1665,7 @@ def add_fused_lm_head(
                 final_logit_softcapping,
                 logit_scale,
                 outputs,
-                sampling_mask,
+                support_ids,
             )
         # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
         # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.

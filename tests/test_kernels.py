@@ -316,17 +316,17 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-5, rtol=1e-5)
 
     @pytest.mark.parametrize(("logit_scale", "final_logit_softcapping"), [(1.0, None), (0.5, 30.0)])
-    def test_sampling_mask(self, logit_scale, final_logit_softcapping):
-        # Log-probs and their gradient are normalized over each row's candidate set; the entropy stays full-vocabulary
+    def test_support_ids(self, logit_scale, final_logit_softcapping):
+        # Log-probs and their gradient are normalized over each row's support; the entropy stays full-vocabulary
         torch.manual_seed(42)
         hidden = torch.randn(self.N, self.H, requires_grad=True, device=torch_device)
         weight = torch.randn(self.V, self.H, requires_grad=True, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
         sizes = torch.randint(1, 8, (self.N,), device=torch_device)
-        sampling_mask = torch.full((self.N, 8), -1, device=torch_device, dtype=torch.long)
+        support_ids = torch.full((self.N, 8), -1, device=torch_device, dtype=torch.long)
         for row in range(self.N):
             ids = torch.randperm(self.V, device=torch_device)[: sizes[row] - 1]
-            sampling_mask[row, : sizes[row]] = torch.cat([labels[row : row + 1], ids])
+            support_ids[row, : sizes[row]] = torch.cat([labels[row : row + 1], ids])
 
         logprobs, entropy, *_ = ChunkedLogProbFunction.apply(
             hidden,
@@ -338,7 +338,7 @@ class TestChunkedLogProbFunction:
             final_logit_softcapping,
             logit_scale,
             ("entropy",),
-            sampling_mask,
+            support_ids,
         )
         (logprobs.sum() + entropy.sum()).backward()
         grad_hidden, grad_weight = hidden.grad.clone(), weight.grad.clone()
@@ -348,7 +348,7 @@ class TestChunkedLogProbFunction:
         if final_logit_softcapping is not None:
             logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
         logits = logits / 0.7
-        keep = torch.zeros_like(logits, dtype=torch.bool).scatter_(1, sampling_mask.clamp(min=0), sampling_mask >= 0)
+        keep = F.one_hot(support_ids + 1, self.V + 1)[..., 1:].any(1)
         logprobs_ref = logits.masked_fill(~keep, float("-inf")).log_softmax(-1).gather(-1, labels[:, None]).squeeze(-1)
         log_p = logits.log_softmax(-1)
         entropy_ref = -(log_p.exp() * log_p).sum(-1)
