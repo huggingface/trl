@@ -2328,7 +2328,7 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(monkeypatch):
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(monkeypatch):
     trainer = GOLDTrainer.__new__(GOLDTrainer)
     trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.args = SimpleNamespace(gradient_accumulation_steps=2, max_length=None)
+    trainer.args = SimpleNamespace(gradient_accumulation_steps=2, max_length=None, gradient_checkpointing_kwargs=None)
     trainer.use_vllm = False
     trainer._teacher_processor = None
     trainer._is_cross_architecture_vlm = False
