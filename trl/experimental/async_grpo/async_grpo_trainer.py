@@ -38,7 +38,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
@@ -248,12 +248,16 @@ class _EpochStopCallback(TrainerCallback):
         self._trainer = trainer
         self._target = target_groups
 
-    def on_step_end(self, _args, _state, control, **_kwargs):
+    def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
         trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
         reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
+            # `max_steps` is only a safety ceiling here, so `DefaultFlowCallback` never reaches its end-of-training save.
+            # Save the final step the same way, or the steps since the last multiple of `save_steps` are lost.
+            if args.save_strategy == SaveStrategy.STEPS:
+                control.should_save = True
 
 
 def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
@@ -285,8 +289,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
-                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
-                    "completion_tokens": int(sum(sample.completion_mask)),
+                    "prompt_tokens": len(sample.input_ids) - int(sample.completion_mask.sum()),
+                    "completion_tokens": int(sample.completion_mask.sum()),
                 },
             )
             for sample in samples[:max_traces]
@@ -626,7 +630,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         # forwarded — the prompt, tool results, and any tail a realign demoted to context. FLOPs are spent on both, so
         # both are worth a number, and their ratio is what says how much of the forward earns no gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
-        trained = [sum(example["completion_mask"]) for example in all_examples]
+        trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
         self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))

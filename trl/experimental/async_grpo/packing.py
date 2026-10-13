@@ -54,7 +54,7 @@ class TreeRow:
 
     def fits(self, sample: dict[str, Any], budget: int) -> bool:
         """Whether the row stays within `budget` unique tokens and `budget` trained tokens with `sample` added."""
-        input_ids = sample["input_ids"]
+        input_ids = sample["input_ids"].tolist()
         children, shared = self.roots, 0
         for key in zip(input_ids, [*input_ids[1:], None], strict=True):
             if key not in children:
@@ -62,10 +62,10 @@ class TreeRow:
             children = self.children[children[key]]
             shared += 1
         novel = len(input_ids) - shared
-        return len(self.tokens) + novel <= budget and self.trained + sum(sample["completion_mask"]) <= budget
+        return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
     def add(self, sample: dict[str, Any]) -> None:
-        input_ids = sample["input_ids"]
+        input_ids = sample["input_ids"].tolist()
         children = self.roots
         nodes = []
         for depth, key in enumerate(zip(input_ids, [*input_ids[1:], None], strict=True)):
@@ -79,7 +79,7 @@ class TreeRow:
         self.samples.append(sample)
         self.sample_nodes.append(nodes)
         self.groups.add(sample["group_id"])
-        self.trained += sum(sample["completion_mask"])
+        self.trained += int(sample["completion_mask"].sum())
 
     def pack(self) -> dict[str, torch.Tensor]:
         """
@@ -128,11 +128,12 @@ class TreeRow:
         shift_labels = [-100] * len(input_ids)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
+            ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
             for p in range(1, len(nodes)):
-                if sample["completion_mask"][p]:
-                    shift_labels[packed[nodes[p - 1]]] = sample["input_ids"][p]
+                if mask[p]:
+                    shift_labels[packed[nodes[p - 1]]] = ids[p]
                     token_index.append(packed[nodes[p - 1]])
-                    old_log_probs.append(sample["old_log_probs"][p])
+                    old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
         return {
