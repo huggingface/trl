@@ -57,6 +57,8 @@ from transformers import (
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
 from transformers.utils import ModelOutput, is_peft_available, is_rich_available
 
+from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 from ..trainer.model_config import ModelConfig
 
 
@@ -499,14 +501,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     if not flushed_tensors:
         return flushed_mask
     return flushed_mask, *flushed_tensors
-
-
-try:
-    from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
-    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
-except ImportError:  # Triton ships with PyTorch on Linux only
-    _ChunkedLogProbFunction = None
-    _fused_logprob_entropy = None
 
 
 def _supports_trl_loss_kernel(
@@ -1639,23 +1633,28 @@ def add_fused_lm_head(
             weight = weight.full_tensor()
             if bias is not None:
                 bias = bias.full_tensor()
+        # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
+        # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
+        compact = hidden_states.device.type in ("cuda", "xpu")
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
             per_token = _ChunkedLogProbFunction.apply(
-                hidden_states[mask],
+                hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
                 weight,
                 bias,
-                labels[mask],
+                labels[mask] if compact else labels.clamp(min=0).reshape(-1),
                 temperature,
                 _CHUNKED_LOGPROB_CHUNK_SIZE,
                 final_logit_softcapping,
                 logit_scale,
                 outputs,
             )
-        # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
-        # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
-            None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
-        )
+        if compact:
+            # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+            # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+            per_token = (None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        else:
+            per_token = (None if x is None else x.view(mask.shape).masked_fill(~mask, 0) for x in per_token)
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = per_token
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None

@@ -12,10 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import math
+
 import torch
-import triton
-import triton.language as tl
 from packaging.version import Version
+
+
+try:
+    import triton
+    import triton.language as tl
+except ImportError:  # Triton ships with PyTorch on Linux only; without it, the tiles are folded in torch
+    triton = None
 
 
 # Tokens per projection tile; the caller sets the vocabulary width with `chunk_size`
@@ -25,6 +34,14 @@ OPTIONAL_OUTPUTS = ("entropy", "log_sum_sq_probs", "mean_logits", "is_top1")
 _BLOCK_SIZE = 1024
 # `torch.addmm(..., out_dtype=torch.float32)` from bf16/fp16 inputs, CUDA only
 _MM_OUT_DTYPE = Version(torch.__version__) >= Version("2.8.0")
+
+
+def _jit(fn):
+    return triton.jit(fn) if triton is not None else fn
+
+
+def _use_triton(device: torch.device) -> bool:
+    return triton is not None and device.type in ("cuda", "xpu")
 
 
 def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
@@ -40,7 +57,7 @@ def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
         acc.addmm_(a.float(), b.float())
 
 
-@triton.jit
+@_jit
 def _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP: tl.constexpr):
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
     logit_scale, softcap, inv_t = logit_scale.to(tl.float32), softcap.to(tl.float32), inv_t.to(tl.float32)
@@ -51,7 +68,7 @@ def _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP: tl.constexpr):
     return z * inv_t
 
 
-@triton.jit
+@_jit
 def _forward_kernel(
     mm_ptr,
     mm_stride,
@@ -123,7 +140,7 @@ def _forward_kernel(
         tl.store(target_logit_ptr + row, _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP))
 
 
-@triton.jit
+@_jit
 def _backward_kernel(
     mm_ptr,
     mm_stride,
@@ -175,15 +192,110 @@ def _backward_kernel(
     tl.store(ptrs, grad.to(mm_ptr.dtype.element_ty), mask=mask)
 
 
+def _torch_transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP):
+    z = z * logit_scale
+    if HAS_SOFTCAP:
+        z = softcap * torch.tanh(z / softcap)
+    return z * inv_t
+
+
+def _forward_tile(
+    tile,
+    tile_stride,
+    targets,
+    running_max,
+    sum_exp,
+    x_sum_exp,
+    sq_sum_exp,
+    z_sum,
+    max_before_target,
+    target_logit,
+    vocab_start,
+    n_cols,
+    logit_scale,
+    softcap,
+    inv_t,
+    HAS_SOFTCAP,
+    HAS_ENTROPY,
+    HAS_LOG_SUM_SQ_PROBS,
+    HAS_MEAN_LOGITS,
+    HAS_IS_TOP1,
+    BLOCK_SIZE,
+):
+    # `_forward_kernel` in torch, for devices without Triton: the whole tile at once instead of one program per token
+    z = _torch_transform(tile.float(), logit_scale, softcap, inv_t, HAS_SOFTCAP)
+    local = targets - vocab_start
+    if HAS_MEAN_LOGITS:
+        z_sum += z.sum(-1)
+    if HAS_IS_TOP1:
+        # `argmax` returns the first maximum, so a tie with an earlier token does not count as a top-1 prediction
+        before_target = torch.arange(n_cols, device=z.device) < local.unsqueeze(-1)
+        max_before_target.copy_(torch.maximum(max_before_target, z.masked_fill(~before_target, -math.inf).amax(-1)))
+    new_m = torch.maximum(running_max, z.amax(-1))
+    rescale = torch.exp(running_max - new_m)
+    e = torch.exp(z - new_m.unsqueeze(-1))
+    sum_exp.mul_(rescale).add_(e.sum(-1))
+    if HAS_ENTROPY:
+        x_sum_exp.mul_(rescale).add_((e * z).sum(-1))
+    if HAS_LOG_SUM_SQ_PROBS:
+        sq_sum_exp.mul_(rescale * rescale).add_((e * e).sum(-1))
+    running_max.copy_(new_m)
+    in_tile = (local >= 0) & (local < n_cols)
+    target_z = z.gather(-1, local.clamp(0, n_cols - 1).unsqueeze(-1)).squeeze(-1)
+    target_logit.copy_(torch.where(in_tile, target_z, target_logit))
+
+
+def _backward_tile(
+    tile,
+    tile_stride,
+    targets,
+    log_z,
+    entropy,
+    grad_logprobs,
+    grad_entropy,
+    vocab_start,
+    n_cols,
+    logit_scale,
+    softcap,
+    inv_t,
+    HAS_SOFTCAP,
+    HAS_LOGPROB_GRAD,
+    HAS_ENTROPY_GRAD,
+    BLOCK_SIZE,
+):
+    # `_backward_kernel` in torch, for devices without Triton: the whole tile at once instead of one block per program
+    y = tile.float() * logit_scale
+    if HAS_SOFTCAP:
+        t = torch.tanh(y / softcap)
+        z = softcap * t * inv_t
+    else:
+        z = y * inv_t
+    log_p = z - log_z.unsqueeze(-1)
+    p = torch.exp(log_p)
+
+    grad = torch.zeros_like(z)
+    if HAS_LOGPROB_GRAD:
+        # d(log p_target) / dz_j = 1[j = target] - p_j
+        is_target = torch.arange(vocab_start, vocab_start + n_cols, device=z.device) == targets.unsqueeze(-1)
+        grad += grad_logprobs.unsqueeze(-1) * (is_target.float() - p)
+    if HAS_ENTROPY_GRAD:
+        # d(entropy) / dz_j = -p_j * (log p_j + entropy)
+        grad -= grad_entropy.unsqueeze(-1) * p * (log_p + entropy.unsqueeze(-1))
+    grad = grad * inv_t
+    if HAS_SOFTCAP:
+        grad = grad * (1 - t * t)
+    tile.copy_(grad * logit_scale)
+
+
 class ChunkedLogProbFunction(torch.autograd.Function):
     """
     Per-token log-probabilities of `hidden @ weight.T`, without materializing the `[N, V]` logits, and optionally the
     entropy, `log(sum_v p_v^2)`, the mean logit and whether the target is the argmax (`outputs`, `None` when not
     requested).
 
-    The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, chunk_size]` tiles; a Triton kernel folds each tile into
-    online-logsumexp statistics in one pass. The backward recomputes each tile, turns it into the logits gradient in
-    place, and accumulates the gradient GEMMs in fp32.
+    The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, chunk_size]` tiles; a Triton kernel (torch ops on devices
+    without Triton) folds each tile into online-logsumexp statistics in one pass. The backward recomputes each tile,
+    turns it into the logits gradient in place, and accumulates the gradient GEMMs in fp32.
     """
 
     @staticmethod
@@ -235,7 +347,8 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                 torch.mm(hidden_chunk, weight[start:end].to(compute_dtype).t(), out=tile)
                 if bias is not None:
                     tile.add_(bias[start:end].to(compute_dtype))
-                _forward_kernel[(n,)](
+                fold = _forward_kernel[(n,)] if _use_triton(device) else _forward_tile
+                fold(
                     tile,
                     tile.stride(0),
                     targets[token_start:token_end],
@@ -303,7 +416,12 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     torch.mm(hidden_chunk, w_chunk.t(), out=tile)
                     if bias is not None:
                         tile.add_(bias[start:end].to(compute_dtype))
-                    _backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))](
+                    fold = (
+                        _backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))]
+                        if _use_triton(hidden.device)
+                        else _backward_tile
+                    )
+                    fold(
                         tile,
                         tile.stride(0),
                         targets[token_start:token_end],

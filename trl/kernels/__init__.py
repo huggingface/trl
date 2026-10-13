@@ -13,7 +13,12 @@
 # limitations under the License.
 
 from .chunked_logprob import ChunkedLogProbFunction
-from .logprob_entropy import selective_log_softmax_and_entropy
+
+
+try:
+    from .logprob_entropy import selective_log_softmax_and_entropy
+except ImportError:  # Triton ships with PyTorch on Linux only
+    selective_log_softmax_and_entropy = None
 
 
 __all__ = ["ChunkedLogProbFunction", "selective_log_softmax_and_entropy"]
