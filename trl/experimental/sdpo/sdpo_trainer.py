@@ -703,15 +703,15 @@ class SDPOTrainer(_BaseTrainer):
 
         if self._use_peft_ema_teacher_adapter():
             # Must run after super().__init__ so self.callback_handler exists.
-            ema_callback = PEFTAdapterEMACallback(
-                model=self.model,
-                teacher_adapter_name="teacher",
-                update_rate=self.args.teacher_update_rate,
-                sync_steps=self.args.teacher_sync_steps,
-                accelerator=self.accelerator,
+            self.add_callback(
+                PEFTAdapterEMACallback(
+                    model=self.model,
+                    teacher_adapter_name="teacher",
+                    update_rate=self.args.teacher_update_rate,
+                    sync_steps=self.args.teacher_sync_steps,
+                    accelerator=self.accelerator,
+                )
             )
-            ema_callback._initialize_teacher_adapter()
-            self.add_callback(ema_callback)
             self.teacher_model = self.model
             return
 
@@ -724,10 +724,13 @@ class SDPOTrainer(_BaseTrainer):
 
         # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
         # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
-        model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs = dict(self.args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # A student passed as an instance wasn't loaded from `model_init_kwargs`, so build the teacher like it
+        model_init_kwargs.setdefault("dtype", self.model.dtype)
+        model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()

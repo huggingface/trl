@@ -349,35 +349,44 @@ def pad_labels(labels, target_length):
     return labels + [-100] * (target_length - len(labels))
 
 
-def test_process_completions_to_buffer_left_pads_prompt_ids():
-    class RecordingTokenizer:
-        pad_token_id = 0
-        pad_token = "<pad>"
+def _gold_trainer(tmp_path, **config_kwargs):
+    return GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", **config_kwargs),
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
+    )
 
-        def batch_decode(
-            self,
-            sequences,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        ):
-            del skip_special_tokens, clean_up_tokenization_spaces
-            return [" ".join(str(token) for token in sequence) for sequence in sequences]
 
-        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            del skip_special_tokens, clean_up_tokenization_spaces
-            return " ".join(str(token) for token in ids)
+class RecordingVLLMGeneration:
+    """Stands in for vLLM, which cannot run here: records the prompts it gets and completes each one with "C"."""
 
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
-    trainer.processing_class = RecordingTokenizer()
-    trainer._tokenizer = RecordingTokenizer()
-    trainer.args = SimpleNamespace(max_length=None)
-    trainer.use_uld_loss = False
+    def __init__(self, processing_class, **kwargs):
+        self.completion_ids = processing_class.encode("C", add_special_tokens=False)
+        self.prompts = None
+        self.sync_calls = 0
+
+    def sync_weights(self):
+        self.sync_calls += 1
+
+    def generate(self, prompts, images, num_generations):
+        self.prompts = prompts
+        return None, [self.completion_ids] * len(prompts), None, None
+
+
+def _gold_vllm_trainer(monkeypatch, tmp_path, **config_kwargs):
+    monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
+    monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", RecordingVLLMGeneration)
+    return _gold_trainer(tmp_path, use_vllm=True, **config_kwargs)
+
+
+def test_process_completions_to_buffer_left_pads_prompt_ids(tmp_path):
+    trainer = _gold_trainer(tmp_path)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
+    pad = trainer.processing_class.pad_token_id
 
-    GOLDTrainer._process_completions_to_buffer(
-        trainer,
+    trainer._process_completions_to_buffer(
         slices=[{"slice": "original"}],
         on_policy_indices=[0],
         local_slice_indices=[0, 0],
@@ -388,385 +397,152 @@ def test_process_completions_to_buffer_left_pads_prompt_ids():
     )
 
     buffered_inputs = trainer._buffered_inputs[0]
-    assert torch.equal(
-        buffered_inputs["input_ids"],
-        torch.tensor([[0, 11, 31], [21, 22, 41]], dtype=torch.long),
-    )
-    assert torch.equal(
-        buffered_inputs["attention_mask"],
-        torch.tensor([[0, 1, 1], [1, 1, 1]], dtype=torch.long),
-    )
-    assert torch.equal(buffered_inputs["labels"], torch.tensor([[-100, -100, 31], [-100, -100, 41]]))
+    assert buffered_inputs["input_ids"].tolist() == [[pad, 11, 31], [21, 22, 41]]
+    assert buffered_inputs["attention_mask"].tolist() == [[0, 1, 1], [1, 1, 1]]
+    assert buffered_inputs["labels"].tolist() == [[-100, -100, 31], [-100, -100, 41]]
 
 
-def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_prompts():
-    class RecordingVLLMGeneration:
-        def __init__(self):
-            self.prompts = None
-            self.sync_calls = 0
-
-        def sync_weights(self):
-            self.sync_calls += 1
-
-        def generate(self, prompts, images, num_generations):
-            self.prompts = prompts
-            assert images is None
-            assert num_generations == 1
-            return None, [[42]], None, None
-
-    class RecordingTokenizer:
-        pad_token_id = 9
-        pad_token = "<eos>"
-
-        def batch_decode(
-            self,
-            sequences,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        ):
-            del clean_up_tokenization_spaces
-            decoded = []
-            token_map = {5: "A", 6: "B", 9: "<eos>"}
-            for sequence in sequences:
-                tokens = []
-                for token in sequence:
-                    token = int(token)
-                    if skip_special_tokens and token == 9:
-                        continue
-                    tokens.append(token_map[token])
-                decoded.append(" ".join(tokens))
-            return decoded
-
-        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            return self.batch_decode([ids], skip_special_tokens, clean_up_tokenization_spaces)[0]
-
-    captured = {}
-
-    def capture_process_completions(
-        slices,
-        on_policy_indices,
-        local_slice_indices,
-        completion_ids,
-        prompt_ids_list,
-        prompts_text,
-        max_completion_length,
-    ):
-        captured["slices"] = slices
-        captured["on_policy_indices"] = on_policy_indices
-        captured["local_slice_indices"] = local_slice_indices
-        captured["completion_ids"] = completion_ids
-        captured["prompt_ids_list"] = prompt_ids_list
-        captured["prompts_text"] = prompts_text
-        captured["max_completion_length"] = max_completion_length
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(is_main_process=True)
-    trainer.args = SimpleNamespace(max_length=None, report_to=[])
-    trainer.processing_class = RecordingTokenizer()
-    trainer._tokenizer = RecordingTokenizer()
-    trainer.use_vllm = True
-    trainer.vllm_generation = RecordingVLLMGeneration()
-    trainer.vllm_sync_frequency = 1
-    trainer._last_vllm_sync_step = -1
-    trainer.state = SimpleNamespace(global_step=0)
-    trainer.num_generations = 1
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
-    trainer._process_completions_to_buffer = capture_process_completions
+def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_prompts(monkeypatch, tmp_path):
+    # The prompt contains the pad token as a real token: the attention mask, not the token id, says what to keep
+    trainer = _gold_vllm_trainer(monkeypatch, tmp_path, max_length=None, max_completion_length=1)
+    trainer._buffered_inputs = [None]
+    trainer._buffered_text_logs = [None]
+    tokenizer = trainer.processing_class
+    pad = tokenizer.pad_token_id
+    a, b = tokenizer.convert_tokens_to_ids(["A", "B"])
+    completion_ids = trainer.vllm_generation.completion_ids
 
     slices = [
         {
-            "prompts": torch.tensor([[9, 9, 5, 9, 6]], dtype=torch.long),
-            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long),
+            "prompts": torch.tensor([[pad, pad, a, pad, b]]),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]]),
         }
     ]
 
-    GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
+    trainer._generate_on_policy_for_slices(slices, [0])
 
-    assert trainer.vllm_generation.prompts == [[5, 9, 6]]
+    assert trainer.vllm_generation.prompts == [[a, pad, b]]
     assert trainer.vllm_generation.sync_calls == 1
-    assert captured["completion_ids"] == [[42]]
-    assert captured["prompt_ids_list"] == [[5, 9, 6]]
-    assert captured["prompts_text"] == ["A <eos> B"]
+    buffered_inputs = trainer._buffered_inputs[0]
+    assert buffered_inputs["input_ids"].tolist() == [[a, pad, b, *completion_ids]]
+    assert buffered_inputs["original_prompt_text"] == ["A<|endoftext|>B"]
 
 
-def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens():
-    class RecordingVLLMGeneration:
-        def __init__(self):
-            self.prompts = None
-            self.sync_calls = 0
-
-        def sync_weights(self):
-            self.sync_calls += 1
-
-        def generate(self, prompts, images, num_generations):
-            self.prompts = prompts
-            assert images is None
-            assert num_generations == 1
-            return None, [[42]], None, None
-
-    class RecordingTokenizer:
-        pad_token_id = 0
-        pad_token = "<pad>"
-
-        def __init__(self):
-            self.truncation_side = "right"
-
-        def batch_decode(
-            self,
-            sequences,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        ):
-            del clean_up_tokenization_spaces
-            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
-            decoded = []
-            for sequence in sequences:
-                tokens = []
-                for token in sequence:
-                    token = int(token)
-                    if skip_special_tokens and token == 13:
-                        continue
-                    if token == 0:
-                        continue
-                    tokens.append(token_map[token])
-                decoded.append(" ".join(tokens))
-            return decoded
-
-        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            return self.batch_decode([ids], skip_special_tokens, clean_up_tokenization_spaces)[0]
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.processing_class = RecordingTokenizer()
-    trainer._tokenizer = RecordingTokenizer()
-    trainer.args = SimpleNamespace(max_length=None, report_to=[])
-    trainer.use_vllm = True
-    trainer.use_uld_loss = False
-    trainer.vllm_generation = RecordingVLLMGeneration()
-    trainer.vllm_sync_frequency = 1
-    trainer._last_vllm_sync_step = -1
-    trainer.state = SimpleNamespace(global_step=0)
-    trainer.num_generations = 1
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens(monkeypatch, tmp_path):
+    trainer = _gold_vllm_trainer(monkeypatch, tmp_path, max_length=None, max_completion_length=1)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
+    tokenizer = trainer.processing_class
+    pad = tokenizer.pad_token_id
+    a, special, b = tokenizer.convert_tokens_to_ids(["A", "<|im_start|>", "B"])
+    completion_ids = trainer.vllm_generation.completion_ids
 
     slices = [
         {
             "slice": "original",
-            "prompts": torch.tensor([[0, 0, 5, 13, 6]], dtype=torch.long),
-            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long),
+            "prompts": torch.tensor([[pad, pad, a, special, b]]),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]]),
         }
     ]
 
-    GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
+    trainer._generate_on_policy_for_slices(slices, [0])
 
     buffered_inputs = trainer._buffered_inputs[0]
-    assert trainer.vllm_generation.prompts == [[5, 13, 6]]
+    assert trainer.vllm_generation.prompts == [[a, special, b]]
     assert trainer.vllm_generation.sync_calls == 1
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[5, 13, 6, 42]], dtype=torch.long))
-    assert torch.equal(
-        buffered_inputs["attention_mask"],
-        torch.tensor([[1, 1, 1, 1]], dtype=torch.long),
-    )
-    assert torch.equal(
-        buffered_inputs["labels"],
-        torch.tensor([[-100, -100, -100, 42]], dtype=torch.long),
-    )
-    assert buffered_inputs["original_prompt_text"] == ["A <special> B"]
+    assert buffered_inputs["input_ids"].tolist() == [[a, special, b, *completion_ids]]
+    assert buffered_inputs["attention_mask"].tolist() == [[1, 1, 1, 1]]
+    assert buffered_inputs["labels"].tolist() == [[-100, -100, -100, *completion_ids]]
+    assert buffered_inputs["original_prompt_text"] == ["A<|im_start|>B"]
     assert buffered_inputs["original_completion_text"] == ["C"]
-    assert trainer._buffered_text_logs[0] == (["A <special> B"], ["C"])
+    assert trainer._buffered_text_logs[0] == (["A<|im_start|>B"], ["C"])
 
 
-def test_on_policy_prompt_text_reflects_truncated_prompt():
+def test_on_policy_prompt_text_reflects_truncated_prompt(monkeypatch, tmp_path):
     """When the prompt overflows max_length - max_completion_length it is truncated before the student sees it.
     `original_prompt_text` — which the teacher re-encodes — must reflect that truncated prompt, not the full one, so
     teacher and student score the completion under the same context."""
-
-    class RecordingVLLMGeneration:
-        def __init__(self):
-            self.prompts = None
-
-        def sync_weights(self):
-            pass
-
-        def generate(self, prompts, images, num_generations):
-            self.prompts = prompts
-            return None, [[42]], None, None
-
-    class RecordingTokenizer:
-        pad_token_id = 0
-        pad_token = "<pad>"
-
-        def batch_decode(
-            self,
-            sequences,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        ):
-            del clean_up_tokenization_spaces
-            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
-            decoded = []
-            for sequence in sequences:
-                tokens = [token_map[int(t)] for t in sequence if int(t) != 0]
-                decoded.append(" ".join(tokens))
-            return decoded
-
-        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            return self.batch_decode([ids], skip_special_tokens, clean_up_tokenization_spaces)[0]
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.processing_class = RecordingTokenizer()
-    trainer.args = SimpleNamespace(max_length=3, report_to=[])
-    trainer.use_vllm = True
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer.uld_loss_fn = None
-    trainer.vllm_generation = RecordingVLLMGeneration()
-    trainer.vllm_sync_frequency = 1
-    trainer._last_vllm_sync_step = -1
-    trainer.state = SimpleNamespace(global_step=0)
-    trainer.num_generations = 1
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1)
+    trainer = _gold_vllm_trainer(monkeypatch, tmp_path, max_length=3, max_completion_length=1)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
+    tokenizer = trainer.processing_class
+    pad = tokenizer.pad_token_id
+    a, special, b = tokenizer.convert_tokens_to_ids(["A", "<|im_start|>", "B"])
+    completion_ids = trainer.vllm_generation.completion_ids
 
     slices = [
         {
-            "prompts": torch.tensor([[0, 0, 5, 13, 6]], dtype=torch.long),
-            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.long),
+            "prompts": torch.tensor([[pad, pad, a, special, b]]),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1, 1, 1]]),
         }
     ]
 
-    GOLDTrainer._generate_on_policy_for_slices(trainer, slices, [0])
+    trainer._generate_on_policy_for_slices(slices, [0])
 
     # prompt_max_length = max_length - max_new_tokens = 3 - 1 = 2; budgeted BEFORE generation, keeping the
-    # END of the prompt (the generation marker), so [5, 13, 6] -> [13, 6] and the student generates from it.
-    assert trainer.vllm_generation.prompts == [[13, 6]]
+    # END of the prompt (the generation marker), so [A, <|im_start|>, B] -> [<|im_start|>, B] and the student
+    # generates from it.
+    assert trainer.vllm_generation.prompts == [[special, b]]
 
     buffered_inputs = trainer._buffered_inputs[0]
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
-    assert buffered_inputs["original_prompt_text"] == ["<special> B"]
-    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
-    assert torch.equal(buffered_inputs["prompt_attention_mask"], torch.tensor([[1, 1]], dtype=torch.long))
+    assert buffered_inputs["input_ids"].tolist() == [[special, b, *completion_ids]]
+    assert buffered_inputs["original_prompt_text"] == ["<|im_start|>B"]
+    assert buffered_inputs["prompts"].tolist() == [[special, b]]
+    assert buffered_inputs["prompt_attention_mask"].tolist() == [[1, 1]]
 
 
-def test_non_vllm_on_policy_budgets_prompt_before_generation(monkeypatch):
+def test_non_vllm_on_policy_budgets_prompt_before_generation(tmp_path):
     """Non-vLLM path budgets the prompt to max_length - max_new_tokens (keep-end) before model.generate,
     matching the vLLM path, so the student generates from and trains on the same in-budget context."""
-
-    class DummyModel:
-        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            assert input_ids.shape[1] == 2
-            assert torch.equal(input_ids, torch.tensor([[13, 6]], dtype=torch.long))
-            assert torch.equal(attention_mask, torch.tensor([[1, 1]], dtype=torch.long))
-            completion = torch.tensor([[42]], dtype=torch.long)
-            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
-
-    class RecordingTokenizer:
-        pad_token_id = 0
-
-        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            token_map = {0: "<pad>", 5: "A", 6: "B", 13: "<special>", 42: "C"}
-            return " ".join(token_map[int(t)] for t in ids)
-
-    class FakeUnwrap:
-        def __init__(self, model, accelerator, generation_kwargs=None):
-            self.model = model
-
-        def __enter__(self):
-            return self.model
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(gold_trainer_module, "unwrap_model_for_generation", FakeUnwrap)
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.processing_class = RecordingTokenizer()
-    trainer.args = SimpleNamespace(max_length=3, report_to=[])
-    trainer.model = DummyModel()
-    trainer.generation_kwargs = {}
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer.uld_loss_fn = None
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
+    trainer = _gold_trainer(tmp_path, max_length=3, max_completion_length=1)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
+    tokenizer = trainer.processing_class
+    pad = tokenizer.pad_token_id
+    a, special, b = tokenizer.convert_tokens_to_ids(["A", "<|im_start|>", "B"])
+    device = trainer.accelerator.device
 
     slices = [
         {
-            "prompts": torch.tensor([[0, 5, 13, 6]], dtype=torch.long),
-            "prompt_attention_mask": torch.tensor([[0, 1, 1, 1]], dtype=torch.long),
+            "prompts": torch.tensor([[pad, a, special, b]], device=device),
+            "prompt_attention_mask": torch.tensor([[0, 1, 1, 1]], device=device),
         }
     ]
 
-    GOLDTrainer._generate_non_vllm_for_slices(trainer, slices, [0])
+    trainer._generate_non_vllm_for_slices(slices, [0])
 
     buffered_inputs = trainer._buffered_inputs[0]
-    # prompt_max_length = 3 - 1 = 2; keep-end of the width-4 prompt -> [13, 6], then generate one token.
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[13, 6, 42]], dtype=torch.long))
-    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[13, 6]], dtype=torch.long))
+    # prompt_max_length = 3 - 1 = 2; keep-end of the width-4 prompt -> [<|im_start|>, B], then generate one token.
+    assert buffered_inputs["prompts"].tolist() == [[special, b]]
+    assert buffered_inputs["input_ids"].shape == (1, 3)
+    assert buffered_inputs["input_ids"][:, :2].tolist() == [[special, b]]
 
 
-def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(monkeypatch):
+def test_non_vllm_on_policy_does_not_trim_padded_width_when_real_prompt_fits(tmp_path):
     """Fallback budgets on the REAL token count, not the padded width (vLLM parity). A left-padded prompt
     whose real tokens already fit max_length - max_new_tokens is passed through unchanged, not trimmed to the last
     `budget` columns (which would carry a pad column into generation)."""
-
-    class DummyModel:
-        def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            assert torch.equal(input_ids, torch.tensor([[0, 0, 7]], dtype=torch.long))
-            assert torch.equal(attention_mask, torch.tensor([[0, 0, 1]], dtype=torch.long))
-            completion = torch.tensor([[42]], dtype=torch.long)
-            return SimpleNamespace(sequences=torch.cat([input_ids, completion], dim=1))
-
-    class RecordingTokenizer:
-        pad_token_id = 0
-
-        def decode(self, ids, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-            token_map = {0: "<pad>", 7: "Q", 42: "C"}
-            return " ".join(token_map[int(t)] for t in ids)
-
-    class FakeUnwrap:
-        def __init__(self, model, accelerator, generation_kwargs=None):
-            self.model = model
-
-        def __enter__(self):
-            return self.model
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(gold_trainer_module, "unwrap_model_for_generation", FakeUnwrap)
-
-    trainer = GOLDTrainer.__new__(GOLDTrainer)
-    trainer.accelerator = SimpleNamespace(device=torch.device("cpu"), is_main_process=True)
-    trainer.processing_class = RecordingTokenizer()
-    trainer.args = SimpleNamespace(max_length=3, report_to=[])
-    trainer.model = DummyModel()
-    trainer.generation_kwargs = {}
-    trainer.use_uld_loss = False
-    trainer.teacher_tokenizer = None
-    trainer.uld_loss_fn = None
-    trainer.generation_config = SimpleNamespace(max_new_tokens=1, eos_token_id=None)
+    trainer = _gold_trainer(tmp_path, max_length=3, max_completion_length=1)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
+    tokenizer = trainer.processing_class
+    pad = tokenizer.pad_token_id
+    q = tokenizer.convert_tokens_to_ids("Q")
+    device = trainer.accelerator.device
 
     slices = [
         {
-            "prompts": torch.tensor([[0, 0, 7]], dtype=torch.long),
-            "prompt_attention_mask": torch.tensor([[0, 0, 1]], dtype=torch.long),
+            "prompts": torch.tensor([[pad, pad, q]], device=device),
+            "prompt_attention_mask": torch.tensor([[0, 0, 1]], device=device),
         }
     ]
 
-    GOLDTrainer._generate_non_vllm_for_slices(trainer, slices, [0])
+    trainer._generate_non_vllm_for_slices(slices, [0])
 
     buffered_inputs = trainer._buffered_inputs[0]
-    assert torch.equal(buffered_inputs["prompts"], torch.tensor([[0, 0, 7]], dtype=torch.long))
-    assert torch.equal(buffered_inputs["input_ids"], torch.tensor([[0, 0, 7, 42]], dtype=torch.long))
+    assert buffered_inputs["prompts"].tolist() == [[pad, pad, q]]
+    assert buffered_inputs["input_ids"].shape == (1, 4)
+    assert buffered_inputs["input_ids"][:, :3].tolist() == [[pad, pad, q]]
 
 
 def test_gold_trainer_init_defaults_vllm_max_model_length_to_max_length(monkeypatch, tmp_path):

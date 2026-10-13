@@ -22,7 +22,6 @@ import transformers
 from datasets import load_dataset
 from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
-from transformers.utils import is_peft_available
 
 from trl import (
     DistillationConfig,
@@ -42,7 +41,7 @@ from trl import (
 )
 from trl.trainer.utils import add_fused_lm_head
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,6 +97,30 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
+    @require_peft
+    @pytest.mark.parametrize(
+        "trainer, test_name",
+        [
+            ("sdpo", "test_train_with_peft_ema_teacher[False-1.0-2]"),
+            ("sdft", "test_train_with_peft_model_and_ema_teacher_sync[False]"),
+        ],
+    )
+    def test_peft_ema_teacher_zero3(self, trainer, test_name, get_config_path):
+        run_command(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                get_config_path("zero3"),
+                "--module",
+                "pytest",
+                f"tests/experimental/test_{trainer}_trainer.py::Test{trainer.upper()}Trainer::{test_name}",
+                "-q",
+                "--maxfail=1",
+            ],
+            os.environ.copy(),
+        )
+
     @pytest.mark.parametrize(
         "config",
         [
@@ -133,19 +156,6 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
-
-    @pytest.mark.skipif(not is_peft_available(), reason="PEFT is required for this test")
-    def test_sdpo_peft_ema_zero3(self, get_config_path):
-        run_command(
-            [
-                "accelerate",
-                "launch",
-                "--config_file",
-                get_config_path("zero3"),
-                "tests/distributed/sdpo_peft_ema_zero3.py",
-            ],
-            os.environ.copy(),
-        )
 
     @pytest.mark.parametrize(
         "config",

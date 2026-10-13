@@ -15,6 +15,7 @@
 import logging
 
 import torch
+from accelerate.state import AcceleratorState
 from accelerate.utils import is_peft_model
 from transformers import (
     TrainerCallback,
@@ -99,7 +100,7 @@ class PEFTAdapterEMACallback(TrainerCallback):
         self.accelerator = accelerator
         self.shadow_weights: dict[str, torch.Tensor] | None = None
         self.teacher_adapter_config = None
-        self._initialized = False
+        self._initialize_teacher_adapter()
 
     def _get_student_state_dict(self):
         """Get student adapter state dict using PEFT keys (without adapter name)."""
@@ -109,28 +110,11 @@ class PEFTAdapterEMACallback(TrainerCallback):
             model = self.accelerator.unwrap_model(self.model)
         else:
             model = self.model
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin if self.accelerator is not None else None
-        trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
-        should_gather = (
-            deepspeed_plugin is not None
-            and deepspeed_plugin.zero_stage == 3
-            and any(parameter.numel() == 0 for parameter in trainable_parameters)
-        )
-        if should_gather:
-            from deepspeed import zero
-
-            with zero.GatheredParameters(trainable_parameters, modifier_rank=None):
-                state_dict = get_peft_model_state_dict(model)
-                return {key: value.detach().clone() for key, value in state_dict.items()}
-
         return get_peft_model_state_dict(model)
 
     def _initialize_teacher_adapter(self):
         """Create teacher adapter with zero weights initialized from student adapter."""
         from peft import set_peft_model_state_dict
-
-        if self._initialized:
-            return
 
         if self.accelerator is not None:
             model = self.accelerator.unwrap_model(self.model)
@@ -156,60 +140,44 @@ class PEFTAdapterEMACallback(TrainerCallback):
 
         self.shadow_weights = {k: v.clone().zero_() for k, v in teacher_state.items()}
 
-        self._initialized = True
         logger.info(f"Initialized PEFT adapter EMA teacher with adapter name: {self.teacher_adapter_name}")
+
+    def _sync_teacher_adapter(self, model):
+        from peft import get_peft_model_state_dict, set_peft_model_state_dict
+
+        student_state = get_peft_model_state_dict(model)
+        for key, student_param in student_state.items():
+            if key in self.shadow_weights:
+                shadow = self.shadow_weights[key].to(student_param.device)
+                shadow.data = (1 - self.update_rate) * shadow.data + self.update_rate * student_param.data
+                self.shadow_weights[key] = shadow
+
+        original_adapter = model.active_adapter
+        model.set_adapter(self.teacher_adapter_name)
+        set_peft_model_state_dict(model, self.shadow_weights, adapter_name=self.teacher_adapter_name)
+        model.set_adapter(original_adapter)
 
     @torch.no_grad()
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.global_step % self.sync_steps != 0:
             return
 
-        if not self._initialized:
-            self._initialize_teacher_adapter()
-
-        if self.shadow_weights is None:
-            return
-
-        if self.accelerator is None and "accelerator" in kwargs:
-            self.accelerator = kwargs["accelerator"]
-
-        student_state = self._get_student_state_dict()
-
-        for key, student_param in student_state.items():
-            if key in self.shadow_weights:
-                shadow = self.shadow_weights[key]
-                shadow.data = (1 - self.update_rate) * shadow.data + self.update_rate * student_param.data
-
-        from peft import set_peft_model_state_dict
-
         if self.accelerator is not None:
-            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            model = self.accelerator.unwrap_model(self.model)
         else:
-            unwrapped_model = self.model
+            model = self.model
 
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin if self.accelerator is not None else None
-        teacher_parameters = [
-            parameter
-            for name, parameter in unwrapped_model.named_parameters()
-            if f".{self.teacher_adapter_name}." in name
-        ]
-        should_gather = (
-            deepspeed_plugin is not None
-            and deepspeed_plugin.zero_stage == 3
-            and any(parameter.numel() == 0 for parameter in teacher_parameters)
-        )
-        original_adapter = unwrapped_model.active_adapter
-        unwrapped_model.set_adapter(self.teacher_adapter_name)
-        if should_gather:
-            from deepspeed import zero
+        deepspeed_plugin = AcceleratorState().deepspeed_plugin
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
 
-            with zero.GatheredParameters(teacher_parameters, modifier_rank=0):
-                set_peft_model_state_dict(unwrapped_model, self.shadow_weights, adapter_name=self.teacher_adapter_name)
+            adapter_parameters = [
+                parameter
+                for name, parameter in model.named_parameters()
+                if parameter.requires_grad or f".{self.teacher_adapter_name}." in name
+            ]
+            with deepspeed.zero.GatheredParameters(adapter_parameters, modifier_rank=0):
+                if deepspeed.comm.get_rank() == 0:
+                    self._sync_teacher_adapter(model)
         else:
-            set_peft_model_state_dict(unwrapped_model, self.shadow_weights, adapter_name=self.teacher_adapter_name)
-        unwrapped_model.set_adapter(original_adapter)
-
-    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        if self.accelerator is None and "accelerator" in kwargs:
-            self.accelerator = kwargs["accelerator"]
-        self._initialize_teacher_adapter()
+            self._sync_teacher_adapter(model)
