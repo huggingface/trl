@@ -334,6 +334,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-REDACTEDForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="REDACTED was introduced in transformers-5.20.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
@@ -742,6 +749,15 @@ class TestSFTTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param(
+                "trl-internal-testing/tiny-REDACTEDForCausalLM",
+                0.0,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="REDACTED was introduced in transformers-5.20.0",
+                ),
+            ),
             # Dense model: no coefficient to inherit
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
         ],

@@ -428,6 +428,13 @@ class TestIsConversationalFromValue(TrlTestCase):
 
 class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
+        pytest.param(
+            "trl-internal-testing/tiny-REDACTEDForCausalLM",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.20.0"),
+                reason="REDACTED was introduced in transformers-5.20.0",
+            ),
+        ),
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-Cohere2ForCausalLM",
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",

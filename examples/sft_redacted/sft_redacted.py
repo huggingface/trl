@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl>=1.16.0",
-#     "transformers @ git+https://github.com/huggingface/transformers.git@REDACTED",
+#     "transformers>=5.20.0",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
 #     "flash-attn-4",
@@ -29,7 +29,7 @@ LoRA SFT of REDACTED on one 8xB300 node: the experts are split 8 ways, everythin
 and each rank trains on its own slice of the batch. One epoch is 36 steps of 1.75 s, 32.8k tokens per step,
 223 GiB per GPU.
 
-    sbatch sft_redacted_2.slurm
+    sbatch sft_redacted.slurm
 """
 
 from datasets import load_dataset
@@ -39,8 +39,7 @@ from transformers.distributed import DistributedConfig
 from trl import SFTConfig, SFTTrainer
 
 
-# The checkpoint, staged on the node's local disk.
-MODEL = "REDACTED"
+MODEL = "REDACTED_HUB_ID"
 
 # Assistant turns carry their reasoning in a `thinking` field, which the chat template renders into the analysis
 # channel.

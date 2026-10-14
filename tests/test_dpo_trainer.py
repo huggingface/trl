@@ -185,6 +185,13 @@ class TestDPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-REDACTEDForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="REDACTED was introduced in transformers-5.20.0",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),

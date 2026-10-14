@@ -1377,6 +1377,13 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
 
 
 _FUSED_LM_HEAD_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-REDACTEDForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.0"),
+            reason="REDACTED was introduced in transformers-5.20.0",
+        ),
+    ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
     pytest.param(
@@ -1671,6 +1678,13 @@ class TestAddFusedLMHead:
 
 
 _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-REDACTEDForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.0"),
+            reason="REDACTED was introduced in transformers-5.20.0",
+        ),
+    ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
