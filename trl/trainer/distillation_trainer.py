@@ -1031,6 +1031,7 @@ class DistillationTrainer(_BaseTrainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
