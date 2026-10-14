@@ -22,6 +22,7 @@ on:
       - "trl/experimental/**"
       - "tests/experimental/**"
       - "pyproject.toml"
+  workflow_dispatch:
 
 env:
   TQDM_DISABLE: 1
