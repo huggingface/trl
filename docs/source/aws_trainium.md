@@ -25,13 +25,13 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-On Neuron, `pad_to_multiple_of` defaults to 128 (its `"auto"` value), so the sequences are padded to a multiple of 128. This bounds the number of shapes, and so of compilations, to `max_length / 128`. Without it, every new sequence length triggers a compilation. On one NeuronCore, 20 steps of the example above take 130 s with the default and 260 s with `pad_to_multiple_of=None`.
+On Neuron, `pad_to_multiple_of` defaults to 128 (its `"auto"` value), so the sequences are padded to a multiple of 128. This bounds the number of shapes, and so of compilations, to `max_length / 128`. Without it, every new sequence length triggers a compilation. On one NeuronCore, with `per_device_train_batch_size=4`, 20 steps of the example above take 130 s with the default and 260 s with `pad_to_multiple_of=None`.
 
 The same applies to every trainer that has a `pad_to_multiple_of` option: DPO, KTO, Reward, GRPO, RLOO and Distillation.
 
 ## Compiling the model
 
-Set `torch_compile=True` to compile the model with the `neuron` backend. Dynamo then marks the sequence dimension as dynamic after the second shape, which the Neuron backend doesn't support yet ([#7660](https://github.com/huggingface/trl/issues/7660)). Turn automatic dynamic shapes off:
+Set `torch_compile=True` to compile the model with the `neuron` backend. Dynamo's automatic dynamic shapes produce graphs the Neuron backend can't compile yet ([#7660](https://github.com/huggingface/trl/issues/7660)), so turn them off:
 
 ```python
 import torch
@@ -48,7 +48,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-The first step compiles for about 2 minutes. After that, Qwen3-0.6B trains at 1.15 s/step on one NeuronCore, against 1.71 s/step without compilation.
+The first step compiles for about 2 minutes. After that, with `per_device_train_batch_size=4`, Qwen3-0.6B trains at 1.15 s/step on one NeuronCore, against 1.71 s/step without compilation.
 
 ## Online methods
 
@@ -57,25 +57,36 @@ vLLM doesn't run on Neuron, so GRPO and RLOO generate with Transformers. With th
 ```python
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
-from trl.rewards import accuracy_reward
+
+
+# Reward completions close to 200 characters
+def reward_len(completions, **kwargs):
+    return [-abs(200 - len(completion)) / 100 for completion in completions]
+
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
-    reward_funcs=accuracy_reward,
-    args=GRPOConfig(cache_implementation="static", model_init_kwargs={"dtype": "bfloat16"}),
-    train_dataset=load_dataset("trl-lib/DeepMath-103K", split="train"),
+    model="Qwen/Qwen3-0.6B",
+    reward_funcs=reward_len,
+    args=GRPOConfig(
+        per_device_train_batch_size=4,
+        num_generations=4,
+        max_completion_length=128,
+        cache_implementation="static",
+        model_init_kwargs={"dtype": "bfloat16"},
+    ),
+    train_dataset=load_dataset("trl-lib/tldr", split="train"),
 )
 trainer.train()
 ```
 
-The prompts are padded to `pad_to_multiple_of` before generation too, so the static cache only takes a few sizes. With both, a GRPO step on Qwen3-0.6B (16 completions of 128 tokens) takes 25 to 38 s, against 107 to 119 s with the static cache alone.
+The prompts are padded to `pad_to_multiple_of` before generation too, so the static cache only takes a few sizes. With both, a step of this example takes 25 to 38 s on one NeuronCore, against 107 to 119 s with the static cache alone.
 
 > [!NOTE]
 > The static cache needs a bf16 model for now: with the default fp32 model, the keys and values end up in different dtypes ([#7664](https://github.com/huggingface/trl/issues/7664)).
 
 ## Data parallelism
 
-For example, on a `trn2.3xlarge` instance, which contains one Trainium2 chip, the default [Logical NeuronCore configuration](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/about-neuron/arch/neuron-features/logical-neuroncore-config.html) (`LNC=2`) pairs the chip's 8 physical NeuronCores into 4 logical NeuronCores. 
+On a `trn2.3xlarge` instance, which contains one Trainium2 chip, the default [Logical NeuronCore configuration](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/about-neuron/arch/neuron-features/logical-neuroncore-config.html) (`LNC=2`) pairs the chip's 8 physical NeuronCores into 4 logical NeuronCores.
 
 To train on all four, use [Accelerate](https://huggingface.co/docs/accelerate):
 
