@@ -80,7 +80,8 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    import peft
+    from peft import PeftConfig, PeftModel, PrefixTuningConfig, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -518,6 +519,18 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
+            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if (
+                isinstance(peft_config, PrefixTuningConfig)
+                and Version(peft.__version__) <= Version("0.17.1")
+                and hasattr(model, "hf_device_map")
+            ):
+                raise ValueError(
+                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
+                    "peft, or load the model with `device_map=None`. See "
+                    "https://github.com/huggingface/peft/issues/2821."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
@@ -1037,6 +1050,7 @@ class DistillationTrainer(_BaseTrainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
@@ -1306,7 +1320,9 @@ class DistillationTrainer(_BaseTrainer):
 
             # Decode post-tool completions
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=self.tools)
+                if ids
+                else {}
                 for idx, ids in enumerate(post_tool_ids)
             ]
 
@@ -1344,7 +1360,7 @@ class DistillationTrainer(_BaseTrainer):
                     or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
                 ):
                     completions = [
-                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                        [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=self.tools)]
                         for i, ids in enumerate(completion_ids)
                     ]
                 else:
@@ -1820,6 +1836,18 @@ class DistillationTrainer(_BaseTrainer):
 
         student_lm_head = unwrapped_student.get_output_embeddings()
         teacher_lm_head = unwrapped_teacher.get_output_embeddings()
+
+        # The loss compares the student and teacher logits chunk by chunk, so both heads must share a device
+        if student_lm_head.weight.device != teacher_lm_head.weight.device:
+            raise ValueError(
+                f"The student `lm_head` is on {student_lm_head.weight.device} but the teacher `lm_head` is on "
+                f"{teacher_lm_head.weight.device}. Place both on the same device in their `device_map`."
+            )
+
+        # With the model split across devices (`device_map`), the backbone can end on another device than the head
+        student_hidden_states = student_hidden_states.to(student_lm_head.weight.device)
+        teacher_hidden_states = teacher_hidden_states.to(teacher_lm_head.weight.device)
+        loss_mask = loss_mask.to(student_lm_head.weight.device)
 
         # On VLMs the logit post-processing lives on `text_config`, so read it through `get_text_config()`.
         student_config = unwrapped_student.config.get_text_config()

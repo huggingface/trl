@@ -193,7 +193,7 @@ class TestOpenRewardSpec(TrlTestCase):
         env_b.reset(**spec.train_dataset[1])
         env_a.echo(text="hello")
         assert env_a.reward == 1.0
-        assert env_b.reward == 0.0  # untouched
+        assert env_b.reward is None  # untouched
         env_a._close()
         env_b._close()
 

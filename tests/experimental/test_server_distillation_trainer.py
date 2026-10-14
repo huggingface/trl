@@ -35,8 +35,6 @@ def _make_server_config_kwargs(tmp_path):
     return {
         "output_dir": str(tmp_path),
         "report_to": "none",
-        "use_cpu": True,
-        "bf16": False,
         "teacher_model_server_url": "http://localhost:8000",
     }
 
@@ -176,11 +174,18 @@ def test_build_teacher_request_inputs(
 
 
 class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
-    def test_variable_lengths_use_neg_inf_sentinel_at_padding(self):
-        mock_self = MagicMock()
-        mock_self.teacher_client.get_sequence_logprobs = MagicMock(return_value=_ragged_server_response())
-        mock_self.loss_top_k = 1
-        mock_self.temperature = 1.0
+    def test_variable_lengths_use_neg_inf_sentinel_at_padding(self, monkeypatch):
+        from trl.generation import vllm_client as vllm_client_module
+
+        # Stand in for the teacher server, which cannot run here
+        teacher_client = MagicMock()
+        teacher_client.get_sequence_logprobs.return_value = _ragged_server_response()
+        monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *args, **kwargs: teacher_client)
+        trainer = ServerDistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=ServerDistillationConfig(**_make_server_config_kwargs(self.tmp_dir)),
+            train_dataset=_variable_length_dataset(),
+        )
 
         inputs = {
             "input_ids": torch.tensor([[10, 11, 90, 0, 0], [10, 11, 90, 9217, 100]]),
@@ -188,9 +193,7 @@ class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
             "labels": torch.tensor([[-100, -100, 90, -100, -100], [-100, -100, 90, 9217, 100]]),
         }
 
-        out = ServerDistillationTrainer._get_teacher_token_logprobs_from_server(
-            mock_self, inputs, aligned_prompt_length=2
-        )
+        out = trainer._get_teacher_token_logprobs_from_server(inputs, aligned_prompt_length=2)
 
         assert out["actual_logprobs"].shape == (2, 3)
         assert out["topk_logprobs"].shape == (2, 3, 1)
@@ -266,7 +269,6 @@ class TestServerDistillationTrainerRaggedGrad(TrlTestCase):
             save_strategy="no",
             report_to="none",
             logging_steps=1,
-            use_cpu=not torch.cuda.is_available(),
             bf16=False,
         )
         model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32).to(self.device)

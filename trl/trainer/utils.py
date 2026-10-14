@@ -1341,6 +1341,11 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    # transformers 5.2/5.3 pin a kernels<0.11 that fails to load the Hub kernels (fixed in 5.4.0, transformers#44887)
+    if kwargs.get("use_kernels") and Version("5.2.0") <= Version(transformers.__version__) < Version("5.4.0"):
+        raise ValueError(
+            "`use_kernels=True` requires transformers>=5.4.0: 5.2.0 and 5.3.0 fail to load the Hub kernels."
+        )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
     # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
@@ -1569,6 +1574,12 @@ def add_fused_lm_head(
             `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
             is always computed; each extra field costs a little on every call.
     """
+    if _ChunkedLogProbFunction is None:
+        raise ImportError(
+            "Triton is not installed. Please install it with `pip install triton`. The fused LM head requires it, "
+            "and it is only available on Linux with a CUDA, ROCm or XPU GPU."
+        )
+
     original_forward = model.forward
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)

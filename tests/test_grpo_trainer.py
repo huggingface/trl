@@ -45,6 +45,7 @@ from .testing_utils import (
     require_peft,
     require_peft_target_parameters,
     require_response_parsing,
+    require_torch_accelerator,
     require_vision,
     require_vllm,
 )
@@ -86,22 +87,14 @@ async def async_multiply_tool(a: int, b: int) -> int:
 
 class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
-        """Helper method to test the get_high_entropy_mask functionality."""
-        # Create a mock trainer with minimal setup
-        from unittest.mock import Mock
-
-        # Create a mock accelerator
-        mock_accelerator = Mock()
-        mock_accelerator.num_processes = 1  # Single process for testing
-
-        # Create a minimal trainer instance just to access the method
-        trainer = Mock(spec=GRPOTrainer)
-        trainer.accelerator = mock_accelerator
-        trainer.accelerator.gather = lambda x: x
-        trainer.accelerator.pad_across_processes = lambda x, dim, pad_index: x
-
-        # Call the actual method from GRPOTrainer
-        return GRPOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        return trainer.get_high_entropy_mask(entropies, mask, threshold)
 
     def test_compute_entropy_mask_0(self):
         # We have a total of 12 tokens out of which 10 are non-pad.
@@ -176,6 +169,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
             rollout_func=rollout_func,
         )
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_prefers_rollout_func(self):
         rollout_func = self._make_rollout_func(
             prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[-0.1]], env_mask=[[1]]
@@ -189,6 +183,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert result[2] == [[1]]  # tool_mask (from env_mask)
         assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
         rollout_func = self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[0.0]])
         trainer = self._make_trainer(rollout_func)
@@ -203,6 +198,7 @@ class TestGRPORolloutDispatch(TrlTestCase):
         assert trainer._last_loaded_step == trainer.state.global_step
         assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
         trainer = self._make_trainer(self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]]))
 
@@ -1108,6 +1104,27 @@ class TestGRPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_ref_model_like_model_instance(self):
+        # A policy passed as an instance has no `model_init_kwargs`: the reference is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # set beta to a non-zero value so that the trainer needs a reference model
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.ref_model.dtype == torch.bfloat16
+        assert trainer.ref_model.config._attn_implementation == "eager"
+
     @require_peft_target_parameters
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
@@ -1193,6 +1210,37 @@ class TestGRPOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_torch_accelerator
+    def test_train_with_fp16(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            fp16=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -3444,6 +3492,104 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments_same_tool_name(self):
+        # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
+        # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
+        # With `shuffle_dataset=False` and `num_generations=2`, every generation batch is [zip, zip, count, count].
+        dataset = Dataset.from_dict({"environment": ["zip", "count"] * 8})
+
+        submitted = {"zip": [], "count": []}
+
+        class ZipEnvironment:
+            def reset(self, **kwargs):
+                return "Give the zip code."
+
+            def submit(self, answer: str) -> str:
+                """
+                Submit the zip code.
+
+                Args:
+                    answer: The zip code.
+
+                Returns:
+                    A confirmation.
+                """
+                submitted["zip"].append(answer)
+                return "ok"
+
+        class CountEnvironment:
+            def reset(self, **kwargs):
+                return "Count."
+
+            def submit(self, answer: int) -> str:
+                """
+                Submit the count.
+
+                Args:
+                    answer: The count.
+
+                Returns:
+                    A confirmation.
+                """
+                submitted["count"].append(answer)
+                return "ok"
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            shuffle_dataset=False,  # keep the [zip, zip, count, count] batch layout deterministic
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 4:  # first generation: batch is [zip, zip, count, count]
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 330, 19, 17, 95642, 151658, 151645],
+                        # "I won't<|im_end|>" + pad
+                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 220, 19, 17, 11248, 151658, 151645],
+                        # "Done!<|im_end|>" + pad
+                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # regeneration after tool execution: only the two examples that issued a tool call
+                completion_ids = torch.tensor(
+                    [
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert submitted["zip"] and all(answer == "42" for answer in submitted["zip"])
+        assert submitted["count"] and all(answer == 42 for answer in submitted["count"])
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
