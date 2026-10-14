@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import importlib
 import importlib.metadata
 import importlib.util
@@ -22,7 +23,23 @@ from packaging.version import Version
 
 
 LIGER_KERNEL_MIN_VERSION = "0.8.2"
-PACKAGE_DISTRIBUTION_MAPPING = importlib.metadata.packages_distributions()
+
+
+@functools.cache
+def _get_package_distribution_mapping():
+    return importlib.metadata.packages_distributions()
+
+
+def __getattr__(name: str):
+    if name == "PACKAGE_DISTRIBUTION_MAPPING":
+        warnings.warn(
+            "PACKAGE_DISTRIBUTION_MAPPING is deprecated and will be removed in a future version. "
+            "Distribution mappings are now loaded lazily on demand.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return _get_package_distribution_mapping()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # From transformers: https://github.com/huggingface/transformers/blob/556312cd45a5e619c41b0f8adf680eab0d334324/src/transformers/utils/import_utils.py#L48-L77
@@ -32,25 +49,37 @@ def _is_package_available(pkg_name: str, return_version: bool = False) -> tuple[
     package_exists = spec is not None
     package_version = "N/A"
     if package_exists and return_version:
+        # Fast path: try the package name and normalized package name directly.
+        # For the vast majority of packages (e.g. transformers, torch, peft, vllm, liger-kernel),
+        # the distribution name matches the package name (or with '-' instead of '_').
+        # This avoids scanning every installed distribution via packages_distributions().
         try:
-            # importlib.metadata works with the distribution package, which may be different from the import
-            # name (e.g. `PIL` is the import name, but `pillow` is the distribution name)
-            distributions = PACKAGE_DISTRIBUTION_MAPPING[pkg_name]
-            # Per PEP 503, underscores and hyphens are equivalent in package names.
-            # Prefer the distribution that matches the (normalized) package name.
-            normalized_pkg_name = pkg_name.replace("_", "-")
-            if normalized_pkg_name in distributions:
-                distribution_name = normalized_pkg_name
-            elif pkg_name in distributions:
-                distribution_name = pkg_name
-            else:
-                distribution_name = distributions[0]
-            package_version = importlib.metadata.version(distribution_name)
+            try:
+                package_version = importlib.metadata.version(pkg_name)
+            except importlib.metadata.PackageNotFoundError:
+                normalized_pkg_name = pkg_name.replace("_", "-")
+                package_version = importlib.metadata.version(normalized_pkg_name)
         except (importlib.metadata.PackageNotFoundError, KeyError):
-            # If we cannot find the metadata (because of editable install for example), try to import directly.
-            # Note that this branch will almost never be run, so we do not import packages for nothing here
-            package = importlib.import_module(pkg_name)
-            package_version = getattr(package, "__version__", "N/A")
+            try:
+                # importlib.metadata works with the distribution package, which may be different from the import
+                # name (e.g. `PIL` is the import name, but `pillow` is the distribution name)
+                distributions = _get_package_distribution_mapping().get(pkg_name, [])
+                if distributions:
+                    normalized_pkg_name = pkg_name.replace("_", "-")
+                    if normalized_pkg_name in distributions:
+                        distribution_name = normalized_pkg_name
+                    elif pkg_name in distributions:
+                        distribution_name = pkg_name
+                    else:
+                        distribution_name = distributions[0]
+                    package_version = importlib.metadata.version(distribution_name)
+                else:
+                    raise importlib.metadata.PackageNotFoundError(pkg_name)
+            except (importlib.metadata.PackageNotFoundError, KeyError):
+                # If we cannot find the metadata (because of editable install for example), try to import directly.
+                # Note that this branch will almost never be run, so we do not import packages for nothing here
+                package = importlib.import_module(pkg_name)
+                package_version = getattr(package, "__version__", "N/A")
     if return_version:
         return package_exists, package_version
     else:
