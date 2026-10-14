@@ -75,10 +75,14 @@ The prompts are padded to `pad_to_multiple_of` before generation too, so the sta
 
 ## Data parallelism
 
-A Trainium2 device exposes 4 logical NeuronCores. Train on all of them with [Accelerate](https://huggingface.co/docs/accelerate):
+For example, on a `trn2.3xlarge` instance, which contains one Trainium2 chip, the default [Logical NeuronCore configuration](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/about-neuron/arch/neuron-features/logical-neuroncore-config.html) (`LNC=2`) pairs the chip's 8 physical NeuronCores into 4 logical NeuronCores. 
+
+To train on all four, use [Accelerate](https://huggingface.co/docs/accelerate):
 
 ```bash
 accelerate launch --num_processes 4 train.py
 ```
 
-SFT scales to 3.6x on 4 NeuronCores. To pin a run to some NeuronCores with `NEURON_RT_VISIBLE_CORES`, use the pairs `0,1` or `2,3`, or all four: the Neuron runtime fails to set up the collectives on `1,2`.
+In this setup, SFT runs 3.6x faster on 4 NeuronCores than on 1.
+
+To restrict a run to a subset of NeuronCores, set `NEURON_RT_VISIBLE_CORES` to `0,1`, `2,3`, or `0-3`. Other combinations such as `1,2` are not supported: the Neuron runtime fails to set up collectives across them.
