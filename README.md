@@ -22,7 +22,7 @@
 
 ## 🎉 What's New
 
-**🚀 Training on AWS Trainium:** every TRL trainer now runs on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend. Sequences are padded to a multiple of 128 by default on Neuron, so the model compiles a handful of times instead of at every new sequence length.
+**🚀 Training on AWS Trainium:** every TRL trainer now runs on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Overview
 
