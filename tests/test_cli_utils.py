@@ -67,7 +67,9 @@ class TestTrlParser(TrlTestCase):
     @pytest.mark.parametrize(
         "config_cls", [DistillationConfig, DPOConfig, GRPOConfig, KTOConfig, RewardConfig, RLOOConfig, SFTConfig]
     )
-    @pytest.mark.parametrize(("value", "expected"), [("128", 128), ("None", None), ("auto", None)])
+    @pytest.mark.parametrize(
+        ("value", "expected"), [("128", 128), ("None", None), ("none", None), ("null", None), ("auto", None)]
+    )
     def test_pad_to_multiple_of_from_command_line(self, config_cls, value, expected):
         """`pad_to_multiple_of` arrives as a string on the command line; `"auto"` resolves to `None` off Neuron."""
         parser = TrlParser(dataclass_types=[config_cls])

@@ -380,7 +380,9 @@ class DPOConfig(_BaseConfig):
         super().__post_init__()
         # The CLI passes the value as a string
         if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
-            self.pad_to_multiple_of = None if self.pad_to_multiple_of == "None" else int(self.pad_to_multiple_of)
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
         if self.pad_to_multiple_of == "auto":
             # Neuron compiles once per input shape, so padding bounds the number of compilations
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
