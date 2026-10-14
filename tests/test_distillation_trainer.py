@@ -1534,6 +1534,8 @@ class TestDistillationTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        # A text-only batch would leave the vision tower without gradients, so DDP looks for unused parameters
+        assert trainer.args.ddp_find_unused_parameters
 
         trainer.train()
 
