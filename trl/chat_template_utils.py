@@ -14,6 +14,7 @@
 
 import re
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
@@ -33,12 +34,19 @@ _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 # reports a dev version) ahead of the 5.13.0 release.
 _SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0.dev0")
 
+# `parse_response(..., tools=...)`, which types the tool-call arguments with the calling tool's JSON schema, landed in
+# transformers 5.15.0 (huggingface/transformers#47529).
+_SUPPORTS_PARSE_RESPONSE_TOOLS = Version(transformers.__version__) >= Version("5.15.0")
 
-def has_generation_markers(chat_template: str) -> bool:
+
+def has_generation_markers(chat_template: str | dict[str, str]) -> bool:
     """
     Check whether the chat template defines `{% generation %}` markers, accounting for whitespace-trim variants such as
-    `{%- generation %}` and `{%- generation -%}`.
+    `{%- generation %}` and `{%- generation -%}`. For a chat template shipped as named variants, the `default` variant
+    is checked.
     """
+    if isinstance(chat_template, dict):
+        chat_template = chat_template["default"]
     return re.search(r"\{%-?\s*generation\s*-?%\}", chat_template) is not None
 
 
@@ -350,6 +358,13 @@ qwen3_template = {
     },
 }
 
+# Qwen3.5, GLM-4-MoE and Nemotron 3 render a string tool-call argument as raw text, so `"75001"` and `75001` render the
+# same. Only the tool's JSON schema can tell them apart: on transformers >= 5.15, where `parse_response` types the
+# arguments from `tools`, the values are kept as text. Older versions guess the type with a lenient JSON parse.
+_XML_INLINE_VALUE_PARSER = (
+    {"name": "text"} if _SUPPORTS_PARSE_RESPONSE_TOOLS else {"name": "json", "args": {"allow_non_json": True}}
+)
+
 qwen3_5_template = {
     "defaults": {"role": "assistant"},
     "start_anchor": "<|im_start|>assistant\n",
@@ -366,7 +381,7 @@ qwen3_5_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
-                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+                "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
@@ -393,7 +408,7 @@ glm4moe_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
-                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+                "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
@@ -517,7 +532,7 @@ nemotron_3_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
-                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+                "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
@@ -594,6 +609,14 @@ gemma3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma3.jinja").read_text(encoding
 
 gemma4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4.jinja").read_text(encoding="utf-8")
 
+gemma4_v2_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v2.jinja").read_text(encoding="utf-8")
+
+gemma4_v3_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v3.jinja").read_text(encoding="utf-8")
+
+gemma4_v4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v4.jinja").read_text(encoding="utf-8")
+
+gemma4_v5_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5.jinja").read_text(encoding="utf-8")
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
@@ -602,7 +625,11 @@ idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(enco
 
 lfm2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2.jinja").read_text(encoding="utf-8")
 
+lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encoding="utf-8")
+
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
+
+lfm2_2_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v2.jinja").read_text(encoding="utf-8")
 
 lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
 
@@ -648,6 +675,9 @@ qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
 
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
+
+# Also matches SmolVLM2, which ships a byte-identical chat template.
+smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
 
 
 ProcessingClassT = TypeVar("ProcessingClassT", PreTrainedTokenizerBase, ProcessorMixin)
@@ -721,11 +751,22 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         nemotron_3_5_lightning_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
-    elif chat_template in [lfm2_2_5_chat_template, lfm2_2_5_vl_chat_template]:
-        # Only the new-style template; the legacy schema is on its way out, so it isn't worth adding for a family whose
-        # tokenizer already requires transformers >= 5.0.0.
+    elif chat_template in [
+        lfm2_v2_chat_template,
+        lfm2_2_5_chat_template,
+        lfm2_2_5_v2_chat_template,
+        lfm2_2_5_vl_chat_template,
+    ]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
         schema, template = None, lfm2_2_5_template
-    elif chat_template == gemma4_chat_template:
+    elif chat_template in [
+        gemma4_chat_template,
+        gemma4_v2_chat_template,
+        gemma4_v3_chat_template,
+        gemma4_v4_chat_template,
+        gemma4_v5_chat_template,
+    ]:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
         schema, template = None, gemma4_template
@@ -978,6 +1019,8 @@ idefics3_training_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3_training.jinj
 
 lfm2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_training.jinja").read_text(encoding="utf-8")
 
+lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja").read_text(encoding="utf-8")
+
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
@@ -1028,6 +1071,8 @@ qwen3_6_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6_training.jinja"
 
 qwen3_8_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8_training.jinja").read_text(encoding="utf-8")
 
+smolvlm_training_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm_training.jinja").read_text(encoding="utf-8")
+
 
 def get_training_chat_template(
     processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
@@ -1038,9 +1083,7 @@ def get_training_chat_template(
 
     Returns a patched chat template that is prefix-preserving and includes `{%% generation %%}` / `{%% endgeneration
     %%}` markers for assistant-only loss masking. Returns `None` if the template already satisfies both requirements.
-    Currently Cohere, Cohere 2, DeepSeek-V3, DeepSeek-R1-Distill, Gemma, Gemma 2, Gemma 3, GLM-4-MoE, GPT-OSS,
-    Idefics3, LFM2, LLaMA 3, Muse Glimmer, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the
-    Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, and Qwen3.8 are supported.
+    The supported templates are listed in [Training templates](chat_templates#training-templates).
 
     Args:
         processing_class (`PreTrainedTokenizerBase` or `ProcessorMixin`):
@@ -1100,98 +1143,109 @@ def get_training_chat_template(
     if processing_class is None:
         raise TypeError("get_training_chat_template() missing required argument: 'processing_class'")
 
+    # A chat template shipped as named variants loads as a dict, whose `default` variant is the one stored here
+    chat_template = processing_class.chat_template
+    if isinstance(chat_template, dict):
+        chat_template = chat_template["default"]
+
     # First check if patching is needed. Prefix-preservation only matters when the template actually supports tools
     # (the check itself renders a tool message), so skip it otherwise.
     prefix_ok = not supports_tool_calling(processing_class) or is_chat_template_prefix_preserving(processing_class)
-    if prefix_ok and has_generation_markers(processing_class.chat_template):
+    if prefix_ok and has_generation_markers(chat_template):
         return None  # No patching needed
 
-    if processing_class.chat_template == cohere_chat_template:
+    if chat_template == cohere_chat_template:
         return cohere_training_chat_template
 
-    if processing_class.chat_template == cohere2_chat_template:
+    if chat_template == cohere2_chat_template:
         return cohere2_training_chat_template
 
-    if processing_class.chat_template == deepseek_r1_distill_chat_template:
+    if chat_template == deepseek_r1_distill_chat_template:
         return deepseek_r1_distill_training_chat_template
 
-    if processing_class.chat_template == deepseekv3_chat_template:
+    if chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
-    if processing_class.chat_template == diffusion_gemma_chat_template:
+    if chat_template == diffusion_gemma_chat_template:
         return diffusion_gemma_training_chat_template
 
-    if processing_class.chat_template == gemma_chat_template:
+    if chat_template == gemma_chat_template:
         return gemma_training_chat_template
 
-    if processing_class.chat_template == gemma3_chat_template:
+    if chat_template == gemma3_chat_template:
         return gemma3_training_chat_template
 
-    if processing_class.chat_template == glm4moe_chat_template:
+    if chat_template == glm4moe_chat_template:
         return glm4moe_training_chat_template
 
-    if processing_class.chat_template == gptoss_chat_template:
+    if chat_template == gptoss_chat_template:
         return gptoss_training_chat_template
 
-    if processing_class.chat_template == idefics3_chat_template:
+    if chat_template == idefics3_chat_template:
         return idefics3_training_chat_template
 
-    if processing_class.chat_template == lfm2_chat_template:
+    if chat_template == lfm2_chat_template:
         return lfm2_training_chat_template
 
-    if processing_class.chat_template == llama3_chat_template:
+    if chat_template == lfm2_v2_chat_template:
+        return lfm2_v2_training_chat_template
+
+    if chat_template == llama3_chat_template:
         return llama3_training_chat_template
 
-    if processing_class.chat_template == llava_next_chat_template:
+    if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
 
-    if processing_class.chat_template == muse_glimmer_chat_template:
+    if chat_template == muse_glimmer_chat_template:
         return muse_glimmer_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_nano_chat_template:
+    if chat_template == nemotron_3_nano_chat_template:
         return nemotron_3_nano_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_super_chat_template:
+    if chat_template == nemotron_3_super_chat_template:
         return nemotron_3_super_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_ultra_chat_template:
+    if chat_template == nemotron_3_ultra_chat_template:
         return nemotron_3_ultra_training_chat_template
 
-    if processing_class.chat_template == nemotron_3_5_lightning_chat_template:
+    if chat_template == nemotron_3_5_lightning_chat_template:
         return nemotron_3_5_lightning_training_chat_template
 
-    if processing_class.chat_template == phi3_chat_template:
+    if chat_template == phi3_chat_template:
         return phi3_training_chat_template
 
-    if processing_class.chat_template == phi3_5_chat_template:
+    if chat_template == phi3_5_chat_template:
         return phi3_5_training_chat_template
 
-    if processing_class.chat_template == qwen2_5_chat_template:
+    if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
-    if processing_class.chat_template == qwen2_5_vl_chat_template:
+    if chat_template == qwen2_5_vl_chat_template:
         return qwen2_5_vl_training_chat_template
 
-    if processing_class.chat_template == qwen3_chat_template:
+    if chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
-    if processing_class.chat_template == qwen3_instruct_2507_chat_template:
+    if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
 
-    if processing_class.chat_template == qwen3_vl_chat_template:
+    if chat_template == qwen3_vl_chat_template:
         return qwen3_vl_training_chat_template
 
-    if processing_class.chat_template == qwen3_5_nothink_chat_template:
+    if chat_template == qwen3_5_nothink_chat_template:
         return qwen3_5_nothink_training_chat_template
 
-    if processing_class.chat_template == qwen3_5_think_chat_template:
+    if chat_template == qwen3_5_think_chat_template:
         return qwen3_5_think_training_chat_template
 
-    if processing_class.chat_template == qwen3_6_chat_template:
+    if chat_template == qwen3_6_chat_template:
         return qwen3_6_training_chat_template
 
-    if processing_class.chat_template == qwen3_8_chat_template:
+    if chat_template == qwen3_8_chat_template:
         return qwen3_8_training_chat_template
+
+    if chat_template == smolvlm_chat_template:
+        return smolvlm_training_chat_template
 
     raise ValueError(
         "The chat template is not training-compatible (missing prefix-preservation or `{% generation %}` markers) "
@@ -1237,7 +1291,12 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: list[int] | None = None) -> dict:
+def parse_response(
+    tokenizer: PreTrainedTokenizerBase,
+    ids: list[int],
+    prefix: list[int] | None = None,
+    tools: list[dict | Callable] | None = None,
+) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -1257,6 +1316,10 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
             including the assistant header / any template-emitted thinking opener). Only used when the tokenizer has a
             new-style `response_template` set and the installed transformers supports it (>= 5.13); ignored for legacy
             `response_schema`.
+        tools (`list[dict | Callable]`, *optional*):
+            Tools available to the model, in the format `apply_chat_template` accepts. Tool-call arguments are typed
+            with the calling tool's JSON schema: `"7"` becomes `7` for an integer parameter and stays `"7"` for a
+            string one. Only used with a new-style `response_template` on transformers >= 5.15.
 
     Returns:
         `dict`:
@@ -1285,7 +1348,11 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
             and _SUPPORTS_RESPONSE_TEMPLATE
             and getattr(tokenizer, "response_template", None) is not None
         ):
-            parsed = tokenizer.parse_response(ids, prefix=prefix)
+            # `tools=` is only supported from transformers 5.15
+            if _SUPPORTS_PARSE_RESPONSE_TOOLS:
+                parsed = tokenizer.parse_response(ids, prefix=prefix, tools=tools)
+            else:
+                parsed = tokenizer.parse_response(ids, prefix=prefix)
         else:
             parsed = tokenizer.parse_response(ids)
         if parsed is None:  # this can happen if the response is heavily truncated and even the content is lost

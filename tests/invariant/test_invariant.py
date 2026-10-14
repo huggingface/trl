@@ -214,7 +214,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         ],
     },
     "sft_fa2": {
-        # loss_type not pinned; this class exercises the current SFTConfig default ("chunked_nll").
+        # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
         # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
         # The grad_norm tol (5.0) is intentionally ~50× looser than the non-FA2 sft class (0.1): it is sized to the
         # FA2 varlen kernel noise observed in practice, not a regression budget. Do not tighten it without re-running

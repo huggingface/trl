@@ -850,7 +850,7 @@ class GOLDTrainer(SFTTrainer):
                 ).model_type
             else:
                 # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
-                if teacher_model.config.vision_config is None:
+                if "vision_config" not in teacher_model.config.sub_configs:
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
                         "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
@@ -1246,7 +1246,10 @@ class GOLDTrainer(SFTTrainer):
         }
 
         with unwrap_model_for_generation(
-            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             (
                 new_input_ids,
@@ -1622,6 +1625,7 @@ class GOLDTrainer(SFTTrainer):
             self.model,
             self.accelerator,
             generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             max_completion_length = self.generation_config.max_new_tokens
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None

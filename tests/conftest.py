@@ -102,6 +102,8 @@ def apply_model_revisions(monkeypatch):
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        AutoProcessor,
+        AutoTokenizer,
         PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,
@@ -143,6 +145,10 @@ def apply_model_revisions(monkeypatch):
         AutoConfig,
         AutoModelForCausalLM,
         AutoModelForSequenceClassification,
+        # `AutoTokenizer`/`AutoProcessor` resolve the chat template before dispatching, so patching only the base
+        # classes loads it from the default branch.
+        AutoProcessor,
+        AutoTokenizer,
         PretrainedConfig,
         PreTrainedModel,
         PreTrainedTokenizerBase,

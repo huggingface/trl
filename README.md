@@ -22,7 +22,7 @@
 
 ## 🎉 What's New
 
-**📜 Training beyond 1M tokens:** A new [long context guide](https://huggingface.co/docs/trl/long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
+**⚡ Up to 6.9× longer sequences on the same GPU:** SFT, DPO, KTO, GRPO and RLOO now score tokens with a [fused LM head](https://huggingface.co/docs/trl/reducing_memory_usage) **by default**. At 8k tokens that is 52% to 82% less peak VRAM.
 
 ## Overview
 

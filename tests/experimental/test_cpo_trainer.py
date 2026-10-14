@@ -111,6 +111,24 @@ class TestCPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_cpo_trainer_truncation(self):
+        # Each response is truncated to `max_length` minus the prompt length. The prompt is never truncated, so a prompt
+        # longer than `max_length` is kept whole with an empty completion.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = CPOConfig(output_dir=self.tmp_dir, report_to="none")
+        full = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+        training_args = CPOConfig(output_dir=self.tmp_dir, max_length=8, report_to="none")
+        truncated = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+
+        for full_row, truncated_row in zip(full, truncated, strict=True):
+            length = max(8, len(full_row["prompt_input_ids"]))
+            assert truncated_row["chosen_input_ids"] == full_row["chosen_input_ids"][:length]
+            assert truncated_row["rejected_input_ids"] == full_row["rejected_input_ids"][:length]
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [

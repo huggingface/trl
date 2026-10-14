@@ -132,11 +132,11 @@ While training and evaluating, we record the following metrics:
 - `loss`: The average DPO loss over the current logging interval.
 - `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
 - `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
-- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
+- `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the token from the chosen completion.
 - `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 - `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
-- `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
-- `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion. This metric is omitted when `use_liger_kernel=True` because the chunked path does not materialize logits.
+- `logits/chosen`: The average logit values assigned by the model to the tokens in the chosen completion.
+- `logits/rejected`: The average logit values assigned by the model to the tokens in the rejected completion.
 - `logps/chosen`: The average log-probability assigned by the model to the tokens in the chosen completion.
 - `logps/rejected`: The average log-probability assigned by the model to the tokens in the rejected completion.
 - `rewards/chosen`: The average implicit reward computed for the chosen completion, computed as  \\( \beta \log \frac{\pi_{\theta}(y^{+}\!\mid x)}{\pi_{\mathrm{ref}}(y^{+}\!\mid x)} \\).
@@ -151,11 +151,7 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
 - `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-- With `use_liger_kernel=True`:
-  - `use_weighting=True` is not supported,
-  - `compute_metrics` is not supported,
-  - PEFT adapters targeting `lm_head` and prompt-learning PEFT methods are not supported,
-  - the MoE load-balancing auxiliary loss is not supported.
+- PEFT adapters targeting `lm_head` are not supported (use `modules_to_save=["lm_head"]` instead).
 - `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 - `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 - `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
@@ -238,10 +234,6 @@ trainer.train()
 > ```python
 > DPOConfig(learning_rate=1e-5, ...)
 > ```
-
-### Train with Liger Kernel
-
-Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ### Rapid Experimentation for DPO
 
