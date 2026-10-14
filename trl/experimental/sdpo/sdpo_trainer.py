@@ -329,6 +329,8 @@ class SDPOTrainer(_BaseTrainer):
     next-token predictions back into the policy.
     """
 
+    loss_is_scaled_for_ga = True
+
     config_cls = SDPOConfig
     _tag_names = ["trl", "sdpo"]
     _name = "SDPO"
@@ -521,7 +523,6 @@ class SDPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -574,7 +575,6 @@ class SDPOTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
         self.importance_sampling_level = args.importance_sampling_level
         self.scale_rewards = args.scale_rewards
@@ -724,10 +724,13 @@ class SDPOTrainer(_BaseTrainer):
 
         # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
         # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
-        model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs = dict(self.args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # A student passed as an instance wasn't loaded from `model_init_kwargs`, so build the teacher like it
+        model_init_kwargs.setdefault("dtype", self.model.dtype)
+        model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()

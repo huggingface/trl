@@ -103,7 +103,7 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -282,6 +282,8 @@ class GRPOTrainer(_BaseTrainer):
             any time without prior notice.
     """
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "grpo"]
     _name = "GRPO"
     _paper = {
@@ -384,6 +386,17 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -448,6 +461,18 @@ class GRPOTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
+            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if (
+                isinstance(peft_config, PrefixTuningConfig)
+                and Version(peft.__version__) <= Version("0.17.1")
+                and hasattr(model, "hf_device_map")
+            ):
+                raise ValueError(
+                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
+                    "peft, or load the model with `device_map=None`. See "
+                    "https://github.com/huggingface/peft/issues/2821."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model) and args.beta != 0.0:
@@ -942,12 +967,6 @@ class GRPOTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
-            # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
-            # global accumulated batch. To control scaling ourselves, we must disable Trainer's built-in scaling. The
-            # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
-            # that behavior without rewriting `training_step`.
-            compute_loss_func="non-None value to disable scaling",
         )
 
         # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
@@ -978,6 +997,9 @@ class GRPOTrainer(_BaseTrainer):
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+            model_init_kwargs.setdefault("dtype", self.model.dtype)
+            model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
@@ -1116,6 +1138,19 @@ class GRPOTrainer(_BaseTrainer):
                 generation_kwargs=args.generation_kwargs,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+            # The importance sampling correction needs logprobs after temperature scaling and logit processing.
+            if (
+                self.vllm_mode == "server"
+                and self.vllm_importance_sampling_correction
+                and self.accelerator.is_main_process
+            ):
+                logprobs_mode = self.vllm_generation.vllm_client.get_server_info()["model_config"]["logprobs_mode"]
+                if logprobs_mode != "processed_logprobs":
+                    logger.warning(
+                        f"The vLLM server runs with `--logprobs-mode {logprobs_mode}`, which biases the importance "
+                        "sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or set "
+                        "`vllm_importance_sampling_correction=False`."
+                    )
         else:
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
@@ -1136,10 +1171,6 @@ class GRPOTrainer(_BaseTrainer):
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
         self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
@@ -1751,7 +1782,10 @@ class GRPOTrainer(_BaseTrainer):
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    self.model_wrapped,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
@@ -1776,8 +1810,18 @@ class GRPOTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
-            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            padded_ids = pad(
+                prompt_tensors,
+                padding_value=self._tokenizer.pad_token_id,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            attention_mask = pad(
+                [torch.ones_like(t) for t in prompt_tensors],
+                padding_value=0,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
             for k, v in multimodal_fields.items():
@@ -1785,7 +1829,12 @@ class GRPOTrainer(_BaseTrainer):
                     generate_inputs[k] = v
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
-                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                    generate_inputs[k] = pad(
+                        [torch.tensor(x) for x in v],
+                        padding_value=0,
+                        padding_side="left",
+                        pad_to_multiple_of=self.pad_to_multiple_of,
+                    )
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
 
@@ -1813,6 +1862,7 @@ class GRPOTrainer(_BaseTrainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
@@ -2109,9 +2159,17 @@ class GRPOTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions
+            # Decode post-tool completions, each with the tools its prompt was rendered with
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[self._batch_environments[i]] for i in idxs_with_tool]
+            else:
+                per_prompt_tools = [self.tools] * len(idxs_with_tool)
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                parse_response(
+                    self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=per_prompt_tools[idx]
+                )
+                if ids
+                else {}
                 for idx, ids in enumerate(post_tool_ids)
             ]
 
@@ -2170,8 +2228,13 @@ class GRPOTrainer(_BaseTrainer):
                 getattr(self._tokenizer, "response_template", None) is not None  # new-style
                 or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
+                # Parse each completion with the tools its prompt was rendered with
+                if self.environment_factories is not None:
+                    per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+                else:
+                    per_prompt_tools = [self.tools] * len(prompts)
                 completions = [
-                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=per_prompt_tools[i])]
                     for i, ids in enumerate(completion_ids)
                 ]
             else:

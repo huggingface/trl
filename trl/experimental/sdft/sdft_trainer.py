@@ -206,6 +206,8 @@ class DemonstrationTeacherContextBuilder:
 class SDFTTrainer(_BaseTrainer):
     """Trainer for SDFT-style on-policy self-distillation with explicit teacher prompts."""
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
     config_cls = SDFTConfig
@@ -231,7 +233,7 @@ class SDFTTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if isinstance(train_dataset, IterableDataset):
             raise NotImplementedError("Iterable datasets are not yet supported in SDFTTrainer.")
@@ -393,7 +395,6 @@ class SDFTTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -446,7 +447,6 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
@@ -519,10 +519,13 @@ class SDFTTrainer(_BaseTrainer):
 
         # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
         # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
-        model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs = dict(self.args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # A student passed as an instance wasn't loaded from `model_init_kwargs`, so build the teacher like it
+        model_init_kwargs.setdefault("dtype", self.model.dtype)
+        model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()

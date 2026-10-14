@@ -1,4 +1,4 @@
-.PHONY: test precommit slow_tests test_experimental claude clean-ai
+.PHONY: test precommit test_experimental claude clean-ai
 
 # Transient infrastructure errors that are worth retrying, matched against "<ExceptionType>: <message>":
 #  - OSError, Timeout, HTTPError 502/504: Hub flakiness
@@ -7,14 +7,11 @@ rerun_errors := (OSError|Timeout|HTTPError.*502|HTTPError.*504|out of memory|STA
 
 # `--dist loadgroup` keeps the vLLM server tests (`xdist_group("vllm_server")`) on one worker, since they share a port
 test:
-	pytest -n auto --dist loadgroup -m "not slow and not low_priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' tests
+	pytest -n auto --dist loadgroup -s -v --reruns 5 --reruns-delay 1 --only-rerun '$(rerun_errors)' tests
 
 precommit:
 	python scripts/add_copyrights.py
 	pre-commit run --all-files
-
-slow_tests:
-	pytest -m "slow" tests/ $(PYTEST_ARGS)
 
 test_experimental:
 	pytest -n auto -s -v tests/experimental

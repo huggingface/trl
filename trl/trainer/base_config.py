@@ -42,8 +42,9 @@ class _BaseConfig(TrainingArguments):
             the documentation of each scheduler for possible values.
         use_liger_kernel (`bool`, *optional*, defaults to `False`):
             Enable [Liger Kernel](https://github.com/linkedin/Liger-Kernel) optimizations: transformers patches the
-            model's layers with Liger's Triton kernels. See the [Liger Kernel Integration](liger_kernel_integration)
-            guide.
+            model's layers with Liger's Triton kernels. Deprecated in [`SFTTrainer`], [`DPOTrainer`], [`KTOTrainer`],
+            [`GRPOTrainer`] and [`RLOOTrainer`], and will be removed in v2.0.0: use `model_init_kwargs={"use_kernels":
+            True}` instead.
         torch_empty_cache_steps (`int`, *optional*):
             Number of steps to wait before calling `torch.<device>.empty_cache()`. If left unset or set to None, cache
             will not be emptied. This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of
@@ -90,7 +91,9 @@ class _BaseConfig(TrainingArguments):
     use_liger_kernel: bool = field(
         default=False,
         metadata={
-            "help": "Enable Liger Kernel optimizations: transformers patches the model's layers with Liger's Triton kernels."
+            "help": "Enable Liger Kernel optimizations: transformers patches the model's layers with Liger's Triton kernels. "
+            "Deprecated in `SFTTrainer`, `DPOTrainer`, `KTOTrainer`, `GRPOTrainer` and `RLOOTrainer`, and will be "
+            'removed in v2.0.0: use `model_init_kwargs={"use_kernels": True}` instead.'
         },
     )
     # - Introduced in v4.54.1; fixed in v5.3.0

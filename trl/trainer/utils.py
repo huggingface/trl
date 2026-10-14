@@ -55,13 +55,19 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import ModelOutput, is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available, is_triton_available
 
+from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..trainer.model_config import ModelConfig
 
 
 if is_comet_available():
     import comet_ml
+
+
+if is_triton_available():
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 
 
 if is_peft_available():
@@ -501,14 +507,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-try:
-    from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
-    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
-except ImportError:  # Triton ships with PyTorch on Linux only
-    _ChunkedLogProbFunction = None
-    _fused_logprob_entropy = None
-
-
 def _supports_trl_loss_kernel(
     logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
 ) -> bool:
@@ -571,7 +569,7 @@ def selective_log_softmax(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs
 
@@ -624,7 +622,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits):
+    if is_triton_available() and _supports_trl_loss_kernel(logits):
         index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
         _, entropy = _fused_logprob_entropy(logits, index)
         return entropy
@@ -698,7 +696,7 @@ def selective_log_softmax_and_entropy(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs, entropy if entropy_requires_grad else entropy.detach()
     if temperature != 1.0:
@@ -1341,6 +1339,11 @@ def create_model_from_path(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
+    # transformers 5.2/5.3 pin a kernels<0.11 that fails to load the Hub kernels (fixed in 5.4.0, transformers#44887)
+    if kwargs.get("use_kernels") and Version("5.2.0") <= Version(transformers.__version__) < Version("5.4.0"):
+        raise ValueError(
+            "`use_kernels=True` requires transformers>=5.4.0: 5.2.0 and 5.3.0 fail to load the Hub kernels."
+        )
     # Respect CPU-only execution: device_map="auto" dispatches the model to the GPU even when the user requested
     # use_cpu=True, which later splits models across devices (e.g. a teacher placed on CPU vs. a student on GPU).
     # On MPS, "auto" segfaults when casting bf16 weights to float32 (huggingface/transformers#48029).
@@ -1361,6 +1364,9 @@ def create_model_from_path(
             else:
                 architecture = AutoModelForCausalLM
     model = architecture.from_pretrained(model_id, **kwargs)
+    # transformers 5.3.0 skips tying remote-code tied embeddings, leaving them on meta (transformers#44469)
+    if Version(transformers.__version__) == Version("5.3.0"):
+        model.tie_weights()
     return model
 
 
@@ -1631,23 +1637,28 @@ def add_fused_lm_head(
             weight = weight.full_tensor()
             if bias is not None:
                 bias = bias.full_tensor()
+        # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
+        # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
+        compact = _use_triton(hidden_states.device)
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
             per_token = _ChunkedLogProbFunction.apply(
-                hidden_states[mask],
+                hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
                 weight,
                 bias,
-                labels[mask],
+                labels[mask] if compact else labels.clamp(min=0).reshape(-1),
                 temperature,
                 _CHUNKED_LOGPROB_CHUNK_SIZE,
                 final_logit_softcapping,
                 logit_scale,
                 outputs,
             )
-        # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
-        # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
-            None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
-        )
+        if compact:
+            # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+            # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+            per_token = (None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        else:
+            per_token = (None if x is None else x.view(mask.shape).masked_fill(~mask, 0) for x in per_token)
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = per_token
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
