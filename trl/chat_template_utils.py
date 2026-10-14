@@ -14,6 +14,7 @@
 
 import re
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
@@ -32,6 +33,10 @@ _CHAT_TEMPLATES_DIR = Path(__file__).parent / "chat_templates"
 # `response_schema` parser. We gate on `5.13.0.dev0` so the feature is also active on transformers `main` (which
 # reports a dev version) ahead of the 5.13.0 release.
 _SUPPORTS_RESPONSE_TEMPLATE = Version(transformers.__version__) >= Version("5.13.0.dev0")
+
+# `parse_response(..., tools=...)`, which types the tool-call arguments with the calling tool's JSON schema, landed in
+# transformers 5.15.0 (huggingface/transformers#47529).
+_SUPPORTS_PARSE_RESPONSE_TOOLS = Version(transformers.__version__) >= Version("5.15.0")
 
 
 def has_generation_markers(chat_template: str | dict[str, str]) -> bool:
@@ -353,6 +358,13 @@ qwen3_template = {
     },
 }
 
+# Qwen3.5, GLM-4-MoE and Nemotron 3 render a string tool-call argument as raw text, so `"75001"` and `75001` render the
+# same. Only the tool's JSON schema can tell them apart: on transformers >= 5.15, where `parse_response` types the
+# arguments from `tools`, the values are kept as text. Older versions guess the type with a lenient JSON parse.
+_XML_INLINE_VALUE_PARSER = (
+    {"name": "text"} if _SUPPORTS_PARSE_RESPONSE_TOOLS else {"name": "json", "args": {"allow_non_json": True}}
+)
+
 qwen3_5_template = {
     "defaults": {"role": "assistant"},
     "start_anchor": "<|im_start|>assistant\n",
@@ -369,7 +381,7 @@ qwen3_5_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
-                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+                "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
@@ -396,7 +408,7 @@ glm4moe_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
-                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+                "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
@@ -520,7 +532,7 @@ nemotron_3_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": r"<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>",
-                "value_parser": {"name": "json", "args": {"allow_non_json": True}},
+                "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
@@ -1279,7 +1291,12 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
                 tool_call["arguments"] = {}
 
 
-def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: list[int] | None = None) -> dict:
+def parse_response(
+    tokenizer: PreTrainedTokenizerBase,
+    ids: list[int],
+    prefix: list[int] | None = None,
+    tools: list[dict | Callable] | None = None,
+) -> dict:
     r"""
     Parse a token sequence into structured response dictionaries with fallback handling.
 
@@ -1299,6 +1316,10 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
             including the assistant header / any template-emitted thinking opener). Only used when the tokenizer has a
             new-style `response_template` set and the installed transformers supports it (>= 5.13); ignored for legacy
             `response_schema`.
+        tools (`list[dict | Callable]`, *optional*):
+            Tools available to the model, in the format `apply_chat_template` accepts. Tool-call arguments are typed
+            with the calling tool's JSON schema: `"7"` becomes `7` for an integer parameter and stays `"7"` for a
+            string one. Only used with a new-style `response_template` on transformers >= 5.15.
 
     Returns:
         `dict`:
@@ -1327,7 +1348,11 @@ def parse_response(tokenizer: PreTrainedTokenizerBase, ids: list[int], prefix: l
             and _SUPPORTS_RESPONSE_TEMPLATE
             and getattr(tokenizer, "response_template", None) is not None
         ):
-            parsed = tokenizer.parse_response(ids, prefix=prefix)
+            # `tools=` is only supported from transformers 5.15
+            if _SUPPORTS_PARSE_RESPONSE_TOOLS:
+                parsed = tokenizer.parse_response(ids, prefix=prefix, tools=tools)
+            else:
+                parsed = tokenizer.parse_response(ids, prefix=prefix)
         else:
             parsed = tokenizer.parse_response(ids)
         if parsed is None:  # this can happen if the response is heavily truncated and even the content is lost
