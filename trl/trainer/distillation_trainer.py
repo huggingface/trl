@@ -1942,7 +1942,10 @@ class DistillationTrainer(_BaseTrainer):
                 "completion": self._logs["completion"],
             }
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            # Tool-calling and multimodal conversations mix types within a field (string vs
+            # list `content`, an argument that's a string in one call and a list in another),
+            # which pandas can't write to parquet
+            Dataset.from_dict(table, on_mixed_types="use_json").to_parquet(
                 os.path.join(
                     self.args.output_dir,
                     "completions",
