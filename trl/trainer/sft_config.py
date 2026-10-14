@@ -86,8 +86,9 @@ class SFTConfig(_BaseConfig):
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
             packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
             parameter.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the sequences will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the sequences will be padded to a multiple of this value. `"auto"` pads to a multiple of 128 on
+            Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
         eval_packing (`bool`, *optional*):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -244,9 +245,12 @@ class SFTConfig(_BaseConfig):
             "value of this parameter."
         },
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the sequences will be padded to a multiple of this value. `'auto'` pads to a multiple of "
+            "128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere."
+        },
     )
     eval_packing: bool | None = field(
         default=None,
@@ -299,6 +303,12 @@ class SFTConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = None if self.pad_to_multiple_of == "None" else int(self.pad_to_multiple_of)
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
         if self.loss_type == "chunked_nll":
             warnings.warn(
                 "`loss_type='chunked_nll'` is deprecated and will be removed in v2.0.0. Use `loss_type='nll'` (the "

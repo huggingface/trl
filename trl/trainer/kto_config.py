@@ -55,8 +55,9 @@ class KTOConfig(_BaseConfig):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the sequences will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the sequences will be padded to a multiple of this value. `"auto"` pads to a multiple of 128 on
+            Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute the reference model log probabilities for the entire training dataset before
             training. This allows to save memory during training, as the reference model does not need to be kept in
@@ -169,9 +170,12 @@ class KTOConfig(_BaseConfig):
             "the right. If `None`, no truncation is applied."
         },
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the sequences will be padded to a multiple of this value. `'auto'` pads to a multiple of "
+            "128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere."
+        },
     )
     precompute_ref_log_probs: bool = field(
         default=False,
@@ -247,3 +251,12 @@ class KTOConfig(_BaseConfig):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
+
+    def __post_init__(self):
+        super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = None if self.pad_to_multiple_of == "None" else int(self.pad_to_multiple_of)
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
