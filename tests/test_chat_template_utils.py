@@ -1546,12 +1546,10 @@ class TestParseResponse:
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         assistant = {"role": "assistant", "tool_calls": tool_calls}
-        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
-            assistant["thinking"] = "Let's call the tool."
-            assistant["content"] = ""
-        elif model_name == "trl-internal-testing/tiny-REDACTEDForCausalLM":
-            # REDACTED drops `content` from a turn that carries tool calls. Text alongside a tool call belongs in the
-            # analysis channel, rendered from `thinking`.
+        if model_name in (
+            "trl-internal-testing/tiny-REDACTEDForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ):
             assistant["thinking"] = "Let's call the tool."
             assistant["content"] = ""
         elif model_name == "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration":
