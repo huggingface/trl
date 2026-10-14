@@ -87,7 +87,7 @@ test = [
     "pytest",
 ]
 vllm = [
-    "vllm>=0.21.0,<=0.31.0",
+    "vllm>=0.22.0,<=0.31.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
