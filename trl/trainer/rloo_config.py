@@ -71,8 +71,9 @@ class RLOOConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -328,9 +329,13 @@ class RLOOConfig(_BaseConfig):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
+            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
+            "pad elsewhere."
+        },
     )
 
     # Parameters that control generation
@@ -613,6 +618,14 @@ class RLOOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.use_transformers_paged:
             warnings.warn(
