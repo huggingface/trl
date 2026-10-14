@@ -9,15 +9,19 @@ on:
       # Run only when relevant files are modified
       - ".github/workflows/tests-experimental.yml"
       - ".github/actions/**"
+      - "Makefile"
       - "trl/experimental/**"
       - "tests/experimental/**"
+      - "pyproject.toml"
   pull_request:
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests-experimental.yml"
       - ".github/actions/**"
+      - "Makefile"
       - "trl/experimental/**"
       - "tests/experimental/**"
+      - "pyproject.toml"
 
 env:
   TQDM_DISABLE: 1
