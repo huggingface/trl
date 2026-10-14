@@ -1126,6 +1126,19 @@ class GRPOTrainer(_BaseTrainer):
                 generation_kwargs=args.generation_kwargs,
             )
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+            # The importance sampling correction needs logprobs after temperature scaling and logit processing.
+            if (
+                self.vllm_mode == "server"
+                and self.vllm_importance_sampling_correction
+                and self.accelerator.is_main_process
+            ):
+                logprobs_mode = self.vllm_generation.vllm_client.get_server_info()["model_config"]["logprobs_mode"]
+                if logprobs_mode != "processed_logprobs":
+                    logger.warning(
+                        f"The vLLM server runs with `--logprobs-mode {logprobs_mode}`, which biases the importance "
+                        "sampling correction. Restart it with `--logprobs-mode processed_logprobs`, or set "
+                        "`vllm_importance_sampling_correction=False`."
+                    )
         else:
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
@@ -2115,9 +2128,17 @@ class GRPOTrainer(_BaseTrainer):
                 pct = prompt_completion_tool_ids[idx]  # = prompt-completion-tool
                 completion_ids[idx_with_tool] = pct[prompt_length:] + post_tool_ids[idx]
 
-            # Decode post-tool completions
+            # Decode post-tool completions, each with the tools its prompt was rendered with
+            if self.environment_factories is not None:
+                per_prompt_tools = [self._env_tools[self._batch_environments[i]] for i in idxs_with_tool]
+            else:
+                per_prompt_tools = [self.tools] * len(idxs_with_tool)
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                parse_response(
+                    self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=per_prompt_tools[idx]
+                )
+                if ids
+                else {}
                 for idx, ids in enumerate(post_tool_ids)
             ]
 
@@ -2176,8 +2197,13 @@ class GRPOTrainer(_BaseTrainer):
                 getattr(self._tokenizer, "response_template", None) is not None  # new-style
                 or getattr(self._tokenizer, "response_schema", None) is not None  # old-style
             ):
+                # Parse each completion with the tools its prompt was rendered with
+                if self.environment_factories is not None:
+                    per_prompt_tools = [self._env_tools[name] for name in self._batch_environments]
+                else:
+                    per_prompt_tools = [self.tools] * len(prompts)
                 completions = [
-                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i])]
+                    [parse_response(self._tokenizer, ids, prefix=prompt_ids[i], tools=per_prompt_tools[i])]
                     for i, ids in enumerate(completion_ids)
                 ]
             else:

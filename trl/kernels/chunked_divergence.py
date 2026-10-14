@@ -118,8 +118,12 @@ def _jsd_kernel(
 ):
     # Second pass of the generalized JSD, which needs both normalizers to form the mixture m = (1 - beta) p_s + beta p_t
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
-    beta, s_scale, s_softcap = beta.to(tl.float32), s_scale.to(tl.float32), s_softcap.to(tl.float32)
-    t_scale, t_softcap, inv_t = t_scale.to(tl.float32), t_softcap.to(tl.float32), inv_t.to(tl.float32)
+    beta = tl.cast(beta, tl.float32)
+    s_scale = tl.cast(s_scale, tl.float32)
+    s_softcap = tl.cast(s_softcap, tl.float32)
+    t_scale = tl.cast(t_scale, tl.float32)
+    t_softcap = tl.cast(t_softcap, tl.float32)
+    inv_t = tl.cast(inv_t, tl.float32)
     row = tl.program_id(0).to(tl.int64)
     s_row = s_ptr + row * s_stride
     t_row = t_ptr + row * t_stride
@@ -175,8 +179,12 @@ def _backward_kernel(
 ):
     # Overwrite one block of the student tile with the gradient of the divergence with respect to the projection output
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
-    beta, s_scale, s_softcap = beta.to(tl.float32), s_scale.to(tl.float32), s_softcap.to(tl.float32)
-    t_scale, t_softcap, inv_t = t_scale.to(tl.float32), t_softcap.to(tl.float32), inv_t.to(tl.float32)
+    beta = tl.cast(beta, tl.float32)
+    s_scale = tl.cast(s_scale, tl.float32)
+    s_softcap = tl.cast(s_softcap, tl.float32)
+    t_scale = tl.cast(t_scale, tl.float32)
+    t_softcap = tl.cast(t_softcap, tl.float32)
+    inv_t = tl.cast(inv_t, tl.float32)
     row = tl.program_id(0).to(tl.int64)
     offsets = tl.program_id(1) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_cols

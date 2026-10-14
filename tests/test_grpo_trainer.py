@@ -3499,6 +3499,104 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments_same_tool_name(self):
+        # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
+        # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
+        # With `shuffle_dataset=False` and `num_generations=2`, every generation batch is [zip, zip, count, count].
+        dataset = Dataset.from_dict({"environment": ["zip", "count"] * 8})
+
+        submitted = {"zip": [], "count": []}
+
+        class ZipEnvironment:
+            def reset(self, **kwargs):
+                return "Give the zip code."
+
+            def submit(self, answer: str) -> str:
+                """
+                Submit the zip code.
+
+                Args:
+                    answer: The zip code.
+
+                Returns:
+                    A confirmation.
+                """
+                submitted["zip"].append(answer)
+                return "ok"
+
+        class CountEnvironment:
+            def reset(self, **kwargs):
+                return "Count."
+
+            def submit(self, answer: int) -> str:
+                """
+                Submit the count.
+
+                Args:
+                    answer: The count.
+
+                Returns:
+                    A confirmation.
+                """
+                submitted["count"].append(answer)
+                return "ok"
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            shuffle_dataset=False,  # keep the [zip, zip, count, count] batch layout deterministic
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 4:  # first generation: batch is [zip, zip, count, count]
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 330, 19, 17, 95642, 151658, 151645],
+                        # "I won't<|im_end|>" + pad
+                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 220, 19, 17, 11248, 151658, 151645],
+                        # "Done!<|im_end|>" + pad
+                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # regeneration after tool execution: only the two examples that issued a tool call
+                completion_ids = torch.tensor(
+                    [
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert submitted["zip"] and all(answer == "42" for answer in submitted["zip"])
+        assert submitted["count"] and all(answer == 42 for answer in submitted["count"])
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_unknown_environment_raises(self):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
         # environment should fail with a clear error rather than a bare KeyError mid-rollout.

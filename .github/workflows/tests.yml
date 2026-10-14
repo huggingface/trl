@@ -246,7 +246,7 @@ jobs:
           source .venv/bin/activate
           uv pip install \
             ".[dev]" \
-            "accelerate==1.4.0" \
+            "accelerate==1.10.1" \
             "datasets==4.7.0" \
             "peft==0.17.0" \
             "transformers==4.56.2"
