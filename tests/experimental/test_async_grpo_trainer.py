@@ -1229,6 +1229,9 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
             id="gemma2-sliding-window-softcap",
+            marks=pytest.mark.skipif(
+                torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
+            ),
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
@@ -1270,7 +1273,10 @@ class TestTreePackingParity(TrlTestCase):
         collator = DataCollatorForRollout(pad_token_id=0)
         runs = [
             (TREE_ATTENTION, collator([[_tree_row(samples)]])),
-            ("kernels-community/flash-attn3", _sequence_packed_batch(samples)),
+            (
+                "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
+                _sequence_packed_batch(samples),
+            ),
         ]
 
         losses, grads = [], []

@@ -157,9 +157,11 @@ TREE_ATTENTION = "tree_fa3"
 
 
 @cache
-def _flash_attn3():
+def _flash_attn():
     from kernels import get_kernel
 
+    if torch.version.hip:
+        return get_kernel("kernels-community/aiter-flash-attn", version=2)
     return get_kernel("kernels-community/flash-attn3", version=1)
 
 
@@ -182,7 +184,7 @@ def tree_attention(
 ):
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn3().flash_attn_varlen_func(
+    out = _flash_attn().flash_attn_varlen_func(
         query,
         key.index_select(0, tree_kv_index),
         value.index_select(0, tree_kv_index),
@@ -193,7 +195,7 @@ def tree_attention(
         softmax_scale=scaling,
         causal=True,
         window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),
-        softcap=softcap or 0.0,
+        **({"softcap": softcap} if softcap else {}),
     )
     out = out[0] if isinstance(out, tuple) else out
     return out.unsqueeze(0), None
