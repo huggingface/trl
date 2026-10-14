@@ -79,7 +79,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-The prompts are padded to `pad_to_multiple_of` before generation too, so the static cache only takes a few sizes. With both, a step of this example takes 25 to 38 s on one NeuronCore, against 107 to 119 s with the static cache alone.
+The prompts are padded to `pad_to_multiple_of` before generation too, so the static cache only takes a few sizes. Each new size still compiles for about 12 minutes on one NeuronCore; once a size is compiled, a step of this example takes about 25 s.
 
 > [!NOTE]
 > The static cache needs a bf16 model for now: with the default fp32 model, the keys and values end up in different dtypes ([#7664](https://github.com/huggingface/trl/issues/7664)).
