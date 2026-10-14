@@ -554,7 +554,11 @@ class _AsyncRolloutLoop:
         except Exception as e:
             logger.warning(f"Could not read the vLLM server's KV capacity, starting at max_inflight_tasks: {e!r}")
             return
-        kv_tokens = sum(map(int, re.findall(r'^vllm:cache_config_info\{.*kv_cache_size_tokens="(\d+)"', text, re.M)))
+        kv_matches = re.findall(r'^vllm:cache_config_info\{.*kv_cache_size_tokens="(\d+)"', text, re.M)
+        if not kv_matches:
+            logger.warning("`/metrics` has no `kv_cache_size_tokens`, starting at max_inflight_tasks")
+            return
+        kv_tokens = sum(map(int, kv_matches))
         max_model_len = max(model["max_model_len"] for model in models["data"])
         self._inflight_cap = max(1, min(self.max_inflight_tasks, kv_tokens // max_model_len))
 
@@ -582,9 +586,17 @@ class _AsyncRolloutLoop:
             except Exception as e:
                 logger.warning(f"vLLM /metrics poll failed, in-flight cap unchanged: {e!r}")
                 continue
-            usage = max(map(float, re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)), default=0.0)
+            usage_matches = re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)
+            queued_matches = re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)
+            if not usage_matches or not queued_matches:
+                # An empty match looks identical to a genuinely idle server (usage=0.0, queued=0), which is exactly
+                # the condition that grows the cap -- so a metrics rename/reformat must not fall through to that
+                # arithmetic silently.
+                logger.warning("vLLM /metrics missing KV usage or queue depth, in-flight cap unchanged")
+                continue
+            usage = max(map(float, usage_matches))
             running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
-            queued = sum(map(float, re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)))
+            queued = sum(map(float, queued_matches))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
             if usage > 0.8 and self._inflight <= self._inflight_cap:
                 self._inflight_cap = max(1, int(self._inflight_cap * 0.7))
