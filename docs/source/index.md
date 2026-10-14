@@ -12,7 +12,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**🚀 Training on AWS Trainium:** every TRL trainer now runs on [AWS Trainium](aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
+**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Taxonomy
 
