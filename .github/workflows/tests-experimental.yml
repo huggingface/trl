@@ -1,6 +1,15 @@
 name: Tests (experimental)
 
 on:
+  push:
+    branches:
+      - main
+      - ci-*
+    paths:
+      # Run only when relevant files are modified
+      - ".github/workflows/tests-experimental.yml"
+      - "trl/experimental/**"
+      - "tests/experimental/**"
   pull_request:
     paths:
       # Run only when relevant files are modified
