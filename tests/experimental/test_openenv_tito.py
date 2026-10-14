@@ -182,7 +182,7 @@ class Session:
 
 def test_loop_owning_capture_rejects_truncated_sampling(make_loop):
     with pytest.raises(ValueError, match="candidate set"):
-        make_loop(top_p=0.95, top_k=512, eos_token_ids=[0])
+        make_loop(top_p=0.95, top_k=512)
 
 
 @pytest.mark.parametrize("temperature", [0.3, 0.8, 1.2])
