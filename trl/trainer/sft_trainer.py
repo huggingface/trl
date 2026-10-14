@@ -44,7 +44,6 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from .._compat import _is_package_version_below
 from ..chat_template_utils import (
     clone_chat_template,
     get_training_chat_template,
@@ -76,20 +75,12 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
+    import peft
+    from peft import PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
-
-
-FLASH_ATTENTION_VARIANTS = {
-    "flash_attention_2",
-    "flash_attention_3",
-    "kernels-community/flash-attn2",
-    "kernels-community/flash-attn3",
-    "kernels-community/vllm-flash-attn3",
-}
 
 
 @dataclass
@@ -854,6 +845,18 @@ class SFTTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
+            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if (
+                isinstance(peft_config, PrefixTuningConfig)
+                and Version(peft.__version__) <= Version("0.17.1")
+                and hasattr(model, "hf_device_map")
+            ):
+                raise ValueError(
+                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
+                    "peft, or load the model with `device_map=None`. See "
+                    "https://github.com/huggingface/peft/issues/2821."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         # PEFT + DeepSpeed ZeRO-3 requires reentrant checkpointing. For more details, see
@@ -901,10 +904,6 @@ class SFTTrainer(_BaseTrainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
-        # A hub kernel can be requested with a revision and/or a kernel name (`repo_id@revision:kernel_name`), while
-        # the variants above are bare repo ids, so compare against the repo id alone.
-        attn_implementation = model.config._attn_implementation.split("@")[0].split(":")[0]
-        use_flash_attention = attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -912,16 +911,6 @@ class SFTTrainer(_BaseTrainer):
                 logger.warning(
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
-                )
-            if not use_flash_attention:
-                logger.warning(
-                    "Padding-free training is enabled, but the attention implementation is not set to a supported "
-                    "Flash Attention variant. Padding-free training flattens batches into a single sequence, and only "
-                    "the following implementations are known to reliably support this: "
-                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
-                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
-                    "configuration to one of these supported options or verify that your attention mechanism can "
-                    "handle flattened sequences."
                 )
 
             if args.per_device_train_batch_size == 1 and not args.packing:
@@ -995,16 +984,6 @@ class SFTTrainer(_BaseTrainer):
                     padding_free=self.padding_free,
                     pad_to_multiple_of=args.pad_to_multiple_of,
                 )
-
-        if args.packing and args.packing_strategy in {"bfd", "bfd_split"} and not use_flash_attention:
-            logger.warning(
-                "You are using packing, but the attention implementation is not set to a supported Flash Attention "
-                "variant. Packing gathers multiple samples into a single sequence, and only the following "
-                f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
-                "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
-                "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
-                "to one of these supported options."
-            )
 
         # Dataset
         if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
@@ -1162,19 +1141,14 @@ class SFTTrainer(_BaseTrainer):
         # from attending to each other, so a packed batch would silently train with documents attending across
         # their boundaries. Read the parallelism config off the accelerator rather than off `args`: when
         # context parallelism is configured through an accelerate YAML, `args.parallelism_config` stays None.
-        if not _is_package_version_below("accelerate", "1.10.1"):
-            parallelism_config = self.accelerator.parallelism_config
-            if (
-                parallelism_config is not None
-                and parallelism_config.cp_enabled
-                and (args.packing or args.eval_packing)
-            ):
-                raise ValueError(
-                    "Packing is not compatible with context parallelism (`cp_size > 1`). Packing relies on a "
-                    "block-diagonal attention mask to keep packed documents separate, and context parallelism "
-                    "drops that mask, so documents would attend across their boundaries. Set `packing=False` "
-                    "and `eval_packing=False`, or disable context parallelism."
-                )
+        parallelism_config = self.accelerator.parallelism_config
+        if parallelism_config is not None and parallelism_config.cp_enabled and (args.packing or args.eval_packing):
+            raise ValueError(
+                "Packing is not compatible with context parallelism (`cp_size > 1`). Packing relies on a "
+                "block-diagonal attention mask to keep packed documents separate, and context parallelism "
+                "drops that mask, so documents would attend across their boundaries. Set `packing=False` "
+                "and `eval_packing=False`, or disable context parallelism."
+            )
 
         # Sequence parallelism (Ulysses/ALST) shards batches along the sequence dimension and requires
         # `position_ids` in every batch to preserve each token's global position. Sequence parallelism was added in
@@ -1232,8 +1206,8 @@ class SFTTrainer(_BaseTrainer):
 
         # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
         # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
-        # computed, so they need no such correction. `ParallelismConfig.tp_size` requires accelerate 1.10.0.
-        if Version(accelerate.__version__) >= Version("1.10.0") and self.accelerator.parallelism_config is not None:
+        # computed, so they need no such correction.
+        if self.accelerator.parallelism_config is not None:
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1
