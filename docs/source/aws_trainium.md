@@ -82,7 +82,3 @@ accelerate launch --num_processes 4 train.py
 ```
 
 SFT scales to 3.6x on 4 NeuronCores. To pin a run to some NeuronCores with `NEURON_RT_VISIBLE_CORES`, use the pairs `0,1` or `2,3`, or all four: the Neuron runtime fails to set up the collectives on `1,2`.
-
-## Memory
-
-Gradient checkpointing, on by default in [`SFTTrainer`], is what lets Qwen3-0.6B fit on one NeuronCore (24 GB) with `per_device_train_batch_size=4` and `max_length=1024`. `activation_offloading=True` is an alternative, about 1.8x slower.
