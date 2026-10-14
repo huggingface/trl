@@ -248,6 +248,12 @@ jobs:
             ".[dev]" \
             "accelerate==1.10.1" \
             "datasets==4.7.0" \
+            "huggingface_hub==0.34.0" \
+            "numpy==1.26.0" \
+            "pandas==2.1.1" \
+            "psutil==5.9.4" \
+            "pyarrow==21.0.0" \
+            "pyyaml==6.0.1" \
             "transformers==4.56.2"
 
       - name: Test with pytest
