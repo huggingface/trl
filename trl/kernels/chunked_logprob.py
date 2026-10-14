@@ -41,8 +41,12 @@ def _jit(fn):
     return triton.jit(fn) if is_triton_available() else fn
 
 
+# Read once at import: Dynamo warns when it traces a call to the `lru_cache`-wrapped `is_triton_available`
+_TRITON_AVAILABLE = is_triton_available()
+
+
 def _use_triton(device: torch.device) -> bool:
-    return is_triton_available() and device.type in ("cuda", "xpu")
+    return _TRITON_AVAILABLE and device.type in ("cuda", "xpu")
 
 
 def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
