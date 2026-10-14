@@ -1100,12 +1100,11 @@ class OnlineDPOTrainer(_BaseTrainer):
         return total_rewards
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs=None):
-        # Get the number of tokens to truncate from prompt
-        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
-
-        # Truncate left to avoid oom
-        prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
-        prompt_mask = prompt_mask[:, num_tokens_to_truncate:]
+        # Truncate left to avoid oom, except with images, as it would drop image tokens
+        if vision_inputs is None:
+            num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
+            prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
+            prompt_mask = prompt_mask[:, num_tokens_to_truncate:]
 
         # Concat the prompt and completion
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
