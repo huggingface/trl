@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
@@ -583,8 +584,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
                     **sample.metrics,
                     "model_version": int(sample.model_version),
                     "teacher_id": sample.teacher_id,  # which teacher scored it; the one thing MOPD traces need
-                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
-                    "completion_tokens": int(sum(sample.completion_mask)),
+                    "prompt_tokens": len(sample.input_ids) - int(sample.completion_mask.sum()),
+                    "completion_tokens": int(sample.completion_mask.sum()),
                 },
             )
             for sample in samples[:max_traces]
@@ -722,16 +723,13 @@ class DataCollatorForRollout(DataCollatorMixin):
     per-rank in `compute_loss`.
 
     Structurally the same as [`~trl.experimental.async_grpo.async_grpo_trainer.DataCollatorForRollout`], with
-    `advantages` replaced by the ragged `teacher_topk_ids` / `teacher_topk_logprobs` (padded per-position to
+    `advantages` replaced by `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to
     `teacher_top_k + 1` candidates with id `-1` / logprob `-inf`, then packed along the sequence dimension like every
     other per-token field).
 
     Args:
         pad_token_id (`int`):
             Token id used to pad `input_ids`.
-        teacher_top_k (`int`):
-            Number of teacher candidates per position (before the trainer's own tail-bucket handling); every position's
-            candidate list is padded/truncated to this width so it tensorizes.
         num_processes (`int`, *optional*, defaults to `1`):
             Number of DP ranks; the micro-batch is packed into this many rows.
         teacher_id_to_idx (`dict[str, int]`, *optional*):
@@ -748,7 +746,6 @@ class DataCollatorForRollout(DataCollatorMixin):
     """
 
     pad_token_id: int
-    teacher_top_k: int
     num_processes: int = 1
     teacher_id_to_idx: dict[str, int] | None = None
     return_tensors: str = "pt"
@@ -763,31 +760,28 @@ class DataCollatorForRollout(DataCollatorMixin):
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
         # rows, so `examples` is a length-1 list holding that single micro-batch (one group per rank).
         (groups,) = examples
-        width = self.teacher_top_k + 1
 
         input_ids, attention_mask, completion_mask, position_ids = [], [], [], []
         teacher_topk_ids, teacher_topk_logprobs = [], []
         teacher_id_idx = [] if self.teacher_id_to_idx else None
         for group in groups:
             seq_lengths = [len(example["input_ids"]) for example in group]
-            ids = [token for example in group for token in example["input_ids"]]
-            input_ids.append(torch.tensor(ids, dtype=torch.long))
+            ids = np.concatenate([example["input_ids"] for example in group])
+            input_ids.append(torch.as_tensor(ids, dtype=torch.long))
             attention_mask.append(torch.ones(len(ids), dtype=torch.long))
             completion_mask.append(
-                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
+                torch.as_tensor(np.concatenate([example["completion_mask"] for example in group]), dtype=torch.long)
             )
             position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
 
-            row_teacher_ids, row_teacher_logprobs = [], []
-            for example in group:
-                for cand_ids, cand_lps in zip(
-                    example["teacher_topk_ids"], example["teacher_topk_logprobs"], strict=False
-                ):
-                    pad_n = width - len(cand_ids)
-                    row_teacher_ids.append(list(cand_ids) + [-1] * pad_n)
-                    row_teacher_logprobs.append(list(cand_lps) + [float("-inf")] * pad_n)
-            teacher_topk_ids.append(torch.tensor(row_teacher_ids, dtype=torch.long))
-            teacher_topk_logprobs.append(torch.tensor(row_teacher_logprobs, dtype=torch.float32))
+            teacher_topk_ids.append(
+                torch.as_tensor(np.concatenate([example["teacher_topk_ids"] for example in group]), dtype=torch.long)
+            )
+            teacher_topk_logprobs.append(
+                torch.as_tensor(
+                    np.concatenate([example["teacher_topk_logprobs"] for example in group]), dtype=torch.float32
+                )
+            )
 
             if teacher_id_idx is not None:
                 # One teacher_id per example, broadcast across its own tokens (constant within a sample).
@@ -812,7 +806,7 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Total valid completion tokens across the micro-batch. Repeated per rank so that DataLoaderDispatcher
         # (dispatch_batches=True) slices correctly on dim=0.
-        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        n_trained_tokens = sum(int(example["completion_mask"].sum()) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
         sample_tokens = [len(example["input_ids"]) for example in all_examples]
@@ -851,7 +845,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         # forwarded — the prompt, and any completion position the teacher scored no candidate for. FLOPs are spent on
         # both, so both are worth a number, and their ratio is what says how much of the forward earns no gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
-        trained = [sum(example["completion_mask"]) for example in all_examples]
+        trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
         self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
@@ -1558,7 +1552,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 batch_size=1,
                 collate_fn=DataCollatorForRollout(
                     self.processing_class.pad_token_id,
-                    self.args.teacher_top_k,
                     num_processes,
                     self._teacher_id_to_idx if len(self._teacher_ids) > 1 else None,
                     prompts_trained=self._trained_prompts,
