@@ -510,14 +510,7 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
     @pytest.mark.parametrize(
         "model_id",
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
-                marks=pytest.mark.xfail(
-                    reason="Online DPO does not support processors with 5D pixel values, such as Idefics2. See "
-                    "https://github.com/huggingface/trl/issues/7702",
-                    strict=True,
-                ),
-            ),
+            "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
         ],
     )
