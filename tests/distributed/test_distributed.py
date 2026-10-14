@@ -19,7 +19,27 @@ from pathlib import Path
 import pytest
 import torch
 import transformers
+from datasets import load_dataset
 from packaging.version import Version
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
+
+from trl import (
+    DistillationConfig,
+    DistillationTrainer,
+    DPOConfig,
+    DPOTrainer,
+    GRPOConfig,
+    GRPOTrainer,
+    KTOConfig,
+    KTOTrainer,
+    RewardConfig,
+    RewardTrainer,
+    RLOOConfig,
+    RLOOTrainer,
+    SFTConfig,
+    SFTTrainer,
+)
+from trl.trainer.utils import add_fused_lm_head
 
 from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_multi_accelerator
 
@@ -527,3 +547,315 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+
+@require_torch_multi_accelerator
+class TestModelParallel:
+    def test_fused_lm_head(self):
+        """With the model split across two devices, the fused LM head matches the model on a single device."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, device_map={"": 0})
+        model_split = AutoModelForCausalLM.from_pretrained(model_id, device_map=device_map)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
+        add_fused_lm_head(model_split, outputs=("log_probs", "entropy"))
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=model.device)
+        labels = input_ids.masked_fill(torch.arange(16, device=model.device) < 4, -100)
+
+        out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
+        out_split = model_split(input_ids=input_ids, labels=labels, fused_lm_head=True)
+
+        torch.testing.assert_close(out_split["log_probs"], out["log_probs"])
+        torch.testing.assert_close(out_split["entropy"], out["entropy"])
+        out_split["loss"].backward()
+        assert all(param.grad is not None for param in model_split.parameters())
+
+    def test_train_sft(self, tmp_path):
+        """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=str(tmp_path), report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_distillation(self, tmp_path):
+        """A student and a teacher split across two devices train with the chunked divergence loss."""
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+        )
+        teacher_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/small-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model, teacher_model=teacher_model, args=training_args, train_dataset=dataset
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_distillation_heads_on_different_devices(self, tmp_path):
+        """The chunked divergence loss needs the student and teacher heads on the same device, so training refuses."""
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+        )
+        # An untied teacher, so its head can sit on another device than its embeddings
+        teacher_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map={"model": 0, "lm_head": 1}
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model, teacher_model=teacher_model, args=training_args, train_dataset=dataset
+        )
+
+        with pytest.raises(ValueError, match="Place both on the same device"):
+            trainer.train()
+
+    def test_train_dpo(self, tmp_path):
+        """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+
+        training_args = DPOConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_kto(self, tmp_path):
+        """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+
+        training_args = KTOConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            report_to="none",
+        )
+        trainer = KTOTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_reward(self, tmp_path):
+        """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `score` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "score": 0,
+        }
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_id, num_labels=1, dtype="float32", device_map=device_map
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        training_args = RewardConfig(output_dir=str(tmp_path), report_to="none")
+        trainer = RewardTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_grpo(self, tmp_path):
+        """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_rloo(self, tmp_path):
+        """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32", device_map=device_map)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=str(tmp_path),
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."

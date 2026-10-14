@@ -20,6 +20,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -34,7 +35,6 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
@@ -47,16 +47,20 @@ from ...chat_template_utils import (
     is_chat_template_prefix_preserving,
     parse_response,
 )
-from ...import_utils import is_vllm_available
+from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
-
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 @dataclass(frozen=True)
@@ -72,7 +76,7 @@ class TurnRecord:
 
 @dataclass
 class TrainingSequence:
-    """One training row. Maps 1:1 onto the list fields of `RolloutSample`."""
+    """One training row. Maps 1:1 onto the array fields of `RolloutSample`."""
 
     input_ids: list[int]  # full tokens (prompt included)
     completion_mask: list[int]  # 1 = train this token, 0 = context
@@ -210,9 +214,9 @@ class RolloutGroup:
 class RolloutSample:
     prompt: Messages
     completion: Messages
-    input_ids: list[int]
-    completion_mask: list[int]
-    old_log_probs: list[float]
+    input_ids: np.ndarray
+    completion_mask: np.ndarray
+    old_log_probs: np.ndarray
     advantage: float
     model_version: int
     group_id: int
@@ -244,6 +248,8 @@ def _scrub_child_env() -> None:
     # The child has no business touching CUDA; any library that imports torch
     # and lazily probes devices would race the parent's allocator.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # On ROCm, an empty CUDA_VISIBLE_DEVICES is ignored when HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES is set.
+    os.environ["HIP_VISIBLE_DEVICES"] = ""
     for k in _CHILD_ENV_TO_STRIP:
         os.environ.pop(k, None)
 
@@ -316,6 +322,7 @@ class _AsyncRolloutLoop:
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
@@ -368,6 +375,7 @@ class _AsyncRolloutLoop:
                 FutureWarning,
             )
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -531,6 +539,7 @@ class _AsyncRolloutLoop:
         inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
+        loop = asyncio.get_running_loop()
 
         self._generation_start_time = time.monotonic()
         try:
@@ -566,7 +575,12 @@ class _AsyncRolloutLoop:
                         reset_kwargs = (
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
-                        observation = environment.reset(**reset_kwargs)
+                        t0 = time.monotonic()
+                        observation = await loop.run_in_executor(
+                            self._tool_pool, functools.partial(environment.reset, **reset_kwargs)
+                        )
+                        self._rates["env/reset_s"][0] += time.monotonic() - t0
+                        self._rates["env/reset_s"][1] += 1
                     # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
                     # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
                     if "prompt" not in row and self.environment_factories is not None:
@@ -664,7 +678,13 @@ class _AsyncRolloutLoop:
                         env_type = type(environment)
                         if env_type in self._env_reward_types:
                             get_reward = environment.get_reward
-                            reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                            t0 = time.monotonic()
+                            if inspect.iscoroutinefunction(get_reward):
+                                reward = await get_reward()
+                            else:
+                                reward = await loop.run_in_executor(self._tool_pool, get_reward)
+                            self._rates["env/reward_s"][0] += time.monotonic() - t0
+                            self._rates["env/reward_s"][1] += 1
                             group.env_rewards.append((env_type, reward))
                         else:
                             group.env_rewards.append(None)
@@ -830,7 +850,7 @@ class _AsyncRolloutLoop:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
-            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
         if self.tools:
@@ -903,7 +923,7 @@ class _AsyncRolloutLoop:
                 **self.chat_template_kwargs,
             )
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             messages.append(assistant_message)
@@ -945,14 +965,14 @@ class _AsyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
-            self._counters[f"tools/{name}_call_total"] += 1
+            self._counters[f"tools/{name}/call_total"] += 1
             tool = tool_dict.get(name)
             if tool is None:
                 # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
                 # and raised — which is an environment problem. Counted apart so the two are not one number.
                 n_failures += 1
                 self._counters["tools/unknown_name_total"] += 1
-                self._counters[f"tools/{name}_failure_total"] += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
             t0 = time.monotonic()
@@ -964,13 +984,13 @@ class _AsyncRolloutLoop:
                     result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
-                self._counters[f"tools/{name}_failure_total"] += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
                 result = {"error": str(error)}
             elapsed = time.monotonic() - t0
             self._rates["tools/latency_s"][0] += elapsed
             self._rates["tools/latency_s"][1] += 1
-            self._rates[f"tools/{name}_latency_s"][0] += elapsed
-            self._rates[f"tools/{name}_latency_s"][1] += 1
+            self._rates[f"tools/{name}/latency_s"][0] += elapsed
+            self._rates[f"tools/{name}/latency_s"][1] += 1
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
         self._rates["tools/parallel_calls_mean"][0] += len(tool_calls)
         self._rates["tools/parallel_calls_mean"][1] += 1
@@ -988,6 +1008,10 @@ class _AsyncRolloutLoop:
             "n": 1,
             "return_token_ids": True,
             "logprobs": 0,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
@@ -1088,9 +1112,9 @@ class _AsyncRolloutLoop:
                     RolloutSample(
                         prompt=prompt,
                         completion=completion,
-                        input_ids=seq.input_ids,
-                        completion_mask=seq.completion_mask,
-                        old_log_probs=seq.old_log_probs,
+                        input_ids=np.asarray(seq.input_ids, dtype=np.int64),
+                        completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
+                        old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
                         advantage=float(advantage),
                         model_version=group.model_version,
                         group_id=group.group_id,
@@ -1139,6 +1163,8 @@ class AsyncRolloutWorker:
     ):
         if not is_vllm_available():
             raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)

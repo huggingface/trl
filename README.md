@@ -22,7 +22,7 @@
 
 ## 🎉 What's New
 
-**📜 Training beyond 1M tokens:** A new [long context guide](https://huggingface.co/docs/trl/long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
+**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Overview
 

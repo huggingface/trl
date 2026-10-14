@@ -26,10 +26,8 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 import torch
-from requests.adapters import HTTPAdapter
 from torch import nn
 from transformers.utils import get_json_schema
-from urllib3.util.retry import Retry
 
 from ..import_utils import is_requests_available, is_vllm_available
 
@@ -37,6 +35,8 @@ from ..import_utils import is_requests_available, is_vllm_available
 if is_requests_available():
     import requests
     from requests import ConnectionError
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
 
 
 if is_vllm_available():
@@ -51,10 +51,6 @@ if _HAS_STATEFUL_TRAINER_ENGINE:
     from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
 elif is_vllm_available():
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
-
-# `/start_weight_update` and `/finish_weight_update` were introduced in vLLM 0.21.0. Before that, `/update_weights`
-# ran the whole weight update lifecycle (layerwise reload init and finalize) on its own.
-_HAS_WEIGHT_UPDATE_LIFECYCLE = is_vllm_available(min_version="0.21.0")
 
 # vLLM 0.26.0 (vllm-project/vllm#46893) made `/reset_prefix_cache` return `{"success": bool}`. Before that, it answered
 # with an empty body.
@@ -304,6 +300,23 @@ class VLLMClient:
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
+    def get_server_info(self) -> dict:
+        """
+        Returns the resolved configuration of the vLLM server, as reported by its `/server_info` endpoint.
+
+        Returns:
+            `dict`: The server's `VllmConfig`, as a JSON tree.
+        """
+        response = self.session.get(f"{self.base_url}/server_info", params={"config_format": "json"})
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} does not expose its development endpoints, which TRL uses to "
+                "synchronize weights. Restart it with `VLLM_SERVER_DEV_MODE=1` in its environment."
+            )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+        return response.json()["vllm_config"]
+
     def get_world_size(self) -> int:
         """
         Returns the number of workers of the vLLM server, i.e. `tensor_parallel_size * data_parallel_size`.
@@ -338,11 +351,18 @@ class VLLMClient:
             messages = [
                 {"role": "user", "content": [{"type": "image", "image": image} for image in images_for_prompt]}
             ]
-            rendered = self._post(
+            response = self.session.post(
                 f"{self.base_url}/v1/chat/completions/render",
                 json={"model": self.model, "messages": to_openai_messages(messages), "max_tokens": 1},
             )
-            return rendered["features"]
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The vLLM server at {self.base_url} does not serve `/v1/chat/completions/render`, which "
+                    "multimodal prompts use. From vLLM 0.30.0, restart it with `--enable-scale-out`."
+                )
+            if response.status_code != 200:
+                raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            return response.json()["features"]
 
         with ThreadPoolExecutor(max_workers=min(max_concurrent_requests, len(images))) as executor:
             return list(executor.map(send, images))
@@ -712,6 +732,13 @@ class VLLMClient:
                 Device of trainer main process. It's the device that will be used for the weights synchronization. Can
                 be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
+        # Weight synchronization needs a weight-transfer engine, so name the missing setting instead of failing later.
+        if self.get_server_info()["weight_transfer_config"] is None:
+            raise RuntimeError(
+                f"The vLLM server at {self.base_url} has no weight-transfer engine. Restart it with "
+                """`--weight-transfer-config '{"backend": "nccl"}'`."""
+            )
+
         # The trainer joins the vLLM workers as an extra rank; it is rank 0, so the workers are offset by one.
         world_size = self.get_world_size() + 1
         init_info = {
@@ -773,12 +800,10 @@ class VLLMClient:
             self._finish_weight_update()
 
     def _start_weight_update(self):
-        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
-            self._post(f"{self.base_url}/start_weight_update", json={})
+        self._post(f"{self.base_url}/start_weight_update", json={})
 
     def _finish_weight_update(self):
-        if _HAS_WEIGHT_UPDATE_LIFECYCLE:
-            self._post(f"{self.base_url}/finish_weight_update", json={})
+        self._post(f"{self.base_url}/finish_weight_update", json={})
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
