@@ -10,9 +10,6 @@ Install `torch-neuronx` by following the [AWS Neuron setup guide](https://awsdoc
 pip install trl
 ```
 
-> [!TIP]
-> Activate the virtual environment before training, so the Neuron compiler (`neuronx-cc`) comes from the same release as `torch-neuronx`. An older `neuronx-cc` on `PATH` fails with a version mismatch.
-
 ## Supervised fine-tuning
 
 The [`SFTTrainer`] quick start runs as is:
