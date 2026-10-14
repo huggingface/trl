@@ -1590,8 +1590,8 @@ class TestKTOTrainerVLM(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-            # REDACTED_NAME: no dataset here feeds `REDACTED_TOWER`, so it gets no gradient. Assert it stays frozen.
-            elif model_id == "trl-internal-testing/tiny-REDACTEDForConditionalGeneration" and "REDACTED_TOWER" in n:
+            # REDACTED_NAME: no dataset here feeds `REDACTED_M_tower`, so it gets no gradient. Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-REDACTEDForConditionalGeneration" and "REDACTED_M_tower" in n:
                 assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
