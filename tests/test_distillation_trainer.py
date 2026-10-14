@@ -125,19 +125,21 @@ class TestChunkedDivergenceLoss(TrlTestCase):
         ):
             yield
 
-    def _inputs(self, B=2, K=6, H=8, V=17, n_masked=3, seed=0):
-        g = torch.Generator(torch_device).manual_seed(seed)
-        student_hidden = torch.randn(B, K, H, generator=g, device=torch_device)
-        teacher_hidden = torch.randn(B, K, H, generator=g, device=torch_device)
-        student_w = torch.randn(V, H, generator=g, device=torch_device)
-        teacher_w = torch.randn(V, H, generator=g, device=torch_device)
-        completion_mask = torch.ones(B, K, device=torch_device)
-        completion_mask.reshape(-1)[torch.randperm(B * K, generator=g, device=torch_device)[:n_masked]] = 0
+    def _inputs(self, B=2, K=6, H=8, V=17, n_masked=3, seed=0, device=torch_device):
+        g = torch.Generator(device).manual_seed(seed)
+        student_hidden = torch.randn(B, K, H, generator=g, device=device)
+        teacher_hidden = torch.randn(B, K, H, generator=g, device=device)
+        student_w = torch.randn(V, H, generator=g, device=device)
+        teacher_w = torch.randn(V, H, generator=g, device=device)
+        completion_mask = torch.ones(B, K, device=device)
+        completion_mask.reshape(-1)[torch.randperm(B * K, generator=g, device=device)[:n_masked]] = 0
         return student_hidden, teacher_hidden, student_w, teacher_w, completion_mask
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
-    def test_matches_naive_full_vocab(self, beta):
-        sh, th, sw, tw, mask = self._inputs()
+    def test_matches_naive_full_vocab(self, beta, device):
+        sh, th, sw, tw, mask = self._inputs(device=device)
         loss, _, n_valid = _chunked_divergence_loss(sh, th, sw, tw, mask, beta)
         expected = _reference_chunked_divergence(sh, th, sw, tw, mask, beta)
         torch.testing.assert_close(loss, expected)
