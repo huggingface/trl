@@ -43,7 +43,6 @@ def _addmm_fp32(acc: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> None:
 @triton.jit
 def _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP: tl.constexpr):
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
-    # tl.cast, not .to: before torch 2.11, Inductor's mutation analysis passes them as constexpr/float
     logit_scale = tl.cast(logit_scale, tl.float32)
     softcap = tl.cast(softcap, tl.float32)
     inv_t = tl.cast(inv_t, tl.float32)
@@ -147,7 +146,6 @@ def _backward_kernel(
 ):
     # Overwrite one block of the logits tile with the gradient of the loss with respect to the projection output
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
-    # tl.cast, not .to: before torch 2.11, Inductor's mutation analysis passes them as constexpr/float
     logit_scale = tl.cast(logit_scale, tl.float32)
     softcap = tl.cast(softcap, tl.float32)
     inv_t = tl.cast(inv_t, tl.float32)
