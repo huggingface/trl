@@ -76,7 +76,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`IWOPDTrainer`](iw_opd_trainer)
 - [`SDFTTrainer`](sdft_trainer)
 - [`SDPOTrainer`](sdpo_trainer)
-- [`SSDTrainer`](ssd_trainer)
 
 </div>
 </div>
