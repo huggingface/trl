@@ -120,11 +120,6 @@ class TestChunkedLogProbFunction:
     N, H, V = 64, 32, 128
     CHUNK_SIZE = 32
 
-    @pytest.mark.xfail(
-        condition=Version(torch.__version__) < Version("2.11.0"),
-        reason="Before torch 2.11, Inductor fails to analyze the kernel's .to() on scalar arguments and miscompiles it",
-        strict=True,
-    )
     def test_torch_compile(self):
         # Inductor passes the float arguments (temperature, logit scale, softcapping) as fp64
         torch.manual_seed(42)
@@ -533,11 +528,6 @@ class TestChunkedLogProbFunction:
 @require_torch_accelerator
 @require_triton
 class TestChunkedDivergenceFunction:
-    @pytest.mark.xfail(
-        condition=Version(torch.__version__) < Version("2.11.0"),
-        reason="Before torch 2.11, Inductor fails to analyze the kernel's .to() on scalar arguments and miscompiles it",
-        strict=True,
-    )
     @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
     def test_torch_compile(self, beta):
         # Inductor passes the float arguments (beta, temperature, logit scales, softcapping) as fp64
