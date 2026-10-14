@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl>=1.14.0",  # adds the MoE aux loss only when the config declares a coefficient
-#     "transformers @ git+https://github.com/huggingface/transformers.git@main",
+#     "transformers>=5.20.0",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
 #     "trackio",
@@ -24,39 +24,27 @@
 
 # docstyle-ignore
 """
-LoRA SFT of REDACTED on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
+LoRA SFT of REDACTED_NAME on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
 across all 64, and each rank trains on its own slice of the batch. 14.2 s/step, 131k tokens/step, 40.2 GB per GPU.
 
-    sbatch sft_redacted.slurm
+    sbatch sft_redacted_name.slurm
 """
 
-import transformers
 from datasets import load_dataset
-from packaging.version import Version
 from peft import LoraConfig
 from transformers.distributed import DistributedConfig
 
 from trl import SFTConfig, SFTTrainer
 
 
-# The checkpoint, staged on every node's local disk.
-MODEL = "REDACTED"
-
-# `ep_size` is not in a released transformers yet. Checked before the dataset is read, so 64 ranks fail in a
-# second rather than after preprocessing 500k rows. Temporary: once it ships, pin `transformers>=5.19.0` in the
-# header above and drop this.
-if Version(transformers.__version__) < Version("5.19.0.dev0"):
-    raise RuntimeError(
-        f"This example needs expert parallelism, which is not in a released transformers yet. Install "
-        f"transformers from main (expert parallelism merged in #48873). Got {transformers.__version__}."
-    )
+MODEL = "REDACTED_HUB_ID"
 
 # Read the dataset before loading the model: 64 GPUs holding a loaded model is the most expensive place to wait
 # on I/O.
 train_dataset = load_dataset("allenai/tulu-3-sft-mixture", split="train[:500000]")
 
 training_args = SFTConfig(
-    output_dir="REDACTED-SFT",
+    output_dir="REDACTED_FILE_NAME-SFT",
     model_init_kwargs={
         # TRL loads a model id in float32 unless told otherwise; "auto" keeps the checkpoint's dtype.
         "dtype": "auto",
