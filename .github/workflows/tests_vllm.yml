@@ -1,0 +1,103 @@
+name: Tests with vLLM
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Runs daily at 3am UTC
+
+  workflow_dispatch:
+
+  push:
+    branches:
+      - ci-*
+    paths:
+      - ".github/workflows/tests_vllm.yml"
+
+env:
+  TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+permissions: {}
+
+jobs:
+  tests:
+    permissions:
+      contents: read
+    name: Tests with vLLM (${{ matrix.vllm }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both ends of the supported range: the floor from pyproject.toml, and the newest release it allows
+        vllm: [floor, latest]
+    runs-on:
+      group: aws-g5-12xlarge-cache
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        env:
+          VLLM_END: ${{ matrix.vllm }}
+        run: |
+          source .venv/bin/activate
+          if [ "$VLLM_END" = "floor" ]; then
+            uv pip install ".[test,vllm,vlm]" "vllm==$(grep -oP '"vllm>=\K[0-9.]+' pyproject.toml)"
+          else
+            uv pip install ".[test,vllm,vlm]"
+          fi
+
+      - name: Check the environment
+        run: |
+          source .venv/bin/activate
+          nvidia-smi
+          # The tensor-parallel tests need 3 GPUs; with fewer, they would be skipped and the job would pass without testing
+          python -c "import torch, transformers, vllm; print(f'vllm {vllm.__version__}, torch {torch.__version__}, transformers {transformers.__version__}'); assert torch.cuda.device_count() >= 3"
+
+      - name: Test the vLLM client and server
+        run: |
+          source .venv/bin/activate
+          pytest -v -rs tests/test_vllm_client_server.py
+
+      - name: Test the trainers with vLLM
+        if: ${{ !cancelled() }}
+        run: |
+          source .venv/bin/activate
+          pytest -v -rs -k "vllm or adapter_name or manifest_and_streaming" \
+            tests/test_grpo_trainer.py \
+            tests/test_rloo_trainer.py \
+            tests/test_distillation_trainer.py \
+            tests/experimental/test_online_dpo_trainer.py \
+            tests/experimental/test_async_grpo_trainer.py \
+            tests/experimental/test_async_distillation_trainer.py
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests with vLLM (${{ matrix.vllm }})
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
