@@ -38,6 +38,7 @@ dependencies = [
     "psutil>=5.9.4",
     "pyarrow>=21.0.0",
     "pyyaml>=6.0.1",
+    "torch>=2.7.0",  # torch 2.6 NVRTC switches text I/O to ASCII after a kernel compile
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]
