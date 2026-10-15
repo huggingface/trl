@@ -36,7 +36,7 @@ from ..testing_utils import TrlTestCase
 
 
 def _make_distillation_config_kwargs(tmp_path):
-    return {"output_dir": str(tmp_path), "report_to": "none", "use_cpu": True, "bf16": False}
+    return {"output_dir": str(tmp_path), "report_to": "none"}
 
 
 def _build_server_result(teacher_logits, inputs, temperature=1.0):
@@ -846,7 +846,6 @@ class TestIWOPDTrainerServerPath(TrlTestCase):
             save_strategy="no",
             report_to="none",
             logging_steps=1,
-            use_cpu=not torch.cuda.is_available(),
             bf16=False,
         )
         model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32).to(self.device)
