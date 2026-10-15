@@ -61,6 +61,10 @@ training_args = GRPOConfig(
     # The whole episode (every turn, tool results included) has to fit in the completion
     max_completion_length=4096,
     max_tool_calling_iterations=10,
+    # vLLM and the trainer disagree by ~0.035 nats per generated token on this model, so a sequence-level ratio (the
+    # default) multiplies that over a 1-2k-token episode and down-weights most episodes by orders of magnitude.
+    # Correct each token instead.
+    vllm_importance_sampling_mode="token_truncate",
     max_steps=200,
     logging_steps=1,
     log_completions=True,
