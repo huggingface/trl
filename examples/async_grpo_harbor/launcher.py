@@ -15,7 +15,7 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "trl @ git+https://github.com/younesbelkada/trl.git@async-grpo-harbor-slurm",
+#     "trl @ git+https://github.com/huggingface/trl.git@main",
 #     "openenv[harbor] @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 #     "vllm==0.25.1",
 #     "flashinfer-jit-cache==0.6.13",
