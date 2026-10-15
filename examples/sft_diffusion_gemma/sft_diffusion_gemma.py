@@ -189,6 +189,59 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
         self.eos_token_id = self.processing_class.eos_token_id
         self.model_prediction_type = self.args.model_prediction_type
 
+    @staticmethod
+    def _prefix_conditioned_logits(
+        model,
+        input_ids,
+        attention_mask,
+        canvas_ids,
+        encoder_len,
+        offsets,
+        self_conditioning_logits=None,
+        self_conditioning_mask=None,
+    ):
+        """Encode exactly the context before each sampled canvas.
+
+        Encoder sliding-window caches evict earlier positions during a full
+        sequence forward. Masking the decoder afterward cannot recover those
+        values. Group equal-length prefixes to retain batched forward passes
+        without accidentally conditioning one row on another row's future.
+        """
+        logits_by_prefix = []
+        row_ids_by_prefix = []
+        for prefix in encoder_len.unique(sorted=True).tolist():
+            rows = (encoder_len == prefix).nonzero(as_tuple=True)[0]
+            selected_ids = input_ids.index_select(0, rows)
+            selected_attention = attention_mask.index_select(0, rows)
+            selected_canvas = canvas_ids.index_select(0, rows)
+            if prefix:
+                selected_ids = selected_ids[:, :prefix]
+                selected_attention = selected_attention[:, :prefix]
+                cache_mask = selected_attention.bool()
+            else:
+                # An empty prefix has no KV context. Keep the full encoder
+                # shape (the model does not accept zero-length input) but
+                # explicitly hide *all* cached tokens from the decoder.
+                cache_mask = torch.zeros_like(selected_attention, dtype=torch.bool)
+
+            canvas_mask = torch.ones_like(selected_canvas, dtype=torch.bool)
+            kwargs = {
+                "input_ids": selected_ids,
+                "attention_mask": selected_attention,
+                "decoder_input_ids": selected_canvas,
+                "decoder_attention_mask": torch.cat([cache_mask, canvas_mask], dim=1),
+                "decoder_position_ids": encoder_len.index_select(0, rows)[:, None] + offsets,
+            }
+            if self_conditioning_logits is not None:
+                kwargs["self_conditioning_logits"] = self_conditioning_logits.index_select(0, rows)
+            if self_conditioning_mask is not None:
+                kwargs["self_conditioning_mask"] = self_conditioning_mask.index_select(0, rows)
+            row_ids_by_prefix.append(rows)
+            logits_by_prefix.append(model(**kwargs).logits)
+
+        row_ids = torch.cat(row_ids_by_prefix)
+        return torch.cat(logits_by_prefix, dim=0).index_select(0, row_ids.argsort())
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         input_ids = inputs["input_ids"]
         attention_mask = inputs["attention_mask"]
@@ -248,13 +301,32 @@ class DiffusionGemmaSFTTrainer(SFTTrainer):
             "decoder_position_ids": encoder_len[:, None] + offsets,
         }
 
-        # Two-pass self-conditioning: a first no-grad pass produces the logits the second pass conditions on,
-        # gated per example with probability p
-        with torch.no_grad():
-            model_kwargs["self_conditioning_logits"] = model(**model_kwargs).logits
-        model_kwargs["self_conditioning_mask"] = torch.rand(batch_size, device=device) < self.self_conditioning_p
-
+        # The full encoder still supplies the autoregressive co-loss over
+        # all tokens. Its sliding-window KV cache is *not* suitable as decoder
+        # context for an earlier sampled response block: those tokens may
+        # already have been evicted. Decoder logits therefore come from
+        # separate, exact-prefix passes below.
         outputs = model(**model_kwargs)
+
+        # Both self-conditioning passes must see the same *correct* prefix.
+        # Preserve the original independent per-example conditioning mask.
+        with torch.no_grad():
+            conditioning_logits = self._prefix_conditioned_logits(
+                model, input_ids, attention_mask, canvas_ids, encoder_len, offsets
+            )
+        conditioning_mask = torch.rand(batch_size, device=device) < self.self_conditioning_p
+        outputs.logits = self._prefix_conditioned_logits(
+            model,
+            input_ids,
+            attention_mask,
+            canvas_ids,
+            encoder_len,
+            offsets,
+            self_conditioning_logits=conditioning_logits,
+            self_conditioning_mask=conditioning_mask,
+        )
+        # The full pass's cache does not correspond to the selected blocks.
+        outputs.past_key_values = None
 
         # Flat cross-entropy over all canvas positions, corrupted and uncorrupted (no 1/t weighting: the uniform
         # corruption kernel has a flat ELBO). For truncated turns the EOS fill is not a real terminator, so it is
