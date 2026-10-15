@@ -74,8 +74,8 @@ jobs:
         run: |
           source .venv/bin/activate
           nvidia-smi
-          # The tensor-parallel tests need 3 GPUs; with fewer, they would be skipped and the job would pass without testing
-          python -c "import torch, transformers, vllm; print(f'vllm {vllm.__version__}, torch {torch.__version__}, transformers {transformers.__version__}'); assert torch.cuda.device_count() >= 3"
+          # The server tests need 2 GPUs; with fewer, they would be skipped and the job would pass without testing
+          python -c "import torch, transformers, vllm; print(f'vllm {vllm.__version__}, torch {torch.__version__}, transformers {transformers.__version__}'); assert torch.cuda.device_count() >= 2"
 
       - name: Test the vLLM client and server
         run: |
@@ -84,15 +84,17 @@ jobs:
 
       - name: Test the trainers with vLLM
         if: ${{ !cancelled() }}
+        env:
+          CUDA_VISIBLE_DEVICES: "0"  # the trainers refuse `nn.DataParallel`, which several visible GPUs would trigger
+          VLLM_END: ${{ matrix.vllm }}
         run: |
           source .venv/bin/activate
-          pytest -v -rs -k "vllm or adapter_name or manifest_and_streaming" \
-            tests/test_grpo_trainer.py \
-            tests/test_rloo_trainer.py \
-            tests/test_distillation_trainer.py \
-            tests/experimental/test_online_dpo_trainer.py \
-            tests/experimental/test_async_grpo_trainer.py \
-            tests/experimental/test_async_distillation_trainer.py
+          files="tests/test_grpo_trainer.py tests/test_rloo_trainer.py tests/test_distillation_trainer.py tests/experimental/test_online_dpo_trainer.py"
+          # The async trainers need transformers>=5.2.0, which the vLLM floor does not allow
+          if [ "$VLLM_END" != "floor" ]; then
+            files="$files tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py"
+          fi
+          pytest -v -rs -k "vllm or adapter_name or manifest_and_streaming" $files
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()
