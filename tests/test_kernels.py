@@ -149,12 +149,14 @@ class TestChunkedLogProbFunction:
         entropy = -(p * log_p).sum(dim=-1)
         return logprobs, entropy
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_forward(self, temperature):
+    def test_forward(self, device, temperature):
         torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, device=torch_device)
-        weight = torch.randn(self.V, self.H, device=torch_device)
-        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+        hidden = torch.randn(self.N, self.H, device=device)
+        weight = torch.randn(self.V, self.H, device=device)
+        labels = torch.randint(0, self.V, (self.N,), device=device)
         chunk_rows = []
         torch_mm = torch.mm
 
@@ -268,6 +270,8 @@ class TestChunkedLogProbFunction:
 
         torch.testing.assert_close(is_top1, argmax == labels)
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize(
         ("logit_scale", "final_logit_softcapping"),
         [
@@ -276,11 +280,11 @@ class TestChunkedLogProbFunction:
             (0.5, 30.0),  # both, applied in that order
         ],
     )
-    def test_logit_scale_and_softcapping(self, logit_scale, final_logit_softcapping):
+    def test_logit_scale_and_softcapping(self, device, logit_scale, final_logit_softcapping):
         torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, device=torch_device)
-        weight = torch.randn(self.V, self.H, device=torch_device)
-        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+        hidden = torch.randn(self.N, self.H, device=device)
+        weight = torch.randn(self.V, self.H, device=device)
+        labels = torch.randint(0, self.V, (self.N,), device=device)
 
         logprobs, entropy, *_ = ChunkedLogProbFunction.apply(
             hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, final_logit_softcapping, logit_scale
@@ -292,12 +296,14 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
-    def test_backward(self, temperature):
+    def test_backward(self, device, temperature):
         torch.manual_seed(42)
-        hidden = torch.randn(self.N, self.H, requires_grad=True, device=torch_device)
-        weight = torch.randn(self.V, self.H, requires_grad=True, device=torch_device)
-        labels = torch.randint(0, self.V, (self.N,), device=torch_device)
+        hidden = torch.randn(self.N, self.H, requires_grad=True, device=device)
+        weight = torch.randn(self.V, self.H, requires_grad=True, device=device)
+        labels = torch.randint(0, self.V, (self.N,), device=device)
 
         # Chunked backward
         logprobs_chunked, *_ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, temperature, self.CHUNK_SIZE)

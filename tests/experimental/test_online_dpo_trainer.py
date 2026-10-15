@@ -517,16 +517,16 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
     def test_online_dpo_vlm_trainer(self, model_id):
         dataset_dict = {
             "prompt": [
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image."}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What do you see?"}]}],
+                [{"role": "user", "content": "Describe the image."}],
+                [{"role": "user", "content": "What do you see?"}],
             ],
-            "images": [
-                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+            "image": [
+                Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)),
+                Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)),
             ],
         }
         dataset = Dataset.from_dict(dataset_dict)
-        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+        dataset = dataset.cast_column("image", features.Image())
 
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         reward_model = AutoModelForSequenceClassification.from_pretrained(

@@ -28,10 +28,16 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "accelerate>=1.4.0",
+    "accelerate>=1.10.1",
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "huggingface_hub>=0.34.0",
     "jinja2",
+    "numpy>=1.26.0",
     "packaging>20.0",
+    "pandas>=2.1.1",
+    "psutil>=5.9.4",
+    "pyarrow>=21.0.0",
+    "pyyaml>=6.0.1",
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]
@@ -71,7 +77,7 @@ quality = [
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes"
+    "bitsandbytes>=0.45.1"  # older versions import triton.ops, removed in Triton 3.2 (torch 2.6)
 ]
 test = [
     "pytest-cov",
@@ -81,7 +87,7 @@ test = [
     "pytest",
 ]
 vllm = [
-    "vllm>=0.21.0,<=0.31.0",
+    "vllm>=0.22.0,<=0.31.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -106,7 +112,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    "bitsandbytes>=0.45.1",  # older versions import triton.ops, removed in Triton 3.2 (torch 2.6)
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
