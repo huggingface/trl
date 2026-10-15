@@ -26,7 +26,7 @@ import torch.nn.functional as F
 import torch.utils.data
 import transformers
 from accelerate.logging import get_logger
-from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+from accelerate.utils import broadcast_object_list, gather_object, is_peft_model, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -213,9 +213,11 @@ class OnlineDPOTrainer(_BaseTrainer):
         # Process reward functions (convert strings to models, collect names)
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        reward_model_revisions = [None] * len(reward_funcs)
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
                 # Load model from string path
+                reward_model_revisions[i] = model_init_kwargs.get("revision")
                 reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                     reward_func, num_labels=1, **model_init_kwargs
                 )
@@ -235,16 +237,20 @@ class OnlineDPOTrainer(_BaseTrainer):
                 raise ValueError("The number of reward processing classes must match the number of reward functions.")
 
         self.reward_processing_classes = []
-        for reward_processing_class_i, reward_func in zip(reward_processing_classes, reward_funcs, strict=True):
+        for i, (reward_processing_class_i, reward_func) in enumerate(
+            zip(reward_processing_classes, reward_funcs, strict=True)
+        ):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class_i is None:
                     reward_processing_class_i = AutoTokenizer.from_pretrained(
-                        reward_func.config._name_or_path, trust_remote_code=args.trust_remote_code
+                        reward_func.config._name_or_path,
+                        revision=reward_model_revisions[i],
+                        trust_remote_code=args.trust_remote_code,
                     )
                 if reward_processing_class_i.pad_token_id is None:
                     reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
                 # Set pad token ID on reward model config
-                reward_func.config.pad_token_id = reward_processing_class_i.pad_token_id
+                reward_func.config.get_text_config().pad_token_id = reward_processing_class_i.pad_token_id
             self.reward_processing_classes.append(reward_processing_class_i)
 
         # Handle reward_weights
@@ -265,6 +271,9 @@ class OnlineDPOTrainer(_BaseTrainer):
         if processing_class is None:
             raise ValueError("`processing_class` must be provided.")
 
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
@@ -381,6 +390,20 @@ class OnlineDPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
@@ -441,7 +464,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                     )
 
                     # Determine device type (supports cuda, xpu, etc.)
-                    accelerator_type = torch.accelerator.current_accelerator().type
+                    if Version(torch.__version__) >= Version("2.6.0"):
+                        accelerator_type = torch.accelerator.current_accelerator().type
+                    else:  # `torch.accelerator` was introduced in torch 2.6
+                        accelerator_type = "cuda"
                     current_device = getattr(torch, accelerator_type).current_device()
                     self.vllm_client.init_communicator(device=current_device)
                 else:
@@ -528,7 +554,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 "do_sample": True,
                 "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": self.eos_token_ids,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
                 "top_p": self.top_p,
@@ -604,7 +630,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         return model
 
     def _generate_vllm(self, prompts, images=None):
-        eos_token_id = self._tokenizer.eos_token_id
         pad_token_id = self._tokenizer.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
@@ -620,7 +645,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         max_tokens = self.generation_config.max_tokens
         completion_mask = [[1] * len(ids) + [0] * (max_tokens - len(ids)) for ids in completion_ids]
         completion_ids = [
-            ids + [eos_token_id] if ids[-1] != eos_token_id and len(ids) < max_tokens else ids
+            ids + [self.eos_token_ids[0]] if ids[-1] not in self.eos_token_ids and len(ids) < max_tokens else ids
             for ids in completion_ids
         ]
         completion_ids = [ids + [pad_token_id] * (max_tokens - len(ids)) for ids in completion_ids]
@@ -711,7 +736,7 @@ class OnlineDPOTrainer(_BaseTrainer):
         """Generate completions using vLLM colocate mode"""
         if self.args.vllm_enable_sleep_mode:
             # wake up colocated vLLM instances if needed
-            torch.cuda.empty_cache()  # required to avoid OOM in some cases
+            empty_cache()  # required to avoid OOM in some cases
             self.llm.wake_up(tags=["weights"])
 
         # Update model weights if needed - only after gradient accumulation completes
@@ -749,8 +774,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         return completion_ids, prompt_ids
 
     def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
-        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
-        for name, param in module.state_dict().items():
+        # For FSDP2, module.named_parameters() covers all parameters and yields tied weights once, as vLLM requires
+        for name, param in module.named_parameters():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
             # Skip PEFT layers: they don’t exist in vLLM, and they are merged already.
@@ -922,7 +947,6 @@ class OnlineDPOTrainer(_BaseTrainer):
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
-        eos_token_id = self._tokenizer.eos_token_id
         pad_token_id = self._tokenizer.pad_token_id
 
         # Apply chat template and tokenize the input
@@ -989,17 +1013,19 @@ class OnlineDPOTrainer(_BaseTrainer):
         prompt_ids = prompt_inputs["input_ids"].repeat(2, 1)
         prompt_mask = prompt_inputs["attention_mask"].repeat(2, 1)
 
-        # Prepare vision inputs if available
+        # Prepare vision inputs if available, concatenated as their number of dimensions varies (5D for Idefics2)
         vision_generation_kwargs = {}
         if self.is_vision_model and images is not None:
             if "pixel_values" in prompt_inputs:
-                vision_generation_kwargs["pixel_values"] = prompt_inputs["pixel_values"].repeat(2, 1, 1, 1)
+                vision_generation_kwargs["pixel_values"] = torch.cat([prompt_inputs["pixel_values"]] * 2)
             if "pixel_attention_mask" in prompt_inputs:
-                vision_generation_kwargs["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"].repeat(2, 1)
+                vision_generation_kwargs["pixel_attention_mask"] = torch.cat(
+                    [prompt_inputs["pixel_attention_mask"]] * 2
+                )
             if "image_sizes" in prompt_inputs:
-                vision_generation_kwargs["image_sizes"] = prompt_inputs["image_sizes"].repeat(2, 1)
+                vision_generation_kwargs["image_sizes"] = torch.cat([prompt_inputs["image_sizes"]] * 2)
             if "image_grid_thw" in prompt_inputs:
-                vision_generation_kwargs["image_grid_thw"] = prompt_inputs["image_grid_thw"].repeat(2, 1)
+                vision_generation_kwargs["image_grid_thw"] = torch.cat([prompt_inputs["image_grid_thw"]] * 2)
 
         with (
             profiling_context(self, "transformers.generate"),
@@ -1025,9 +1051,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             )
 
         completion_ids = output[:, prompt_ids.size(1) :]
-        completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+        completion_ids, completion_mask = truncate_right(completion_ids, self.eos_token_ids, pad_token_id)
 
-        return prompt_ids, prompt_mask, completion_ids, completion_mask
+        return prompt_ids, prompt_mask, completion_ids, completion_mask, vision_generation_kwargs or None
 
     def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list, **reward_kwargs):
         """
@@ -1076,12 +1102,11 @@ class OnlineDPOTrainer(_BaseTrainer):
         return total_rewards
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs=None):
-        # Get the number of tokens to truncate from prompt
-        num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
-
-        # Truncate left to avoid oom
-        prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
-        prompt_mask = prompt_mask[:, num_tokens_to_truncate:]
+        # Truncate left to avoid oom, except with images, as it would drop image tokens
+        if vision_inputs is None:
+            num_tokens_to_truncate = max(prompt_ids.size(1) + completion_ids.size(1) - self.max_length, 0)
+            prompt_ids = prompt_ids[:, num_tokens_to_truncate:]
+            prompt_mask = prompt_mask[:, num_tokens_to_truncate:]
 
         # Concat the prompt and completion
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
@@ -1140,43 +1165,17 @@ class OnlineDPOTrainer(_BaseTrainer):
                             elif role == "system":
                                 message["content"] = [{"type": "text", "text": content}]
 
+        vision_inputs = None
         if self.args.use_vllm:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts, images)
         else:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
-
-        contain_eos_token = torch.any(completion_ids == self._tokenizer.eos_token_id, dim=-1)
-
-        # Extract vision inputs if available for VLM support
-        vision_inputs = None
-        if has_images and self.is_vision_model and not self.args.use_vllm:
-            # For vision models with transformers generation, we need to prepare vision inputs
-            # Process the images to get vision inputs that can be passed through the forward pass
-            vision_inputs = {}
-            kwargs = {"images": [[img] for img in images]}
-            processed = self.processing_class(
-                text=[""] * len(images),  # Dummy text for vision processing
-                return_tensors="pt",
-                **kwargs,
+            prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs = self._generate(
+                model, prompts, images
             )
-            # Handle DataParallel wrapped models
-            model_device = getattr(model, "device", None)
-            model_dtype = getattr(model, "dtype", None)
-            if model_device is None and hasattr(model, "module"):
-                model_device = model.module.device
-                model_dtype = model.module.dtype
-            # Move vision tensors to device and convert to model dtype
-            # Need to duplicate for 2 completions per prompt
-            if "pixel_values" in processed:
-                vision_inputs["pixel_values"] = (
-                    processed["pixel_values"].to(model_device, dtype=model_dtype).repeat(2, 1, 1, 1)
-                )
-            if "pixel_attention_mask" in processed:
-                vision_inputs["pixel_attention_mask"] = processed["pixel_attention_mask"].to(model_device).repeat(2, 1)
-            if "image_sizes" in processed:
-                vision_inputs["image_sizes"] = processed["image_sizes"].to(model_device).repeat(2, 1)
-            if "image_grid_thw" in processed:
-                vision_inputs["image_grid_thw"] = processed["image_grid_thw"].to(model_device).repeat(2, 1)
+
+        contain_eos_token = torch.any(
+            torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=completion_ids.device)), dim=-1
+        )
 
         logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs)
         with torch.no_grad():

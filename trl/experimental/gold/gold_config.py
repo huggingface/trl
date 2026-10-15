@@ -22,7 +22,7 @@ from ...trainer.sft_config import SFTConfig
 @dataclass
 class GOLDConfig(SFTConfig):
     r"""
-    Configuration class for [`GOLDTrainer`].
+    Configuration class for [`experimental.gold.GOLDTrainer`].
 
     This class includes only the parameters that are specific to GOLD training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
@@ -54,7 +54,7 @@ class GOLDConfig(SFTConfig):
             revision is used.
         teacher_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
+            from a string. The `revision` value is also used when loading the teacher processing class.
         teacher_tokenizer_name_or_path (`str`, *optional*):
             Tokenizer name or path for the teacher model. If None when using ULD loss, will use the same tokenizer as
             the student model (not recommended for cross-tokenizer distillation).
@@ -77,7 +77,7 @@ class GOLDConfig(SFTConfig):
             Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities across
             student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
-            original ULD paper.
+            original ULD paper. Set to `False` for SentencePiece or other non-ByteLevel tokenizers.
         uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
             Strategy used to align answer logits and merge token probabilities in the ULD loss. With `"observed"`, the
             answer logits are sliced at the answer positions and split tokens (when `use_extended_uld=True`) are merged
@@ -233,7 +233,7 @@ class GOLDConfig(SFTConfig):
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the "
-            "teacher model from a string."
+            "teacher model from a string. The `revision` value is also used when loading the teacher processing class."
         },
     )
     teacher_tokenizer_name_or_path: str | None = field(
@@ -297,7 +297,8 @@ class GOLDConfig(SFTConfig):
                 "Whether to enable extended ULD alignment that uses tokenizers to align and merge token "
                 "probabilities across student and teacher tokenizations. When True, the trainer will compute "
                 "token mappings and merge probabilities for split tokens; when False, ULD will use simple "
-                "positional truncation like in the original ULD paper."
+                "positional truncation like in the original ULD paper. Set to False for SentencePiece or other "
+                "non-ByteLevel tokenizers."
             )
         },
     )

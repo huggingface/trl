@@ -127,12 +127,13 @@ class TestRewardFunc(TrlTestCase):
         assert _outcome_reward_func(environment_reward=[0.25, 0.75]) == [0.25, 0.75]
 
     def test_fresh_env_reward_is_zero_without_backend(self):
-        # The trainer discovers tool methods via `inspect.getmembers`, which evaluates properties. A fresh
-        # env (never `reset`) must expose its tools and return 0.0 from `reward` WITHOUT starting the
-        # Harbor backend or importing `harbor` (not installed in the trainer env).
+        # The trainer discovers tool methods on the environment's class (`inspect.getmembers` on the
+        # instance would evaluate `reward`). A fresh env (never `reset`) must expose its tools and return
+        # 0.0 from `reward` WITHOUT starting the Harbor backend or importing `harbor` (not installed in
+        # the trainer env).
         import inspect
 
         env = HarborBashEnv()
-        names = {n for n, _ in inspect.getmembers(env, predicate=inspect.ismethod)}
+        names = {n for n, _ in inspect.getmembers(type(env), predicate=inspect.isfunction)}
         assert {"bash", "reset"} <= names
         assert env.reward == 0.0

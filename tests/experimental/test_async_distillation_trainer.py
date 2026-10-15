@@ -14,16 +14,22 @@
 
 import asyncio
 import itertools
+import json
 import math
 import multiprocessing as mp
+import os
 import queue
-import types
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
+import numpy as np
 import pytest
+import requests
 import torch
-from datasets import load_dataset
-from transformers import AutoTokenizer
+from datasets import Dataset, load_dataset
+from requests.adapters import BaseAdapter
+from transformers import AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
@@ -34,11 +40,15 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     TokenBudgetBatcher,
     _add_tail_bucket,
     _balance_by_squared_length,
+    _chunked_jsd_loss,
+    _EpochStopCallback,
+    _iter_vllm_named_params,
     _jsd_divergence,
     _narrow_top1_actual_support,
     _reduce_metric,
 )
 from trl.experimental.async_distillation.async_rollout_worker import (
+    AsyncRolloutWorker,
     RolloutSample,
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
@@ -46,8 +56,9 @@ from trl.experimental.async_distillation.async_rollout_worker import (
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
+from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
 
 
 TEACHER_TOP_K = 4
@@ -104,15 +115,20 @@ class _StubRolloutWorker:
             teacher_topk_ids, teacher_topk_logprobs = _make_teacher_topk(
                 self._vocab_size, completion_ids, TEACHER_TOP_K, seed=idx
             )
+            full_teacher_ids = np.full((len(prompt_ids) + len(completion_ids), TEACHER_TOP_K + 1), -1, dtype=np.int64)
+            full_teacher_ids[len(prompt_ids) :, :TEACHER_TOP_K] = teacher_topk_ids
+            full_teacher_logprobs = np.full(full_teacher_ids.shape, -np.inf, dtype=np.float32)
+            full_teacher_logprobs[len(prompt_ids) :, :TEACHER_TOP_K] = teacher_topk_logprobs
             yield RolloutSample(
                 prompt=row["prompt"],
                 completion=completion,
-                input_ids=prompt_ids + completion_ids,
-                completion_mask=[0] * len(prompt_ids) + [1] * len(completion_ids),
-                teacher_topk_ids=[[] for _ in prompt_ids] + teacher_topk_ids,
-                teacher_topk_logprobs=[[] for _ in prompt_ids] + teacher_topk_logprobs,
+                input_ids=np.array(prompt_ids + completion_ids, dtype=np.int64),
+                completion_mask=np.array([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64),
+                teacher_topk_ids=full_teacher_ids,
+                teacher_topk_logprobs=full_teacher_logprobs,
                 model_version=self._model_version,
                 teacher_id="default",
+                prompt_id=idx,  # `itertools.cycle` keeps counting across epochs, like the real `_repeat_iterator`
                 metrics={},
             )
 
@@ -154,16 +170,167 @@ class _StubWeightTransfer:
         pass
 
 
-def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default") -> dict:
+class FakeVLLMServer:
+    """The state a vLLM server has and a mocked dict does not, behind the eight paths [`VLLMClient`] uses.
+
+    Configure it after construction (`fake.lora_config = ...`) and before the trainer is built; the trainer probes
+    `/server_info` in its constructor. Read `loaded`, `evicted` and `paused` afterwards to see what the trainer did
+    from the server's side.
+
+    Attributes:
+        lora_config (`dict` or `None`):
+            What `/server_info` reports under `lora_config`. `None` is a server started without `--enable-lora`, which
+            also makes `/v1/load_lora_adapter` a 404, as it is on the real server.
+        data_parallel_size (`int`):
+            What `/server_info` reports under `parallel_config`.
+        loaded (`OrderedDict[str, str]`):
+            Adapter name to path, oldest first. This is the LRU order vLLM's `LRUCacheLoRAModelManager` evicts in.
+        evicted (`list[str]`):
+            Adapters silently dropped because a load arrived with `loaded` already at `max_loras`. A real server does
+            exactly this rather than reject the load, which is why `select_adapter_sync` sizes `--max-loras` for it.
+        paused (`bool`):
+            Whether `/pause` has been called more recently than `/resume`.
+        requests (`list[str]`):
+            Every path this server was asked, in order.
+        on_load (`callable`, *optional*):
+            Called as `on_load(name, path)` the moment a load is accepted, before the response is returned — the one
+            place a test can observe the trainer's state *at* load time (e.g. that `model_version` has not moved yet).
+    """
+
+    url = "http://fake-vllm"  # a scheme and a host, never bound to anything
+
+    def __init__(self, *, lora_config=None, data_parallel_size=1, max_model_len=2048, dtype="torch.bfloat16"):
+        self.lora_config = lora_config
+        self.data_parallel_size = data_parallel_size
+        self.max_model_len = max_model_len
+        self.dtype = dtype
+        self.loaded: OrderedDict[str, str] = OrderedDict()
+        self.evicted: list[str] = []
+        self.paused = False
+        self.on_load = None
+        self.requests: list[str] = []  # every path asked of this server, in order
+
+    def dispatch(self, method: str, path: str, query: dict, body) -> tuple[int, object]:
+        """Answer one request. Returns `(status_code, json_payload)`."""
+        self.requests.append(path)
+        if path == "/health":
+            return 200, {}
+        if path == "/server_info":
+            return 200, {
+                "vllm_config": {
+                    "lora_config": self.lora_config,
+                    "parallel_config": {
+                        "data_parallel_size": self.data_parallel_size,
+                        "tensor_parallel_size": 1,
+                        "world_size": 1,
+                    },
+                    "model_config": {"dtype": self.dtype},
+                }
+            }
+        if path == "/v1/models":
+            return 200, {
+                "data": [{"id": "base", "max_model_len": self.max_model_len}, *({"id": name} for name in self.loaded)]
+            }
+        if path == "/get_world_size":
+            include_dp = query.get("include_dp", ["true"])[0].lower() != "false"
+            return 200, {"world_size": self.data_parallel_size if include_dp else 1}
+        if path == "/pause":
+            self.paused = True
+            return 200, {}
+        if path == "/resume":
+            self.paused = False
+            return 200, {}
+        if path == "/v1/load_lora_adapter":
+            return self._load(body["lora_name"], body["lora_path"], body.get("load_inplace", False))
+        if path == "/v1/unload_lora_adapter":
+            if self.lora_config is None:
+                return 404, {"detail": "Not Found"}
+            self.loaded.pop(body["lora_name"], None)
+            return 200, "Success"
+        return 404, {"detail": f"no route for {method} {path}"}
+
+    def _load(self, name: str, path: str, load_inplace: bool) -> tuple[int, object]:
+        # Without `--enable-lora` (and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1`) the endpoint is not registered at all.
+        if self.lora_config is None:
+            return 404, {"detail": "Not Found"}
+        # `_check_load_lora_adapter_request`: a repeated name is rejected unless the caller asked to load in place.
+        if name in self.loaded and not load_inplace:
+            return 400, {
+                "error": {
+                    "message": f"The lora adapter '{name}' has already been loaded. If you want to load the adapter "
+                    "in place, set 'load_inplace' to True.",
+                    "type": "InvalidUserInput",
+                }
+            }
+        # `add_lora` validates eagerly: the engine reads the directory before the request is answered, so a path the
+        # server cannot see is a 404 here, not a 200 followed by an engine death.
+        if not os.path.isfile(os.path.join(path, "adapter_config.json")):
+            return 404, {"error": {"message": f"Loading lora {name} failed: No adapter found for {path}"}}
+        # `LRUCacheLoRAModelManager.add_adapter`: at capacity the oldest adapter is removed, silently.
+        if name not in self.loaded and len(self.loaded) >= self.lora_config["max_loras"]:
+            self.evicted.append(self.loaded.popitem(last=False)[0])
+        self.loaded.pop(name, None)  # re-insert at the end: a load touches the LRU order
+        self.loaded[name] = path
+        if self.on_load is not None:
+            self.on_load(name, path)
+        return 200, f"Success: LoRA adapter '{name}' added successfully."
+
+
+class FakeVLLMTransport(BaseAdapter):
+    """A `requests` transport that delivers to a [`FakeVLLMServer`] instead of a socket."""
+
+    def __init__(self, server: FakeVLLMServer):
+        super().__init__()
+        self.server = server
+
+    def send(self, request, **kwargs):
+        url = urlsplit(request.url)
+        body = json.loads(request.body) if request.body else None
+        status, payload = self.server.dispatch(request.method, url.path, parse_qs(url.query), body)
+        response = requests.Response()
+        response.status_code = status
+        response.url = request.url
+        response.request = request
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps(payload).encode()
+        response.encoding = "utf-8"
+        return response
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def fake_vllm(monkeypatch) -> FakeVLLMServer:
+    """A [`FakeVLLMServer`] that every `requests` call to `FakeVLLMServer.url` reaches, for this test only.
+
+    The one patch in this module. It swaps the transport for one URL, leaves every other request untouched, and is
+    undone by `monkeypatch` when the test ends.
+    """
+    server = FakeVLLMServer()
+    transport = FakeVLLMTransport(server)
+    real_get_adapter = requests.Session.get_adapter
+
+    def get_adapter(self, url):
+        return transport if url.startswith(FakeVLLMServer.url) else real_get_adapter(self, url)
+
+    monkeypatch.setattr(requests.Session, "get_adapter", get_adapter)
+    return server
+
+
+def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
     # First token is a prompt token (completion_mask 0, empty teacher candidates); the rest are completion tokens.
-    teacher_topk_ids = [[]] + [list(range(top_k))] * (length - 1)
-    teacher_topk_logprobs = [[]] + [[-float(i) - 0.1 for i in range(top_k)]] * (length - 1)
+    teacher_topk_ids = np.full((length, top_k + 1), -1, dtype=np.int64)
+    teacher_topk_ids[1:, :top_k] = np.arange(top_k)
+    teacher_topk_logprobs = np.full((length, top_k + 1), -np.inf, dtype=np.float32)
+    teacher_topk_logprobs[1:, :top_k] = -np.arange(top_k) - 0.1
     return {
-        "input_ids": list(range(length)),
-        "completion_mask": [0] + [1] * (length - 1),
+        "input_ids": np.arange(length, dtype=np.int64),
+        "completion_mask": np.array([0] + [1] * (length - 1), dtype=np.int64),
         "teacher_topk_ids": teacher_topk_ids,
         "teacher_topk_logprobs": teacher_topk_logprobs,
         "teacher_id": teacher_id,
+        "prompt_id": prompt_id,
         "metrics": {},
     }
 
@@ -202,7 +369,7 @@ class TestPackingAwareBatching:
         assert loads[0] == loads[1]
 
     def test_collator_pads_teacher_candidates_and_masks_prompt_positions(self):
-        collator = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1)
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1)
         a = _rollout_sample(3)  # input_ids [0, 1, 2]; position 0 is prompt (no candidates)
         batch = collator([[[a]]])
 
@@ -219,9 +386,9 @@ class TestPackingAwareBatching:
         assert batch["teacher_topk_ids"][0, 1, TEACHER_TOP_K] == -1
 
     def test_collator_pads_unequal_rows(self):
-        collator = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=2)
-        a = _rollout_sample(3)  # input_ids [0, 1, 2]
-        b = _rollout_sample(2)  # input_ids [0, 1]
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
+        a = _rollout_sample(3, prompt_id=7)  # input_ids [0, 1, 2]
+        b = _rollout_sample(2, prompt_id=8)  # input_ids [0, 1]
 
         batch = collator([[[a], [b]]])
 
@@ -242,17 +409,18 @@ class TestPackingAwareBatching:
         assert collator.metrics["batch/pad_frac"] == [(1, 6)]  # the one slot row b was padded with
         assert "batch/row_fill_frac" not in collator.metrics  # no budget passed, so nothing to fill
 
+        # The prompts behind this micro-batch, accumulated for `_EpochStopCallback` to count epochs with.
+        assert collator.prompts_trained == {7, 8}
+
     def test_collator_packs_teacher_id_per_token_for_mopd(self):
         # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
         # token's jsd/teacher_entropy to a teacher if the id is broadcast across that sample's own tokens here.
-        collator = DataCollatorForRollout(
-            pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1, teacher_id_to_idx={"math": 0, "code": 1}
-        )
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, teacher_id_to_idx={"math": 0, "code": 1})
         batch = collator([[[_rollout_sample(3, teacher_id="math"), _rollout_sample(2, teacher_id="code")]]])
 
         assert batch["teacher_id_idx"].tolist() == [[0, 0, 0, 1, 1]]
 
-        single = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1)
+        single = DataCollatorForRollout(pad_token_id=0, num_processes=1)
         assert "teacher_id_idx" not in single([[[_rollout_sample(3)]]])
 
 
@@ -318,25 +486,36 @@ class TestParseTeacherLogprobs:
         assert logprobs == pytest.approx(expected_logprobs)
 
 
-def _bare_loop(tokenizer, teacher_server_urls):
-    # _generate_and_score_one/_score_with_teacher only read the attributes set below off self, so we skip the heavy
-    # __init__ (mp.Queue/mp.Value/mp.Event, child-process bookkeeping) and set just those, mirroring
-    # AsyncGRPOTrainer's own `_bare_loop` test helper.
-    loop = object.__new__(_AsyncRolloutLoop)
-    loop.tokenizer = tokenizer
-    loop.chat_template_kwargs = {}
-    loop.teacher_server_urls = teacher_server_urls
-    # Normally resolved from each teacher's /v1/models in _run_loops, which no bare loop ever reaches.
+def _rollout_loop(**kwargs):
+    # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM or teacher connection happens here).
+    tokenizer = kwargs.get("processing_class") or AutoTokenizer.from_pretrained(
+        "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    )
+    kwargs = {
+        "model_name": "test",
+        "dataset": Dataset.from_dict({"prompt": ["hi"]}),
+        "processing_class": tokenizer,
+        "eos_token_ids": [tokenizer.eos_token_id],
+        "rollout_buffer": mp.Queue(),
+        "model_version_value": mp.Value("i", 0),
+        "heartbeat_value": mp.Value("d", 0.0),
+        "failed_event": mp.Event(),
+        "exception_info_queue": mp.Queue(),
+        "metrics_queue": mp.Queue(),
+        **kwargs,
+    }
+    return _AsyncRolloutLoop(**kwargs)
+
+
+def _scoring_loop(tokenizer, teacher_server_urls):
+    loop = _rollout_loop(
+        processing_class=tokenizer,
+        teacher_server_urls=teacher_server_urls,
+        teacher_top_k=TEACHER_TOP_K,
+        request_timeout=30,
+    )
+    # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
-    loop.teacher_top_k = TEACHER_TOP_K
-    loop.teacher_temperature = 1.0
-    loop.request_timeout = 30
-    loop._model_version_value = types.SimpleNamespace(value=0)
-    # `_generate_and_score_one` pushes its rollout metrics; collect them instead of sending them to a queue.
-    loop._pushed_metrics = []
-    loop._counters = defaultdict(float)
-    loop._rates = defaultdict(lambda: [0.0, 0.0])
-    loop._push_metrics = loop._pushed_metrics.append
     return loop
 
 
@@ -348,13 +527,7 @@ class TestWorkerMetrics:
     """The worker's payload has the same shape as the trainer's sink, so draining it in `log()` is an append."""
 
     def _loop(self, teacher_server_urls=ONE_TEACHER, maxsize=0):
-        loop = object.__new__(_AsyncRolloutLoop)
-        loop._metrics_queue = mp.Queue(maxsize=maxsize)
-        loop._counters = defaultdict(float)
-        loop._rates = defaultdict(lambda: [0.0, 0.0])
-        loop.teacher_server_urls = teacher_server_urls
-        loop.tokenizer = types.SimpleNamespace(eos_token_id=0, pad_token_id=0)
-        return loop
+        return _rollout_loop(teacher_server_urls=teacher_server_urls, metrics_queue=mp.Queue(maxsize=maxsize))
 
     def test_counters_and_rates_ride_along_and_reset(self):
         loop = self._loop()
@@ -378,16 +551,17 @@ class TestWorkerMetrics:
             loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
 
     @pytest.mark.parametrize(
-        ("teacher_server_urls", "completion_ids", "clipped", "per_teacher"),
+        ("teacher_server_urls", "ends_on_eos", "clipped", "per_teacher"),
         [
-            (ONE_TEACHER, [7, 8, 0], 0.0, False),  # ends on eos: the model stopped on its own
-            (TWO_TEACHERS, [7, 8, 9], 1.0, True),  # ends mid-sentence: cut off by max_completion_length
+            (ONE_TEACHER, True, 0.0, False),  # ends on eos: the model stopped on its own
+            (TWO_TEACHERS, False, 1.0, True),  # ends mid-sentence: cut off by max_completion_length
         ],
     )
     def test_rollout_push_reports_the_completion_and_the_teacher_call(
-        self, teacher_server_urls, completion_ids, clipped, per_teacher
+        self, teacher_server_urls, ends_on_eos, clipped, per_teacher
     ):
         loop = self._loop(teacher_server_urls)
+        completion_ids = [7, 8, loop.eos_token_ids[0] if ends_on_eos else 9]
         loop._push_rollout_metrics(completion_ids=completion_ids, teacher_id="math", score_s=0.25, duration_s=1.5)
         payload = loop._metrics_queue.get(timeout=5)
 
@@ -412,7 +586,7 @@ class TestMultiTeacherRouting:
     def _run(self, teacher_server_urls, *teacher_ids):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-        loop = _bare_loop(tokenizer, teacher_server_urls)
+        loop = _scoring_loop(tokenizer, teacher_server_urls)
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
@@ -430,7 +604,7 @@ class TestMultiTeacherRouting:
             {"prompt": [{"role": "user", "content": "hi"}], **({} if tid is None else {"teacher_id": tid})}
             for tid in teacher_ids
         ]
-        samples = [asyncio.run(loop._generate_and_score_one(row)) for row in rows]
+        samples = [asyncio.run(loop._generate_and_score_one(i, row)) for i, row in enumerate(rows)]
         return samples, requests
 
     @pytest.mark.parametrize("teacher_id", ["whatever", None])
@@ -449,11 +623,12 @@ class TestMultiTeacherRouting:
 
     def test_scores_only_the_completion_region(self):
         (sample,), ((_, payload),) = self._run(ONE_TEACHER, None)
-        n_prompt = len(sample.input_ids) - sum(sample.completion_mask)
-        assert payload["prompt"] == sample.input_ids
+        n_prompt = len(sample.input_ids) - int(sample.completion_mask.sum())
+        assert payload["prompt"] == sample.input_ids.tolist()
         assert payload["prompt_logprobs"] == TEACHER_TOP_K
-        assert sample.teacher_topk_ids[:n_prompt] == [[]] * n_prompt
-        assert sample.teacher_topk_ids[n_prompt:] == [[7]] * sum(sample.completion_mask)
+        assert (sample.teacher_topk_ids[:n_prompt] == -1).all()
+        assert (sample.teacher_topk_ids[n_prompt:, 0] == 7).all()
+        assert (sample.teacher_topk_ids[n_prompt:, 1:] == -1).all()
 
     @pytest.mark.parametrize(("teacher_id", "match"), [(None, "teacher_id=None"), ("unknown", "teacher_id='unknown'")])
     def test_multi_teacher_raises_on_unroutable_row(self, teacher_id, match):
@@ -468,10 +643,8 @@ class TestBetaRange:
 
     @pytest.mark.parametrize("beta", [-0.1, 1.1, 2.0])
     def test_out_of_range_beta_raises(self, beta):
-        # use_cpu/bf16 avoid an unrelated `TrainingArguments` validation error on machines without a bf16-capable
-        # GPU; irrelevant to what this test checks.
         with pytest.raises(ValueError, match=r"beta must be in \[0.0, 1.0\]"):
-            AsyncDistillationConfig(output_dir="/tmp/unused", report_to="none", use_cpu=True, bf16=False, beta=beta)
+            AsyncDistillationConfig(output_dir="/tmp/unused", report_to="none", beta=beta)
 
 
 class TestNarrowTop1ActualSupport:
@@ -697,6 +870,63 @@ class TestSparseGeneralizedJSDMatchesFullVocabReference:
         torch.testing.assert_close(ours, reference)
 
 
+class TestPerTeacherStats:
+    """MOPD's per-teacher breakdown: `_chunked_jsd_loss` returns a `(count, jsd_sum, teacher_entropy_sum)` triple per
+    teacher, which `compute_loss` turns into `teacher_jsd/{id}`. Packing concatenates several teachers' tokens into one
+    row and then splits that row into fixed-size chunks, so the partition has to survive a teacher's positions being
+    spread across chunk boundaries.
+    """
+
+    NUM_POSITIONS, HIDDEN_SIZE, VOCAB_SIZE, NUM_TEACHERS = 10, 8, 32, 2
+
+    def _run(self, teacher_id_idx, chunk_size):
+        generator = torch.Generator().manual_seed(0)
+        hidden = torch.randn(self.NUM_POSITIONS, self.HIDDEN_SIZE, generator=generator)
+        lm_head_weight = torch.randn(self.VOCAB_SIZE, self.HIDDEN_SIZE, generator=generator)
+        actual_token_ids = torch.randint(self.VOCAB_SIZE, (self.NUM_POSITIONS,), generator=generator).tolist()
+        ids, logprobs = _make_teacher_topk(self.VOCAB_SIZE, actual_token_ids, TEACHER_TOP_K, seed=0)
+        target_ids = torch.tensor(ids)
+
+        return _chunked_jsd_loss(
+            hidden,
+            lm_head_weight,
+            None,
+            1.0,
+            None,
+            target_ids,
+            torch.tensor(logprobs),
+            torch.ones_like(target_ids, dtype=torch.bool),
+            0.0,
+            1.0,
+            True,
+            teacher_id_idx,
+            self.NUM_TEACHERS,
+            chunk_size,
+        )
+
+    @pytest.mark.parametrize("chunk_size", [3, 256])
+    def test_stats_partition_the_batch_by_teacher(self, chunk_size):
+        teacher_id_idx = torch.tensor([0, 1, 1, 0, 0, 1, 0, 1, 1, 0])
+        _, jsd_sum, _, teacher_entropy_sum, per_teacher_stats = self._run(teacher_id_idx, chunk_size)
+
+        counts, jsd_sums, entropy_sums = per_teacher_stats.view(self.NUM_TEACHERS, 3).T
+        torch.testing.assert_close(counts, torch.bincount(teacher_id_idx).float())
+        torch.testing.assert_close(jsd_sums.sum(), jsd_sum)
+        torch.testing.assert_close(entropy_sums.sum(), teacher_entropy_sum)
+
+    def test_chunking_does_not_move_tokens_between_teachers(self):
+        teacher_id_idx = torch.tensor([0, 1, 1, 0, 0, 1, 0, 1, 1, 0])
+        chunked = self._run(teacher_id_idx, 3)[-1]
+        whole = self._run(teacher_id_idx, self.NUM_POSITIONS)[-1]
+
+        torch.testing.assert_close(chunked, whole)
+
+    def test_single_teacher_reports_no_breakdown(self):
+        per_teacher_stats = self._run(None, 3)[-1]
+
+        assert not per_teacher_stats.any()
+
+
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu",
     reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
@@ -746,6 +976,46 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_resume_from_checkpoint(self):
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
+        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are covered by
+        # TestRolloutStateCheckpoint.
+        # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
+        # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
+        model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        def build_trainer(**overrides):
+            args = AsyncDistillationConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=3,
+                teacher_top_k=TEACHER_TOP_K,
+                max_completion_length=8,
+                token_budget=-1,  # FixedCountBatcher, so a step consumes a fixed, predictable number of samples
+                vllm_server_timeout=5.0,
+                report_to="none",
+                **overrides,
+            )
+            return AsyncDistillationTrainer(
+                model=model_id,
+                args=args,
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+        # First run: train for 2 steps, which saves a checkpoint at step 1.
+        trainer = build_trainer(max_steps=2, save_steps=1)
+        assert trainer.args.ignore_data_skip is True
+        trainer.train()
+
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-1")
+        assert os.path.isfile(os.path.join(checkpoint_dir, "trainer_state.json"))
+
+        # Second run: resume from the step-1 checkpoint.
+        build_trainer(max_steps=3).train(resume_from_checkpoint=checkpoint_dir)
+
     @pytest.mark.parametrize("beta", [0.25, 0.5, 0.75, 1.0])
     def test_train_with_nonzero_beta(self, beta):
         # Adapted from ServerDistillationTrainer's own `test_reverse_kl_finite_grad_with_ragged_batch`: a real
@@ -780,3 +1050,402 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         for record in log_history:
             assert math.isfinite(record["grad_norm"]), f"grad_norm={record['grad_norm']} leaked -inf into backward"
             assert math.isfinite(record["loss"])
+
+
+def _checkpoint_trainer(output_dir, dataset_start_index=0):
+    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    trainer = AsyncDistillationTrainer(
+        model=model_id,
+        args=AsyncDistillationConfig(output_dir=output_dir, report_to="none"),
+        train_dataset=dataset,
+        rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
+        weight_transfer=_StubWeightTransfer(),
+    )
+    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
+    trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+    trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    return trainer
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+class TestEpochStop(TrlTestCase):
+    """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct prompt ids.
+
+    The count spans a resume: the worker restarts `prompt_id` at 0, so the prompts trained before the checkpoint ride
+    in `_prompts_before_resume` and are added back here, or a resumed run would train `num_train_epochs` more passes on
+    top of the ones already done.
+    """
+
+    @pytest.mark.parametrize(
+        ("trained", "before_resume", "should_stop"),
+        [
+            ({0, 1, 2}, 0, False),
+            ({0, 1, 2, 3}, 0, True),
+            ({0, 1}, 2, True),  # a resumed run reaches the target counting the checkpoint's prompts
+            (set(), 4, True),  # ... and reaches it having trained nothing of its own
+        ],
+    )
+    def test_stops_once_the_prompt_target_is_reached(self, trained, before_resume, should_stop):
+        trainer = _checkpoint_trainer(self.tmp_dir)
+        trainer._trained_prompts = trained
+        trainer._prompts_before_resume = before_resume
+        control = TrainerControl()
+
+        _EpochStopCallback(trainer, target_prompts=4).on_step_end(trainer.args, None, control)
+
+        assert control.should_training_stop is should_stop
+        assert control.should_save is should_stop  # the final step is saved, as when training reaches `max_steps`
+
+
+class TestRolloutStartIndex(TrlTestCase):
+    def test_rollout_loop_skips_to_start_index(self):
+        loop = _rollout_loop(
+            dataset=Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]}), dataset_start_index=3
+        )
+        _prompt_id, row = next(loop._repeat_iterator())
+        assert row["prompt"] == "row_3"
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+class TestRolloutStateCheckpoint(TrlTestCase):
+    """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
+
+    def _trainer_at_step_5(self, trained_prompts, dataset_start_index=0):
+        trainer = _checkpoint_trainer(self.tmp_dir, dataset_start_index)
+        trainer.state.global_step = 5
+        trainer._trained_prompts = trained_prompts
+        return trainer
+
+    @pytest.mark.parametrize(
+        ("trained_prompts", "dataset_start_index", "expected"),
+        [
+            ({0, 1, 2, 3, 4}, 10, 15),  # dataset_start_index(10) + first_untrained(5)
+            # Prompt 2 was never trained (its rollout was dropped as stale), so the cursor stops there: it gets
+            # re-generated on resume instead of being silently skipped.
+            ({0, 1, 3, 4, 5}, 0, 2),
+        ],
+    )
+    def test_save_checkpoint_writes_rollout_state(self, trained_prompts, dataset_start_index, expected):
+        trainer = self._trainer_at_step_5(trained_prompts, dataset_start_index=dataset_start_index)
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(trainer.model, None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == expected
+
+    def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
+        # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
+        # file has to exist by the time it runs. Writing it from an `on_save` callback would not: `Trainer` fires
+        # `on_save` only after `_save_checkpoint` returns, leaving the Hub copy without it.
+        trainer = self._trainer_at_step_5({0, 1})
+        written_before_super = []
+
+        def record(*_args, **_kwargs):
+            written_before_super.append(
+                os.path.isfile(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"))
+            )
+
+        with patch.object(_BaseTrainer, "_save_checkpoint", side_effect=record):
+            trainer._save_checkpoint(trainer.model, None)
+
+        assert written_before_super == [True]
+
+    def test_inner_training_loop_sets_dataset_start_index_from_file(self):
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
+        os.makedirs(checkpoint_dir)
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            json.dump({"prompt_index": 77, "model_version": 42}, f)
+
+        trainer = _checkpoint_trainer(self.tmp_dir)
+        trainer._trained_prompts = {1, 2, 3}  # a prior run's ids, which the reset has to drop
+
+        with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
+            trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
+
+        assert trainer.rollout_worker._loop_kwargs["dataset_start_index"] == 77
+        # Epochs are counted in prompts trained, so a resumed run has to pick that count up too, or it would train
+        # `num_train_epochs` more passes on top of the ones already done.
+        assert trainer._prompts_before_resume == 77
+        # The worker restarts `prompt_id` at 0, so ids left over from an earlier run would collide with this one's.
+        assert trainer._trained_prompts == set()
+        # Adapter names are derived from `model_version`, so restarting it at 0 would republish a different adapter
+        # under a name a still-running vLLM server already holds, and strand the previous run's directories outside
+        # the eviction window.
+        assert trainer.model_version == 42
+        trainer.rollout_worker.update_model_version.assert_called_once_with(42)
+
+    def test_inner_training_loop_defaults_model_version_for_old_checkpoints(self):
+        # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
+        checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
+        os.makedirs(checkpoint_dir)
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            json.dump({"prompt_index": 5}, f)
+
+        trainer = _checkpoint_trainer(self.tmp_dir)
+        trainer.model_version = 7  # a version the resume has to reset, not the 0 `__init__` starts from
+
+        with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
+            trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
+
+        assert trainer.model_version == 0
+
+
+class TestRolloutRequestModel(TrlTestCase):
+    def _loop(self, lora_name):
+        return _rollout_loop(model_name="Qwen/Qwen3-4B", lora_name=lora_name)
+
+    def test_dense_runs_request_the_base_model(self):
+        assert self._loop(None)._request_model == "Qwen/Qwen3-4B"
+
+    def test_adapter_runs_request_the_versioned_adapter(self):
+        # In vLLM's API an adapter *is* a model name: naming the base model would silently serve the base model.
+        loop = self._loop("trl-policy")
+        assert loop._request_model == "trl-policy-v0"
+        loop._model_version_value.value = 3
+        assert loop._request_model == "trl-policy-v3"
+
+
+# A LoRA-capable server, as reported by `/server_info`. `max_loras` covers the `max_staleness + 1` servable policy
+# versions plus the one being loaded, for the tests' default `max_staleness=1`.
+SERVER_LORA_CONFIG = {"max_lora_rank": 32, "max_loras": 3}
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu",
+    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+)
+@require_peft
+class TestAsyncDistillationTrainerPeft(TrlTestCase):
+    """The trainer against a `FakeVLLMServer`: its real `VLLMClient` sends real requests, the wire is faked.
+
+    Nothing here is patched. The trainer probes, loads, pauses, resumes and unloads through `VLLMClient` exactly as it
+    does in production, and the assertions read what the server saw — `fake.loaded`, `fake.evicted`, `fake.paused`.
+    """
+
+    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+
+    def _lora_config(self, **kwargs):
+        from peft import LoraConfig
+
+        kwargs.setdefault("target_modules", ["q_proj", "v_proj"])
+        kwargs.setdefault("r", 8)
+        return LoraConfig(**kwargs)
+
+    def _build(
+        self,
+        fake: FakeVLLMServer,
+        peft_config,
+        lora_config=None,
+        data_parallel_size=1,
+        weight_transfer=None,
+        rollout_worker="stub",
+        **config_kwargs,
+    ):
+        """Build a trainer against `fake`, configured to look like a server started with the given flags.
+
+        With `weight_transfer=None` the trainer owns weight sync, which is what makes it probe the server and pick a
+        mode. Pass a `weight_transfer` to exercise the send itself — an injected backend deliberately keeps adapter
+        sync off. `rollout_worker="stub"` injects `_StubRolloutWorker`; `None` lets the trainer build the real
+        `AsyncRolloutWorker`, which is cheap until `start()` and useful for reading what it was told.
+        """
+        fake.lora_config = lora_config
+        fake.data_parallel_size = data_parallel_size
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        config_kwargs.setdefault("max_staleness", 1)
+        args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            token_budget=-1,  # disable token budgeting (no real vLLM server to query max_model_len from)
+            vllm_server_base_url=fake.url,
+            vllm_server_timeout=5.0,
+            report_to="none",
+            **config_kwargs,
+        )
+        if rollout_worker == "stub":
+            rollout_worker = _StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer))
+        return AsyncDistillationTrainer(
+            model=self.model_id,
+            args=args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+            rollout_worker=rollout_worker,
+            weight_transfer=weight_transfer,
+        )
+
+    def test_train_peft_config(self, fake_vllm):
+        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_StubWeightTransfer())
+        previous_params = {n: p.clone() for n, p in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        for name, param in previous_params.items():
+            new_param = trainer.model.get_parameter(name)
+            if "lora_" in name:
+                assert not torch.equal(param, new_param), f"Adapter parameter {name} has not changed."
+            else:
+                # Base weights are frozen, but every sync merges the adapter in and unmerges it out, which is not
+                # bit-exact: the targeted `base_layer` weights drift by a float ulp. A gradient step at this
+                # learning rate would move them by orders of magnitude more.
+                torch.testing.assert_close(
+                    param, new_param, rtol=0, atol=1e-5, msg=f"Base parameter {name} has changed."
+                )
+
+    @pytest.mark.parametrize("target_modules", [["q_proj", "lm_head"], r".*_head$"])
+    def test_lora_on_the_head_is_refused(self, fake_vllm, target_modules):
+        # The chunked divergence path reads `lm_head.weight`, which on a PEFT-wrapped head is the base weight: the
+        # adapter delta would be silently dropped from every student logprob. The regex case is why the check is on
+        # the module and not on `target_modules` — that string never contains "lm_head".
+        with pytest.raises(ValueError, match="lm_head"):
+            self._build(fake_vllm, self._lora_config(target_modules=target_modules), lora_config=SERVER_LORA_CONFIG)
+
+    def test_an_injected_weight_transfer_keeps_adapter_sync_off(self, fake_vllm):
+        # An injected backend owns weight sync and may be a no-op that disables it; adapter sync must not run behind
+        # its back, and the server is not consulted.
+        trainer = self._build(
+            fake_vllm, self._lora_config(), lora_config=SERVER_LORA_CONFIG, weight_transfer=_StubWeightTransfer()
+        )
+        assert trainer._lora_sync is False
+        assert fake_vllm.requests == []
+
+    def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
+        # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
+        # would leave the other ranks waiting in the collective that shares the sync mode.
+        with pytest.raises(ValueError, match="--max-lora-rank"):
+            self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
+
+    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
+    @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
+    def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
+        # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
+        # model, silently, and distilled against the teacher as if it were the student. The real worker is built here
+        # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it.
+        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=None)
+        assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
+
+    # --- adapter sync, as the server sees it -----------------------------------------------------------------------
+
+    def test_adapter_sync_loads_the_adapter_before_bumping_the_version(self, fake_vllm):
+        trainer = self._build(fake_vllm, self._lora_config(), lora_config=SERVER_LORA_CONFIG)
+        version_at_load = []
+        fake_vllm.on_load = lambda name, path: version_at_load.append(trainer.model_version)
+
+        trainer._sync_weight()
+
+        # The rollout worker derives the adapter it requests from `model_version`, so the version must move only
+        # once the adapter it names exists on the server.
+        assert version_at_load == [0]
+        assert trainer.model_version == 1
+        assert trainer.rollout_worker._model_version == 1
+        assert list(fake_vllm.loaded) == ["trl-policy-v1"]
+        path = fake_vllm.loaded["trl-policy-v1"]
+        assert os.path.isfile(os.path.join(path, "adapter_config.json"))
+        # The server resolves the path in its own process, with its own cwd, possibly on another host. vLLM reads a
+        # path it cannot resolve as a Hub repo id, so a relative one dies inside the engine.
+        assert os.path.isabs(path)
+        assert fake_vllm.paused is False  # paused for the publish, resumed after
+
+    @pytest.mark.parametrize(
+        ("max_staleness", "max_loras", "servable_after_five"),
+        [(1, 3, ["trl-policy-v4", "trl-policy-v5"]), (4, 6, [f"trl-policy-v{v}" for v in range(1, 6)])],
+    )
+    def test_adapter_sync_keeps_max_staleness_plus_one_versions_servable(
+        self, fake_vllm, max_staleness, max_loras, servable_after_five
+    ):
+        # In-flight requests may still name any of the last `max_staleness + 1` versions; vLLM resolves `lora_path`
+        # lazily inside the engine, so deleting one of those directories kills the engine with an `HFValidationError`
+        # rather than 404ing.
+        trainer = self._build(
+            fake_vllm,
+            self._lora_config(),
+            lora_config={"max_lora_rank": 32, "max_loras": max_loras},
+            max_staleness=max_staleness,
+        )
+
+        for _ in range(5):
+            trainer._sync_weight()
+
+        assert list(fake_vllm.loaded) == servable_after_five
+        # The server never had to evict one itself: the `--max-loras` bound left room for the load-then-unload.
+        assert fake_vllm.evicted == []
+        # The files lag the unload by one sync, so one more directory than the servable set survives on disk.
+        newest_deleted = 5 - (max_staleness + 1) - 1
+        for version in range(1, 6):
+            exists = os.path.isdir(os.path.join(trainer._lora_dir, f"trl-policy-v{version}"))
+            assert exists is (version > newest_deleted), f"trl-policy-v{version}"
+
+    # --- merged fallback ---------------------------------------------------------------------------------------
+
+    def test_merged_sync_sends_base_names_only(self, fake_vllm):
+        sent = []
+
+        class _RecordingWeightTransfer(_StubWeightTransfer):
+            def send_weights(self, iterator):
+                sent.extend(name for name, _ in iterator)
+
+        trainer = self._build(
+            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer()
+        )
+        trainer._sync_weight()
+
+        assert sent
+        forbidden = (
+            "lora_",
+            "base_model.model.",
+            ".base_layer",
+            "original_module",
+            "modules_to_save",
+            "_checkpoint_wrapped_module.",
+        )
+        for name in sent:
+            assert not any(token in name for token in forbidden), name
+        # `modules_to_save` keeps a trainable copy and the frozen original side by side. Only the copy is sent, under
+        # the base checkpoint's name — sending both would repeat that name and desync the packed transfer.
+        assert len(sent) == len(set(sent))
+
+    @require_vllm  # the merged path builds the real `WeightTransferClient`, whose constructor requires vLLM
+    def test_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
+        # The server sizes its receive buffers from the manifest, so a name present in one and not the other
+        # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
+        # `init_weight_transfer`, which is not called.
+        trainer = self._build(fake_vllm, self._lora_config(modules_to_save=["lm_head"]), lora_config=None)
+        manifest = trainer.weight_transfer._weight_update_info
+
+        assert manifest["names"] == [name for name, _ in trainer._streaming_iter()]
+        assert len(manifest["names"]) == len(manifest["shapes"]) == len(manifest["dtype_names"])
+        assert manifest["names"] == [name for name, _ in _iter_vllm_named_params(trainer.model)]
+
+    def test_adapters_are_unmerged_when_the_send_raises(self, fake_vllm):
+        merged_during_send = []
+
+        class _RaisingWeightTransfer(_StubWeightTransfer):
+            def send_weights(self, iterator):
+                merged_during_send.append(_any_adapter_merged(trainer.model))
+                raise RuntimeError("transfer blew up")
+
+        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer())
+        with pytest.raises(RuntimeError, match="transfer blew up"):
+            trainer._sync_weight()
+
+        # Leaving the adapter merged would silently train merged weights from the next step on.
+        assert merged_during_send == [True]
+        assert not _any_adapter_merged(trainer.model)
+
+
+def _any_adapter_merged(model) -> bool:
+    from peft.tuners.tuners_utils import BaseTunerLayer
+
+    return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())

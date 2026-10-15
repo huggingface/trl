@@ -35,7 +35,7 @@ class DistillationConfig(_BaseConfig):
 
         model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the trainer
-            is provided as a string.
+            is provided as a string. The `revision` value is also used when loading the processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`],
@@ -64,8 +64,9 @@ class DistillationConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -178,7 +179,8 @@ class DistillationConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument "
-            "of the trainer is provided as a string."
+            "of the trainer is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
@@ -235,9 +237,13 @@ class DistillationConfig(_BaseConfig):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
+            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
+            "pad elsewhere."
+        },
     )
 
     # Parameters that control generation
@@ -390,6 +396,14 @@ class DistillationConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError(f"beta must be in [0.0, 1.0], got {self.beta}.")

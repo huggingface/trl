@@ -15,8 +15,12 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
+permissions: {}
+
 jobs:
   tests_transformers_branch:
+    permissions:
+      contents: read
     name: Tests with Transformers ${{ inputs.transformers_ref }}
     runs-on:
       group: aws-g6e-4xlarge
@@ -30,17 +34,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -69,8 +73,10 @@ jobs:
           title: Tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
-  distributed_smoke:
-    name: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
+  distributed:
+    permissions:
+      contents: read
+    name: Distributed tests with Transformers ${{ inputs.transformers_ref }}
     runs-on:
       group: aws-g5-12xlarge-cache
     container:
@@ -85,17 +91,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -111,7 +117,7 @@ jobs:
             ".[dev]" \
             "transformers @ git+https://github.com/huggingface/transformers.git@${TRANSFORMERS_REF}"
 
-      - name: Run distributed smoke tests
+      - name: Run distributed tests
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
@@ -121,5 +127,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Distributed smoke tests with Transformers ${{ inputs.transformers_ref }}
+          title: Distributed tests with Transformers ${{ inputs.transformers_ref }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

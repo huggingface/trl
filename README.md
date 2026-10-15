@@ -22,7 +22,7 @@
 
 ## 🎉 What's New
 
-**⚗️ DistillationTrainer is now stable:** [`DistillationTrainer`](https://huggingface.co/docs/trl/distillation_trainer) graduates to the stable API — on-policy knowledge distillation that matches a teacher's full next-token distribution with a memory-efficient chunked JSD loss and vLLM-powered generation.
+**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Overview
 
@@ -176,7 +176,7 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
 ```bash
 trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name argilla/Capybara-Preferences \
-    --output_dir Qwen2.5-0.5B-DPO 
+    --output_dir Qwen2.5-0.5B-DPO
 ```
 
 **KTO:**

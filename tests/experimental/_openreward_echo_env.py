@@ -46,6 +46,7 @@ TRAIN_TASKS: list[JSONObject] = [
 class EchoTaskSpec(BaseModel):
     id: str
     target: str
+    failure_reward: float = 0.0
 
 
 class EchoParams(BaseModel):
@@ -110,7 +111,7 @@ class EchoEnvironment(Environment):
                     text="match" if correct else f"no match (got {params.text!r})",
                 )
             ],
-            reward=1.0 if correct else 0.0,
+            reward=1.0 if correct else self.config.failure_reward,
             finished=correct,
         )
 

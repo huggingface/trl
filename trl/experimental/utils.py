@@ -24,7 +24,6 @@ import pyarrow as pa
 import pyarrow.types
 import torch
 from accelerate.utils import is_peft_model
-from packaging.version import Version
 from pyarrow import compute as pc
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -51,7 +50,6 @@ from ..trainer.utils import flush_left, pad
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, PeftModel, get_peft_model
 
 
@@ -658,16 +656,16 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
 
 
 def truncate_right(
-    input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
+    input_ids: torch.Tensor, stop_token_ids: list[int], pad_token_id: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Truncates the input tensor from the right side after the first occurrence of the stop token.
+    Truncates the input tensor from the right side after the first occurrence of a stop token.
 
     Args:
         input_ids (`torch.Tensor`):
             The tensor containing the responses to be truncated
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs
+        stop_token_ids (`list[int]`):
+            The token IDs representing the stop tokens where truncation occurs
         pad_token_id (`int`):
             The token ID representing the pad token used to fill the truncated responses
 
@@ -678,7 +676,9 @@ def truncate_right(
             - `mask` (`torch.Tensor`):
                 The mask tensor to indicate the padding tokens
     """
-    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
+    trunc_idxs = first_true_indices(
+        torch.isin(input_ids, torch.tensor(stop_token_ids, device=input_ids.device))
+    ).unsqueeze(-1)
     new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
     idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
     output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)
@@ -777,10 +777,10 @@ def get_reward(
         attention_mask=attention_mask,
         position_ids=position_ids,
         return_dict=True,
-        output_hidden_states=True,
+        output_hidden_states=False,
         use_cache=False,  # otherwise mistral-based RM would error out
     )
-    reward_logits = model.score(output.hidden_states[-1])
+    reward_logits = model.score(output.last_hidden_state)
     sequence_lengths = first_true_indices(query_responses[:, context_length:] == pad_token_id) - 1 + context_length
     # https://github.com/huggingface/transformers/blob/dc68a39c8111217683bf49a4912d0c9018bab33d/src/transformers/models/gpt2/modeling_gpt2.py#L1454
     return (
@@ -898,11 +898,7 @@ def prepare_peft_model(
 
     # Create PEFT model
     if peft_config is not None:
-        if (
-            Version(peft.__version__) >= Version("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
+        if getattr(model, "is_loaded_in_4bit", False) and is_sharded_qlora:
             model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
         else:
             model = get_peft_model(model, peft_config)
