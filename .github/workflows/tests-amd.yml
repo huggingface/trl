@@ -32,7 +32,8 @@ jobs:
             runner: hfc-amd-mi300-2gpu
             gpu_count: 2
             pytest_args: tests/distributed/test_distributed.py
-    runs-on: ${{ matrix.runner }}
+    runs-on:
+      group: ${{ matrix.runner }}
     container:
       image: rocm/pytorch:rocm10.1.0_ubuntu26.04_py3.14_pytorch_release_2.14.0
       # Forward HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES assigned by the runner,
