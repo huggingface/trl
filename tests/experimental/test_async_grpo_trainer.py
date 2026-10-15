@@ -316,8 +316,8 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
@@ -488,8 +488,8 @@ def _vision_parameter_names(model) -> set[str]:
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 @pytest.mark.parametrize(
     "model_id",
@@ -600,8 +600,8 @@ class TestRolloutStartIndex(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
@@ -1229,6 +1229,9 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
             id="gemma2-sliding-window-softcap",
+            marks=pytest.mark.skipif(
+                torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
+            ),
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
@@ -1270,7 +1273,10 @@ class TestTreePackingParity(TrlTestCase):
         collator = DataCollatorForRollout(pad_token_id=0)
         runs = [
             (TREE_ATTENTION, collator([[_tree_row(samples)]])),
-            ("kernels-community/flash-attn3", _sequence_packed_batch(samples)),
+            (
+                "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
+                _sequence_packed_batch(samples),
+            ),
         ]
 
         losses, grads = [], []
@@ -1718,8 +1724,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestEpochStop(TrlTestCase):
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct group_ids.
@@ -2037,8 +2043,8 @@ class TestSelectAdapterSync(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 @require_peft
 class TestAsyncGRPOTrainerPeft(TrlTestCase):
