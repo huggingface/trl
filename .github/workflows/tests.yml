@@ -244,10 +244,17 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
+          # Oldest releases that install on this job's Python, which can be above the pyproject floors
           uv pip install \
             ".[dev]" \
             "accelerate==1.10.1" \
             "datasets==4.7.0" \
+            "huggingface_hub==0.34.0" \
+            "numpy==2.1.0" \
+            "pandas==2.2.3" \
+            "psutil==5.9.4" \
+            "pyarrow==21.0.0" \
+            "pyyaml==6.0.2" \
             "transformers==4.56.2"
 
       - name: Test with pytest
