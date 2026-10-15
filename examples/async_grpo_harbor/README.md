@@ -123,3 +123,20 @@ hf jobs uv run --flavor l4x1 --image huggingface/trl --secrets HF_TOKEN --timeou
 ```
 
 </details>
+
+### Evaluation
+
+Passing `--eval-checkpoints` switches the launcher to evaluation mode: each policy (a Hub model id or a checkpoint folder) is served in turn with vLLM and evaluated on the held-out test set under every harness of `--eval-harnesses` (defaults to `opencode,mini-swe-agent,pi,openhands-sdk`). A run folder stands for all of its checkpoints, and LoRA adapters are merged before serving. The example below compares the base model with every checkpoint of a training run:
+
+```sh
+hf jobs uv run --flavor h200 --image huggingface/trl --secrets HF_TOKEN --timeout 12h \
+    --volume hf://buckets/<user>/<bucket>:/outputs \
+    https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/launcher.py -- \
+    --data-root /outputs \
+    --model Qwen/Qwen3.5-0.8B --split FineEnvs/SmolDataEnvs-harbor-test --n-tasks 250 \
+    --sandbox hf-sandbox --docker-image docker.io/savatar101/env-data-agent-train:base --max-inflight 32 \
+    --eval-checkpoints Qwen/Qwen3.5-0.8B /outputs/runs/<run-name>
+```
+
+Results are written to `/outputs/eval/<label>/summary.json`, along with a `trials.tar.gz` archive of the agent trajectories. Policies already fully evaluated with the same harnesses are skipped, so a job can be resubmitted after a timeout.
+
