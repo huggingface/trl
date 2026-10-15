@@ -27,7 +27,7 @@ Full SFT of LiquidAI/LFM2.5-8B-A1B on function calling, on one 8xH100 node: the 
 parallelism with token dispatch), everything else is FSDP-sharded across the 8 GPUs, and the loss is on the assistant
 tool calls only.
 
-    torchrun --nproc_per_node 8 examples/sft_lfm2_5_moe/sft_lfm2_5_moe.py
+    torchrun --nproc_per_node 8 examples/sft_grpo_lfm2_5_moe/1_sft.py
 
 LiquidAI/LFM2.5-24B-A2B has the same architecture: set `MODEL` to it to train it with the same layout.
 """

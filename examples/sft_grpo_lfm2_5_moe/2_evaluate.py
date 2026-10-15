@@ -18,7 +18,7 @@ Exact-match accuracy of a model playing the HotpotQA library game, on held-out v
 decoding and the same tool loop as training. Tool calls are parsed with TRL's response schema for the model's chat
 template, so a malformed call counts against the model, as it does in training.
 
-    python examples/grpo_lfm2_5_moe/evaluate.py --model LiquidAI/LFM2.5-8B-A1B --output base.jsonl
+    python examples/sft_grpo_lfm2_5_moe/2_evaluate.py --model LiquidAI/LFM2.5-8B-A1B --output base.jsonl
 """
 
 import argparse

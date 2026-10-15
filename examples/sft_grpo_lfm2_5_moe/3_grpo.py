@@ -28,13 +28,13 @@ right articles and chaining them.
 
 On one GPU, with vLLM colocated:
 
-    python examples/grpo_lfm2_5_moe/grpo_lfm2_5_moe.py
+    python examples/sft_grpo_lfm2_5_moe/3_grpo.py
 
 On one 8-GPU node (each GPU runs its own vLLM engine and trains on its own slice of the batch):
 
-    accelerate launch --num_processes 8 examples/grpo_lfm2_5_moe/grpo_lfm2_5_moe.py
+    accelerate launch --num_processes 8 examples/sft_grpo_lfm2_5_moe/3_grpo.py
 
-Evaluate the base model and the trained adapter on the same held-out questions with `evaluate.py`.
+Evaluate the base model and the trained adapter on the same held-out questions with `2_evaluate.py`.
 """
 
 from peft import LoraConfig

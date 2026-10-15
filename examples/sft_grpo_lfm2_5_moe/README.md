@@ -7,14 +7,14 @@ Each [HotpotQA](https://huggingface.co/datasets/hotpotqa/hotpot_qa) question com
 ## Run
 
 ```sh
-python examples/grpo_lfm2_5_moe/grpo_lfm2_5_moe.py                                # 1 GPU, vLLM colocated
-accelerate launch --num_processes 8 examples/grpo_lfm2_5_moe/grpo_lfm2_5_moe.py    # 8 GPUs, data parallel
+python examples/sft_grpo_lfm2_5_moe/3_grpo.py                                # 1 GPU, vLLM colocated
+accelerate launch --num_processes 8 examples/sft_grpo_lfm2_5_moe/3_grpo.py    # 8 GPUs, data parallel
 ```
 
 Evaluate a model on 500 held-out validation questions (all labelled `hard` by HotpotQA), greedy, with the same tool loop and TRL's tool-call parser:
 
 ```sh
-python examples/grpo_lfm2_5_moe/evaluate.py --model LiquidAI/LFM2.5-8B-A1B --output base.jsonl
+python examples/sft_grpo_lfm2_5_moe/2_evaluate.py --model LiquidAI/LFM2.5-8B-A1B --output base.jsonl
 ```
 
 ## Results
