@@ -30,8 +30,14 @@ requires-python = ">=3.11"
 dependencies = [
     "accelerate>=1.10.1",
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "huggingface_hub>=0.34.0",
     "jinja2",
+    "numpy>=1.26.0",
     "packaging>20.0",
+    "pandas>=2.1.1",
+    "psutil>=5.9.4",
+    "pyarrow>=21.0.0",
+    "pyyaml>=6.0.1",
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]
