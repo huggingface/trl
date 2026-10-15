@@ -317,7 +317,7 @@ def main() -> None:
         top_k=-1,
         log_completions=True,
         num_completions_to_print=2,
-        eos_token_ids=eos_token_ids
+        eos_token_ids=eos_token_ids,
     )
 
     peft_config = None

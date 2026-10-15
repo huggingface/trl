@@ -93,7 +93,9 @@ def summarize(rows, expected):
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--server", default="http://127.0.0.1:8200", help="a running `openenv harbor serve` on the test set")
+    p.add_argument(
+        "--server", default="http://127.0.0.1:8200", help="a running `openenv harbor serve` on the test set"
+    )
     p.add_argument("--vllm-url", required=True)
     p.add_argument("--model", required=True, help="the name vLLM serves the policy under")
     p.add_argument("--checkpoint", default="", help="label recorded in summary.json, e.g. the checkpoint path")
@@ -159,12 +161,21 @@ def main() -> None:
                 result = future.result()
             except Exception as exc:  # noqa: BLE001 - record the failure, keep evaluating the other pairs
                 result = {"reward": None, "error": f"{type(exc).__name__}: {exc}"}
-            record = {"task_name": row["task_name"], "task_index": row["task_index"], "harness": harness,
-                      "difficulty": difficulty(args.split, row["task_name"]), **result}
+            record = {
+                "task_name": row["task_name"],
+                "task_index": row["task_index"],
+                "harness": harness,
+                "difficulty": difficulty(args.split, row["task_name"]),
+                **result,
+            }
             pair_path(row, harness).write_text(json.dumps(record, indent=2))
-            print(f"[{done}/{len(pending)}] {harness:16s} {row['task_name']}  reward={result.get('reward')}", flush=True)
+            print(
+                f"[{done}/{len(pending)}] {harness:16s} {row['task_name']}  reward={result.get('reward')}", flush=True
+            )
 
-    records = [json.loads(pair_path(row, h).read_text()) for row in rows for h in harnesses if pair_path(row, h).exists()]
+    records = [
+        json.loads(pair_path(row, h).read_text()) for row in rows for h in harnesses if pair_path(row, h).exists()
+    ]
     summary = {
         "model": args.model,
         "checkpoint": args.checkpoint,

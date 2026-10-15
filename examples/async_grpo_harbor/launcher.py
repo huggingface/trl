@@ -335,8 +335,13 @@ def run_eval(args: argparse.Namespace, data_root: pathlib.Path, env_path: str) -
     rc = 0
     for checkpoint in checkpoints:
         # /outputs/runs/<run>/checkpoint-N -> runs_<run>_checkpoint-N; a Hub id keeps its name.
-        label = re.sub(r"[^\w.-]+", "_", str(pathlib.Path(checkpoint).resolve().relative_to(data_root.resolve()))
-                       if checkpoint.startswith(str(data_root)) else checkpoint)
+        label = re.sub(
+            r"[^\w.-]+",
+            "_",
+            str(pathlib.Path(checkpoint).resolve().relative_to(data_root.resolve()))
+            if checkpoint.startswith(str(data_root))
+            else checkpoint,
+        )
         out = data_root / "eval" / label
         out.mkdir(parents=True, exist_ok=True)
         summary = out / "summary.json"
@@ -354,8 +359,14 @@ def run_eval(args: argparse.Namespace, data_root: pathlib.Path, env_path: str) -
             served = merge_lora(checkpoint, pathlib.Path("merged") / label)
         # One server per policy, so its trial folders stay apart; the factories keep one connection per harness.
         server_log = out / "openenv-server.log"
-        server = _spawn(_serve_cmd(args), server_log, env={
-            "MAX_CONCURRENT_ENVS": str(args.max_inflight + 8), "OPENENV_HARBOR_TRIALS_DIR": str(trials.resolve())})
+        server = _spawn(
+            _serve_cmd(args),
+            server_log,
+            env={
+                "MAX_CONCURRENT_ENVS": str(args.max_inflight + 8),
+                "OPENENV_HARBOR_TRIALS_DIR": str(trials.resolve()),
+            },
+        )
         vllm_url = f"http://127.0.0.1:{args.vllm_port}"
         vllm_cmd = [
             "vllm", "serve", served,
@@ -440,9 +451,16 @@ def prepare_tasks(args: argparse.Namespace, target: pathlib.Path) -> str:
     quotas = {d: int(n) if n else None for d, _, n in (s.partition(":") for s in args.difficulty.split(",") if s)}
     if quotas:
         # Read every task.toml from a cache outside `target`: a folder holding only task.toml would count as a task.
-        tomls = snapshot_download(args.split, repo_type="dataset", allow_patterns=[f"{p}/task.toml" for p in names],
-                                  cache_dir=f"{target}-toml-cache")
-        found = {p: re.search(r'^difficulty = "(\w+)"', pathlib.Path(tomls, p, "task.toml").read_text(), re.M) for p in names}
+        tomls = snapshot_download(
+            args.split,
+            repo_type="dataset",
+            allow_patterns=[f"{p}/task.toml" for p in names],
+            cache_dir=f"{target}-toml-cache",
+        )
+        found = {
+            p: re.search(r'^difficulty = "(\w+)"', pathlib.Path(tomls, p, "task.toml").read_text(), re.M)
+            for p in names
+        }
         picked = {d: [p for p in names if found[p] and found[p][1] == d][:n] for d, n in quotas.items()}
         names = sorted(p for selected in picked.values() for p in selected)
         print("[launcher] selected " + ", ".join(f"{len(s)} {d}" for d, s in picked.items()), flush=True)
@@ -456,7 +474,9 @@ def prepare_tasks(args: argparse.Namespace, target: pathlib.Path) -> str:
         # OpenEnv passes no memory override to Harbor, so the sandbox size comes from task.toml.
         text = re.sub(r"^memory_mb = .*$", f"memory_mb = {args.sandbox_memory_mb}", text, flags=re.M)
         if args.docker_image and "docker_image" not in text:
-            text = re.sub(r"^\[environment\]$", f'[environment]\ndocker_image = "{args.docker_image}"', text, count=1, flags=re.M)
+            text = re.sub(
+                r"^\[environment\]$", f'[environment]\ndocker_image = "{args.docker_image}"', text, count=1, flags=re.M
+            )
         toml.write_text(text)
     print(f"[launcher] prepared {len(names)} tasks in {target}", flush=True)
     return str(target)
@@ -504,7 +524,9 @@ def main() -> None:
         raise RuntimeError("sandbox is e2b but E2B_API_KEY is unset; pass it with --secrets E2B_API_KEY")
     if args.sandbox == "hf-sandbox":
         if not args.docker_image:
-            raise RuntimeError("hf-sandbox cannot build a task's Dockerfile: pass --docker-image with a prebuilt image")
+            raise RuntimeError(
+                "hf-sandbox cannot build a task's Dockerfile: pass --docker-image with a prebuilt image"
+            )
         patch_harbor_untar()
     if args.n_tasks and not os.path.isdir(args.split):
         # Served from local disk: thousands of small files are slow to write to a bucket and slow for the server to read
@@ -539,7 +561,9 @@ def main() -> None:
     # Evaluation serves the policy only; training also runs the trainer, on its own GPU unless colocated.
     needed = 1 if args.eval_checkpoints else len({args.vllm_device, args.train_device})
     if n_gpu < needed:
-        raise RuntimeError(f"needs {needed} GPU(s) (engine + trainer on one host) but sees {n_gpu}; try --flavor h200x2")
+        raise RuntimeError(
+            f"needs {needed} GPU(s) (engine + trainer on one host) but sees {n_gpu}; try --flavor h200x2"
+        )
     if not args.eval_checkpoints and needed == 1 and args.weight_transfer != "ipc":
         raise RuntimeError("vLLM and the trainer share a GPU, which NCCL cannot do: pass --weight-transfer ipc")
 
