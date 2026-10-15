@@ -14,12 +14,11 @@ torchrun --nproc_per_node 8 examples/lfm2_5_moe_research_agent/1_sft.py
 
 One epoch on 8 H100s: 938 steps in 16 minutes, 0.80 s and 27k tokens per step, 3.7k tokens/s per GPU, 31.5 GB peak per GPU. The loss goes from 1.16 to 0.03 and the token accuracy from 90.5% to 99.3%.
 
-The script saves checkpoints in its output directory; the last one is the trained model:
+The trained model is on the Hub as [trl-lib/LFM2.5-8B-A1B-SFT-function-calling](https://huggingface.co/trl-lib/LFM2.5-8B-A1B-SFT-function-calling) (with your own run, use the last checkpoint in the output directory):
 
 ```python
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.trainer_utils import get_last_checkpoint
 
 from trl.chat_template_utils import add_response_schema, parse_response
 
@@ -34,9 +33,9 @@ def get_weather(city: str, unit: str) -> str:
     """
 
 
-model_dir = get_last_checkpoint("LFM2.5-8B-A1B-SFT-function-calling")
-tokenizer = add_response_schema(AutoTokenizer.from_pretrained(model_dir))
-model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16, device_map="cuda")
+model_id = "trl-lib/LFM2.5-8B-A1B-SFT-function-calling"
+tokenizer = add_response_schema(AutoTokenizer.from_pretrained(model_id))
+model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16, device_map="cuda")
 
 messages = [{"role": "user", "content": "Is it warmer in Lisbon or in Oslo right now? Answer in Fahrenheit."}]
 prompt = tokenizer.apply_chat_template(messages, tools=[get_weather], add_generation_prompt=True)["input_ids"]
@@ -95,22 +94,12 @@ read(title='Maroon 5')             -> Maroon 5 is an American pop rock band ... 
 submit_answer(answer='Matt Flynn') -> Answer submitted.
 ```
 
-The script saves LoRA checkpoints. To play episodes with the trained agent, merge the last one into the base model so vLLM can serve it, then run `2_evaluate.py` on it (here on the first held-out question; each episode is written to `episode.jsonl`):
-
-```python
-from peft import AutoPeftModelForCausalLM
-from transformers import AutoTokenizer
-from transformers.trainer_utils import get_last_checkpoint
-
-adapter_dir = get_last_checkpoint("LFM2.5-8B-A1B-GRPO-HotpotQA")
-AutoPeftModelForCausalLM.from_pretrained(adapter_dir, dtype="bfloat16").merge_and_unload().save_pretrained("LFM2.5-8B-A1B-GRPO-HotpotQA-merged")
-AutoTokenizer.from_pretrained(adapter_dir).save_pretrained("LFM2.5-8B-A1B-GRPO-HotpotQA-merged")
-```
+The trained agent is on the Hub as [trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA](https://huggingface.co/trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA), the last LoRA checkpoint merged into the base model so vLLM can serve it (with your own run, merge it with `AutoPeftModelForCausalLM.from_pretrained(checkpoint).merge_and_unload()`). Play an episode on the first held-out question; each episode is written to `episode.jsonl`:
 
 ```sh
-python examples/lfm2_5_moe_research_agent/2_evaluate.py --model LFM2.5-8B-A1B-GRPO-HotpotQA-merged --num_questions 1 --output episode.jsonl
+python examples/lfm2_5_moe_research_agent/2_evaluate.py --model trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA --num_questions 1 --output episode.jsonl
 ```
 
 ```
-{"model": "LFM2.5-8B-A1B-GRPO-HotpotQA-merged", "num_questions": 1, "exact_match": 1.0, "submitted": 1.0, "mean_turns": 5.0, "turns_with_tool_call_block": 4, "turns_with_parsed_tool_calls": 4}
+{"model": "trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA", "num_questions": 1, "exact_match": 1.0, "submitted": 1.0, "mean_turns": 5.0, "turns_with_tool_call_block": 4, "turns_with_parsed_tool_calls": 4}
 ```
