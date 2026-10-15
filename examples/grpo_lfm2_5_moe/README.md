@@ -26,8 +26,9 @@ One H100, LoRA r=32, 4 questions x 8 episodes per step, ~49 s per step (81% of i
 | LFM2.5-8B-A1B | 35.8% | 57.8% | 60.4% | 4.2 |
 | after 50 steps | 42.2% | 73.0% | 62.8% | 2.5 |
 | after 100 steps | 44.4% | 80.6% | 73.0% | 2.0 |
+| after 150 steps | 47.6% | 88.0% | 77.0% | 2.0 |
 
-The base model mostly reads search snippets: it searches the same entity again and again until it runs out of turns (140 of 500 episodes). After training it opens the articles, follows the link to the second one, and submits.
+The base model mostly reads search snippets: it searches the same entity again and again until it runs out of turns (140 of 500 episodes, 35 after 150 steps). After training it opens the articles, follows the link to the second one, and submits. On the same 500 questions, 150 steps of training fix 87 that the base model missed and lose 28.
 
 ## A held-out question, before and after
 
