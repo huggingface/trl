@@ -1,6 +1,7 @@
 FROM nvidia/cuda:13.0.3-devel-ubuntu24.04
 COPY --from=ghcr.io/astral-sh/uv:0.12.24 /uv /usr/local/bin/uv
 ARG VERSION
-ENV PIP_BREAK_SYSTEM_PACKAGES=1 UV_BREAK_SYSTEM_PACKAGES=1
-RUN apt-get update && apt-get install -y git python3-dev python3-pip python-is-python3 && rm -rf /var/lib/apt/lists/*
-RUN uv pip install --system trl[liger,peft,vlm,vllm]==${VERSION} kernels trackio
+ENV VIRTUAL_ENV=/opt/venv UV_PYTHON_INSTALL_DIR=/opt/uv/python PATH=/opt/venv/bin:$PATH
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN uv venv --python 3.12 --seed $VIRTUAL_ENV
+RUN uv pip install trl[liger,peft,vlm,vllm]==${VERSION} kernels trackio
