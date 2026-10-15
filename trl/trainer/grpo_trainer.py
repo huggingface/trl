@@ -1955,10 +1955,7 @@ class GRPOTrainer(_BaseTrainer):
         sync_processes = self.use_vllm and self.vllm_mode == "server"
 
         while iteration_num < self.max_tool_calling_iterations:
-            if sync_processes:
-                if not any(gather_object([bool(idxs_with_tool)])):
-                    break
-            elif not idxs_with_tool:
+            if not idxs_with_tool and not sync_processes:
                 break
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
             # Snapshot state so we can rollback tool results that would exceed max_completion_length
@@ -2071,7 +2068,11 @@ class GRPOTrainer(_BaseTrainer):
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
-            if not idxs_with_tool and not sync_processes:
+            # Checked after dropping the overlong tool results, so processes never generate from empty lists only
+            if sync_processes:
+                if not any(gather_object([bool(idxs_with_tool)])):
+                    break  # no process has tool calls left
+            elif not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
             # Filter images and multimodal fields to match the current subset (index into full batch).
