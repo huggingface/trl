@@ -107,6 +107,22 @@ class AsyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        score_centering (`bool`, *optional*, defaults to `True`):
+            Whether to train with score centering ([paper](https://huggingface.co/papers/2609.20807)) instead of the
+            clipped objective: the importance-weighted score of each sampled token minus its expectation under the vLLM
+            sampler, so that a constant advantage does not pull the policy toward the sampler. The expectation is taken
+            over the `num_sampler_logprobs` most likely tokens at each position, whose log-probabilities the sampler
+            reports.
+        importance_sampling_min (`float`, *optional*, defaults to `0.5`):
+            Lower bound of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio falls
+            outside [`importance_sampling_min`, `importance_sampling_max`] are dropped from the loss (masked importance
+            sampling).
+        importance_sampling_max (`float`, *optional*, defaults to `5.0`):
+            Upper bound of the importance ratio.
+        num_sampler_logprobs (`int`, *optional*, defaults to `8`):
+            Number of top log-probabilities requested from the vLLM sampler for every generated token, used by score
+            centering. More cover more of the sampler's probability mass but cost more to serialize; the server's
+            `--max-logprobs` bounds it.
         token_budget (`int`, *optional*):
             Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic token-budgeted
             micro-batching. When `> 0`, a `TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows
@@ -334,6 +350,31 @@ class AsyncGRPOConfig(_BaseConfig):
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
     )
+    score_centering: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to train with score centering instead of the clipped objective: the importance-weighted "
+            "score of each sampled token minus its expectation under the vLLM sampler."
+        },
+    )
+    importance_sampling_min: float = field(
+        default=0.5,
+        metadata={
+            "help": "Lower bound of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio "
+            "falls outside [`importance_sampling_min`, `importance_sampling_max`] are dropped from the loss."
+        },
+    )
+    importance_sampling_max: float = field(
+        default=5.0,
+        metadata={"help": "Upper bound of the importance ratio."},
+    )
+    num_sampler_logprobs: int = field(
+        default=8,
+        metadata={
+            "help": "Number of top log-probabilities requested from the vLLM sampler for every generated token, used "
+            "by score centering."
+        },
+    )
     token_budget: int | None = field(
         default=None,
         metadata={
@@ -397,6 +438,9 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.score_centering and self.num_sampler_logprobs < 1:
+            raise ValueError("`score_centering=True` needs `num_sampler_logprobs >= 1`.")
 
         if self.top_p < 1.0 and self.top_k == 0:
             raise ValueError(
