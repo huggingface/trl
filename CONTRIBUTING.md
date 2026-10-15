@@ -399,6 +399,8 @@ Declaring a first floor for a dependency that has none is not covered by the abo
 
 When TRL needs an API newer than the floor, the default is a version guard, not a bump. Put a floor change in its own PR and say in the description which version guards, compatibility shims or warning filters it retires.
 
+Two CI jobs test the floors. The nightly minimum-versions job runs on the oldest supported Python and pins every dependency exactly at its floor. The per-PR minimum-versions job runs on the default CI Python, where a floor release may have no wheels, so it pins the oldest release that installs there, which can be above the floor. A floor change updates the pins in both jobs, and moving either job to another Python means re-deriving its pins.
+
 ### Working with warnings
 
 Warnings play a critical role in guiding users toward resolving potential issues, but they should be used thoughtfully to avoid unnecessary noise. Unlike logging, which provides informational context or operational details, warnings signal conditions that require attention and action. Overusing warnings can dilute their importance, leading users to ignore them entirely.
