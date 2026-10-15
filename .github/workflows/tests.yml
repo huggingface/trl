@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - ci-*
   pull_request:
     paths:
       # Run only when relevant files are modified
