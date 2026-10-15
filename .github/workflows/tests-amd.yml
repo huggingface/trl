@@ -34,8 +34,7 @@ jobs:
             pytest_args: tests/distributed/test_distributed.py
     runs-on: ${{ matrix.runner }}
     container:
-      # TRL requires Python >=3.11; the old Ubuntu 22.04 image only has Python 3.10.
-      image: rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.10.0
+      image: rocm/pytorch:rocm10.1.0_ubuntu26.04_py3.14_pytorch_release_2.14.0
       # Forward HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES assigned by the runner,
       # matching transformers' AMD CI. Do not override these with CUDA_VISIBLE_DEVICES.
       options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host --shm-size "16gb"
@@ -59,8 +58,6 @@ jobs:
           # Match transformers' AMD CI cleanup of NVIDIA-only packages.
           # Keep kernels to load the ROCm AITER Flash Attention implementation.
           python -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
-          # AMD's prebuilt flash-attn 2.8.3 wheel is cp310-only and cannot be used
-          # with this Python 3.12 image. The SFT padding-free test uses AITER on ROCm.
 
       - name: Verify ROCm and GPU isolation
         env:
