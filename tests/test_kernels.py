@@ -17,7 +17,6 @@ from unittest.mock import patch
 import pytest
 import torch
 import torch.nn.functional as F
-from packaging.version import Version
 from transformers.testing_utils import torch_device
 from transformers.utils import is_triton_available
 
@@ -93,11 +92,6 @@ class TestLogProbEntropy:
         torch.testing.assert_close(entropy, reference_entropy, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(actual_grad, reference_logits.grad, rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.xfail(
-        condition=Version(torch.__version__) < Version("2.7.0"),
-        reason="Before torch 2.7, Dynamo cannot trace tensor.stride() in an autograd.Function backward with fullgraph",
-        strict=True,
-    )
     def test_torch_compile_fullgraph(self):
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
         index = torch.randint(257, (2, 3), device=torch_device)
