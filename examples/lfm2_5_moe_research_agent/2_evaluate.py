@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl[vllm]",
+# ]
+# ///
+
 # docstyle-ignore
 """
 Exact-match accuracy of a model playing the HotpotQA library game, on held-out validation questions, with greedy
