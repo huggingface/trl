@@ -355,6 +355,13 @@ class TestSFTTrainer(TrlTestCase):
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2-MoE requires transformers>=5.0.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
