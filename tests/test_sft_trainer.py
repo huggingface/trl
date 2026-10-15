@@ -2089,10 +2089,10 @@ class TestSFTTrainer(TrlTestCase):
                 ),
             ),
             pytest.param(
-                "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
+                "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.20.0"),
-                    reason="REDACTED_NAME was introduced in transformers-5.20.0",
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
                 ),
             ),
         ],
@@ -2126,8 +2126,8 @@ class TestSFTTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
-            # REDACTED_NAME: no dataset here feeds `REDACTED_M_tower`, so it gets no gradient. Assert it stays frozen.
-            elif model_id == "trl-internal-testing/tiny-REDACTEDForConditionalGeneration" and "REDACTED_M_tower" in n:
+            # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
                 assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"

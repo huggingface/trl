@@ -24,10 +24,10 @@
 
 # docstyle-ignore
 """
-LoRA SFT of REDACTED_NAME on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
+LoRA SFT of Muse Spark Open on 64 H100s across 8 nodes: the experts are split 8 ways, everything else is sharded
 across all 64, and each rank trains on its own slice of the batch. 14.2 s/step, 131k tokens/step, 40.2 GB per GPU.
 
-    sbatch sft_redacted_name.slurm
+    sbatch sft_muse_spark_open.slurm
 """
 
 from datasets import load_dataset
@@ -37,14 +37,14 @@ from transformers.distributed import DistributedConfig
 from trl import SFTConfig, SFTTrainer
 
 
-MODEL = "REDACTED_HUB_ID"
+MODEL = "meta-models/Muse-Spark-Open-816B-A42B"
 
 # Read the dataset before loading the model: 64 GPUs holding a loaded model is the most expensive place to wait
 # on I/O.
 train_dataset = load_dataset("allenai/tulu-3-sft-mixture", split="train[:500000]")
 
 training_args = SFTConfig(
-    output_dir="REDACTED_FILE_NAME-SFT",
+    output_dir="Muse-Spark-Open-SFT",
     model_init_kwargs={
         # TRL loads a model id in float32 unless told otherwise; "auto" keeps the checkpoint's dtype.
         "dtype": "auto",

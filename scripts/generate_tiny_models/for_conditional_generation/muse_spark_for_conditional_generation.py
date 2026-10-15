@@ -14,7 +14,7 @@
 
 import torch
 from transformers import AutoConfig, AutoProcessor, GenerationConfig
-from transformers.models.redacted import REDACTEDForConditionalGeneration
+from transformers.models.muse_spark import MuseSparkForConditionalGeneration
 
 from .._common import (
     check_dtype_pattern,
@@ -31,7 +31,7 @@ check_transformers_version("5.20.0")
 
 set_seed()
 
-MODEL_ID = "REDACTED_HUB_ID"
+MODEL_ID = "meta-models/Muse-Spark-Open-816B-A42B"
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
@@ -63,7 +63,7 @@ vision_config = {
     "layer_types": ["window_attention", "full_attention"],
 }
 # `hidden_sizes` and `depths` take one entry per layer.
-REDACTED_M_config = {
+audio_config = {
     "num_hidden_layers": 4,
     # `patch_sizes` stays at the reference: the processor depends on it.
     "hidden_sizes": (16, 16, 32, 32),
@@ -78,12 +78,12 @@ config = AutoConfig.from_pretrained(
     MODEL_ID,
     text_config=text_config,
     vision_config=vision_config,
-    REDACTED_M_config=REDACTED_M_config,
+    audio_config=audio_config,
     # Has to stay `vision hidden_size * merge_size ** 2`.
     out_hidden_size=128,
     projector_hidden_size=32,
 )
-model = REDACTEDForConditionalGeneration(config).to(dtype=torch.bfloat16)
+model = MuseSparkForConditionalGeneration(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 
 # Restore float32 for the router, which the reference keeps in fp32: bf16 router logits tie often enough
