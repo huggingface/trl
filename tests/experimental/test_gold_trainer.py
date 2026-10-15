@@ -1878,11 +1878,13 @@ def test_gold_trainer_init_rejects_non_vlm_teacher(tmp_path, vlm_dataset):
 
 def test_gold_trainer_init_rejects_keep_end_truncation_for_vlm(tmp_path, vlm_dataset):
     """GOLDTrainer should raise ValueError when truncation_mode='keep_end' is used with a VLM."""
+    with pytest.warns(FutureWarning, match="keep_end.*deprecated"):
+        training_args = GOLDConfig(output_dir=str(tmp_path), report_to="none", truncation_mode="keep_end")
     with pytest.raises(ValueError, match="truncation_mode='keep_end' is not supported for vision-language models"):
         GOLDTrainer(
             model=_TINY_SMOLVLM,
             teacher_model=_TINY_SMOLVLM,
-            args=GOLDConfig(output_dir=str(tmp_path), report_to="none", truncation_mode="keep_end"),
+            args=training_args,
             train_dataset=vlm_dataset,
         )
 
