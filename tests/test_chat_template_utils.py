@@ -297,6 +297,50 @@ class TestAddResponseSchema:
         assert parsed == messages[-1]
 
     @pytest.mark.parametrize(
+        "tokenizer_name, chat_template",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM",
+                lfm2_v2_chat_template,
+                id="lfm2-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2 reuses the new-style response template of LFM2.5, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_v2_chat_template,
+                id="lfm2-2.5-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+        ],
+    )
+    def test_add_response_schema_parenthesis_in_string_argument(self, tokenizer_name, chat_template):
+        # LFM2.5 closes a call with `)`, which a string argument such as a Wikipedia title can also contain
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [
+            {"type": "function", "function": {"name": "read", "arguments": {"title": "Ed Wood (film)"}}},
+            {"type": "function", "function": {"name": "search", "arguments": {"query": "Tim Burton (director)"}}},
+        ]
+        messages = [
+            {"role": "user", "content": "Who directed Ed Wood?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        )
+        text = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True)
+        response = text.input_ids[len(prefix.input_ids) :]
+        parsed = parse_response(tokenizer, response, prefix=prefix.input_ids)
+        assert parsed == messages[-1]
+
+    @pytest.mark.parametrize(
         "processor_name",
         [
             pytest.param(
