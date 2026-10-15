@@ -77,7 +77,7 @@ quality = [
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes"
+    "bitsandbytes>=0.45.1"  # older versions import triton.ops, removed in Triton 3.2 (torch 2.6)
 ]
 test = [
     "pytest-cov",
@@ -112,7 +112,7 @@ dev = [
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    "bitsandbytes>=0.45.1",  # older versions import triton.ops, removed in Triton 3.2 (torch 2.6)
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
