@@ -1433,21 +1433,16 @@ _FUSED_LM_HEAD_MODEL_IDS = [
 ]
 
 
-def test_add_fused_lm_head_without_triton():
-    """Without Triton, attaching the head names the missing dependency instead of failing on `None` at first call."""
-    model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
-    with patch("trl.trainer.utils._ChunkedLogProbFunction", None), pytest.raises(ImportError, match="Triton"):
-        add_fused_lm_head(model)
-
-
 @require_torch_accelerator
 class TestAddFusedLMHead:
-    def test_masked_labels(self):
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_masked_labels(self, device):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
         add_fused_lm_head(model, outputs=("log_probs", "entropy"))
-        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
-        labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
+        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=device)
+        labels = input_ids.masked_fill(torch.arange(16, device=device) < 8, -100)
 
         out_full = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
         out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
@@ -1483,10 +1478,12 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
         assert (out_shifted["log_probs"][:, -1] == 0).all()
 
-    def test_all_masked_labels_backward(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_all_masked_labels_backward(self, device):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
         add_fused_lm_head(model)
-        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
 
         out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
         out["log_probs"].sum().backward()
@@ -1767,6 +1764,13 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.0"),
+            reason="Muse Spark Open was introduced in transformers-5.20.0",
         ),
     ),
 ]
