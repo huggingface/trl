@@ -1,12 +1,12 @@
 # Async Distillation
 
 > [!IMPORTANT]
-> This trainer requires `vllm>=0.22.0` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
 > Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
 >
 > ```bash
-> pip install 'vllm>=0.22.0'
+> pip install vllm
 > pip install 'transformers>=5.2.0' --no-deps
 > ```
 

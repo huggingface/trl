@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import torch.nn as nn
 import transformers
@@ -638,8 +637,8 @@ class RewardTrainer(_BaseTrainer):
 
         # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
         # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
-        # computed, so they need no such correction. `parallelism_config` requires accelerate 1.12.0.
-        if Version(accelerate.__version__) >= Version("1.12.0") and self.accelerator.parallelism_config is not None:
+        # computed, so they need no such correction.
+        if self.accelerator.parallelism_config is not None:
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1

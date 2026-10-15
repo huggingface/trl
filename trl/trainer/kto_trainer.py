@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
@@ -788,6 +787,16 @@ class KTOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
         if self._is_vision_dataset and args.precompute_ref_log_probs:
             raise ValueError(
                 "`precompute_ref_log_probs=True` is not supported for vision datasets. For vision-language "
@@ -968,8 +977,8 @@ class KTOTrainer(_BaseTrainer):
 
         # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
         # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
-        # computed, so they need no such correction. `ParallelismConfig.tp_size` requires accelerate 1.10.0.
-        if Version(accelerate.__version__) >= Version("1.10.0") and self.accelerator.parallelism_config is not None:
+        # computed, so they need no such correction.
+        if self.accelerator.parallelism_config is not None:
             self._tp_size = self.accelerator.parallelism_config.tp_size
         else:
             self._tp_size = 1

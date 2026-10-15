@@ -22,7 +22,7 @@
 
 ## 🎉 What's New
 
-**⚡ Up to 6.9× longer sequences on the same GPU:** SFT, DPO, KTO, GRPO and RLOO now score tokens with a [fused LM head](https://huggingface.co/docs/trl/reducing_memory_usage) **by default**. At 8k tokens that is 52% to 82% less peak VRAM.
+**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Overview
 
