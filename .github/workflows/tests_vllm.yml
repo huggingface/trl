@@ -70,8 +70,8 @@ jobs:
         run: |
           source .venv/bin/activate
           nvidia-smi
-          # The tensor-parallel tests need 3 GPUs; with fewer, they would be skipped and the job would pass without testing
-          python -c "import torch, transformers, vllm; print(f'vllm {vllm.__version__}, torch {torch.__version__}, transformers {transformers.__version__}'); assert torch.cuda.device_count() >= 3"
+          # The server tests need 2 GPUs; with fewer, they would be skipped and the job would pass without testing
+          python -c "import torch, transformers, vllm; print(f'vllm {vllm.__version__}, torch {torch.__version__}, transformers {transformers.__version__}'); assert torch.cuda.device_count() >= 2"
 
       - name: Test the vLLM client and server
         run: |
