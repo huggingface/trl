@@ -64,3 +64,62 @@ Run the packaged contract and reconciliation tests with this checkout on `PYTHON
 python -m pytest tests/experimental/test_openenv_tito.py \
     tests/experimental/test_async_grpo_trainer.py::TestReconciler -q
 ```
+
+## Single harness + Single GPU with LoRA on Qwen3.5-0.8B
+
+The example below shows how to train a small model, i.e., Qwen3.5-0.8B, with single harness RL on a single GPU, leveraging LoRA and IPC communication to synchronise the trained weights with the vLLM server. In this example, we were able to make the model converge after ~200 optimization steps. The sandboxes are executed with HF jobs instead of E2B. The mi
+
+### Setting up
+
+Make sure to subscribe to HF pro to be able to use HF jobs. Make also sure to create a HF bucket in order to save the intermediate artifacts and final checkpoints.
+
+### Commands
+
+The minimum required GPU VRAM is 24GB. We tested this setup on 2 different hardwares
+
+- 1x NVIDIA H200 GPU: Training time ~2.5h
+- 1x NVIDIA L4 GPU: Training time ~12h 
+
+Taking into account the CPU sandboxes, the run should cost you below 20$.
+
+The commands only differ by the GPU flavor and the attention implementation: the H200 uses Flash Attention 3, while the L4 doesn't support it and uses Flash Attention 2.
+
+<details>
+<summary>1x NVIDIA H200</summary>
+
+```sh
+hf jobs uv run --flavor h200 --image huggingface/trl --secrets HF_TOKEN --timeout 12h \
+    --volume hf://buckets/<user>/<bucket>:/outputs \
+    https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/launcher.py -- \
+    --data-root /outputs \
+    --train-script-url https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py \
+    --model Qwen/Qwen3.5-0.8B --harness pi --split FineEnvs/SmolDataEnvs-harbor-train --n-tasks 1000 --difficulty easy \
+    --sandbox hf-sandbox --docker-image docker.io/savatar101/env-data-agent-train:base \
+    --vllm-device 0 --train-device 0 --weight-transfer ipc --gpu-memory-utilization 0.3 --token-budget 65536 \
+    --max-inflight 32 --max-steps 200 --save-steps 25 --save-total-limit 0 --lora-r 32 --learning-rate 2e-5 \
+    --attn-implementation kernels-community/flash-attn3 \
+    --num-generations 8 --temperature 0.8 --max-completion-length 16384 --agent-step-limit 17 --agent-timeout 600 \
+    --per-device-train-batch-size 4 --gradient-accumulation-steps 4
+```
+
+</details>
+
+<details>
+<summary>1x NVIDIA L4</summary>
+
+```sh
+hf jobs uv run --flavor l4x1 --image huggingface/trl --secrets HF_TOKEN --timeout 12h \
+    --volume hf://buckets/<user>/<bucket>:/outputs \
+    https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/launcher.py -- \
+    --data-root /outputs \
+    --train-script-url https://raw.githubusercontent.com/huggingface/trl/main/examples/async_grpo_harbor/async_grpo_harbor.py \
+    --model Qwen/Qwen3.5-0.8B --harness pi --split FineEnvs/SmolDataEnvs-harbor-train --n-tasks 1000 --difficulty easy \
+    --sandbox hf-sandbox --docker-image docker.io/savatar101/env-data-agent-train:base \
+    --vllm-device 0 --train-device 0 --weight-transfer ipc --gpu-memory-utilization 0.3 --token-budget 65536 \
+    --max-inflight 32 --max-steps 200 --save-steps 25 --save-total-limit 0 --lora-r 32 --learning-rate 2e-5 \
+    --attn-implementation kernels-community/flash-attn2 \
+    --num-generations 8 --temperature 0.8 --max-completion-length 16384 --agent-step-limit 17 --agent-timeout 600 \
+    --per-device-train-batch-size 4 --gradient-accumulation-steps 4
+```
+
+</details>
