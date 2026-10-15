@@ -72,6 +72,8 @@ jobs:
 
           assert torch.version.hip, "CUDA torch got installed"
           assert torch.cuda.is_available(), "ROCm GPU is unavailable"
+          # ROCm may report zero devices before HIP is initialized.
+          torch.cuda.init()
           assert torch.cuda.device_count() == int(os.environ["EXPECTED_GPU_COUNT"]), "Unexpected GPU isolation"
           print("ROCm torch", torch.__version__, "| HIP", torch.version.hip)
           for i in range(torch.cuda.device_count()):

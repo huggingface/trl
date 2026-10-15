@@ -24,6 +24,8 @@ from kernels import get_kernel
 def main():
     assert torch.version.hip, "This check requires ROCm torch"
     assert torch.cuda.is_available(), "ROCm GPU is unavailable"
+    # ROCm may report zero devices before HIP is initialized.
+    torch.cuda.init()
     kernel = get_kernel("kernels-community/aiter-flash-attn", version=1)
 
     for device_index in range(torch.cuda.device_count()):
