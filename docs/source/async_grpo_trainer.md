@@ -1,12 +1,12 @@
 # Asynchronous GRPO
 
 > [!IMPORTANT]
-> This trainer requires `vllm>=0.22.0` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
 > Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
 >
 > ```bash
-> pip install 'vllm>=0.22.0'
+> pip install vllm
 > pip install 'transformers>=5.2.0' --no-deps
 > ```
 
@@ -79,6 +79,10 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
 # Terminal 2: training on GPU 1
 CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 ```
+
+## AMD GPUs
+
+The trainer runs on AMD GPUs (ROCm) with no extra setup: the commands above work as they are. Training uses the [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) attention kernel on AMD GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on NVIDIA GPUs, both downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs.
 
 ## Vision-language models
 

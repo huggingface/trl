@@ -928,8 +928,8 @@ class TestPerTeacherStats:
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
@@ -1070,8 +1070,8 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestEpochStop(TrlTestCase):
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct prompt ids.
@@ -1112,8 +1112,8 @@ class TestRolloutStartIndex(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
@@ -1220,8 +1220,8 @@ SERVER_LORA_CONFIG = {"max_lora_rank": 32, "max_loras": 3}
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 @require_peft
 class TestAsyncDistillationTrainerPeft(TrlTestCase):

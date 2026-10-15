@@ -4789,6 +4789,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        # Some samples have no image: their batches leave the vision tower without gradients
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

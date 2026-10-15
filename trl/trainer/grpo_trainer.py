@@ -386,6 +386,17 @@ class GRPOTrainer(_BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -1799,8 +1810,18 @@ class GRPOTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
-            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            padded_ids = pad(
+                prompt_tensors,
+                padding_value=self._tokenizer.pad_token_id,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            attention_mask = pad(
+                [torch.ones_like(t) for t in prompt_tensors],
+                padding_value=0,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
             for k, v in multimodal_fields.items():
@@ -1808,7 +1829,12 @@ class GRPOTrainer(_BaseTrainer):
                     generate_inputs[k] = v
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
-                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                    generate_inputs[k] = pad(
+                        [torch.tensor(x) for x in v],
+                        padding_value=0,
+                        padding_side="left",
+                        pad_to_multiple_of=self.pad_to_multiple_of,
+                    )
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
 
