@@ -258,6 +258,10 @@ def cleanup_vllm_dist_env():
     `TestGRPOTrainerSlow::test_vlm_processor_vllm_colocate_mode`). We call vLLM's own cleanup helper rather than a bare
     `torch.distributed.destroy_process_group()` so that vLLM's internal parallel-state globals (`_TP`, `_WORLD`, ...)
     are reset too, letting the next colocate test reinitialize cleanly.
+
+    It also restores `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, `MASTER_ADDR` and `MASTER_PORT`, which TRL sets before building
+    the vLLM `LLM` in colocate mode. Left set, they make the next test's `Accelerator` initialize `torch.distributed` on
+    the leaked port.
     """
     dist_env = {
         name: os.environ.get(name) for name in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT")
