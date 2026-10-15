@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
-#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla_env",
+#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla-env",
 # ]
 # ///
 
@@ -28,7 +28,7 @@ correct action (e.g., swerve to an empty lane) to minimize casualties.
 Setup (Option A - Install from HF Space, recommended):
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
+uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla-env
 ```
 
 Setup (Option B - Clone OpenEnv repo, for development):
