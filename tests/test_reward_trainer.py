@@ -28,7 +28,6 @@ from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
     require_peft,
-    require_peft_target_parameters,
     require_torch_accelerator,
 )
 
@@ -428,7 +427,7 @@ class TestRewardTrainer(TrlTestCase):
                 assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForSequenceClassification.from_pretrained(model_id, dtype="float32")

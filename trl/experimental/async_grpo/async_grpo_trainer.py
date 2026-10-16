@@ -401,6 +401,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "input_ids": sample.input_ids,
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
+                "sampling_mask": sample.sampling_mask,
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
                 "metrics": sample.metrics,  # per-sample rewards; aggregated by the collator, never sent to the model
@@ -599,6 +600,7 @@ class DataCollatorForRollout(DataCollatorMixin):
             "input_ids": self.pad_token_id,
             "shift_labels": -100,
             "token_index": -1,
+            "sampling_mask": -1,
             "tree_kv_index": -1,
             "tree_cu_seqlens_q": -1,
             "tree_cu_seqlens_k": -1,
@@ -1483,6 +1485,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "shift_labels",
                 "token_index",
                 "old_log_probs",
+                "sampling_mask",
                 "advantages",
                 "segment_id",
                 "global_n_tokens",
@@ -1504,6 +1507,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
+        sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
+        if sampling_mask.shape[-1] == 0:
+            sampling_mask = None
         tree_kwargs = {
             key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
         }
@@ -1516,6 +1522,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             input_ids=input_ids,
             position_ids=position_ids,
             shift_labels=shift_labels,
+            support_ids=sampling_mask,
             fused_lm_head=True,
             **router_kwargs,
             **tree_kwargs,
