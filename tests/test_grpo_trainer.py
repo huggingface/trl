@@ -24,6 +24,7 @@ from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
@@ -4664,16 +4665,29 @@ class TestGRPOTrainerVLM(TrlTestCase):
     @require_torch_accelerator
     def test_vllm_generation_suppresses_image_token(self):
         # A sampled image placeholder token would make the forward pass over prompt + completion fail
+        model_id = "HuggingFaceTB/SmolVLM-256M-Instruct"  # tiny models are too small for vLLM
+        image_token_id = AutoConfig.from_pretrained(model_id).image_token_id
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none", use_vllm=True, vllm_mode="colocate")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="colocate",
+            max_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            # Leave only the image token and one the model ranks far below it, so an unsuppressed run samples it
+            generation_kwargs={"allowed_token_ids": [image_token_id, 43476]},
+        )
         trainer = GRPOTrainer(
-            model="HuggingFaceTB/SmolVLM-256M-Instruct",  # tiny models are too small for vLLM
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model=model_id,
+            reward_funcs=lambda completions, **kwargs: [float(len(c[0]["content"])) for c in completions],
             args=training_args,
             train_dataset=dataset,
         )
 
-        assert trainer.vllm_generation.generation_kwargs["logit_bias"] == {trainer.model.config.image_token_id: -100}
+        trainer.train()
 
     @pytest.mark.parametrize(
         "model_id",
