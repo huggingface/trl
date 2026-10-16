@@ -117,6 +117,8 @@ class TestUnwrapModelForGeneration:
                 return False
 
         deepspeed_mod = types.ModuleType("deepspeed")
+        # unwrap_model imports this when DeepSpeed is installed. The stub replaces sys.modules for the whole call.
+        deepspeed_mod.DeepSpeedEngine = type("DeepSpeedEngine", (), {})
         zero_mod = types.ModuleType("deepspeed.zero")
         zero_mod.GatheredParameters = GatheredParameters
         deepspeed_mod.zero = zero_mod
