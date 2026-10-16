@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      - ci-docker-python-3.13
+      - ci-docker-uv-python
   workflow_dispatch:
 
 concurrency:
@@ -39,14 +41,15 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: docker/trl-dev
-          push: true
+          push: false
+          load: true
           tags: |
-            huggingface/trl:dev
+            trl-dev-verify
 
-      - name: Post to Slack
-        if: always()
-        uses: ./.github/actions/post-slack
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Build and push TRL Dev Docker image
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+      - name: Assert the imports work and the Python version is 3.13
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python trl-dev-verify -c "import trl, torch, vllm, liger_kernel, peft, kernels, trackio; print(trl.__version__, torch.__version__, vllm.__version__)"
+          PYTHON=$(docker run --rm --entrypoint python trl-dev-verify -c "import sys; print('%d.%d' % sys.version_info[:2])" | tail -n1)
+          echo "python=${PYTHON}"
+          test "${PYTHON}" = "3.13"
