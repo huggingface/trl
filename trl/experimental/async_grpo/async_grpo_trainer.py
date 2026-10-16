@@ -1070,7 +1070,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
-        register_tree_attention()
 
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
@@ -1079,12 +1078,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+
         # Here we set the default to TREE_ATTENTION but this can be changed by the user if desired
-        model_init_kwargs.setdefault("attn_implementation", TREE_ATTENTION)
+        # we should let users chose to support non-Hopper hardwares for flash attention 2, etc. 
+        attn_implementation = model_init_kwargs.pop("attn_implementation", TREE_ATTENTION)
+        if attn_implementation == TREE_ATTENTION:
+            register_tree_attention()
+
         model_revision = model_init_kwargs.get("revision")
         model = create_model_from_path(
             model,
             device_map=None,
+            attn_implementation=attn_implementation,
             **model_init_kwargs,
         )
 
