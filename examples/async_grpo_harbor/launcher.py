@@ -269,7 +269,7 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", default="Qwen/Qwen3.5-2B")
+    p.add_argument("--model", default="Qwen/Qwen3-4B")
     p.add_argument("--split", default="AdithyaSK/data_agent_rl_environment_train")
     p.add_argument("--harness", default="mini-swe-agent")
     p.add_argument("--sandbox", default="e2b")
@@ -280,7 +280,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--vllm-device", default="0")
     p.add_argument("--train-device", default="1")  # the trainer; NCCL weight sync needs the same host
     p.add_argument("--max-model-len", type=int, default=131072)
-    p.add_argument("--tool-call-parser", default="qwen3_xml")  # Qwen3.5; use `hermes` for most others
+    p.add_argument("--tool-call-parser", default="qwen3_xml")  # Qwen3; use `hermes` for most others
     p.add_argument("--reasoning-parser", default="qwen3")
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
     p.add_argument("--data-root", default=str(DATA_ROOT))

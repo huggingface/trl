@@ -52,7 +52,7 @@ Run (2 GPUs: vLLM on one, trainer on the other):
 
 ```sh
 # Terminal 1: serve the policy with token capture and weight updates.
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
     --host 0.0.0.0 --port 8000 \
     --enable-auto-tool-choice --tool-call-parser qwen3_xml \
     --reasoning-parser qwen3 \
@@ -65,7 +65,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_harbor/async_grpo_harbor.py \
     --server http://localhost:8200 \
     --vllm-url http://localhost:8000 \
-    --model Qwen/Qwen3.5-2B \
+    --model Qwen/Qwen3-4B \
     --split <hf-dataset> \
     --max-steps 20
 ```
@@ -145,7 +145,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--server", default="http://127.0.0.1:8200", help="a running `openenv harbor serve`")
     p.add_argument("--vllm-url", required=True, help="the engine AsyncGRPO generates from and syncs weights into")
-    p.add_argument("--model", default="Qwen/Qwen3.5-2B")
+    p.add_argument("--model", default="Qwen/Qwen3-4B")
     p.add_argument("--split", required=True, help="the Harbor task dataset the server was started with")
     p.add_argument("--harness", default="mini-swe-agent", help="any harness the server reports; see the docstring")
     p.add_argument("--sandbox", default="e2b")
