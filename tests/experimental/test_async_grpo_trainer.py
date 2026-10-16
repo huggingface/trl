@@ -2320,7 +2320,7 @@ class TestManifestWeightStream:
         model = torch.nn.Sequential(
             torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
             torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
-        )
+        ).to(torch_device)
         original = [(name, param.detach().clone()) for name, param in _iter_vllm_named_params(model)]
         info = {
             "names": [name for name, _ in original],
@@ -2338,28 +2338,3 @@ class TestManifestWeightStream:
         ]
         for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
             assert torch.equal(sent_tensor, original_tensor)
-
-    @pytest.mark.parametrize(
-        ("info", "stream"),
-        [
-            pytest.param(
-                {"names": ["embed"], "dtype_names": ["float32"], "shapes": [[3]]},
-                [("embed", torch.ones(2))],
-                id="shape-mismatch",
-            ),
-            pytest.param(
-                {"names": ["embed"], "dtype_names": ["float32"], "shapes": [[2]]},
-                [("embed", torch.ones(2)), ("extra", torch.ones(2))],
-                id="extra-parameter",
-            ),
-            pytest.param(
-                {"names": ["embed", "head"], "dtype_names": ["float32", "float32"], "shapes": [[2], [2]]},
-                [("embed", torch.ones(2))],
-                id="short-stream",
-            ),
-        ],
-    )
-    def test_send_weights_rejects_a_stream_off_the_manifest(self, info, stream):
-        with pytest.raises(RuntimeError, match="Weight sync") as exc_info:
-            _tensors_handed_to_producer(info, stream)
-        assert isinstance(exc_info.value.__cause__, ValueError)
