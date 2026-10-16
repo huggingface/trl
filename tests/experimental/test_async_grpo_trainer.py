@@ -33,8 +33,9 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+from transformers import AttentionInterface, AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
+from transformers.utils import is_flash_attn_2_available
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
@@ -61,7 +62,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
-from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
+from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow, register_tree_attention
 from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import (
@@ -366,6 +367,126 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "attn_implementation",
+        [
+            None,
+            pytest.param(
+                "flash_attention_2",
+                marks=pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed"),
+            ),
+            "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
+        ],
+    )
+    @pytest.mark.parametrize("gradient_checkpointing", [True, False])
+    def test_train_with_attention_backend(self, attn_implementation, gradient_checkpointing):
+        """An explicit kernel choice must retain tree packing and perform real optimizer updates."""
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        model_init_kwargs = {"dtype": torch.bfloat16, "attn_implementation": attn_implementation}
+        args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs=model_init_kwargs.copy(),
+            gradient_checkpointing=gradient_checkpointing,
+            learning_rate=0.01,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_steps=2,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            save_strategy="no",
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        initial = {name: param.clone() for name, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.global_step == 2
+        assert torch.isfinite(torch.tensor(trainer.state.log_history[-1]["train_loss"]))
+        assert any(not torch.equal(initial[name], param) for name, param in trainer.model.named_parameters())
+        assert all(torch.isfinite(param).all() for param in trainer.model.parameters())
+        assert args.model_init_kwargs == model_init_kwargs
+
+    @pytest.mark.parametrize("attn_implementation", ["sdpa", "eager"])
+    def test_sequence_attention_cannot_replace_the_tree_wrapper(self, attn_implementation):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with pytest.raises(ValueError):
+            AsyncGRPOTrainer(
+                model=model_id,
+                args=AsyncGRPOConfig(
+                    output_dir=self.tmp_dir,
+                    model_init_kwargs={"attn_implementation": attn_implementation},
+                    report_to="none",
+                ),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+    @pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed")
+    @pytest.mark.parametrize("fa2_first", [True, False])
+    def test_backend_selection_is_per_trainer(self, fa2_first):
+        """Interleaved Trainers must preserve their backend and tree loss/gradients."""
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        default_backend = (
+            "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3"
+        )
+        backends = ["flash_attention_2", default_backend]
+        if not fa2_first:
+            backends.reverse()
+        samples = [
+            _tree_sample([101, 102, 103, 201, 202], n_prompt=3, advantage=1.0),
+            _tree_sample([101, 102, 103, 301, 302], n_prompt=3, advantage=-1.0),
+        ]
+        for sample in samples:
+            sample["old_log_probs"][:] = -12.0
+        batch = DataCollatorForRollout(pad_token_id=0)([[_tree_row(samples)]])
+        trainers, losses, grads = [], [], []
+        for index, backend in enumerate([*backends, backends[0]]):
+            if index < 2:
+                trainer = AsyncGRPOTrainer(
+                    model=model_id,
+                    args=AsyncGRPOConfig(
+                        output_dir=os.path.join(self.tmp_dir, str(index)),
+                        model_init_kwargs={"dtype": torch.bfloat16, "attn_implementation": backend},
+                        report_to="none",
+                    ),
+                    train_dataset=dataset,
+                    rollout_worker=_StubRolloutWorker(
+                        AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3
+                    ),
+                    weight_transfer=_StubWeightTransfer(),
+                )
+                trainer.current_gradient_accumulation_steps = 1
+                trainer.model.to(torch_device).eval()
+                trainers.append(trainer)
+            else:
+                trainer = trainers[0]
+            assert trainer.attn_implementation == backend
+            assert trainer.model.config._attn_implementation == TREE_ATTENTION
+            trainer.model.zero_grad()
+            loss = trainer.compute_loss(trainer.model, {key: value.to(torch_device) for key, value in batch.items()})
+            loss.backward()
+            losses.append(loss.detach().float())
+            grads.append(
+                torch.cat([p.grad.float().flatten() for p in trainer.model.parameters() if p.grad is not None])
+            )
+
+        for index in (1, 2):
+            torch.testing.assert_close(losses[0], losses[index], atol=1e-3, rtol=1e-3)
+            assert (grads[0] - grads[index]).norm() < 5e-2 * grads[0].norm()
 
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
@@ -1088,6 +1209,18 @@ class TestTreePacking(TrlTestCase):
         _tree_sample([101, 102, 103, 201, 202, 401], n_prompt=3, advantage=0.5),
     ]
 
+    def test_registration_preserves_standard_attention(self):
+        sdpa_attention = AttentionInterface()["sdpa"]
+        fa2_attention = AttentionInterface()["flash_attention_2"]
+
+        register_tree_attention()
+        tree_attention = AttentionInterface()[TREE_ATTENTION]
+        register_tree_attention()
+
+        assert AttentionInterface()[TREE_ATTENTION] is tree_attention
+        assert AttentionInterface()["sdpa"] is sdpa_attention
+        assert AttentionInterface()["flash_attention_2"] is fa2_attention
+
     def test_shared_prefixes_are_forwarded_once(self):
         row = _tree_row(self.ROWS).pack()
 
@@ -1243,6 +1376,17 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
 
 @require_torch_accelerator
 @pytest.mark.parametrize(
+    "attn_implementation",
+    [
+        None,
+        pytest.param(
+            "flash_attention_2",
+            marks=pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed"),
+        ),
+    ],
+    ids=["default", "fa2"],
+)
+@pytest.mark.parametrize(
     ("model_id", "model_init_kwargs"),
     [
         pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
@@ -1273,14 +1417,17 @@ class TestTreePackingParity(TrlTestCase):
                 samples.append(sample)
         return samples
 
-    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs):
+    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs, attn_implementation):
+        model_init_kwargs = {"dtype": torch.bfloat16, **model_init_kwargs}
+        if attn_implementation is not None:
+            model_init_kwargs["attn_implementation"] = attn_implementation
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         trainer = AsyncGRPOTrainer(
             model=model_id,
             reward_funcs=dummy_reward_func,
             args=AsyncGRPOConfig(
                 output_dir=self.tmp_dir,
-                model_init_kwargs={"dtype": torch.bfloat16, **model_init_kwargs},
+                model_init_kwargs=model_init_kwargs,
                 router_aux_loss_coef=0.0,
                 report_to="none",
             ),
@@ -1293,9 +1440,10 @@ class TestTreePackingParity(TrlTestCase):
         samples = self._samples()
         collator = DataCollatorForRollout(pad_token_id=0)
         runs = [
-            (TREE_ATTENTION, collator([[_tree_row(samples)]])),
+            (model.config._attn_implementation, collator([[_tree_row(samples)]])),
             (
-                "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
+                attn_implementation
+                or ("kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3"),
                 _sequence_packed_batch(samples),
             ),
         ]
