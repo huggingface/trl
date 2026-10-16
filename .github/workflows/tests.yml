@@ -248,6 +248,7 @@ jobs:
             ".[dev]" \
             "accelerate==1.10.1" \
             "datasets==4.7.0" \
+            "torch==2.6.0" \
             "transformers==4.56.2"
 
       - name: Test with pytest
