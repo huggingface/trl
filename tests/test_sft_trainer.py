@@ -467,10 +467,7 @@ class TestSFTTrainer(TrlTestCase):
         ],
     )
     def test_train_model(self, model_id):
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            dtype="float32",
-        )
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
