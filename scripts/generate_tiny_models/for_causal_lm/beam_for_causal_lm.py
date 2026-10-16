@@ -14,7 +14,7 @@
 
 import torch
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
-from transformers.models.redacted import REDACTEDConfig, REDACTEDForCausalLM
+from transformers.models.beam import BeamConfig, BeamForCausalLM
 
 from .._common import (
     check_dtype_pattern,
@@ -31,12 +31,12 @@ check_transformers_version("5.20.1")
 
 set_seed()
 
-MODEL_ID = "REDACTED_HUB_ID"
+MODEL_ID = "reflection/Beam-1.0-501B-A23B"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 reference = AutoConfig.from_pretrained(MODEL_ID)
-config = REDACTEDConfig(
+config = BeamConfig(
     vocab_size=reference.vocab_size,
     hidden_size=16,
     intermediate_size=32,
@@ -60,7 +60,7 @@ config = REDACTEDConfig(
     max_position_embeddings=reference.max_position_embeddings,
     tie_word_embeddings=reference.tie_word_embeddings,
 )
-model = REDACTEDForCausalLM(config).to(dtype=torch.bfloat16)
+model = BeamForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 # The routers stay in float32, as in the reference checkpoint
 for name, module in model.named_modules():

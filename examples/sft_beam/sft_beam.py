@@ -25,11 +25,11 @@
 
 # docstyle-ignore
 """
-LoRA SFT of REDACTED on one 8xB300 node: the experts are split 8 ways, everything else is sharded across the 8 GPUs,
+LoRA SFT of Beam on one 8xB300 node: the experts are split 8 ways, everything else is sharded across the 8 GPUs,
 and each rank trains on its own slice of the batch. One epoch is 36 steps of 1.75 s, 32.8k tokens per step,
 223 GiB per GPU.
 
-    sbatch sft_redacted.slurm
+    sbatch sft_beam.slurm
 """
 
 from datasets import load_dataset
@@ -39,14 +39,14 @@ from transformers.distributed import DistributedConfig
 from trl import SFTConfig, SFTTrainer
 
 
-MODEL = "REDACTED_HUB_ID"
+MODEL = "reflection/Beam-1.0-501B-A23B"
 
 # Assistant turns carry their reasoning in a `thinking` field, which the chat template renders into the analysis
 # channel.
 train_dataset = load_dataset("HuggingFaceH4/Multilingual-Thinking", split="train")
 
 training_args = SFTConfig(
-    output_dir="REDACTED-SFT",
+    output_dir="Beam-SFT",
     model_init_kwargs={
         # TRL loads a model id in float32 unless told otherwise; "auto" keeps the checkpoint's dtype.
         "dtype": "auto",
