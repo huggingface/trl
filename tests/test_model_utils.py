@@ -23,12 +23,7 @@ from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import (
-    _unwrap_model_for_generation,
-    disable_gradient_checkpointing,
-    prepare_deepspeed,
-    unwrap_model_for_generation,
-)
+from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed, unwrap_model_for_generation
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -105,15 +100,15 @@ class TestUnwrapModelForGeneration:
             torch.autograd.grad(loss, list(model.parameters()))
 
     def test_reattaches_zero3_hooks_on_error(self):
+        # ZeRO-3 gathering and optimizer hooks need a distributed DeepSpeed engine, which unit tests cannot start.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").to(torch_device)
+        accelerator = Accelerator()
         calls = []
-
-        class FakeDistributedBackend:
-            def __init__(self, accelerator):
-                self.is_zero3 = True
 
         class GatheredParameters:
             def __init__(self, params):
-                pass
+                if not any(True for _ in params):
+                    raise AssertionError("expected parameters to gather")
 
             def __enter__(self):
                 return self
@@ -121,18 +116,23 @@ class TestUnwrapModelForGeneration:
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        fake_deepspeed = types.SimpleNamespace(zero=types.SimpleNamespace(GatheredParameters=GatheredParameters))
-        model = types.SimpleNamespace(is_gradient_checkpointing=False, parameters=lambda: ())
-        accelerator = types.SimpleNamespace(unwrap_model=lambda wrapped: wrapped)
+        deepspeed_mod = types.ModuleType("deepspeed")
+        zero_mod = types.ModuleType("deepspeed.zero")
+        zero_mod.GatheredParameters = GatheredParameters
+        deepspeed_mod.zero = zero_mod
+
+        class Zero3Backend:
+            def __init__(self, accelerator):
+                self.is_zero3 = True
 
         with (
-            patch.dict(sys.modules, {"deepspeed": fake_deepspeed}),
-            patch("trl.distributed.DistributedBackend", FakeDistributedBackend),
+            patch.dict(sys.modules, {"deepspeed": deepspeed_mod}),
+            patch("trl.distributed.DistributedBackend", Zero3Backend),
             patch("trl.models.utils.remove_hooks", lambda hooked: calls.append(("remove", hooked))),
             patch("trl.models.utils.add_hooks", lambda hooked: calls.append(("add", hooked))),
             pytest.raises(RuntimeError, match="boom"),
         ):
-            with _unwrap_model_for_generation(model, accelerator):
+            with unwrap_model_for_generation(model, accelerator):
                 raise RuntimeError("boom")
 
         assert calls == [("remove", model), ("add", model)]
