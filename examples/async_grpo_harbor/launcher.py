@@ -21,6 +21,7 @@
 #     "flashinfer-jit-cache==0.6.13",
 #     "kernels>=0.17.0,<0.18.0",
 #     "flash-linear-attention",
+#     "causal-conv1d",    
 #     "ray",
 #     "datasets>=3.2",
 #     "peft",
