@@ -402,6 +402,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
                 "sampling_mask": sample.sampling_mask,
+                "sampler_logprobs": sample.sampler_logprobs,
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
                 "metrics": sample.metrics,  # per-sample rewards; aggregated by the collator, never sent to the model
@@ -601,6 +602,8 @@ class DataCollatorForRollout(DataCollatorMixin):
             "shift_labels": -100,
             "token_index": -1,
             "sampling_mask": -1,
+            "sampler_ids": -1,
+            "sampler_log_probs": -math.inf,
             "tree_kv_index": -1,
             "tree_cu_seqlens_q": -1,
             "tree_cu_seqlens_k": -1,
@@ -1383,6 +1386,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     temperature=self.args.temperature,
                     top_p=self.args.top_p,
                     top_k=self.args.top_k,
+                    num_sampler_logprobs=self.args.num_sampler_logprobs if self.args.score_centering else 0,
                     min_p=self.args.min_p,
                     repetition_penalty=self.args.repetition_penalty,
                     request_timeout=self.args.request_timeout,
@@ -1486,6 +1490,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "token_index",
                 "old_log_probs",
                 "sampling_mask",
+                "sampler_ids",
+                "sampler_log_probs",
                 "advantages",
                 "segment_id",
                 "global_n_tokens",
@@ -1510,6 +1516,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
         if sampling_mask.shape[-1] == 0:
             sampling_mask = None
+        sampler_ids = inputs["sampler_ids"][mask_bool].unsqueeze(0) if self.args.score_centering else None
         tree_kwargs = {
             key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
         }
@@ -1523,6 +1530,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             position_ids=position_ids,
             shift_labels=shift_labels,
             support_ids=sampling_mask,
+            score_ids=sampler_ids,
             fused_lm_head=True,
             **router_kwargs,
             **tree_kwargs,
@@ -1533,10 +1541,27 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-        per_token_loss1 = coef_1 * advantages
-        per_token_loss2 = coef_2 * advantages
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        is_masked = (coef_1 < self.args.importance_sampling_min) | (coef_1 > self.args.importance_sampling_max)
+        if self.args.score_centering:
+            # Score centering: https://huggingface.co/papers/2609.20807, Appendix A.2
+            score_log_probs = outputs.score_log_probs[0][token_index]
+            sampler_log_probs = inputs["sampler_log_probs"][mask_bool][token_index]
+            with torch.no_grad():
+                low, high = self.args.importance_sampling_min, self.args.importance_sampling_max
+                q = sampler_log_probs.exp()
+                p = score_log_probs.exp() * (q > 0)
+                head = torch.where((p >= low * q) & (p <= high * q), p, 0.0)
+                tail_ratio = (1 - p.sum(-1)).clamp(min=1e-6) / (1 - q.sum(-1)).clamp(min=1e-6)
+                tail = ((tail_ratio >= low) & (tail_ratio <= high)).float()
+                residual = head - tail.unsqueeze(-1) * p
+                weight = torch.where(is_masked, 0.0, coef_1)
+            correction = (residual * score_log_probs).sum(-1)
+            per_token_loss = -advantages * (weight * log_probs - correction)
+        else:
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+            per_token_loss1 = coef_1 * advantages
+            per_token_loss2 = coef_2 * advantages
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2) * ~is_masked
 
         # DDP/FSDP averages gradients across ranks (world_size).
         # To get correct per-token normalization we scale by 1/tokens_per_rank
@@ -1569,8 +1594,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_low_clip_sum = is_low_clipped.float().sum()
             local_high_clip_sum = is_high_clipped.float().sum()
             local_region_clip_sum = is_region_clipped.float().sum()
+            local_masked_sum = is_masked.float().sum()
+            local_sampler_mass_sum = q.sum() if self.args.score_centering else torch.zeros_like(local_count)
 
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum, count]
+            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum,
+            # masked_sum, sampler_mass_sum, count]
             stats = torch.stack(
                 [
                     local_ratio_sum,
@@ -1579,6 +1607,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     local_low_clip_sum,
                     local_high_clip_sum,
                     local_region_clip_sum,
+                    local_masked_sum,
+                    local_sampler_mass_sum,
                     local_count,
                 ]
             )
@@ -1590,6 +1620,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 global_low_clip_sum,
                 global_high_clip_sum,
                 global_region_clip_sum,
+                global_masked_sum,
+                global_sampler_mass_sum,
                 global_count,
             ) = stats.unbind(0)
             self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
@@ -1598,6 +1630,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
+            self._metrics["train"]["importance_sampling/masked_mean"].append((global_masked_sum / global_count).item())
+            if self.args.score_centering:
+                self._metrics["train"]["score_centering/sampler_mass"].append(
+                    (global_sampler_mass_sum / global_count).item()
+                )
 
             num_seq = int(segment_id.max()) + 1  # completions in this rank's row
 

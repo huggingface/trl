@@ -64,6 +64,11 @@ Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
 
 
+def _by_token_id(top_logprobs: list[dict[str, float]]) -> list[dict[int, float]]:
+    """Key each token's top log-probs by token id, which vLLM spells `token_id:<id>` when asked for ids."""
+    return [{int(token.removeprefix("token_id:")): logprob for token, logprob in top.items()} for top in top_logprobs]
+
+
 @dataclass(frozen=True)
 class TurnRecord:
     """One generation call: the whole prompt this turn, the tokens the model produced, their logprobs."""
@@ -75,6 +80,8 @@ class TurnRecord:
     output_mask: list[int] | None = None
     # Per output token, the token ids the sampler could draw (top-k/top-p truncation); None without truncation.
     output_sampling_mask: list[list[int]] | None = None
+    # Per output token, the sampler's log-prob of its most likely tokens, by token id; None when not requested.
+    output_sampler_logprobs: list[dict[int, float]] | None = None
 
 
 @dataclass
@@ -85,6 +92,7 @@ class TrainingSequence:
     completion_mask: list[int]  # 1 = train this token, 0 = context
     old_log_probs: list[float]  # sampled logprobs; prompt-only context is zero-filled
     sampling_mask: list[list[int]]  # per token, the sampler's candidate set; empty for context and without truncation
+    sampler_logprobs: list[dict[int, float]]  # per token, the sampler's top log-probs by id; empty when not asked
     rollout_id: RolloutId  # which conversation this row came from
 
 
@@ -116,6 +124,7 @@ class _SampleBuilder:
         self.loss_mask: list[int] = []
         self.logprobs: list[float] = []
         self.sampling_mask: list[list[int]] = []
+        self.sampler_logprobs: list[dict[int, float]] = []
         self.last_response_start_idx: int | None = None
 
     def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
@@ -141,6 +150,7 @@ class _SampleBuilder:
             mask=turn.output_mask if turn.output_mask is not None else 1,
             logprobs=turn.output_log_probs,
             sampling_mask=turn.output_sampling_mask,
+            sampler_logprobs=turn.output_sampler_logprobs,
         )
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
@@ -150,6 +160,7 @@ class _SampleBuilder:
         self.loss_mask[matched:] = [0] * len(tail)
         self.logprobs[matched:] = [0.0] * len(tail)
         self.sampling_mask[matched:] = [[] for _ in tail]
+        self.sampler_logprobs[matched:] = [{} for _ in tail]
 
     def _append(
         self,
@@ -158,6 +169,7 @@ class _SampleBuilder:
         mask: int | list[int],
         logprobs: list[float] | None = None,
         sampling_mask: list[list[int]] | None = None,
+        sampler_logprobs: list[dict[int, float]] | None = None,
     ) -> None:
         """Append tokens with a uniform or per-token supervision mask."""
         masks = [mask] * len(ids) if isinstance(mask, int) else mask
@@ -173,13 +185,19 @@ class _SampleBuilder:
         self.loss_mask.extend(masks)
         self.logprobs.extend(logprobs if logprobs is not None else [0.0] * len(ids))
         self.sampling_mask.extend(sampling_mask if sampling_mask is not None else [[] for _ in ids])
+        self.sampler_logprobs.extend(sampler_logprobs if sampler_logprobs is not None else [{} for _ in ids])
 
     def has_trained_token(self) -> bool:
         return any(self.loss_mask)
 
     def to_training_sequence(self, rollout_id: RolloutId) -> TrainingSequence:
         return TrainingSequence(
-            list(self.tokens), list(self.loss_mask), list(self.logprobs), list(self.sampling_mask), rollout_id
+            list(self.tokens),
+            list(self.loss_mask),
+            list(self.logprobs),
+            list(self.sampling_mask),
+            list(self.sampler_logprobs),
+            rollout_id,
         )
 
 
@@ -237,6 +255,7 @@ class RolloutSample:
     completion_mask: np.ndarray
     old_log_probs: np.ndarray
     sampling_mask: list[list[int]]
+    sampler_logprobs: list[dict[int, float]]
     advantage: float
     model_version: int
     group_id: int
@@ -361,6 +380,7 @@ class _AsyncRolloutLoop:
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = 0,
+        num_sampler_logprobs: int = 0,
         min_p: float | None = None,
         repetition_penalty: float = 1.0,
         request_timeout: int = 120,
@@ -417,6 +437,7 @@ class _AsyncRolloutLoop:
         self.top_p = top_p
         self.top_k = top_k
         self.sampling_replay = top_p < 1.0 or top_k > 0
+        self.num_sampler_logprobs = num_sampler_logprobs
         self.min_p = min_p
         self.repetition_penalty = repetition_penalty
         self.request_timeout = request_timeout
@@ -978,12 +999,22 @@ class _AsyncRolloutLoop:
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
             )
-            turn_ids, turn_logprobs, turn_sampling_mask = await self._generate_one_turn(prompt_ids)
+            turn_ids, turn_logprobs, turn_sampling_mask, turn_sampler_logprobs = await self._generate_one_turn(
+                prompt_ids
+            )
             assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             messages.append(assistant_message)
-            turns.append(TurnRecord(prompt_ids, turn_ids, turn_logprobs, output_sampling_mask=turn_sampling_mask))
+            turns.append(
+                TurnRecord(
+                    prompt_ids,
+                    turn_ids,
+                    turn_logprobs,
+                    output_sampling_mask=turn_sampling_mask,
+                    output_sampler_logprobs=turn_sampler_logprobs,
+                )
+            )
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None:
                 break
@@ -1052,8 +1083,11 @@ class _AsyncRolloutLoop:
         self._rates["tools/parallel_calls_mean"][1] += 1
         return tool_messages, n_calls, n_failures
 
-    async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float], list[list[int]] | None]:
-        """Sample one turn: its token ids, their logprobs, and with top-k/top-p the candidate set of each token."""
+    async def _generate_one_turn(
+        self, prompt_ids: list[int]
+    ) -> tuple[list[int], list[float], list[list[int]] | None, list[dict[int, float]] | None]:
+        """Sample one turn: its token ids, their logprobs, with top-k/top-p the candidate set of each token, and with
+        `num_sampler_logprobs` the sampler's top log-probs at each token, by token id."""
         sampling_params = {
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -1061,7 +1095,7 @@ class _AsyncRolloutLoop:
             "top_k": self.top_k,
             "repetition_penalty": self.repetition_penalty,
             "n": 1,
-            "logprobs": 0,
+            "logprobs": self.num_sampler_logprobs,
             # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
             # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
             # per request keeps them independent.
@@ -1070,14 +1104,21 @@ class _AsyncRolloutLoop:
         if self.min_p is not None:
             sampling_params["min_p"] = self.min_p
         if not self.sampling_replay:
-            payload = {"model": self._request_model, "prompt": prompt_ids, "return_token_ids": True, **sampling_params}
+            payload = {
+                "model": self._request_model,
+                "prompt": prompt_ids,
+                "return_token_ids": True,
+                "return_tokens_as_token_ids": True,
+                **sampling_params,
+            }
             output = await self._retry(
                 lambda: self._post("/v1/completions", payload, self.request_timeout),
                 max_attempts=30,
                 label="vllm /v1/completions",
             )
             choice = output["choices"][0]
-            return choice["token_ids"], choice["logprobs"]["token_logprobs"], None
+            sampler_logprobs = _by_token_id(choice["logprobs"]["top_logprobs"]) if self.num_sampler_logprobs else None
+            return choice["token_ids"], choice["logprobs"]["token_logprobs"], None, sampler_logprobs
         payload = {"model": self._request_model, "token_ids": prompt_ids, "sampling_params": sampling_params}
         output = await self._retry(
             lambda: self._post("/inference/v1/generate", payload, self.request_timeout),
@@ -1085,8 +1126,14 @@ class _AsyncRolloutLoop:
             label="vllm /inference/v1/generate",
         )
         choice = output["choices"][0]
-        logprobs = [token["logprob"] for token in choice["logprobs"]["content"]]
-        return choice["token_ids"], logprobs, choice["sampling_mask"]
+        content = choice["logprobs"]["content"]
+        logprobs = [token["logprob"] for token in content]
+        sampler_logprobs = None
+        if self.num_sampler_logprobs:
+            sampler_logprobs = _by_token_id(
+                [{t["token"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
+            )
+        return choice["token_ids"], logprobs, choice["sampling_mask"], sampler_logprobs
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
@@ -1181,6 +1228,7 @@ class _AsyncRolloutLoop:
                         completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
                         old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
                         sampling_mask=seq.sampling_mask,
+                        sampler_logprobs=seq.sampler_logprobs,
                         advantage=float(advantage),
                         model_version=group.model_version,
                         group_id=group.group_id,
