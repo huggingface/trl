@@ -598,6 +598,24 @@ training_args = GRPOConfig(
 While the paper doesn't specify a  \\( \textcolor{blue}{\delta} \\) value used, a good starting point could be  \\( \textcolor{blue}{\delta} = 0.5 \\). If training seems too conservative or too many sequences are masked, you can increase the value.
 For reference,  \\( \textcolor{blue}{\delta} = 1.0 \\) corresponds to an average log-ratio divergence of 1 nat per token, i.e. on sequences where this threshold is exceeded, the old policy was on average  \\( e^1 \approx 2.7 \\) times more likely to generate these tokens than the current policy.
 
+- The **Keep Sampling Mask** strategy, which keeps top-k/top-p sampling unbiased. The sampler draws each token from a truncated support  \\( \textcolor{red}{\mathcal{S}_{i,t}} \\), the tokens left after truncation, so the policy log-probability is renormalized over that same support:
+
+$$
+\log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
+$$
+
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0` or `top_k > 0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    top_p=0.95,
+    top_k=512,
+)
+```
+
 ### GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2601.05242
@@ -1868,30 +1886,7 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
-```python
-from trl.experimental.ssd import SSDConfig, SSDTrainer
-
-training_args = SSDConfig(
-    temperature=0.6,                       # Training-time sampling temperature (T_train)
-    top_k=20,                              # Training-time top-k truncation
-    top_p=0.95,                            # Training-time top-p truncation
-    max_completion_length=65536,
-    learning_rate=5e-6,
-)
-
-trainer = SSDTrainer(
-    model="Qwen/Qwen3-4B-Instruct",
-    args=training_args,
-    train_dataset=...,
-)
-trainer.train()
-```
-
-Expected dataset columns:
-
-- `prompt`
-
-For more details, see the [SSD Trainer documentation](ssd_trainer).
+TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
 
 ## Distributed Training
 
