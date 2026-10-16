@@ -373,7 +373,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             model_id,
             dtype="float32",
             device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
+            attn_implementation="eager",
         )
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -396,6 +396,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             weight_transfer=_StubWeightTransfer(),
         )
         assert trainer.model is model
+        assert trainer.model.config._attn_implementation == TREE_ATTENTION
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

@@ -944,8 +944,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
               with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
               vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
               models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise.
-            - A [`~transformers.PreTrainedModel`] object. It must already use an attention implementation that supports
-              padding-free training.
+            - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
+              tree attention backend for packed training.
 
             The model name from the config is used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
@@ -1097,6 +1097,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             )
         else:
             model_revision = None
+            model.set_attn_implementation(TREE_ATTENTION)
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
