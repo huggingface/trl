@@ -615,7 +615,7 @@ class _AsyncRolloutLoop:
             logger.warning("`/metrics` has no `kv_cache_size_tokens`, starting at max_inflight_tasks")
             return
         kv_tokens = sum(map(int, kv_matches))
-        max_model_len = max(model["max_model_len"] for model in models["data"])
+        max_model_len = max(model["max_model_len"] for model in models["data"] if model["max_model_len"])
         self._inflight_cap = max(1, min(self.max_inflight_tasks, kv_tokens // max_model_len))
 
     async def _control_loop(self, stop_event: asyncio.Event) -> None:

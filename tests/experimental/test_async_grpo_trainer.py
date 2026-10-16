@@ -812,7 +812,9 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             )
 
         async def models(request):
-            return web.json_response({"data": [{"id": "m", "max_model_len": 1000}]})
+            return web.json_response(
+                {"data": [{"id": "m", "max_model_len": 1000}, {"id": "policy-v1", "max_model_len": None}]}
+            )
 
         app = web.Application()
         app.router.add_get("/metrics", metrics)
