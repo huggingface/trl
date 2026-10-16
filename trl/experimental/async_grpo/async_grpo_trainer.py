@@ -1079,7 +1079,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs.setdefault("dtype", args.dtype)
 
         # Here we set the default to TREE_ATTENTION but this can be changed by the user if desired
-        # we should let users chose to support non-Hopper hardwares for flash attention 2, etc. 
+        # we should let users chose to support non-Hopper hardwares for flash attention 2, etc.
         attn_implementation = model_init_kwargs.pop("attn_implementation", TREE_ATTENTION)
         if attn_implementation == TREE_ATTENTION:
             register_tree_attention()
