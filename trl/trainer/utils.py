@@ -55,13 +55,19 @@ from transformers import (
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import ModelOutput, is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available, is_triton_available
 
+from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..trainer.model_config import ModelConfig
 
 
 if is_comet_available():
     import comet_ml
+
+
+if is_triton_available():
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 
 
 if is_peft_available():
@@ -358,7 +364,7 @@ def generate_model_card(
     template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
+        template_str=pkg_resources.files("trl").joinpath(f"templates/{template_file}").read_text(encoding="utf-8"),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
@@ -496,14 +502,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-try:
-    from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
-    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
-except ImportError:  # Triton ships with PyTorch on Linux only
-    _ChunkedLogProbFunction = None
-    _fused_logprob_entropy = None
-
-
 def _supports_trl_loss_kernel(
     logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
 ) -> bool:
@@ -566,7 +564,7 @@ def selective_log_softmax(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs
 
@@ -619,7 +617,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits):
+    if is_triton_available() and _supports_trl_loss_kernel(logits):
         index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
         _, entropy = _fused_logprob_entropy(logits, index)
         return entropy
@@ -693,7 +691,7 @@ def selective_log_softmax_and_entropy(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs, entropy if entropy_requires_grad else entropy.detach()
     if temperature != 1.0:
@@ -1557,6 +1555,10 @@ def add_fused_lm_head(
     as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
     original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
+    `support_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, is the support each token was sampled
+    from: the tokens left after top-k/top-p truncation. Given, the log-probabilities are normalized over that set
+    rather than the whole vocabulary, as the sampler's were. It is aligned with `input_ids` and shifted like `labels`.
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Causal language model to patch.
@@ -1569,12 +1571,6 @@ def add_fused_lm_head(
             `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
             is always computed; each extra field costs a little on every call.
     """
-    if _ChunkedLogProbFunction is None:
-        raise ImportError(
-            "Triton is not installed. Please install it with `pip install triton`. The fused LM head requires it, "
-            "and it is only available on Linux with a CUDA, ROCm or XPU GPU."
-        )
-
     original_forward = model.forward
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
@@ -1600,7 +1596,14 @@ def add_fused_lm_head(
     # Keep the original signature: `generate` validates its model kwargs against it
     @functools.wraps(type(model).forward)
     def _fused_forward(
-        self, *args, fused_lm_head=False, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs
+        self,
+        *args,
+        fused_lm_head=False,
+        labels=None,
+        shift_labels=None,
+        num_items_in_batch=None,
+        support_ids=None,
+        **kwargs,
     ):
         if not fused_lm_head:
             if labels is not None:
@@ -1620,6 +1623,8 @@ def add_fused_lm_head(
         if shift_labels is None:
             hidden_states = backbone_outputs.last_hidden_state[:, :-1]
             labels = labels[:, 1:]
+            if support_ids is not None:
+                support_ids = support_ids[:, 1:]
         else:
             hidden_states = backbone_outputs.last_hidden_state
             labels = shift_labels
@@ -1640,23 +1645,34 @@ def add_fused_lm_head(
             weight = weight.full_tensor()
             if bias is not None:
                 bias = bias.full_tensor()
+        # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
+        # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
+        compact = _use_triton(hidden_states.device)
+        if support_ids is not None:
+            support_ids = support_ids.to(lm_head.weight.device)
+            support_ids = (
+                support_ids[mask] if compact else support_ids.masked_fill(~mask.unsqueeze(-1), 0).flatten(0, 1)
+            )
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
             per_token = _ChunkedLogProbFunction.apply(
-                hidden_states[mask],
+                hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
                 weight,
                 bias,
-                labels[mask],
+                labels[mask] if compact else labels.clamp(min=0).reshape(-1),
                 temperature,
                 _CHUNKED_LOGPROB_CHUNK_SIZE,
                 final_logit_softcapping,
                 logit_scale,
                 outputs,
+                support_ids,
             )
-        # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
-        # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
-            None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
-        )
+        if compact:
+            # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+            # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+            per_token = (None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token)
+        else:
+            per_token = (None if x is None else x.view(mask.shape).masked_fill(~mask, 0) for x in per_token)
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = per_token
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
