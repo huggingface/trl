@@ -81,7 +81,7 @@ class GRPORow:
             # Key the root on the sample index too, so the sample starts a chain of its own
             if not self.share_prefixes and depth == 0:
                 key = (*key, len(self.samples))
-                
+
             if key not in children:
                 children[key] = len(self.tokens)
                 self.tokens.append(key[0])

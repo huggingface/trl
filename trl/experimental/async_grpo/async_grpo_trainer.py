@@ -1539,7 +1539,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if sampling_mask.shape[-1] == 0:
                 sampling_mask = None
             attn_kwargs = {
-                key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
+                key: inputs[key][inputs[key] >= 0]
+                for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
             }
             attn_kwargs["tree_max_seqlen_q"], attn_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
         else:

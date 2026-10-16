@@ -85,10 +85,10 @@ from functools import partial
 
 from datasets import Dataset
 from harbor_env.harness import HarborSessionFactory
-from kernels import get_kernel
 from peft import LoraConfig
 from transformers import AutoTokenizer
 
+from kernels import get_kernel
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.openenv_harness import HarnessRolloutOutcome, HarnessRolloutWorker
 from trl.experimental.async_grpo.vllm_client import VLLMClient
@@ -235,7 +235,7 @@ def main() -> None:
         # short convolutions. PyPI ships no wheel for it, so serve the prebuilt Hub kernel under that name before
         # transformers imports it with the model.
         sys.modules["causal_conv1d"] = get_kernel("kernels-community/causal-conv1d", version=1)
-    stamp =os.environ.get("SLURM_JOB_ID") or os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
+    stamp = os.environ.get("SLURM_JOB_ID") or os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
     stamp = f"{stamp}-{uuid.uuid4().hex[:8]}"
     run_name = args.run_name or f"{args.model.split('/')[-1]}-{args.harness}-{args.max_steps}steps-{stamp}"
     output_dir = args.output_dir or f"runs/async_grpo_harbor/{run_name}"
