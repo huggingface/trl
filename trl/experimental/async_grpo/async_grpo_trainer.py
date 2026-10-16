@@ -1533,11 +1533,11 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
+        sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
+        if sampling_mask.shape[-1] == 0:
+            sampling_mask = None
 
         if self.tree_attention:
-            sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
-            if sampling_mask.shape[-1] == 0:
-                sampling_mask = None
             attn_kwargs = {
                 key: inputs[key][inputs[key] >= 0]
                 for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
