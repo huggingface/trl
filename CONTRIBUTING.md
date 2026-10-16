@@ -399,7 +399,7 @@ Declaring a first floor for a dependency that has none is not covered by the abo
 
 When TRL needs an API newer than the floor, the default is a version guard, not a bump. Put a floor change in its own PR and say in the description which version guards, compatibility shims or warning filters it retires.
 
-The minimum-versions CI job runs on the oldest supported Python and pins every dependency exactly at its floor, so a floor change also updates its pin.
+The minimum-versions CI job pins every dependency exactly at its floor, so a floor change also updates its pin.
 
 ### Working with warnings
 
