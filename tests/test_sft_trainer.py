@@ -736,9 +736,15 @@ class TestSFTTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_train_moe_with_peft_config_trains_experts(self):
-        # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts, so the
-        # LoRA config must still reach the routed experts
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.0.0")
+        and is_peft_available()
+        and Version(peft.__version__) < Version("0.21.3.dev0"),
+        reason="With transformers v5, peft<0.19 skips the routed experts (#7765), and peft<0.21.3 the dense and shared "
+        "expert layers (#7767)",
+    )
+    def test_train_moe_with_peft_config_trains_all_mlp_layers(self):
+        # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts
         model_id = "trl-internal-testing/tiny-Glm4MoeForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
         previous_params = {n: param.clone() for n, param in model.named_parameters()}
@@ -762,6 +768,10 @@ class TestSFTTrainer(TrlTestCase):
             n for n, param in merged_model.named_parameters() if not torch.equal(previous_params[n], param.cpu())
         ]
         assert any(".mlp.experts." in n for n in changed), f"No routed expert weight has changed, only {changed}."
+        assert any(".mlp.shared_experts." in n for n in changed), (
+            f"No shared expert weight has changed, only {changed}."
+        )
+        assert any("layers.0.mlp." in n for n in changed), f"No dense layer weight has changed, only {changed}."
 
     @pytest.mark.parametrize(
         "model_id, expect_coef, expect_aux_loss",
