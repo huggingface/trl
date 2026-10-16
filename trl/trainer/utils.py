@@ -369,7 +369,7 @@ def generate_model_card(
     template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
+        template_str=pkg_resources.files("trl").joinpath(f"templates/{template_file}").read_text(encoding="utf-8"),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
