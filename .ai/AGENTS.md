@@ -67,6 +67,8 @@ Concretely:
 
 Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, `object.__new__` (building an instance without its `__init__`), or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
 
+Test behavior through the public API (the trainer, its config, public functions) rather than private methods: a test that calls a private method usually has to build the object around it by hand, and it breaks on any refactor of the internals. Call a private function directly only when its behavior cannot be reached deterministically otherwise, such as a pure helper.
+
 There are no `slow` tests: use tiny models, and put tests that need several GPUs in `tests/distributed`. Tests that need an optional dependency or specific hardware are gated by the `require_*` decorators in `tests/testing_utils.py`, so they skip where they cannot run.
 
 ## Documentation
