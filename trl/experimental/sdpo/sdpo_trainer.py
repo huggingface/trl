@@ -1203,9 +1203,11 @@ class SDPOTrainer(_BaseTrainer):
         """
         if distillation_logits.loss_mask.sum() == 0:
             mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, 0.0)
+            # Empty ranks must participate in the same metric collective as nonempty ranks.
+            zero_metric = distillation_logits.student_logits.new_zeros((), dtype=torch.float32)
+            self._log_self_distillation_metric(mode, self.accelerator.gather(zero_metric).mean().item())
             # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
-            return distillation_logits.student_logits.sum() * 0.0
+            return distillation_logits.student_logits.sum(dtype=torch.float32) * 0.0
 
         if self.args.distillation_mode == "topk_logits":
             if self.args.distillation_topk is None:
@@ -1260,7 +1262,7 @@ class SDPOTrainer(_BaseTrainer):
         ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
         self._log_self_distillation_metric(
             mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
+            self.accelerator.gather(mean_distill_loss.float()).mean().item(),
         )
         return loss
 
