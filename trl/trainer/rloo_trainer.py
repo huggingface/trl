@@ -68,6 +68,7 @@ from .utils import (
     get_config_model_id,
     identity,
     is_async_callable,
+    model_accepts_images,
     nanmax,
     nanmin,
     nanstd,
@@ -297,7 +298,8 @@ class RLOOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config),
                 revision=model_revision,
                 truncation_side="left",

@@ -34,6 +34,7 @@ from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
@@ -68,6 +69,7 @@ from .utils import (
     get_config_model_id,
     global_then_local_main_first,
     hash_module,
+    model_accepts_images,
     pad,
     use_adapter,
 )
@@ -649,7 +651,8 @@ class KTOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if isinstance(processing_class, ProcessorMixin):
