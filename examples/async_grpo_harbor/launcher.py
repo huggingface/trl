@@ -312,14 +312,14 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
 def merge_lora(adapter: str, out: pathlib.Path) -> str:
     """Merge a LoRA checkpoint into its base model (the class TRL trained) so vLLM can serve it."""
     import torch
-    import transformers
-    from peft import PeftModel
+    from peft import PeftConfig, PeftModel
+    from transformers import AutoTokenizer
 
-    base = json.loads((pathlib.Path(adapter) / "adapter_config.json").read_text())["base_model_name_or_path"]
-    architecture = getattr(transformers, transformers.AutoConfig.from_pretrained(base).architectures[0])
-    model = PeftModel.from_pretrained(architecture.from_pretrained(base, dtype=torch.bfloat16), adapter)
-    model.merge_and_unload().save_pretrained(out)
-    transformers.AutoTokenizer.from_pretrained(adapter).save_pretrained(out)
+    from trl.trainer.utils import create_model_from_path
+
+    base = create_model_from_path(PeftConfig.from_pretrained(adapter).base_model_name_or_path, dtype=torch.bfloat16)
+    PeftModel.from_pretrained(base, adapter).merge_and_unload().save_pretrained(out)
+    AutoTokenizer.from_pretrained(adapter).save_pretrained(out)
     return str(out)
 
 
