@@ -1560,6 +1560,10 @@ def add_fused_lm_head(
     as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
     original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
+    `support_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, is the support each token was sampled
+    from: the tokens left after top-k/top-p truncation. Given, the log-probabilities are normalized over that set
+    rather than the whole vocabulary, as the sampler's were. It is aligned with `input_ids` and shifted like `labels`.
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Causal language model to patch.
@@ -1597,7 +1601,14 @@ def add_fused_lm_head(
     # Keep the original signature: `generate` validates its model kwargs against it
     @functools.wraps(type(model).forward)
     def _fused_forward(
-        self, *args, fused_lm_head=False, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs
+        self,
+        *args,
+        fused_lm_head=False,
+        labels=None,
+        shift_labels=None,
+        num_items_in_batch=None,
+        support_ids=None,
+        **kwargs,
     ):
         if not fused_lm_head:
             if labels is not None:
@@ -1617,6 +1628,8 @@ def add_fused_lm_head(
         if shift_labels is None:
             hidden_states = backbone_outputs.last_hidden_state[:, :-1]
             labels = labels[:, 1:]
+            if support_ids is not None:
+                support_ids = support_ids[:, 1:]
         else:
             hidden_states = backbone_outputs.last_hidden_state
             labels = shift_labels
@@ -1640,6 +1653,11 @@ def add_fused_lm_head(
         # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
         # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
         compact = _use_triton(hidden_states.device)
+        if support_ids is not None:
+            support_ids = support_ids.to(lm_head.weight.device)
+            support_ids = (
+                support_ids[mask] if compact else support_ids.masked_fill(~mask.unsqueeze(-1), 0).flatten(0, 1)
+            )
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
             per_token = _ChunkedLogProbFunction.apply(
                 hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
@@ -1651,6 +1669,7 @@ def add_fused_lm_head(
                 final_logit_softcapping,
                 logit_scale,
                 outputs,
+                support_ids,
             )
         if compact:
             # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
