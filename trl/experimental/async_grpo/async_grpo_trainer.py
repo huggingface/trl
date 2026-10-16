@@ -1079,11 +1079,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+        # Here we set the default to TREE_ATTENTION but this can be changed by the user if desired
+        model_init_kwargs.setdefault("attn_implementation", TREE_ATTENTION)
         model_revision = model_init_kwargs.get("revision")
         model = create_model_from_path(
             model,
             device_map=None,
-            attn_implementation=TREE_ATTENTION,
             **model_init_kwargs,
         )
 
