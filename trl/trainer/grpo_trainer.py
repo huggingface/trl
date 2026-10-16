@@ -535,7 +535,7 @@ class GRPOTrainer(_BaseTrainer):
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
         # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
         # represent, silently freezing it, see #7268.
-        if _is_quantized_model:
+        if args.bf16 and _is_quantized_model:
             for name, param in model.named_parameters():
                 if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
