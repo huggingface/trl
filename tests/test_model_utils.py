@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import types
 from unittest.mock import patch
 
@@ -22,7 +23,12 @@ from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed, unwrap_model_for_generation
+from trl.models.utils import (
+    _unwrap_model_for_generation,
+    disable_gradient_checkpointing,
+    prepare_deepspeed,
+    unwrap_model_for_generation,
+)
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -97,3 +103,36 @@ class TestUnwrapModelForGeneration:
                 torch.autograd.grad(loss, list(model.parameters()))
         else:
             torch.autograd.grad(loss, list(model.parameters()))
+
+    def test_reattaches_zero3_hooks_on_error(self):
+        calls = []
+
+        class FakeDistributedBackend:
+            def __init__(self, accelerator):
+                self.is_zero3 = True
+
+        class GatheredParameters:
+            def __init__(self, params):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        fake_deepspeed = types.SimpleNamespace(zero=types.SimpleNamespace(GatheredParameters=GatheredParameters))
+        model = types.SimpleNamespace(is_gradient_checkpointing=False, parameters=lambda: ())
+        accelerator = types.SimpleNamespace(unwrap_model=lambda wrapped: wrapped)
+
+        with (
+            patch.dict(sys.modules, {"deepspeed": fake_deepspeed}),
+            patch("trl.distributed.DistributedBackend", FakeDistributedBackend),
+            patch("trl.models.utils.remove_hooks", lambda hooked: calls.append(("remove", hooked))),
+            patch("trl.models.utils.add_hooks", lambda hooked: calls.append(("add", hooked))),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            with _unwrap_model_for_generation(model, accelerator):
+                raise RuntimeError("boom")
+
+        assert calls == [("remove", model), ("add", model)]
