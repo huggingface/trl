@@ -526,7 +526,7 @@ class VLLMGeneration:
         if features is None:
             return None
 
-        image_token_id = self.processing_class.image_token_id
+        image_token_id = self.model.config.image_token_id
         placeholders = []
         offset = 0
         while offset < len(prompt_ids):
