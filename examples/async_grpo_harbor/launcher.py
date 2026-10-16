@@ -21,7 +21,6 @@
 #     "flashinfer-jit-cache==0.6.13",
 #     "kernels>=0.17.0,<0.18.0",
 #     "flash-linear-attention",
-#     "causal-conv1d",    
 #     "ray",
 #     "datasets>=3.2",
 #     "peft",
@@ -41,6 +40,8 @@
 # vllm 0.25.1 pins flashinfer 0.6.13, and the JIT cache must match it. vllm>=0.30 needs mcp>=2, which breaks the
 # fastmcp<4 the pinned OpenEnv imports. kernels 0.17.x is what transformers accepts for the flash-attn3 hub kernel,
 # flash-linear-attention gives Qwen3.5 its fast linear-attention path, and ray is imported by vLLM's IPC weight transfer.
+# causal-conv1d is not listed: PyPI ships no wheel for it, so it would compile from source. The training script loads the
+# prebuilt Hub kernel instead.
 
 """Run `async_grpo_harbor.py` on Hugging Face Jobs: one job, one command.
 

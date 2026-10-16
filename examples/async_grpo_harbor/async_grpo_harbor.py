@@ -18,7 +18,8 @@
 #     "trackio",
 #     "datasets",
 #     "peft",
-#     "openenv @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "kernels",
+#     "openenv @git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 # ]
 # ///
 
@@ -78,11 +79,13 @@ import argparse
 import logging
 import os
 import pathlib
+import sys
 import uuid
 from functools import partial
 
 from datasets import Dataset
 from harbor_env.harness import HarborSessionFactory
+from kernels import get_kernel
 from peft import LoraConfig
 from transformers import AutoTokenizer
 
@@ -227,7 +230,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    stamp = os.environ.get("SLURM_JOB_ID") or os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
+    if "Qwen3.5" in args.model:
+        # Qwen3.5's linear-attention layers keep packed samples apart only with the `causal_conv1d` package, for their
+        # short convolutions. PyPI ships no wheel for it, so serve the prebuilt Hub kernel under that name before
+        # transformers imports it with the model.
+        sys.modules["causal_conv1d"] = get_kernel("kernels-community/causal-conv1d", version=1)
+    stamp =os.environ.get("SLURM_JOB_ID") or os.environ.get("HF_JOB_ID") or os.environ.get("JOB_ID") or "local"
     stamp = f"{stamp}-{uuid.uuid4().hex[:8]}"
     run_name = args.run_name or f"{args.model.split('/')[-1]}-{args.harness}-{args.max_steps}steps-{stamp}"
     output_dir = args.output_dir or f"runs/async_grpo_harbor/{run_name}"
