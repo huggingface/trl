@@ -247,6 +247,7 @@ jobs:
           uv pip install \
             ".[dev]" \
             "accelerate==1.10.1" \
+            "bitsandbytes==0.45.1" \
             "datasets==4.7.0" \
             "peft==0.17.0" \
             "torch==2.6.0" \
