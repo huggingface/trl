@@ -23,11 +23,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "Qwen/Qwen3-4B-Instruct-2507"
 
@@ -40,6 +43,7 @@ config = Qwen3Config(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    tie_word_embeddings=True,
     max_position_embeddings=262144,
     rope_theta=5000000,
     max_window_layers=36,

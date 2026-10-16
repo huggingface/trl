@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "openai/gpt-oss-20b"
 
@@ -42,6 +45,11 @@ config = GptOssConfig(
     num_experts_per_tok=2,
     eos_token_id=200002,
     pad_token_id=199999,
+    # Reference-only keys: `GptOssConfig` does not model any of these.
+    initial_context_length=4096,
+    swiglu_limit=7.0,
+    # Alias the reference carries for `num_experts_per_tok`, so it takes the scaled-down value.
+    experts_per_token=2,
 )
 model = GptOssForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -38,6 +41,7 @@ config = LlamaConfig(
     num_key_value_heads=2,
     num_hidden_layers=2,
     intermediate_size=32,
+    tie_word_embeddings=True,
     max_position_embeddings=131072,
     rope_theta=500000.0,
     rope_scaling={

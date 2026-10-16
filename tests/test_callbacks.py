@@ -28,7 +28,8 @@ class TestLogCompletionsCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # `Trainer` realigns the configs at train time, so mirror the pad token as the TRL trainers do at init.
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
         dataset["train"] = dataset["train"].select(range(8))
 
@@ -121,7 +122,8 @@ class TestBEMACallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # `Trainer` realigns the configs at train time, so mirror the pad token as the TRL trainers do at init.
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
         def tokenize_function(examples, tokenizer):

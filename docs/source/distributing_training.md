@@ -1,8 +1,5 @@
 # Distributing Training
 
-> [!WARNING]
-> Section under construction. Feel free to contribute!
-
 ## Multi-GPU Training with TRL
 
 The trainers in TRL use [🤗 Accelerate](https://github.com/huggingface/accelerate) to enable distributed training across multiple GPUs or nodes. To do so, first create an [🤗 Accelerate](https://github.com/huggingface/accelerate) config file by running

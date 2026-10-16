@@ -45,10 +45,10 @@ class AsyncGRPOConfig(_BaseConfig):
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
 
         > Parameters that control generation
 
@@ -106,14 +106,15 @@ class AsyncGRPOConfig(_BaseConfig):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
-            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
-            within this budget, bounding peak memory independently of the sample count (the number of samples per row
-            becomes dynamic). If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train
-            start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample
-            longer than `token_budget` fits in no row and is dropped with a warning. Set `<= 0` to disable token
-            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch, Σ
-            Lᵢ²-balanced across the rows.
+            Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic token-budgeted
+            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows
+            each stay within this budget, bounding peak memory independently of the sample count (the number of samples
+            per row becomes dynamic). The budget bounds unique tokens rather than raw ones, so tokens shared by several
+            samples count once, and it bounds the row's loss terms too. If `None` (default), it is set to the vLLM
+            server's `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout
+            sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
+            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
+            num_processes` samples per micro-batch, balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -190,12 +191,12 @@ class AsyncGRPOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
 
@@ -334,13 +335,14 @@ class AsyncGRPOConfig(_BaseConfig):
     token_budget: int | None = field(
         default=None,
         metadata={
-            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
-            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
-            "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
-            "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
+            "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic "
+            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms attention-cost-balanced "
+            "micro-batches whose rows each stay within this budget, bounding peak memory independently of the sample "
+            "count. If None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
             "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
             "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
-            "`per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
+            "`per_device_train_batch_size × num_processes` samples per micro-batch, attention-cost-balanced across "
+            "the rows."
         },
     )
 
