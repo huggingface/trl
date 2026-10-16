@@ -37,7 +37,6 @@ from .testing_utils import (
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_torch_accelerator,
     require_vision,
     require_vllm,
@@ -784,7 +783,7 @@ class TestRLOOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -2310,6 +2309,19 @@ class TestRLOOTrainerVLM(TrlTestCase):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_generation_suppresses_image_token(self):
+        # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
     def test_train_vlm_with_pad_to_multiple_of(self):
         # Models like Gemma3 use other forward keyword arguments like token_type_ids that also need to be padded when
