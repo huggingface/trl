@@ -401,6 +401,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "input_ids": sample.input_ids,
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
+                "sampling_mask": sample.sampling_mask,
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
                 "metrics": sample.metrics,  # per-sample rewards; aggregated by the collator, never sent to the model
@@ -599,6 +600,7 @@ class DataCollatorForRollout(DataCollatorMixin):
             "input_ids": self.pad_token_id,
             "shift_labels": -100,
             "token_index": -1,
+            "sampling_mask": -1,
             "tree_kv_index": -1,
             "tree_cu_seqlens_q": -1,
             "tree_cu_seqlens_k": -1,
@@ -1484,6 +1486,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "shift_labels",
                 "token_index",
                 "old_log_probs",
+                "sampling_mask",
                 "advantages",
                 "segment_id",
                 "global_n_tokens",
@@ -1505,6 +1508,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
+        sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
+        if sampling_mask.shape[-1] == 0:
+            sampling_mask = None
         tree_kwargs = {
             key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
         }
@@ -1517,6 +1523,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             input_ids=input_ids,
             position_ids=position_ids,
             shift_labels=shift_labels,
+            support_ids=sampling_mask,
             fused_lm_head=True,
             **router_kwargs,
             **tree_kwargs,
@@ -1869,7 +1876,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
-            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
 
@@ -1892,7 +1899,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 elif not isinstance(self.train_dataset, Dataset):
                     logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
                 else:
-                    with open(rollout_state_file) as f:
+                    with open(rollout_state_file, encoding="utf-8") as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
                     self._groups_before_resume = rollout_state["prompt_index"]
