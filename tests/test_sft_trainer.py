@@ -444,9 +444,31 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_model(self):
-        model = AutoModelForCausalLM.from_pretrained(
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            # (`Qwen3_5ForCausalLM`, model type `qwen3_5_text`), which is how Qwen3.5 is usually trained on text
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_train_model(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
             dtype="float32",
         )
 
