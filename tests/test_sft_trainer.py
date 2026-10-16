@@ -734,6 +734,34 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    def test_train_moe_with_peft_config_trains_experts(self):
+        # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts, so the
+        # LoRA config must still reach the routed experts
+        model_id = "trl-internal-testing/tiny-Glm4MoeForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        previous_params = {n: param.clone() for n, param in model.named_parameters()}
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["gate_proj", "up_proj", "down_proj"]),
+        )
+
+        trainer.train()
+
+        # Merging the adapter into the base weights shows which weights the training changed
+        merged_model = trainer.model.merge_and_unload()
+        changed = [
+            n for n, param in merged_model.named_parameters() if not torch.equal(previous_params[n], param.cpu())
+        ]
+        assert any(".mlp.experts." in n for n in changed), f"No routed expert weight has changed, only {changed}."
+
     @pytest.mark.parametrize(
         "model_id, expect_coef, expect_aux_loss",
         [
