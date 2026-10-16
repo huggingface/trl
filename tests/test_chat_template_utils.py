@@ -393,6 +393,14 @@ class TestSupportsToolCalling:
     @pytest.mark.parametrize(
         "model_id",
         [
+            pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                id="beam",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
             pytest.param(
@@ -521,6 +529,17 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", id="lfm2"),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                id="muse_spark",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.20.0"),
+                        reason="Muse Spark Open was introduced in transformers-5.20.0",
+                    ),
+                ],
+            ),
         ],
     )
     def test_supports_tool_calling(self, model_id):
@@ -795,6 +814,14 @@ class TestIsChatTemplateStopTokenTrained:
 @pytest.mark.parametrize(
     "tokenizer_name",
     [
+        pytest.param(
+            "trl-internal-testing/tiny-BeamForCausalLM",
+            id="beam",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.20.1"),
+                reason="Beam was introduced in transformers-5.20.1",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
         # Real Cohere checkpoints ship their chat template as named variants, which load as a dict
         pytest.param(
@@ -950,6 +977,17 @@ class TestIsChatTemplateStopTokenTrained:
             ],
         ),
         pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", id="smolvlm", marks=require_vision),
+        pytest.param(
+            "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+            id="muse_spark",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ],
+        ),
     ],
 )
 class TestGetTrainingChatTemplate:
@@ -1270,6 +1308,14 @@ class TestNamedChatTemplateVariants:
 @pytest.mark.parametrize(
     "model_name",
     [
+        pytest.param(
+            "trl-internal-testing/tiny-BeamForCausalLM",
+            id="beam",
+            marks=pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.20.1"),
+                reason="Beam was introduced in transformers-5.20.1",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),
         pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
         pytest.param(
@@ -1375,6 +1421,17 @@ class TestNamedChatTemplateVariants:
                 ),
             ],
         ),
+        pytest.param(
+            "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+            id="muse_spark",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ],
+        ),
     ],
 )
 @pytest.mark.xfail(
@@ -1443,12 +1500,13 @@ class TestParseResponse:
             pytest.skip("gpt-oss thinking/content separation requires the response_template parser (>= 5.13).")
 
         processing_class = self._load(model_name)
-        # gpt-oss and LFM2.5 use the `thinking` field name (matching their own chat templates, which read it back off
-        # the message) rather than the `reasoning_content` convention used by other models.
+        # gpt-oss, Beam and LFM2.5 use the `thinking` field name (matching their own chat templates, which read it back
+        # off the message) rather than the `reasoning_content` convention used by other models.
         reasoning_field = (
             "thinking"
             if model_name
             in (
+                "trl-internal-testing/tiny-BeamForCausalLM",
                 "trl-internal-testing/tiny-GptOssForCausalLM",
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
@@ -1521,7 +1579,10 @@ class TestParseResponse:
         processing_class = self._load(model_name)
         tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
         assistant = {"role": "assistant", "tool_calls": tool_calls}
-        if model_name == "trl-internal-testing/tiny-GptOssForCausalLM":
+        if model_name in (
+            "trl-internal-testing/tiny-BeamForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+        ):
             assistant["thinking"] = "Let's call the tool."
             assistant["content"] = ""
         elif model_name == "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration":
@@ -1621,6 +1682,8 @@ class TestParseResponse:
         if model_name == "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration":
             pytest.skip("Muse Glimmer ships its own response template, which JSON-parses `75001` as an int.")
         processing_class = self._load(model_name)
+        if model_name == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration":
+            pytest.skip("The Muse Spark Open response template reads argument values as JSON, before the tool schema.")
         # A string that looks like a number must stay a string, and every other JSON type must come back typed
         arguments = {"zip_code": "75001", "days": 3, "threshold": 0.5, "metric": True, "fields": ["rain", "wind"]}
         tool_calls = [{"type": "function", "function": {"name": "get_weather", "arguments": arguments}}]
