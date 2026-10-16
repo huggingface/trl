@@ -512,8 +512,8 @@ lfm2_2_5_template = {
 }
 
 # The later LFM2.5 template escapes `\`, `'`, newlines and carriage returns in string arguments, so a string runs up to
-# the first unescaped `'`. The `json` value parser does not unescape them: such a string comes back with its quotes and
-# escapes, `'Saint-Jean-d\'Angély'` rather than `Saint-Jean-d'Angély`.
+# the first unescaped `'`. The `json` value parser does not unescape them: a string with `\` or a newline keeps its
+# escapes (`Paris\\nFrance`), and one with `'` also keeps its quotes (`'Saint-Jean-d\'Angély'`).
 _LFM2_2_5_V3_STR = r"'(?:[^'\\]|\\.)*'"
 _LFM2_2_5_V3_ATOM = rf"[^\[\]{{}}'\"]|{_LFM2_2_5_V3_STR}|\"(?:[^\"\\]|\\.)*\""
 _LFM2_2_5_V3_NESTED = _LFM2_2_5_V3_ATOM
