@@ -67,6 +67,8 @@ python -m pytest tests/experimental/test_openenv_tito.py \
 
 ## Single harness + Single GPU with LoRA on Qwen3.5-0.8B
 
+![Single harness RL on a single GPU](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/refs%2Fpr%2F7/grpo-harness-rl-single-gpu.png)
+
 The example below shows how to train a small model, i.e., Qwen3.5-0.8B, with single harness RL on a single GPU, leveraging LoRA and IPC communication to synchronise the trained weights with the vLLM server. In this example, we were able to make the model converge after ~200 optimization steps. The sandboxes are executed with HF jobs instead of E2B. The mi
 
 ### Setting up
