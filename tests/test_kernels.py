@@ -321,6 +321,51 @@ class TestChunkedLogProbFunction:
         torch.testing.assert_close(grad_hidden_chunked, hidden.grad, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(grad_weight_chunked, weight.grad, atol=1e-5, rtol=1e-5)
 
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    @pytest.mark.parametrize(("logit_scale", "final_logit_softcapping"), [(1.0, None), (0.5, 30.0)])
+    def test_support_ids(self, device, logit_scale, final_logit_softcapping):
+        # Log-probs and their gradient are normalized over each row's support; the entropy stays full-vocabulary
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True, device=device)
+        weight = torch.randn(self.V, self.H, requires_grad=True, device=device)
+        labels = torch.randint(0, self.V, (self.N,), device=device)
+        sizes = torch.randint(1, 8, (self.N,), device=device)
+        support_ids = torch.full((self.N, 8), -1, device=device, dtype=torch.long)
+        for row in range(self.N):
+            ids = torch.randperm(self.V, device=device)[: sizes[row] - 1]
+            support_ids[row, : sizes[row]] = torch.cat([labels[row : row + 1], ids])
+
+        logprobs, entropy, *_ = ChunkedLogProbFunction.apply(
+            hidden,
+            weight,
+            None,
+            labels,
+            0.7,
+            self.CHUNK_SIZE,
+            final_logit_softcapping,
+            logit_scale,
+            ("entropy",),
+            support_ids,
+        )
+        (logprobs.sum() + entropy.sum()).backward()
+        grad_hidden, grad_weight = hidden.grad.clone(), weight.grad.clone()
+        hidden.grad = weight.grad = None
+
+        logits = hidden @ weight.t() * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / 0.7
+        keep = F.one_hot(support_ids + 1, self.V + 1)[..., 1:].any(1)
+        logprobs_ref = logits.masked_fill(~keep, float("-inf")).log_softmax(-1).gather(-1, labels[:, None]).squeeze(-1)
+        log_p = logits.log_softmax(-1)
+        entropy_ref = -(log_p.exp() * log_p).sum(-1)
+        (logprobs_ref.sum() + entropy_ref.sum()).backward()
+
+        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-4, rtol=1e-4)
+
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_backward_bfloat16(self, temperature):
         torch.manual_seed(42)

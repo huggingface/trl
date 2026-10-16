@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import cache, partial
 from typing import Any
 
 import torch
 from transformers import AttentionInterface
 from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
+from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 
 class TreeRow:
@@ -94,6 +94,8 @@ class TreeRow:
                 - `input_ids` (`N`): the unique tokens.
                 - `position_ids` (`N`): each token's position in its samples, which is its depth in the trie.
                 - `shift_labels` (`N`): next token each position predicts, `-100` where it is not trained.
+                - `sampling_mask` (`N`, `C`): candidate set the sampler drew that next token from, padded with `-1`;
+                  `C` is `0` without top-k/top-p truncation.
                 - `tree_kv_index` (`K`): packed position of every K/V row [`tree_attention`] gathers, the
                   root-to-segment paths of all segments laid end to end.
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
@@ -126,20 +128,26 @@ class TreeRow:
             stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
 
         shift_labels = [-100] * len(input_ids)
+        sampling_mask = [[] for _ in input_ids]
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
             ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
             for p in range(1, len(nodes)):
                 if mask[p]:
                     shift_labels[packed[nodes[p - 1]]] = ids[p]
+                    sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
                     token_index.append(packed[nodes[p - 1]])
                     old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
+        width = max(map(len, sampling_mask))
         return {
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
             "shift_labels": torch.tensor(shift_labels),
+            "sampling_mask": torch.tensor(
+                [candidates + [-1] * (width - len(candidates)) for candidates in sampling_mask], dtype=torch.long
+            ).view(len(input_ids), width),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
             "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
             "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
@@ -156,20 +164,6 @@ class TreeRow:
 TREE_ATTENTION = "tree_fa3"
 
 
-@cache
-def _flash_attn(attn_implementation=None):
-    if attn_implementation == "flash_attention_2":
-        import flash_attn
-
-        return flash_attn
-
-    from kernels import get_kernel
-
-    if torch.version.hip:
-        return get_kernel("kernels-community/aiter-flash-attn", version=2)
-    return get_kernel("kernels-community/flash-attn3", version=1)
-
-
 def tree_attention(
     module,
     query,
@@ -182,44 +176,35 @@ def tree_attention(
     tree_cu_seqlens_k,
     tree_max_seqlen_q,
     tree_max_seqlen_k,
+    tree_attn_implementation,
     scaling=None,
     sliding_window=None,
     softcap=None,
-    attn_implementation=None,
     **kwargs,
 ):
     dtype = get_target_dtype(query, module) or query.dtype
-    query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn(attn_implementation).flash_attn_varlen_func(
+    query, key, value = (x.transpose(1, 2).to(dtype) for x in (query, key, value))
+    # Each segment queries its root-to-segment path, whose K/V length can exceed the query length.
+    out = _flash_attention_forward(
         query,
-        key.index_select(0, tree_kv_index),
-        value.index_select(0, tree_kv_index),
-        tree_cu_seqlens_q,
-        tree_cu_seqlens_k,
-        tree_max_seqlen_q,
-        tree_max_seqlen_k,
+        key.index_select(1, tree_kv_index),
+        value.index_select(1, tree_kv_index),
+        attention_mask=None,
+        query_length=query.shape[1],
+        is_causal=True,
+        cu_seq_lens_q=tree_cu_seqlens_q,
+        cu_seq_lens_k=tree_cu_seqlens_k,
+        max_length_q=tree_max_seqlen_q,
+        max_length_k=tree_max_seqlen_k,
         softmax_scale=scaling,
-        causal=True,
-        window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),
-        **({"softcap": softcap} if softcap else {}),
+        sliding_window=sliding_window,
+        softcap=softcap,
+        target_dtype=dtype,
+        attn_implementation=tree_attn_implementation,
     )
-    out = out[0] if isinstance(out, tuple) else out
-    return out.unsqueeze(0), None
+    return out, None
 
 
-def register_tree_attention(attn_implementation: str | None = None) -> str:
-    """Register a tree wrapper for the requested varlen backend and return its model-facing name."""
-    default_backend = "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3"
-    if attn_implementation is None or attn_implementation == default_backend:
-        name = TREE_ATTENTION
-        attention = tree_attention
-    elif attn_implementation == "flash_attention_2":
-        name = "tree_fa2"
-        attention = partial(tree_attention, attn_implementation=attn_implementation)
-    else:
-        raise ValueError(
-            f"Tree packing supports `flash_attention_2` or `{default_backend}`, got {attn_implementation!r}."
-        )
-    AttentionInterface.register(name, attention)
-    AttentionMaskInterface.register(name, lambda **kwargs: None)
-    return name
+def register_tree_attention() -> None:
+    AttentionInterface.register(TREE_ATTENTION, tree_attention)
+    AttentionMaskInterface.register(TREE_ATTENTION, lambda **kwargs: None)
