@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import cache
+from functools import cache, partial
 from typing import Any
 
 import torch
@@ -157,7 +157,12 @@ TREE_ATTENTION = "tree_fa3"
 
 
 @cache
-def _flash_attn():
+def _flash_attn(attn_implementation=None):
+    if attn_implementation == "flash_attention_2":
+        import flash_attn
+
+        return flash_attn
+
     from kernels import get_kernel
 
     if torch.version.hip:
@@ -180,11 +185,12 @@ def tree_attention(
     scaling=None,
     sliding_window=None,
     softcap=None,
+    attn_implementation=None,
     **kwargs,
 ):
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn().flash_attn_varlen_func(
+    out = _flash_attn(attn_implementation).flash_attn_varlen_func(
         query,
         key.index_select(0, tree_kv_index),
         value.index_select(0, tree_kv_index),
@@ -201,6 +207,19 @@ def tree_attention(
     return out.unsqueeze(0), None
 
 
-def register_tree_attention() -> None:
-    AttentionInterface.register(TREE_ATTENTION, tree_attention)
-    AttentionMaskInterface.register(TREE_ATTENTION, lambda **kwargs: None)
+def register_tree_attention(attn_implementation: str | None = None) -> str:
+    """Register a tree wrapper for the requested varlen backend and return its model-facing name."""
+    default_backend = "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3"
+    if attn_implementation is None or attn_implementation == default_backend:
+        name = TREE_ATTENTION
+        attention = tree_attention
+    elif attn_implementation == "flash_attention_2":
+        name = "tree_fa2"
+        attention = partial(tree_attention, attn_implementation=attn_implementation)
+    else:
+        raise ValueError(
+            f"Tree packing supports `flash_attention_2` or `{default_backend}`, got {attn_implementation!r}."
+        )
+    AttentionInterface.register(name, attention)
+    AttentionMaskInterface.register(name, lambda **kwargs: None)
+    return name

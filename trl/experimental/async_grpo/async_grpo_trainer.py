@@ -56,7 +56,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import TREE_ATTENTION, TreeRow, register_tree_attention
+from .packing import TreeRow, register_tree_attention
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -1070,20 +1070,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
-        register_tree_attention()
-
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
-        model_init_kwargs = args.model_init_kwargs or {}
+        model_init_kwargs = (args.model_init_kwargs or {}).copy()
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
         model_revision = model_init_kwargs.get("revision")
+        # Keep the tree wrapper while selecting the kernel it calls, rather than ordinary sequence attention.
+        attn_implementation = register_tree_attention(model_init_kwargs.pop("attn_implementation", None))
         model = create_model_from_path(
             model,
             device_map=None,
-            attn_implementation=TREE_ATTENTION,
+            attn_implementation=attn_implementation,
             **model_init_kwargs,
         )
 
