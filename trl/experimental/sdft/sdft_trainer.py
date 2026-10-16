@@ -58,6 +58,7 @@ from .loss_utils import (
     add_tail_bucket,
     apply_importance_sampling_clipping,
     compute_divergence,
+    compute_dopd_routed_loss,
     compute_full_logit_self_distillation_loss,
     compute_sampled_token_self_distillation_loss,
     compute_topk_self_distillation_loss,
@@ -384,7 +385,9 @@ class SDFTTrainer(_BaseTrainer):
                     "`use_teacher_server=True` only supports `distillation_mode` in {'sampled_token', 'topk_logits'}, "
                     f"got {args.distillation_mode!r}. The server returns the teacher's top-k logprobs, not the full "
                     "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
-                    "top-k support (the server cannot score the student's top-k indices)."
+                    "top-k support (the server cannot score the student's top-k indices). `dopd` is also unavailable: "
+                    "it needs full student/teacher logit access to compute per-token confidence and advantage gap, "
+                    "the same reason `full_logits` is excluded."
                 )
         super().__init__(
             model=model,
@@ -868,14 +871,40 @@ class SDFTTrainer(_BaseTrainer):
                 distillation_logits.completion_ids,
                 distillation_alpha=self.args.distillation_alpha,
             )
+        elif self.args.distillation_mode == "dopd":
+            # DOPD routes on the advantage gap between both policies under the same privileged context (the paper's
+            # "privilege illusion" fix): the bare-prompt student forward would conflate the transferable capability
+            # gap with the information-asymmetry gap. Forward the student on the teacher's privileged input under
+            # `no_grad` purely for routing; the loss terms still train the live bare-student logits.
+            with torch.no_grad():
+                privileged_student_logits = self._forward_logits(
+                    model=model,
+                    input_ids=inputs["teacher_input_ids"],
+                    attention_mask=inputs["teacher_attention_mask"],
+                    logits_to_keep=distillation_logits.completion_ids.size(1),
+                )
+            per_token_loss = compute_dopd_routed_loss(
+                distillation_logits.student_logits,
+                distillation_logits.teacher_logits,
+                privileged_student_logits,
+                distillation_logits.completion_ids,
+                gap_threshold=self.args.distillation_dopd_gap_threshold,
+                confidence_threshold=self.args.distillation_dopd_confidence_threshold,
+                light_topk=self.args.distillation_dopd_light_topk,
+                self_reg_weight=self.args.distillation_dopd_self_reg_weight,
+                student_consistency_weight=self.args.distillation_dopd_student_consistency_weight,
+            )
         else:
             raise ValueError(
-                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', "
+                "distillation_mode must be one of: 'sampled_token', 'full_logits', 'topk_logits', 'dopd', "
                 f"got {self.args.distillation_mode!r}"
             )
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         if self.args.distillation_is_clip is not None and old_per_token_logps is not None:
+            # Detached IS ratio is a per-token scalar multiplier — safe with any per_token_loss regime, including
+            # DOPD's four-regime routed loss whose stop-gradient sub-terms (regimes 2 and 4) are unaffected by an
+            # external detached weight.
             student_per_token_logps = selective_log_softmax(
                 distillation_logits.student_logits,
                 distillation_logits.completion_ids,
