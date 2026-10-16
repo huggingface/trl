@@ -1541,7 +1541,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             attn_kwargs = {
                 key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
             }
-            attn_kwargs["tree_max_seqlen_q"], tree_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
+            attn_kwargs["tree_max_seqlen_q"], attn_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
         else:
             # Rows share no prefix here, so each segment is one whole sample: its boundaries are what the varlen
             # kernels (flash attention, linear attention) need to keep the packed samples apart
