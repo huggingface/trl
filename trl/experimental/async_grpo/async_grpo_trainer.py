@@ -1097,17 +1097,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         text_config = model.config.get_text_config()
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
-        # Check tree attention compat
-        if layer_types:
-            raise ValueError(
-                f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing only routes attention layers "
-                "along each sample's own path; a recurrent or convolutional layer would scan across samples."
-            )
-        if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
-            raise ValueError(
-                f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
-                "support."
-            )
+        # Check tree attention compat only for tree attention
+        if attn_implementation == TREE_ATTENTION:
+            if layer_types:
+                raise ValueError(
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing only routes attention layers "
+                    "along each sample's own path; a recurrent or convolutional layer would scan across samples."
+                )
+            if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
+                raise ValueError(
+                    f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
+                    "support."
+                )
 
         # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
         # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
