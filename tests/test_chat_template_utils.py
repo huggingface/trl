@@ -397,8 +397,8 @@ class TestSupportsToolCalling:
                 "trl-internal-testing/tiny-REDACTEDForCausalLM",
                 id="redacted",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.20.0"),
-                    reason="REDACTED was introduced in transformers-5.20.0",
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="REDACTED was introduced in transformers-5.20.1",
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
@@ -818,8 +818,8 @@ class TestIsChatTemplateStopTokenTrained:
             "trl-internal-testing/tiny-REDACTEDForCausalLM",
             id="redacted",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.20.0"),
-                reason="REDACTED was introduced in transformers-5.20.0",
+                Version(transformers.__version__) < Version("5.20.1"),
+                reason="REDACTED was introduced in transformers-5.20.1",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", id="cohere"),
@@ -1312,8 +1312,8 @@ class TestNamedChatTemplateVariants:
             "trl-internal-testing/tiny-REDACTEDForCausalLM",
             id="redacted",
             marks=pytest.mark.skipif(
-                Version(transformers.__version__) < Version("5.20.0"),
-                reason="REDACTED was introduced in transformers-5.20.0",
+                Version(transformers.__version__) < Version("5.20.1"),
+                reason="REDACTED was introduced in transformers-5.20.1",
             ),
         ),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", id="glm4moe"),

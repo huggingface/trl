@@ -1380,8 +1380,8 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     pytest.param(
         "trl-internal-testing/tiny-REDACTEDForCausalLM",
         marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.20.0"),
-            reason="REDACTED was introduced in transformers-5.20.0",
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="REDACTED was introduced in transformers-5.20.1",
         ),
     ),
     "trl-internal-testing/tiny-CohereForCausalLM",
@@ -1681,8 +1681,8 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     pytest.param(
         "trl-internal-testing/tiny-REDACTEDForCausalLM",
         marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.20.0"),
-            reason="REDACTED was introduced in transformers-5.20.0",
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="REDACTED was introduced in transformers-5.20.1",
         ),
     ),
     "trl-internal-testing/tiny-CohereForCausalLM",

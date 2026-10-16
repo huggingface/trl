@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl>=1.16.0",
-#     "transformers>=5.20.0",
+#     "transformers>=5.20.1",
 #     "peft>=0.21.0",
 #     "accelerate>=1.15.0",
 #     "flash-attn-4",

@@ -269,8 +269,8 @@ class TestGRPOTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-REDACTEDForCausalLM",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.20.0"),
-                    reason="REDACTED was introduced in transformers-5.20.0",
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="REDACTED was introduced in transformers-5.20.1",
                 ),
             ),
             pytest.param(
