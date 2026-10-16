@@ -401,12 +401,11 @@ class RLOOTrainer(_BaseTrainer):
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
-            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
-                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
+                and Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
             ):
                 logger.warning(
@@ -797,6 +796,9 @@ class RLOOTrainer(_BaseTrainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
+            if isinstance(processing_class, ProcessorMixin):
+                # A sampled image token would mismatch the image features
+                generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)

@@ -481,12 +481,11 @@ class GRPOTrainer(_BaseTrainer):
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
-            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
-                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
+                and Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
             ):
                 logger.warning(
@@ -1165,6 +1164,9 @@ class GRPOTrainer(_BaseTrainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
+            if isinstance(processing_class, ProcessorMixin):
+                # A sampled image token would mismatch the image features
+                generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
@@ -1224,7 +1226,7 @@ class GRPOTrainer(_BaseTrainer):
                 )
                 card = DatasetCard.from_template(
                     card_data=card_data,
-                    template_path=str(template_path),
+                    template_str=template_path.read_text(encoding="utf-8"),
                     repo_id=repo_id,
                     hub_model_id=self.args.hub_model_id,
                 )
@@ -3388,7 +3390,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_adaptive_entropy and self.args.should_save:
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             output_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
-            with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w") as f:
+            with open(os.path.join(output_dir, "entropy_ctrl_state.json"), "w", encoding="utf-8") as f:
                 json.dump({"entropy_coef": self.entropy_coef, "last_world_entropy": self._last_world_entropy}, f)
 
     def _load_optimizer_and_scheduler(self, checkpoint):
@@ -3396,7 +3398,7 @@ class GRPOTrainer(_BaseTrainer):
         if self.use_adaptive_entropy and checkpoint is not None:
             path = os.path.join(checkpoint, "entropy_ctrl_state.json")
             if os.path.exists(path):
-                with open(path) as f:
+                with open(path, encoding="utf-8") as f:
                     state = json.load(f)
                 self.entropy_coef = state["entropy_coef"]
                 self._last_world_entropy = state["last_world_entropy"]
