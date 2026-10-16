@@ -107,6 +107,8 @@ class GRPORow:
                 - `input_ids` (`N`): the unique tokens.
                 - `position_ids` (`N`): each token's position in its samples, which is its depth in the trie.
                 - `shift_labels` (`N`): next token each position predicts, `-100` where it is not trained.
+                - `sampling_mask` (`N`, `C`): candidate set the sampler drew that next token from, padded with `-1`;
+                  `C` is `0` without top-k/top-p truncation.
                 - `tree_kv_index` (`K`): packed position of every K/V row [`tree_attention`] gathers, the
                   root-to-segment paths of all segments laid end to end.
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
@@ -139,20 +141,26 @@ class GRPORow:
             stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
 
         shift_labels = [-100] * len(input_ids)
+        sampling_mask = [[] for _ in input_ids]
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
             ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
             for p in range(1, len(nodes)):
                 if mask[p]:
                     shift_labels[packed[nodes[p - 1]]] = ids[p]
+                    sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
                     token_index.append(packed[nodes[p - 1]])
                     old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
+        width = max(map(len, sampling_mask))
         return {
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
             "shift_labels": torch.tensor(shift_labels),
+            "sampling_mask": torch.tensor(
+                [candidates + [-1] * (width - len(candidates)) for candidates in sampling_mask], dtype=torch.long
+            ).view(len(input_ids), width),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
             "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
             "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
@@ -170,9 +178,11 @@ TREE_ATTENTION = "tree_fa3"
 
 
 @cache
-def _flash_attn3():
+def _flash_attn():
     from kernels import get_kernel
 
+    if torch.version.hip:
+        return get_kernel("kernels-community/aiter-flash-attn", version=2)
     return get_kernel("kernels-community/flash-attn3", version=1)
 
 
@@ -195,7 +205,7 @@ def tree_attention(
 ):
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn3().flash_attn_varlen_func(
+    out = _flash_attn().flash_attn_varlen_func(
         query,
         key.index_select(0, tree_kv_index),
         value.index_select(0, tree_kv_index),
@@ -206,7 +216,7 @@ def tree_attention(
         softmax_scale=scaling,
         causal=True,
         window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),
-        softcap=softcap or 0.0,
+        **({"softcap": softcap} if softcap else {}),
     )
     out = out[0] if isinstance(out, tuple) else out
     return out.unsqueeze(0), None

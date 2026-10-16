@@ -151,7 +151,10 @@ class OffloadActivations(saved_tensors_hooks):
         self.accelerator_type = (
             torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
         )
-        self.device_module = torch.get_device_module(self.accelerator_type)
+        # torch.get_device_module was added in torch 2.4; before that, accelerator_type is always "cuda"
+        self.device_module = (
+            torch.get_device_module(self.accelerator_type) if is_torch_version(">=", "2.4.0") else torch.cuda
+        )
 
         # For streaming
         if self.use_streams:
