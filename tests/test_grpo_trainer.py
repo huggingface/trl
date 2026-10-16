@@ -43,7 +43,6 @@ from .testing_utils import (
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_response_parsing,
     require_torch_accelerator,
     require_vision,
@@ -266,6 +265,13 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
@@ -1125,7 +1131,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.ref_model.dtype == torch.bfloat16
         assert trainer.ref_model.config._attn_implementation == "eager"
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -3281,6 +3287,71 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_log_completions(self):
+        # The logged completions mix types within a field: the tool returns content blocks while assistant content is
+        # a string, and `query` is a string in one call and a list in the other. The completions table must still be
+        # written (#7674).
+        def lookup_tool(query: str) -> list:
+            """
+            Looks up the items matching a query.
+
+            Args:
+                query: What to look up.
+
+            Returns:
+                The matching items, as text content blocks.
+            """
+            return [{"type": "text", "text": "crate"}]
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[lookup_tool],
+        )
+        tokenizer = trainer.processing_class
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call: two tool calls, then a text answer
+                texts = [
+                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": "crate"}}\n</tool_call><|im_end|>',
+                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": ["crate"]}}\n</tool_call><|im_end|>',
+                    "No tool needed.<|im_end|>",
+                ]
+            else:  # second call, for the two examples with a tool call
+                texts = ["Done!<|im_end|>"] * input_ids.shape[0]
+            rows = [tokenizer(text, add_special_tokens=False).input_ids for text in texts]
+            width = max(len(row) for row in rows)
+            completion_ids = [row + [tokenizer.pad_token_id] * (width - len(row)) for row in rows]
+            return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        assert completions.num_rows == 3
+        tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
+        assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),

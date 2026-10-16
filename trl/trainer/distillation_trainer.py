@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import transformers
 from accelerate.logging import get_logger
@@ -82,8 +83,7 @@ from .utils import (
 
 
 if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, PrefixTuningConfig, PromptLearningConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -526,17 +526,14 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
-            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
-            if (
-                isinstance(peft_config, PrefixTuningConfig)
-                and Version(peft.__version__) <= Version("0.17.1")
-                and hasattr(model, "hf_device_map")
-            ):
+            # Rejected here rather than after wrapping, since `get_peft_model` itself fails on prefix tuning with
+            # peft <= 0.17.1 (peft#2821).
+            if isinstance(peft_config, PromptLearningConfig):
                 raise ValueError(
-                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
-                    "peft, or load the model with `device_map=None`. See "
-                    "https://github.com/huggingface/peft/issues/2821."
+                    "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
+                    "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
+                    "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
+                    "adapter such as LoRA instead."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -1987,12 +1984,13 @@ class DistillationTrainer(_BaseTrainer):
                 "completion": self._logs["completion"],
             }
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            pq.write_table(
+                Dataset.from_dict(table, on_mixed_types="use_json").data.table,
                 os.path.join(
                     self.args.output_dir,
                     "completions",
                     f"completions_{self.state.global_step:05d}.parquet",
-                )
+                ),
             )
 
             for logging_backend in logging_backends:
