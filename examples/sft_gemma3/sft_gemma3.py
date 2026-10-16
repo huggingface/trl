@@ -40,13 +40,12 @@ def main():
 
     # Load model
     model_id = "google/gemma-3-12b-it"
-    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager")
+    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager", use_kernels=True)
 
     # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
         bf16=True,
-        use_liger_kernel=True,
         max_length=8192,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,

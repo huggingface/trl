@@ -79,6 +79,7 @@ from .utils import (
     split_pixel_values_by_grid,
     split_tensor_dict,
     start_event_loop_in_daemon,
+    strip_images_from_messages,
     unsplit_pixel_values_by_grid,
     use_adapter,
 )
@@ -86,7 +87,7 @@ from .utils import (
 
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -215,6 +216,8 @@ class RLOOTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "rloo"]
     _name = "RLOO"
     _paper = {
@@ -310,10 +313,23 @@ class RLOOTrainer(_BaseTrainer):
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
         elif isinstance(processing_class, PreTrainedTokenizerBase):
             self._tokenizer = processing_class
+            self._is_vlm = False
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
@@ -322,6 +338,16 @@ class RLOOTrainer(_BaseTrainer):
         # configs.
         model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
         model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # PEFT
         if peft_config is not None:
@@ -355,6 +381,18 @@ class RLOOTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
+            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if (
+                isinstance(peft_config, PrefixTuningConfig)
+                and Version(peft.__version__) <= Version("0.17.1")
+                and hasattr(model, "hf_device_map")
+            ):
+                raise ValueError(
+                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
+                    "peft, or load the model with `device_map=None`. See "
+                    "https://github.com/huggingface/peft/issues/2821."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model):
@@ -617,6 +655,16 @@ class RLOOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
@@ -635,6 +683,9 @@ class RLOOTrainer(_BaseTrainer):
             if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+            model_init_kwargs.setdefault("dtype", self.model.dtype)
+            model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
             self.ref_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
 
         # Disable dropout in the models
@@ -661,9 +712,11 @@ class RLOOTrainer(_BaseTrainer):
             args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
 
         # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        # `entropy` feeds the `entropy` metric
         add_fused_lm_head(
             self.model.get_base_model() if is_peft_model(self.model) else self.model,
             temperature=self.temperature,
+            outputs=("log_probs", "entropy"),
         )
         if self.ref_model is not None:
             add_fused_lm_head(self.ref_model, temperature=self.temperature)
@@ -736,7 +789,7 @@ class RLOOTrainer(_BaseTrainer):
                 "do_sample": True,
                 "pad_token_id": self._tokenizer.pad_token_id,
                 "bos_token_id": self._tokenizer.bos_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": self.eos_token_ids,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -744,16 +797,15 @@ class RLOOTrainer(_BaseTrainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
+            if isinstance(processing_class, ProcessorMixin):
+                # A sampled image token would mismatch the image features
+                generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
             # Keep training-specific generation kwargs to overwrite model's original generation config
             self.generation_kwargs = generation_kwargs
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
         self._dist = DistributedBackend(self.accelerator)
 
         # Add tags to the model
@@ -1264,7 +1316,10 @@ class RLOOTrainer(_BaseTrainer):
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    self.model_wrapped,
+                    self.accelerator,
+                    gather_deepspeed3_params=self.args.ds3_gather_for_generation,
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
@@ -1286,8 +1341,18 @@ class RLOOTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
-            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            padded_ids = pad(
+                prompt_tensors,
+                padding_value=self._tokenizer.pad_token_id,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            attention_mask = pad(
+                [torch.ones_like(t) for t in prompt_tensors],
+                padding_value=0,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
             for k, v in multimodal_fields.items():
@@ -1295,7 +1360,12 @@ class RLOOTrainer(_BaseTrainer):
                     generate_inputs[k] = v
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
-                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                    generate_inputs[k] = pad(
+                        [torch.tensor(x) for x in v],
+                        padding_value=0,
+                        padding_side="left",
+                        pad_to_multiple_of=self.pad_to_multiple_of,
+                    )
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
             generate_inputs = super()._prepare_inputs(generate_inputs)
@@ -1307,6 +1377,7 @@ class RLOOTrainer(_BaseTrainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
@@ -1319,7 +1390,7 @@ class RLOOTrainer(_BaseTrainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
-            is_eos = completion_ids == self._tokenizer.eos_token_id
+            is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
             eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
             eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
             sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1371,7 +1442,7 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1446,7 +1517,7 @@ class RLOOTrainer(_BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+            eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             # Mask completion_mask for attention masking
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
@@ -1576,10 +1647,6 @@ class RLOOTrainer(_BaseTrainer):
             else:
                 ref_per_token_logps = None
 
-        # Decode
-        prompts_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=True)
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
@@ -1666,9 +1733,9 @@ class RLOOTrainer(_BaseTrainer):
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
-        # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        # Log prompts and completions
+        self._logs["prompt"].extend(gather_object(prompts))
+        self._logs["completion"].extend(gather_object(completions))
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
@@ -1677,7 +1744,7 @@ class RLOOTrainer(_BaseTrainer):
         # Keys must be sorted so that all ranks call gather_object in the same order, otherwise values
         # get mis-attributed across columns (dict insertion order may differ between processes).
         for column in sorted(set(gather_object(list(self._pending_extra_logs)))):
-            values = self._pending_extra_logs.get(column, [None] * len(prompts_text))
+            values = self._pending_extra_logs.get(column, [None] * len(prompts))
             self._logs["extra"][column].extend(gather_object(values))
         self._pending_extra_logs.clear()
 
@@ -1850,8 +1917,8 @@ class RLOOTrainer(_BaseTrainer):
 
             table = {
                 "step": [self.state.global_step] * len(self._logs["prompt"]),
-                "prompt": self._logs["prompt"],
-                "completion": self._logs["completion"],
+                "prompt": [strip_images_from_messages(messages) for messages in self._logs["prompt"]],
+                "completion": [strip_images_from_messages(messages) for messages in self._logs["completion"]],
                 **self._logs["rewards"],
                 **self._logs["extra"],
                 "advantage": self._logs["advantages"],
@@ -1874,7 +1941,8 @@ class RLOOTrainer(_BaseTrainer):
                     df = df_base
 
                 if self.log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
+                    # Prompts are conversations (lists of dicts), so compare them by their text
+                    df = df[~df["prompt"].astype(str).duplicated()]
 
                 logging_backend.log({"completions": logging_backend.Table(dataframe=df)})
 

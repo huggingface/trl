@@ -45,6 +45,8 @@
     title: Speeding Up Training
   - local: distributing_training
     title: Distributing Training
+  - local: aws_trainium
+    title: Training on AWS Trainium
   - local: long_context_training
     title: Training Beyond 1M Tokens
   - local: use_model
@@ -57,8 +59,6 @@
     title: Harbor
   - local: kernels_hub
     title: Kernels Hub
-  - local: liger_kernel_integration
-    title: Liger Kernel
   - local: openenv
     title: OpenEnv
   - local: openreward
@@ -119,8 +119,6 @@
     title: IW-OPD
   - local: merge_model_callback
     title: MergeModelCallback
-  - local: minillm_trainer
-    title: MiniLLM
   - local: online_dpo_trainer
     title: Online DPO
   - local: orpo_trainer
@@ -129,8 +127,6 @@
     title: SDFT
   - local: sdpo_trainer
     title: SDPO
-  - local: ssd_trainer
-    title: SSD
   - local: tpo_trainer
     title: TPO
   title: Experimental

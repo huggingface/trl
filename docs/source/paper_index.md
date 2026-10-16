@@ -1751,23 +1751,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
-
-```python
-from datasets import load_dataset
-from trl.experimental.minillm import MiniLLMTrainer
-
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-trainer = MiniLLMTrainer(
-    model="Qwen/Qwen3-0.6B",
-    teacher_model="Qwen/Qwen3-1.7B",
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
+TRL shipped an implementation as `MiniLLMTrainer` up to v1.14; it is no longer part of the library and remains available in the git history.
 
 ### Reinforcement Learning via Self-Distillation
 
@@ -1852,30 +1836,7 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
-```python
-from trl.experimental.ssd import SSDConfig, SSDTrainer
-
-training_args = SSDConfig(
-    temperature=0.6,                       # Training-time sampling temperature (T_train)
-    top_k=20,                              # Training-time top-k truncation
-    top_p=0.95,                            # Training-time top-p truncation
-    max_completion_length=65536,
-    learning_rate=5e-6,
-)
-
-trainer = SSDTrainer(
-    model="Qwen/Qwen3-4B-Instruct",
-    args=training_args,
-    train_dataset=...,
-)
-trainer.train()
-```
-
-Expected dataset columns:
-
-- `prompt`
-
-For more details, see the [SSD Trainer documentation](ssd_trainer).
+TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
 
 ## Distributed Training
 

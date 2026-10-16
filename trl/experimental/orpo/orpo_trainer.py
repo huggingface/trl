@@ -129,6 +129,8 @@ class ORPOTrainer(_BaseTrainer):
             metric values.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "orpo"]
     _name = "ORPO"
     _paper = {
@@ -395,11 +397,6 @@ class ORPOTrainer(_BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
-
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
@@ -532,13 +529,18 @@ class ORPOTrainer(_BaseTrainer):
                 self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
-            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
-
             # if combined sequence is too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if len(answer_tokens["prompt_input_ids"]) + len(answer_tokens["input_ids"]) > self.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - longer_response_length]
+                        answer_tokens[k] = answer_tokens[k][
+                            : max(0, self.max_length - len(answer_tokens["prompt_input_ids"]))
+                        ]
+                if len(answer_tokens["input_ids"]) == 0:
+                    logger.warning_once(
+                        "The prompt alone fills `max_length`, so truncation leaves an empty completion. Consider "
+                        "increasing `max_length` or filtering out long prompts."
+                    )
 
             # Create labels
             chosen_sequence_tokens = {
