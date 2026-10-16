@@ -295,6 +295,8 @@ trl distillation \
     --lora_alpha 16
 ```
 
+Gemma 3 pan-and-scan crops are kept with their source sample when splitting training microbatches. Enable it with `AutoProcessor.from_pretrained(model_id, do_pan_and_scan=True)` and pass that processor as `processing_class`. Additional crops increase memory use.
+
 ## DistillationTrainer
 
 [[autodoc]] DistillationTrainer
