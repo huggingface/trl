@@ -45,6 +45,7 @@ from trl.trainer.utils import (
     get_peft_config,
     hash_module,
     is_async_callable,
+    model_accepts_images,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -287,6 +288,38 @@ class TestCreateModelFromPath(TrlTestCase):
                 "trl-internal-testing/tiny-Qwen3ForCausalLM", architecture=AutoModelForCausalLM, device_map="auto"
             )
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
+
+
+class TestModelAcceptsImages(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id, architecture, expected",
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", AutoModelForImageTextToText, True),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForImageTextToText,
+                True,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForCausalLM,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_model_accepts_images(self, model_id, architecture, expected):
+        model = architecture.from_pretrained(model_id)
+        assert model_accepts_images(model) is expected
 
 
 @require_peft
