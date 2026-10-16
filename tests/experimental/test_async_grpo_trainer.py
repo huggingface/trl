@@ -61,7 +61,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
-from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
+from trl.experimental.async_grpo.packing import TREE_ATTENTION, GRPORow
 from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import (
@@ -886,8 +886,8 @@ def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) ->
     }
 
 
-def _tree_row(samples: list[dict]) -> TreeRow:
-    row = TreeRow()
+def _tree_row(samples: list[dict]) -> GRPORow:
+    row = GRPORow()
     for sample in samples:
         row.add(sample)
     return row

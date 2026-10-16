@@ -21,10 +21,12 @@ from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
 
 
-class TreeRow:
+class GRPORow:
     """
+    A helper class to handle GRPO sequence packing. Supports by default Tree Attention (prefix sharing for GRPO).
+
     One DP rank's forward: its samples folded into a prefix trie, so a token shared by several samples is forwarded
-    once.
+    once, this can be disabled with `share_prefixes=False`.
 
     Multi-turn rollouts overlap heavily — a shared prompt, and after a fork a shared conversation — so the decoder's
     per-token work drops by the packing ratio (raw tokens ÷ unique tokens). Attention still shows each sample exactly
@@ -32,22 +34,28 @@ class TreeRow:
     nothing shared, the trie is one chain per sample, which is plain padding-free packing.
 
     Any common prefix is shared: the rollouts of a prompt, and across prompts a common system prompt. The planner
-    checks a sample against the row ([`~TreeRow.fits`]) before placing it, so the token budget bounds unique tokens,
-    not raw ones, and it sends a sample to a row already holding its `group_id` ([`~TreeRow.groups`]), where its prompt
+    checks a sample against the row ([`~GRPORow.fits`]) before placing it, so the token budget bounds unique tokens,
+    not raw ones, and it sends a sample to a row already holding its `group_id` ([`~GRPORow.groups`]), where its prompt
     is.
 
     A node is keyed on its token *and* the next one, so samples share a token only when they also agree on what follows
     it. The trie therefore forks one token before the samples diverge, and every node has a single next-token label: a
     branch costs one extra token per extra branch, and the loss can go through plain per-position labels. A sample's
     last token is keyed on `None`, which no other sample extends, so every sample ends on a leaf.
+
+    Args:
+        share_prefixes (`bool`, *optional*, defaults to `True`):
+            Whether samples share their common prefixes. Without sharing, every sample is its own chain, so the row is
+            plain padding-free packing that any attention implementation can run given the sample boundaries.
     """
 
-    def __init__(self):
+    def __init__(self, share_prefixes: bool = True):
+        self.share_prefixes = share_prefixes
         self.samples: list[dict[str, Any]] = []
         self.sample_nodes: list[list[int]] = []  # sample -> trie node of each of its tokens
         self.tokens: list[int] = []  # node -> its token
         self.children: list[dict[tuple[int, int | None], int]] = []  # node -> {(token, next token): child node}
-        self.roots: dict[tuple[int, int | None], int] = {}  # {(token, next token): root node}
+        self.roots: dict[tuple, int] = {}  # {(token, next token[, sample index when not sharing]): root node}
         self.groups: set[Any] = set()
         self.trained = 0
         self.load = 0
@@ -57,7 +65,8 @@ class TreeRow:
         input_ids = sample["input_ids"].tolist()
         children, shared = self.roots, 0
         for key in zip(input_ids, [*input_ids[1:], None], strict=True):
-            if key not in children:
+            # If tree attention is disabled, there is nothing to reuse within than sample
+            if not self.share_prefixes or key not in children:
                 break
             children = self.children[children[key]]
             shared += 1
@@ -69,6 +78,10 @@ class TreeRow:
         children = self.roots
         nodes = []
         for depth, key in enumerate(zip(input_ids, [*input_ids[1:], None], strict=True)):
+            # Key the root on the sample index too, so the sample starts a chain of its own
+            if not self.share_prefixes and depth == 0:
+                key = (*key, len(self.samples))
+
             if key not in children:
                 children[key] = len(self.tokens)
                 self.tokens.append(key[0])

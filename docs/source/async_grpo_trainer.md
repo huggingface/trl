@@ -101,7 +101,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 > **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
 
 > [!WARNING]
-> **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
+> **Hybrid models (Qwen3.5, Qwen3.6) need a non-tree `attn_implementation` and `flash-linear-attention` installed.** Tree packing refuses them, since their gated-DeltaNet layers scan the row in order. With e.g. `model_init_kwargs={"attn_implementation": "sdpa"}` the trainer falls back to plain padding-free packing and passes each sample's boundaries (`cu_seq_lens_q`, `seq_idx`).
 
 ## Top-k and top-p sampling
 
@@ -247,9 +247,9 @@ A row is a **prefix trie**, not a concatenation: a token shared by several sampl
 Where it happens:
 
 ```
-planner    TreeRow.add            the trie grows sample by sample; a sample is priced by its novel tokens
-   │                              (TreeRow.fits), so `token_budget` bounds unique tokens, not raw ones
-collator   TreeRow.pack           DFS layout: unique tokens, depth as position_ids, one loss term per
+planner    GRPORow.add            the trie grows sample by sample; a sample is priced by its novel tokens
+   │                              (GRPORow.fits), so `token_budget` bounds unique tokens, not raw ones
+collator   GRPORow.pack           DFS layout: unique tokens, depth as position_ids, one loss term per
    │                              original trained token (token_index), and per segment its queries and
    │                              the K/V indices of its root-to-segment path, all built on CPU
 attention  tree_attention         gather K/V along the paths, one FA3 varlen call, causal
@@ -290,6 +290,7 @@ A few consequences:
 - **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is, and splits a group only when a rank would otherwise forward nothing.
 - **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
+- **Other attention implementations share nothing**: tree attention needs FA3 (Hopper). Any other `attn_implementation` in `model_init_kwargs` (e.g. `sdpa`, `flash_attention_2`) turns sharing off, so every sample is its own segment and the row is plain padding-free packing, at a packing ratio of 1.0. We keep this option to enable AsyncGRPO for non-Hopper hardware.
 
 What it buys: with nothing shared, it runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 
