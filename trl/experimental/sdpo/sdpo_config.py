@@ -69,6 +69,14 @@ class SDPOConfig(_BaseConfig):
         distillation_topk (`int`, *optional*):
             Top-k approximation for logit-level SDPO. Must be set when `distillation_mode=topk_logits` and left unset
             otherwise.
+        distillation_topk_support (`Literal["student", "teacher"]`, *optional*, defaults to `"student"`):
+            Which side's logits define the top-k token support for `distillation_mode="topk_logits"`. SDPO's convention
+            is `"student"`; pass `"teacher"` to project onto the teacher's top-k instead. Only used when
+            `distillation_mode="topk_logits"`. With `use_teacher_server=True`, this field is force-aligned to
+            `"teacher"` at construction (the server only returns the teacher's top-k).
+        distillation_kl_clip (`float`, *optional*):
+            Pointwise per-vocabulary-entry clip applied to the divergence before it is summed over the vocabulary.
+            `None` (the default) disables clipping. Only supported for the `full_logits` and `topk_logits` modes.
         distillation_is_clip (`float`, *optional*, defaults to `2.0`):
             Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
         distillation_add_tail (`bool`, *optional*, defaults to `False`):
@@ -253,7 +261,11 @@ class SDPOConfig(_BaseConfig):
             practice for training stability.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "generation_kwargs",
+        "chat_template_kwargs",
+    ]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
@@ -345,13 +357,13 @@ class SDPOConfig(_BaseConfig):
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict[str, Any] | None = field(
+    generation_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict[str, Any] | None = field(
+    chat_template_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
@@ -520,6 +532,20 @@ class SDPOConfig(_BaseConfig):
             "unset otherwise."
         },
     )
+    distillation_topk_support: Literal["student", "teacher"] = field(
+        default="student",
+        metadata={
+            "help": "Which side's logits define the top-k token support for `distillation_mode='topk_logits'`. "
+            "Only used when `distillation_mode='topk_logits'`."
+        },
+    )
+    distillation_kl_clip: float | None = field(
+        default=None,
+        metadata={
+            "help": "Pointwise per-vocabulary-entry clip applied to the divergence before it is summed over the "
+            "vocabulary. `None` disables clipping. Only supported for `full_logits` and `topk_logits` modes."
+        },
+    )
     distillation_is_clip: float | None = field(
         default=2.0,
         metadata={
@@ -612,6 +638,16 @@ class SDPOConfig(_BaseConfig):
                 "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
                 f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
             )
+        if self.distillation_kl_clip is not None and self.distillation_mode not in ("full_logits", "topk_logits"):
+            raise ValueError(
+                "`distillation_kl_clip` is only supported for `distillation_mode` in {'full_logits', 'topk_logits'}, "
+                f"got `distillation_mode={self.distillation_mode!r}` with `distillation_kl_clip` set."
+            )
+        if self.use_teacher_server and self.distillation_mode == "topk_logits":
+            # The vLLM teacher server returns only the teacher's top-k logprobs (the student's full logit
+            # distribution is not available server-side to project onto), so the server path always uses teacher
+            # support regardless of the requested value; align the field so the config does not lie.
+            self.distillation_topk_support = "teacher"
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
@@ -645,3 +681,13 @@ class SDPOConfig(_BaseConfig):
 
         if self.epsilon_high is None:
             self.epsilon_high = self.epsilon
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "SDPOTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. SDPO builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
