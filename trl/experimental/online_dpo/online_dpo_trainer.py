@@ -34,6 +34,7 @@ from torch.utils.data import IterableDataset
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     DataCollator,
     GenerationConfig,
@@ -137,7 +138,8 @@ class OnlineDPOTrainer(_BaseTrainer):
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
+            reuse the fine-tuned model. If `None`, the processing class is loaded from the model's name with
+            [`~transformers.AutoProcessor.from_pretrained`].
         reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
@@ -267,10 +269,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the processing_class is provided
-        if processing_class is None:
-            raise ValueError("`processing_class` must be provided.")
-
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
@@ -292,9 +290,11 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 raise ValueError(
                     "You passed `model_init_kwargs` to the `OnlineDPOConfig`, but your model is already instantiated. "
@@ -302,6 +302,16 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
+
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(
+                get_config_model_id(model.config),
+                revision=model_revision,
+                truncation_side="left",
+                padding_side="left",
+                trust_remote_code=args.trust_remote_code,
+            )
 
         # PEFT
         if peft_config is not None:
