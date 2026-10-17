@@ -1137,6 +1137,12 @@ class KTOTrainer(_BaseTrainer):
                     map_kwargs["desc"] = f"Dropping fully truncated examples from {dataset_name} dataset"
                 dataset = dataset.filter(lambda example: len(example["prompt_ids"]) < args.max_length, **map_kwargs)
 
+            # Shuffle the training data once. The sampler is sequential (see the KL completions below), so data sorted by
+            # label would otherwise reach training in single-label batches. Unpairing produces such an order: it writes
+            # the chosen rows of each map batch before the rejected ones.
+            if dataset_name == "train" and isinstance(dataset, Dataset):
+                dataset = dataset.shuffle(seed=args.seed)
+
             # Add KL completions if needed. The KL term is estimated from mismatched (prompt, completion) pairs, built
             # by rotating the completions by +1 within each batch of size `per_device_train_batch_size`:
             # (x_1, y_1), ..., (x_n, y_n) --> (x_1, y_n), (x_2, y_1), ..., (x_n, y_{n-1}). For best results, the

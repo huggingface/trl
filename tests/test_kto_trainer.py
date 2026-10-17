@@ -369,6 +369,41 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_paired_dataset_batches_mix_labels(self):
+        # Unpairing writes the chosen rows of each map batch before its rejected rows, and KTO samples sequentially, so
+        # the training data must be shuffled for a batch to hold both desirable and undesirable examples
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [f"Question {i}:" for i in range(16)],
+                "chosen": [f" good answer {i}" for i in range(16)],
+                "rejected": [f" bad answer {i}" for i in range(16)],
+            }
+        )
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, per_device_train_batch_size=4, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        labels = [batch["label"] for batch in trainer.get_train_dataloader()]
+        num_mixed = sum(0 < batch_labels.sum() < len(batch_labels) for batch_labels in labels)
+        assert num_mixed >= len(labels) // 2
+
+    def test_label_sorted_unpaired_dataset_batches_mix_labels(self):
+        # An unpaired dataset sorted by label has the same problem as an unpaired paired dataset
+        dataset = Dataset.from_dict(
+            {
+                "prompt": [f"Question {i}:" for i in range(32)],
+                "completion": [f" answer {i}" for i in range(32)],
+                "label": [True] * 16 + [False] * 16,
+            }
+        )
+
+        training_args = KTOConfig(output_dir=self.tmp_dir, per_device_train_batch_size=4, report_to="none")
+        trainer = KTOTrainer(model=self.model_id, args=training_args, train_dataset=dataset)
+
+        labels = [batch["label"] for batch in trainer.get_train_dataloader()]
+        num_mixed = sum(0 < batch_labels.sum() < len(batch_labels) for batch_labels in labels)
+        assert num_mixed >= len(labels) // 2
+
     def test_fully_truncated_completion_examples_dropped(self):
         """The collator truncates with `keep_start`, so an example whose prompt alone fills `max_length` loses every
         completion token; it's dropped during dataset preparation."""
@@ -588,9 +623,10 @@ class TestKTOTrainer(TrlTestCase):
         )
 
         # Verify the tokenization step: dataset stores raw token IDs (aligned with DPO style).
-        # prompt_ids must start with the tokenized prompt text.
-        prompt_ids = self.tokenizer(train_dataset["prompt"][0])["input_ids"]
-        assert trainer.train_dataset[0]["prompt_ids"][: len(prompt_ids)] == prompt_ids
+        # prompt_ids must start with the tokenized prompt text. The training data is shuffled, so look up the prompt.
+        tokenized_prompts = [self.tokenizer(prompt)["input_ids"] for prompt in train_dataset["prompt"]]
+        processed_prompt_ids = trainer.train_dataset[0]["prompt_ids"]
+        assert any(processed_prompt_ids[: len(ids)] == ids for ids in tokenized_prompts)
         # completion_ids are the raw answer tokens (no prompt prefix, no BOS/EOS added yet).
         assert len(trainer.train_dataset[0]["completion_ids"]) > 0
 
@@ -1130,11 +1166,11 @@ class TestKTOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        # The completion is the whole assistant turn
+        # The completion is the whole assistant turn. The training data is shuffled, so compare without order.
         tokenizer = trainer.processing_class
-        for example, processed in zip(dataset, trainer.train_dataset, strict=True):
-            completion = tokenizer.decode(processed["completion_ids"])
-            assert completion == example["completion"][0]["content"] + tokenizer.eos_token
+        completions = [tokenizer.decode(processed["completion_ids"]) for processed in trainer.train_dataset]
+        expected = [example["completion"][0]["content"] + tokenizer.eos_token for example in dataset]
+        assert sorted(completions) == sorted(expected)
 
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
