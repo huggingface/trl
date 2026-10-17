@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from accelerate import Accelerator
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, TrainerControl, TrainerState, TrainingArguments
 from transformers.utils import is_peft_available
@@ -208,13 +209,14 @@ class TestSelfDistillationTrainerBehavior(TrlTestCase):
         )
 
         update_rate = 0.5
+        args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         callback = PEFTAdapterEMACallback(
             model=model,
             teacher_adapter_name="teacher",
             update_rate=update_rate,
             sync_steps=1,
+            accelerator=Accelerator(cpu=True),
         )
-        args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
         state = TrainerState(global_step=0)
         control = TrainerControl()
 
