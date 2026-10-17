@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import transformers
 from accelerate.logging import get_logger
@@ -59,6 +60,8 @@ from ..distributed import DistributedBackend
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_vllm_available
+from ..kernels.chunked_divergence import ChunkedDivergenceFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..models import prepare_deepspeed
 from ..models.utils import _ForwardRedirection, unwrap_model_for_generation
 from .base_trainer import _BaseTrainer
@@ -80,8 +83,7 @@ from .utils import (
 
 
 if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, PrefixTuningConfig, PromptLearningConfig, get_peft_model
+    from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -170,15 +172,17 @@ def _chunked_divergence_loss(
         if teacher_lm_head_bias is not None:
             teacher_lm_head_bias = teacher_lm_head_bias.full_tensor()
 
-    # Triton ships with PyTorch on Linux only, so the kernel is imported here rather than with `trl`
-    from ..kernels.chunked_divergence import ChunkedDivergenceFunction
-
     # Each model flattens with its own hidden width: the teacher may be wider/narrower than the student (only the
     # vocabulary must match), and each projects through its own `lm_head`.
     valid = completion_mask.reshape(-1) != 0
     n_valid_tensor = valid.sum()
-    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))[valid]
-    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))[valid]
+    h_s = student_hidden_states.reshape(-1, student_hidden_states.size(-1))
+    h_t = teacher_hidden_states.reshape(-1, teacher_hidden_states.size(-1))
+    # On Triton devices, only the valid positions are projected. Elsewhere (e.g. Neuron), the number of valid positions
+    # would change the tile shapes on every batch and trigger a recompilation, so every position is projected instead.
+    compact = _use_triton(student_hidden_states.device)
+    if compact:
+        h_s, h_t = h_s[valid], h_t[valid]
     per_token_divergence, per_token_entropy = ChunkedDivergenceFunction.apply(
         h_s,
         student_lm_head_weight,
@@ -193,6 +197,9 @@ def _chunked_divergence_loss(
         teacher_logit_scale,
         teacher_final_logit_softcapping,
     )
+    if not compact:
+        per_token_divergence = per_token_divergence.masked_fill(~valid, 0)
+        per_token_entropy = per_token_entropy.masked_fill(~valid, 0)
     loss = per_token_divergence.sum()
     entropy_sum = per_token_entropy.sum()
 
@@ -396,6 +403,17 @@ class DistillationTrainer(_BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
@@ -508,17 +526,14 @@ class DistillationTrainer(_BaseTrainer):
             get_peft_model_kwargs = {}
             if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
-            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
-            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
-            if (
-                isinstance(peft_config, PrefixTuningConfig)
-                and Version(peft.__version__) <= Version("0.17.1")
-                and hasattr(model, "hf_device_map")
-            ):
+            # Rejected here rather than after wrapping, since `get_peft_model` itself fails on prefix tuning with
+            # peft <= 0.17.1 (peft#2821).
+            if isinstance(peft_config, PromptLearningConfig):
                 raise ValueError(
-                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
-                    "peft, or load the model with `device_map=None`. See "
-                    "https://github.com/huggingface/peft/issues/2821."
+                    "Prompt-learning PEFT methods (PromptTuning, PrefixTuning, P-Tuning) are not supported. The "
+                    "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
+                    "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
+                    "adapter such as LoRA instead."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
@@ -635,6 +650,14 @@ class DistillationTrainer(_BaseTrainer):
             )
             args.dataloader_num_workers = 0
 
+        # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
+        # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
+        # (see https://github.com/huggingface/transformers/pull/43203) and is released (most likely in 5.0.0), we
+        # default to the recommended non-reentrant behavior here, while preserving any user-provided value.
+        if args.gradient_checkpointing and Version(transformers.__version__) < Version("5.0.0"):
+            args.gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+            args.gradient_checkpointing_kwargs.setdefault("use_reentrant", False)
+
         super().__init__(
             model=model,
             args=args,
@@ -723,6 +746,9 @@ class DistillationTrainer(_BaseTrainer):
             "repetition_penalty": self.repetition_penalty,
             "cache_implementation": args.cache_implementation,
         }
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features
+            generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
         if args.generation_kwargs is not None:
             generation_kwargs.update(args.generation_kwargs)
         self.generation_config = GenerationConfig(**generation_kwargs, disable_compile=True)
@@ -994,8 +1020,18 @@ class DistillationTrainer(_BaseTrainer):
         else:
             # Regular generation path: left-pad token IDs into tensors
             prompt_tensors = [torch.tensor(ids) for ids in prompt_ids]
-            padded_ids = pad(prompt_tensors, padding_value=self._tokenizer.pad_token_id, padding_side="left")
-            attention_mask = pad([torch.ones_like(t) for t in prompt_tensors], padding_value=0, padding_side="left")
+            padded_ids = pad(
+                prompt_tensors,
+                padding_value=self._tokenizer.pad_token_id,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
+            attention_mask = pad(
+                [torch.ones_like(t) for t in prompt_tensors],
+                padding_value=0,
+                padding_side="left",
+                pad_to_multiple_of=self.pad_to_multiple_of,
+            )
             generate_inputs = {"input_ids": padded_ids, "attention_mask": attention_mask}
             # For VLMs, include multimodal fields as tensors (pixel_values, image_grid_thw, etc.)
             for k, v in multimodal_fields.items():
@@ -1003,7 +1039,12 @@ class DistillationTrainer(_BaseTrainer):
                     generate_inputs[k] = v
                 elif isinstance(v, list) and v and isinstance(v[0], list):
                     # Per-token field (e.g., token_type_ids): left-pad like input_ids
-                    generate_inputs[k] = pad([torch.tensor(x) for x in v], padding_value=0, padding_side="left")
+                    generate_inputs[k] = pad(
+                        [torch.tensor(x) for x in v],
+                        padding_value=0,
+                        padding_side="left",
+                        pad_to_multiple_of=self.pad_to_multiple_of,
+                    )
                 else:
                     generate_inputs[k] = torch.tensor(np.array(v))
 
@@ -1031,6 +1072,7 @@ class DistillationTrainer(_BaseTrainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation,
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
+                    gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
                 ) as unwrapped_model,
                 torch.no_grad(),
                 self._dist.summon_full_params(self.model_wrapped, recurse=False),
@@ -1942,12 +1984,13 @@ class DistillationTrainer(_BaseTrainer):
                 "completion": self._logs["completion"],
             }
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            pq.write_table(
+                Dataset.from_dict(table, on_mixed_types="use_json").data.table,
                 os.path.join(
                     self.args.output_dir,
                     "completions",
                     f"completions_{self.state.global_step:05d}.parquet",
-                )
+                ),
             )
 
             for logging_backend in logging_backends:

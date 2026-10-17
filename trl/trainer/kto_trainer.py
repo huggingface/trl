@@ -720,12 +720,11 @@ class KTOTrainer(_BaseTrainer):
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
-            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
-                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
+                and Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
             ):
                 logger.warning(
@@ -787,6 +786,16 @@ class KTOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
         if self._is_vision_dataset and args.precompute_ref_log_probs:
             raise ValueError(
                 "`precompute_ref_log_probs=True` is not supported for vision datasets. For vision-language "
