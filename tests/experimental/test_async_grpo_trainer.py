@@ -33,11 +33,13 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
+    _EpochStopCallback,
+    _TrainBeginCallback,
     DataCollatorForRollout,
     FixedCountBatcher,
     RolloutWorkerProtocol,
@@ -1851,6 +1853,39 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert math.isnan(samples[0].metrics["reward"])
         assert samples[1].advantage == 0.0  # only one scorable row -> zero-centered
         assert samples[1].metrics["reward"] == 2.0
+
+
+class TestEpochStopAtTrainBegin:
+    """Completed async resumes must stop before syncing weights or starting rollouts."""
+
+    def test_completed_resume_skips_worker_start_and_sync(self):
+        trainer = MagicMock()
+        trainer._epoch_stop_groups = 4
+        trainer._groups_before_resume = 4
+        trainer.accelerator.is_main_process = True
+        trainer.weight_transfer = MagicMock()
+        trainer.rollout_worker = MagicMock()
+        trainer._sync_weight = MagicMock()
+        control = TrainerControl()
+
+        callback = _TrainBeginCallback(trainer)
+        callback.on_train_begin(None, None, control)
+
+        assert control.should_training_stop
+        assert not callback._fired  # a no-op resume must not consume the one-time startup
+        trainer.weight_transfer.init_weight_transfer.assert_not_called()
+        trainer._sync_weight.assert_not_called()
+        trainer.rollout_worker.start.assert_not_called()
+
+    def test_epoch_stop_callback_checks_restored_cursor_at_train_begin(self):
+        trainer = MagicMock()
+        trainer._groups_before_resume = 4
+        trainer._trained_groups = set()
+        control = TrainerControl()
+
+        _EpochStopCallback(trainer, target_groups=4).on_train_begin(None, None, control)
+
+        assert control.should_training_stop
 
 
 @pytest.mark.skipif(
