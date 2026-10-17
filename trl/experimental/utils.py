@@ -656,16 +656,16 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
 
 
 def truncate_right(
-    input_ids: torch.Tensor, stop_token_id: int, pad_token_id: int
+    input_ids: torch.Tensor, stop_token_ids: list[int], pad_token_id: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Truncates the input tensor from the right side after the first occurrence of the stop token.
+    Truncates the input tensor from the right side after the first occurrence of a stop token.
 
     Args:
         input_ids (`torch.Tensor`):
             The tensor containing the responses to be truncated
-        stop_token_id (`int`):
-            The token ID representing the stop token where truncation occurs
+        stop_token_ids (`list[int]`):
+            The token IDs representing the stop tokens where truncation occurs
         pad_token_id (`int`):
             The token ID representing the pad token used to fill the truncated responses
 
@@ -676,7 +676,9 @@ def truncate_right(
             - `mask` (`torch.Tensor`):
                 The mask tensor to indicate the padding tokens
     """
-    trunc_idxs = first_true_indices(input_ids == stop_token_id).unsqueeze(-1)
+    trunc_idxs = first_true_indices(
+        torch.isin(input_ids, torch.tensor(stop_token_ids, device=input_ids.device))
+    ).unsqueeze(-1)
     new_size = [1] * (len(input_ids.size()) - 1) + [input_ids.shape[1]]
     idxs = torch.arange(input_ids.shape[1], device=input_ids.device).view(*new_size)
     output_ids = torch.masked_fill(input_ids, idxs > trunc_idxs, pad_token_id)

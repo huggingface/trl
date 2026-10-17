@@ -128,6 +128,8 @@ def main():
     )
     trainer.train()
 
+    trainer.end()
+
 
 if __name__ == "__main__":
     main()

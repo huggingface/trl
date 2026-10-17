@@ -14,8 +14,13 @@
 
 import time
 
-import requests
 from accelerate.logging import get_logger
+
+from ...import_utils import is_requests_available
+
+
+if is_requests_available():
+    import requests
 
 
 logger = get_logger(__name__)
@@ -38,6 +43,9 @@ class VLLMClient:
     """
 
     def __init__(self, server_url: str, server_timeout: float = 240.0):
+        if not is_requests_available():
+            raise ImportError("requests is not installed. Please install it with `pip install requests`.")
+
         self.server_url = server_url.rstrip("/")
         self.server_timeout = server_timeout
 
@@ -123,7 +131,7 @@ class VLLMClient:
         return response.json()["world_size"]
 
     def pause(self, timeout: int = 1800) -> None:
-        """Pause generation while keeping the KV cache warm (`mode=keep`), so weights can be swapped in."""
+        """Freeze in-flight requests and clear caches before replacing the model weights."""
         response = requests.post(f"{self.server_url}/pause", params={"mode": "keep"}, timeout=timeout)
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")

@@ -1,11 +1,11 @@
 # Labels derived from the changed paths alone; ✨ enhancement, 🐛 bug and 💥 breaking stay manual.
-# `any-glob-to-all-files` means "one glob matches every changed file", so the maintenance paths are
-# a single braced glob: listed separately, a pull request spanning two of them would get no label.
+# `any-glob-to-all-files` means "one glob matches every changed file", so each label's paths are a
+# single braced glob: listed separately, a pull request spanning two of them would get no label.
 
 "📚 documentation":
   - changed-files:
       - any-glob-to-all-files:
-          - "docs/**"
+          - "{docs/**,CONTRIBUTING.md}"
 
 "🔧 maintenance":
   - changed-files:
