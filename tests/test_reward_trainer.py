@@ -14,7 +14,6 @@
 
 import json
 import pathlib
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -1082,20 +1081,17 @@ class TestRewardTrainer(TrlTestCase):
             else None
         )
 
-        with patch(
-            "trl.trainer.reward_trainer.clone_chat_template",
-            side_effect=lambda model, proc, path: (model, proc, [32000]),
-        ):
-            RewardTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=RewardConfig(
-                    output_dir=self.tmp_dir,
-                    report_to="none",
-                    chat_template_path="dummy-path-intercepted-by-mock",
-                ),
-                train_dataset=dataset,
-                peft_config=peft_config,
-            )
+        RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=RewardConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                # Qwen3-4B's template adds tokens to this tokenizer, so the added-tokens path runs
+                chat_template_path="Qwen/Qwen3-4B",
+            ),
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
 
         assert peft_config.modules_to_save == original_modules, (
             f"RewardTrainer mutated peft_config.modules_to_save: "
