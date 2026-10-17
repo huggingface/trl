@@ -1,0 +1,107 @@
+name: Tests on AMD ROCm
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+env:
+  TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
+  # Install into the image's ROCm Python instead of creating a venv with CUDA torch.
+  PIP_BREAK_SYSTEM_PACKAGES: "1"
+
+permissions: {}
+
+jobs:
+  tests:
+    permissions:
+      contents: read
+    name: AMD ROCm (${{ matrix.test_type }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test_type: single GPU
+            runner: hfc-amd-mi300-1gpu
+            gpu_count: 1
+            pytest_args: >-
+              tests --ignore=tests/distributed
+              tests/experimental/test_async_grpo_trainer.py
+              tests/experimental/test_async_distillation_trainer.py
+          - test_type: distributed
+            runner: hfc-amd-mi300-2gpu
+            gpu_count: 2
+            pytest_args: tests/distributed/test_distributed.py
+    runs-on:
+      group: ${{ matrix.runner }}
+    container:
+      image: rocm/pytorch:rocm10.1.0_ubuntu26.04_py3.14_pytorch_release_2.14.0
+      # Forward HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES assigned by the runner,
+      # matching transformers' AMD CI. Do not override these with CUDA_VISIBLE_DEVICES.
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host --shm-size "16gb"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Keep the image's ROCm torch stack when resolving optional dependencies.
+          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
+          # aiohttp is needed by the async rollout tests; vLLM-specific cases remain dependency-gated.
+          # Install the dev extras separately so Liger cannot replace the image's ROCm Triton.
+          python -m pip install -c /tmp/rocm-constraints.txt \
+            ".[deepspeed,kernels,openreward,peft,quality,quantization,test,vlm]" \
+            kernels "aiohttp>=3.13.3" jmespath
+          python -m pip install --no-deps "liger-kernel>=0.8.2"
+          # Match transformers' AMD CI cleanup of NVIDIA-only packages.
+          # Keep kernels to load the ROCm AITER Flash Attention implementation.
+          python -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
+
+      - name: Verify ROCm and GPU isolation
+        env:
+          EXPECTED_GPU_COUNT: ${{ matrix.gpu_count }}
+        run: |
+          python - <<'PY'
+          import os
+          import torch
+
+          assert torch.version.hip, "CUDA torch got installed"
+          assert torch.cuda.is_available(), "ROCm GPU is unavailable"
+          # ROCm may report zero devices before HIP is initialized.
+          torch.cuda.init()
+          assert torch.cuda.device_count() == int(os.environ["EXPECTED_GPU_COUNT"]), "Unexpected GPU isolation"
+          print("ROCm torch", torch.__version__, "| HIP", torch.version.hip)
+          for i in range(torch.cuda.device_count()):
+              print(i, torch.cuda.get_device_name(i))
+          # Check ROCm Triton still works after installing optional dependencies.
+          x = torch.arange(16, device="cuda", dtype=torch.float32)
+          torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
+          print("ROCm Triton compilation passed")
+          PY
+
+      - name: Test with pytest
+        # One worker per job avoids competing training runs on the same GPU(s).
+        # Keep the retry policy aligned with the Makefile's test target.
+        run: >-
+          python -m pytest -n 0 -s -v --reruns 5 --reruns-delay 1
+          --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504|out of memory|STATUS_ALLOC_FAILED)'
+          ${{ matrix.pytest_args }}
+
+      - name: Post to Slack
+        if: always()
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests on AMD ROCm (${{ matrix.test_type }})
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
