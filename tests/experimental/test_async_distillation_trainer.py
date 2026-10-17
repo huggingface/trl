@@ -412,6 +412,37 @@ class TestPackingAwareBatching:
         # The prompts behind this micro-batch, accumulated for `_EpochStopCallback` to count epochs with.
         assert collator.prompts_trained == {7, 8}
 
+    def test_collator_excludes_missing_teacher_scores_from_loss_denominator(self):
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, beta=0.0)
+        sample = _rollout_sample(4)
+        # The middle completion token was generated but the teacher returned no usable candidates for it.
+        sample["teacher_topk_ids"][2, :] = -1
+        sample["teacher_topk_logprobs"][2, :] = -np.inf
+
+        batch = collator([[[sample]]])
+
+        # Only completion positions 1 and 3 can contribute to the forward-KL loss.
+        assert batch["global_n_tokens"].tolist() == [2.0]
+        assert collator.metrics["sample/trained_tokens_mean"] == [2.0]
+        # The prompt and the missing-score completion token are forwarded but earn no gradient.
+        assert collator.metrics["batch/masked_token_frac"] == [(2, 4)]
+
+    def test_collator_uses_beta_specific_support_for_valid_token_count(self):
+        sample = _rollout_sample(4)
+        # Actual token 2 is absent, but the teacher top-1 candidate remains usable.
+        # JSD (beta<1) can use that top-1 candidate; pure reverse KL (beta=1) cannot.
+        sample["teacher_topk_ids"][2, :TEACHER_TOP_K] = [0, 1, 3, 4]
+
+        jsd_collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, beta=0.5)
+        jsd_batch = jsd_collator([[[sample]]])
+        reverse_kl_collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, beta=1.0)
+        reverse_kl_batch = reverse_kl_collator([[[sample]]])
+
+        assert jsd_batch["global_n_tokens"].tolist() == [3.0]
+        assert jsd_collator.metrics["sample/trained_tokens_mean"] == [3.0]
+        assert reverse_kl_batch["global_n_tokens"].tolist() == [2.0]
+        assert reverse_kl_collator.metrics["sample/trained_tokens_mean"] == [2.0]
+
     def test_collator_packs_teacher_id_per_token_for_mopd(self):
         # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
         # token's jsd/teacher_entropy to a teacher if the id is broadcast across that sample's own tokens here.
