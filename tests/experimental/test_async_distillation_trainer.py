@@ -42,6 +42,7 @@ from trl.experimental.async_distillation.async_distillation_trainer import (
     _balance_by_squared_length,
     _chunked_jsd_loss,
     _EpochStopCallback,
+    _TrainBeginCallback,
     _iter_vllm_named_params,
     _jsd_divergence,
     _narrow_top1_actual_support,
@@ -1067,6 +1068,39 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
     return trainer
+
+
+class TestEpochStopAtTrainBegin:
+    """Completed async resumes must stop before syncing weights or starting rollouts."""
+
+    def test_completed_resume_skips_worker_start_and_sync(self):
+        trainer = MagicMock()
+        trainer._epoch_stop_prompts = 4
+        trainer._prompts_before_resume = 4
+        trainer.accelerator.is_main_process = True
+        trainer.weight_transfer = MagicMock()
+        trainer.rollout_worker = MagicMock()
+        trainer._sync_weight = MagicMock()
+        control = TrainerControl()
+
+        callback = _TrainBeginCallback(trainer)
+        callback.on_train_begin(None, None, control)
+
+        assert control.should_training_stop
+        assert not callback._fired  # a no-op resume must not consume the one-time startup
+        trainer.weight_transfer.init_weight_transfer.assert_not_called()
+        trainer._sync_weight.assert_not_called()
+        trainer.rollout_worker.start.assert_not_called()
+
+    def test_epoch_stop_callback_checks_restored_cursor_at_train_begin(self):
+        trainer = MagicMock()
+        trainer._prompts_before_resume = 4
+        trainer._trained_prompts = set()
+        control = TrainerControl()
+
+        _EpochStopCallback(trainer, target_prompts=4).on_train_begin(None, None, control)
+
+        assert control.should_training_stop
 
 
 @pytest.mark.skipif(
