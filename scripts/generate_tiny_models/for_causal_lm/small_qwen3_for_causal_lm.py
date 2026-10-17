@@ -17,10 +17,19 @@
 import torch
 from transformers import AutoTokenizer, GenerationConfig, Qwen3Config, Qwen3ForCausalLM
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "Qwen/Qwen3-4B"
 

@@ -43,10 +43,10 @@ class GRPOConfig(_BaseConfig):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
             Also applied to reward-model and reward-tokenizer loads.
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -76,8 +76,9 @@ class GRPOConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -441,12 +442,12 @@ class GRPOConfig(_BaseConfig):
             "reward-model and reward-tokenizer loads."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     disable_dropout: bool = field(
@@ -507,9 +508,13 @@ class GRPOConfig(_BaseConfig):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
+            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
+            "pad elsewhere."
+        },
     )
 
     # Parameters that control generation
@@ -1042,6 +1047,14 @@ class GRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.use_transformers_paged:
             warnings.warn(

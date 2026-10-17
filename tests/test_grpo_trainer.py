@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gc
 import os
-import warnings
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -29,28 +27,26 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
-    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
-from transformers.testing_utils import backend_empty_cache, torch_device
+from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.import_utils import is_liger_kernel_available
+from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 
 from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
+    is_bf16_supported,
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_response_parsing,
     require_torch_accelerator,
     require_vision,
     require_vllm,
-    xfail_data_parallel,
 )
 
 
@@ -90,22 +86,14 @@ async def async_multiply_tool(a: int, b: int) -> int:
 
 class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
-        """Helper method to test the get_high_entropy_mask functionality."""
-        # Create a mock trainer with minimal setup
-        from unittest.mock import Mock
-
-        # Create a mock accelerator
-        mock_accelerator = Mock()
-        mock_accelerator.num_processes = 1  # Single process for testing
-
-        # Create a minimal trainer instance just to access the method
-        trainer = Mock(spec=GRPOTrainer)
-        trainer.accelerator = mock_accelerator
-        trainer.accelerator.gather = lambda x: x
-        trainer.accelerator.pad_across_processes = lambda x, dim, pad_index: x
-
-        # Call the actual method from GRPOTrainer
-        return GRPOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+        )
+        return trainer.get_high_entropy_mask(entropies, mask, threshold)
 
     def test_compute_entropy_mask_0(self):
         # We have a total of 12 tokens out of which 10 are non-pad.
@@ -160,79 +148,58 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-class TestGRPORolloutDispatch:
-    def _make_trainer(self):
-        trainer = object.__new__(GRPOTrainer)
-        trainer.accelerator = SimpleNamespace(
-            device=torch.device("cpu"),
-            is_main_process=True,
-            gather=lambda t: t,
-        )
-        trainer.args = SimpleNamespace(report_to=[])
-        trainer.model = SimpleNamespace(training=True)
-        trainer.state = SimpleNamespace(global_step=2, num_input_tokens_seen=0)
-        trainer._last_loaded_step = 1
-        trainer.use_vllm = False
-        trainer.use_transformers_continuous_batching = False
-        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock())
-        trainer.processing_class = SimpleNamespace(
-            batch_decode=MagicMock(return_value=["decoded"]),
-        )
-        trainer._tokenizer = SimpleNamespace(eos_token_id=2, pad_token_id=0)
-        trainer.tools = None
-        trainer._metrics = {
-            "train": {
-                "num_tokens": [],
-                **{
-                    k: []
-                    for k in [
-                        "completions/mean_length",
-                        "completions/min_length",
-                        "completions/max_length",
-                        "completions/clipped_ratio",
-                        "completions/mean_terminated_length",
-                        "completions/min_terminated_length",
-                        "completions/max_terminated_length",
-                    ]
-                },
-            }
-        }
-        return trainer
+class TestGRPORolloutDispatch(TrlTestCase):
+    def _make_rollout_func(self, **output):
+        # A plain callable, as a user passes, recording the calls it gets
+        def rollout_func(prompts, trainer):
+            rollout_func.calls.append((prompts, trainer))
+            return output
 
-    def test_generate_prefers_rollout_func(self):
-        trainer = self._make_trainer()
-        trainer.rollout_func = MagicMock(
-            return_value={
-                "prompt_ids": [[1]],
-                "completion_ids": [[2]],
-                "logprobs": [[-0.1]],
-                "env_mask": [[1]],
-            }
+        rollout_func.calls = []
+        return rollout_func
+
+    def _make_trainer(self, rollout_func):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        return GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            rollout_func=rollout_func,
         )
+
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_generate_prefers_rollout_func(self):
+        rollout_func = self._make_rollout_func(
+            prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[-0.1]], env_mask=[[1]]
+        )
+        trainer = self._make_trainer(rollout_func)
 
         result = trainer._generate(["prompt"])
 
         assert result[0] == [[1]]  # prompt_ids
         assert result[1] == [[2]]  # completion_ids
         assert result[2] == [[1]]  # tool_mask (from env_mask)
-        trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
+        assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_syncs_vllm_weights_when_needed(self):
-        trainer = self._make_trainer()
+        rollout_func = self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]], logprobs=[[0.0]])
+        trainer = self._make_trainer(rollout_func)
+        # Stand in for the vLLM server, which cannot run here, and start from the step __init__ sets with use_vllm=True
         trainer.use_vllm = True
-        trainer.rollout_func = MagicMock(
-            return_value={"prompt_ids": [[1]], "completion_ids": [[2]], "logprobs": [[0.0]]}
-        )
+        trainer.vllm_generation = MagicMock()
+        trainer._last_loaded_step = -1
 
         trainer._generate(["prompt"])
 
         trainer.vllm_generation.sync_weights.assert_called_once()
         assert trainer._last_loaded_step == trainer.state.global_step
-        trainer.rollout_func.assert_called_once_with(["prompt"], trainer)
+        assert rollout_func.calls == [(["prompt"], trainer)]
 
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_generate_rollout_func_raises_when_required_keys_are_missing(self):
-        trainer = self._make_trainer()
-        trainer.rollout_func = MagicMock(return_value={"prompt_ids": [[1]], "completion_ids": [[2]]})
+        trainer = self._make_trainer(self._make_rollout_func(prompt_ids=[[1]], completion_ids=[[2]]))
 
         with pytest.raises(ValueError, match="rollout_func must return keys"):
             trainer._generate(["prompt"])
@@ -299,6 +266,13 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
@@ -334,6 +308,40 @@ class TestGRPOTrainer(TrlTestCase):
         # MoE models log the load-balancing auxiliary loss (on by default)
         if trainer.aux_loss_enabled:
             assert trainer.state.log_history[-1]["aux_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_liger_kernel
+    def test_train_with_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            use_liger_kernel=True,
+            report_to="none",
+        )
+        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
+        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -393,9 +401,8 @@ class TestGRPOTrainer(TrlTestCase):
         )
         assert type(trainer.model).__name__ == "RemoteForCausalLM"
 
-    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
     @pytest.mark.parametrize("loss_type", ["bnpo", "dr_grpo", "dapo", "cispo", "sapo", "luspo", "vespo"])
-    def test_train_loss_types(self, loss_type, use_liger_kernel):
+    def test_train_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -407,7 +414,6 @@ class TestGRPOTrainer(TrlTestCase):
             max_completion_length=32,  # reduce the completion length to reduce memory usage
             gradient_accumulation_steps=2,  # set to 2 to test than DAPO can operate with accumulated batch
             loss_type=loss_type,
-            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -428,37 +434,15 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "loss_type, beta",
-        [
-            ("grpo", 0.0),
-            ("bnpo", 0.0),
-            ("dr_grpo", 0.0),
-            ("dapo", 0.0),
-            ("cispo", 0.0),
-            ("sapo", 0.0),
-            ("luspo", 0.0),
-            ("vespo", 0.0),
-            ("dapo", 0.1),  # non-zero beta so that the KL term is compared too
-        ],
-    )
-    def test_liger_loss_matches_non_liger_loss(self, loss_type, beta):
-        # The Liger and non-Liger paths must return the same loss for the same batch. `steps_per_generation` differs
-        # from `gradient_accumulation_steps` so that the per-window rescale dapo/cispo/vespo apply is non-trivial.
+    def test_logps_match_plain_forward(self):
+        # The fused LM head scores the completion tokens like a plain forward of the model, at the sampling temperature
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            beta=beta,
-            importance_sampling_level="sequence" if loss_type == "luspo" else "token",
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=32,  # reduce the completion length to reduce memory usage
-            steps_per_generation=4,
-            gradient_accumulation_steps=2,
-            loss_type=loss_type,
-            use_liger_kernel=True,
+            bf16=False,  # compare in full precision
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            temperature=0.7,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -467,33 +451,57 @@ class TestGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        input_ids = torch.randint(0, trainer.model.config.vocab_size, (2, 16), device=trainer.accelerator.device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[0, :3] = 0  # left padding
+        attention_mask[1, -2:] = 0  # padding after the end of the completion
 
-        # Generate and score one batch, as the training loop would
-        trainer.model.train()
-        trainer.current_gradient_accumulation_steps = training_args.gradient_accumulation_steps
-        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        logps, entropies, _ = trainer._get_per_token_logps_and_entropies(
+            trainer.model, input_ids, attention_mask, logits_to_keep=10, compute_entropy=True
+        )
+        with torch.no_grad():
+            logits = trainer.model(input_ids=input_ids, attention_mask=attention_mask).logits[:, -11:-1] / 0.7
+        ref_logps = logits.log_softmax(-1)
+        completion_mask = attention_mask[:, -10:].bool()
 
-        raw_losses = []
-        original_forward = trainer.liger_loss.forward
+        expected_logps = ref_logps.gather(-1, input_ids[:, -10:, None]).squeeze(-1)
+        expected_entropies = -(ref_logps.exp() * ref_logps).sum(-1)
+        torch.testing.assert_close(logps[completion_mask], expected_logps[completion_mask], atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(
+            entropies[completion_mask], expected_entropies[completion_mask], atol=1e-4, rtol=1e-4
+        )
+        assert (logps[~completion_mask] == 0).all()
 
-        def capture_raw_loss(*args, **kwargs):
-            output = original_forward(*args, **kwargs)
-            raw_losses.append(output[0])
-            return output
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_logps_use_mixed_precision(self):
+        # Scoring runs outside `compute_loss`, so it has to enter autocast itself. Without that the backbone would
+        # silently run in fp32 under bf16 training.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            bf16=True,
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        projection = next(module for name, module in trainer.model.named_modules() if name.endswith("q_proj"))
+        projection_dtypes = []
 
-        with patch.object(trainer.liger_loss, "forward", side_effect=capture_raw_loss):
-            liger_loss = trainer.compute_loss(trainer.model, inputs)
-        trainer.use_liger_kernel = False
-        loss = trainer.compute_loss(trainer.model, inputs)
+        def record_projection_dtype(_module, _args, output):
+            projection_dtypes.append(output.dtype)
 
-        assert liger_loss.abs() > 0  # the comparison below would hold vacuously for two zero losses
-        torch.testing.assert_close(liger_loss, loss, rtol=1e-4, atol=1e-5)
+        with projection.register_forward_hook(record_projection_dtype):
+            trainer.train()
 
-        # Both paths divide by `current_gradient_accumulation_steps`, so an error in it cancels out in the comparison
-        # above. Pin the dapo/cispo/vespo per-window rescale to a known factor: steps_per_generation (4) divided by
-        # gradient_accumulation_steps (2).
-        if loss_type == "dapo":
-            torch.testing.assert_close(liger_loss, raw_losses[0] * 2.0, rtol=1e-4, atol=1e-5)
+        assert projection_dtypes  # the hook fired at all
+        assert set(projection_dtypes) == {torch.bfloat16}
 
         release_memory(trainer.model, trainer)
 
@@ -830,6 +838,26 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
+    def test_peft_init_is_seeded(self):
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
+
+    @require_peft
     def test_train_peft_config(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
@@ -912,12 +940,63 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_liger_kernel_with_peft_lm_head_raises(self):
-        # The Liger fused GRPO loss reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
+    @require_bitsandbytes
+    def test_train_peft_dora_and_quantization(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",  # identifier, so that the trainer quantizes it
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(use_dora=True),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # The DoRA magnitude vector is the exception: it must stay in float32, since its optimizer updates can be
+            # smaller than bfloat16 can represent, which would otherwise silently freeze it, see #7268
+            if "lora_magnitude_vector" in n:
+                assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            elif "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_peft_lm_head_raises(self):
+        # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
         # ignored and never trained. The trainer must fail fast instead of training a silently-frozen head (#4612).
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -937,36 +1016,13 @@ class TestGRPOTrainer(TrlTestCase):
             )
 
     @require_peft
-    def test_liger_kernel_with_peft_non_lm_head_target_allowed(self):
-        # The lm_head guard must only fire when the adapter actually wraps lm_head. An adapter that targets other
-        # modules (here q_proj/v_proj) leaves lm_head as a plain Linear, so Liger reads the real (frozen) head weight
-        # and there is nothing to silently drop. Guards against an over-broad regression.
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        kwargs = {
-            "model": model,
-            "reward_funcs": "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            "args": training_args,
-            "train_dataset": dataset,
-            "peft_config": LoraConfig(target_modules=["q_proj", "v_proj"]),
-        }
-        if is_liger_kernel_available():
-            GRPOTrainer(**kwargs)  # must construct without raising
-        else:
-            # Liger isn't installed on this lane: the guard runs before the Liger-availability check, so the only
-            # acceptable failure is the missing-dependency ImportError, never the lm_head ValueError.
-            with pytest.raises(ImportError):
-                GRPOTrainer(**kwargs)
-
-    @require_peft
-    def test_liger_kernel_with_peft_modules_to_save_lm_head_allowed(self):
+    def test_peft_modules_to_save_lm_head_allowed(self):
         # `modules_to_save=["lm_head"]` makes the head a fully trained copy (ModulesToSaveWrapper, not a tuner layer),
-        # so `lm_head.weight` resolves to the trained weight and Liger trains it correctly. This is the documented
+        # so `lm_head.weight` resolves to the trained weight and the chunked projection trains it correctly. This is the documented
         # workaround in the guard's error message, so it must stay unblocked.
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
         # `ensure_weight_tying=True` silences PEFT's weight-tying warning fired when lm_head is in the adapter on a
         # model with untied embeddings; once tying respects `tie_word_embeddings`, the flag itself warns that no tied
         # modules were found, so it must only be set on the affected range.
@@ -984,27 +1040,38 @@ class TestGRPOTrainer(TrlTestCase):
             "train_dataset": dataset,
             "peft_config": peft_config,
         }
-        if is_liger_kernel_available():
-            GRPOTrainer(**kwargs)  # must construct without raising
-        else:
-            with pytest.raises(ImportError):
-                GRPOTrainer(**kwargs)
+        GRPOTrainer(**kwargs)  # must construct without raising
 
     @require_peft
-    def test_liger_kernel_with_peft_prompt_learning_raises(self):
-        # Prompt-learning methods inject virtual tokens via PeftModel.forward(), which the Liger GRPO loss bypasses.
-        # The trainer must fail fast to avoid computing the loss on the wrong (truncated) sequence.
+    def test_train_peft_prompt_tuning(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32")
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = GRPOConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.raises(ValueError, match="prompt-learning"):
-            GRPOTrainer(
-                model=model,
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
-            )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the prompt embeddings have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "prompt_encoder" in n:
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_train_peft_model(self):
@@ -1043,7 +1110,28 @@ class TestGRPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    def test_ref_model_like_model_instance(self):
+        # A policy passed as an instance has no `model_init_kwargs`: the reference is built with its dtype and attention
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype=torch.bfloat16, attn_implementation="eager"
+        )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            beta=0.1,  # set beta to a non-zero value so that the trainer needs a reference model
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.ref_model.dtype == torch.bfloat16
+        assert trainer.ref_model.config._attn_implementation == "eager"
+
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -1128,6 +1216,37 @@ class TestGRPOTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_torch_accelerator
+    def test_train_with_fp16(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            fp16=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -1276,7 +1395,8 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_sync_and_async_reward_funcs(self):
-        # Test that GRPOTrainer can be instantiated with multiple reward functions one of which is async
+        # Test that GRPOTrainer can be instantiated with multiple reward functions, one of which is async, in both the
+        # function and the callable class form.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def sync_reward_func1(completions, **kwargs):
@@ -1290,6 +1410,12 @@ class TestGRPOTrainer(TrlTestCase):
             """Async Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
+        class AsyncCallableReward:
+            """Async reward function written as a callable class."""
+
+            async def __call__(self, completions, **kwargs):
+                return [float(completion.count(" ")) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -1300,7 +1426,7 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func],
+            reward_funcs=[sync_reward_func1, sync_reward_func2, async_reward_func, AsyncCallableReward()],
             args=training_args,
             train_dataset=dataset,
         )
@@ -1836,92 +1962,8 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    @pytest.mark.xfail(reason="Off-Policy Masking isn't compatible with Liger yet.")
-    def test_train_with_off_policy_mask_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            off_policy_mask_threshold=0.5,
-            use_liger_kernel=True,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-        )
-
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    def test_compute_liger_loss_passes_vllm_is_ratio(self):
-        """Test that importance_sampling_ratio from inputs is passed to liger_grpo_loss as vllm_is_ratio."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_liger_kernel=True,
-            report_to="none",
-            logging_strategy="no",
-        )
-
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        # Mock _generate_and_score_completions to inject importance_sampling_ratio
-        original_gen = trainer._generate_and_score_completions
-
-        def gen_with_is_ratio(*args, **kwargs):
-            result = original_gen(*args, **kwargs)
-            B, T = result["completion_ids"].shape
-            result["importance_sampling_ratio"] = torch.full((B, T), 0.5, device=result["completion_ids"].device)
-            return result
-
-        with (
-            patch.object(trainer, "_generate_and_score_completions", side_effect=gen_with_is_ratio),
-            patch.object(trainer.liger_loss, "forward", wraps=trainer.liger_loss.forward) as mock_forward,
-        ):
-            trainer.train()
-
-            # Verify vllm_is_ratio was passed in every call to liger_grpo_loss
-            assert mock_forward.call_count > 0, "liger_grpo_loss.forward was never called"
-            for call in mock_forward.call_args_list:
-                vllm_is_ratio = call.kwargs.get("vllm_is_ratio")
-                assert vllm_is_ratio is not None, (
-                    "vllm_is_ratio should not be None when importance_sampling_ratio is present"
-                )
-                assert (vllm_is_ratio == 0.5).all(), (
-                    "vllm_is_ratio values should match the injected importance_sampling_ratio"
-                )
-
-        release_memory(trainer.model, trainer)
-
     @pytest.mark.parametrize("use_bias_correction_kl", [True, False])
-    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
-    def test_train_bias_correction_kl(self, use_liger_kernel, use_bias_correction_kl):
+    def test_train_bias_correction_kl(self, use_bias_correction_kl):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1931,7 +1973,6 @@ class TestGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -2262,9 +2303,7 @@ class TestGRPOTrainer(TrlTestCase):
     def test_entropy_bonus_flows_gradients(self):
         # Regression test: entropies were computed under torch.no_grad(), which made the entropy bonus a
         # no-op for training — it lowered the reported loss but contributed no gradient. When the bonus is
-        # active (entropy_coef != 0 or use_adaptive_entropy), entropies must carry grad; otherwise they stay
-        # detached to save the memory of the full-vocab softmax graph (they only feed logging and the
-        # top_entropy_quantile mask, neither of which is differentiable).
+        # active (entropy_coef != 0 or use_adaptive_entropy), entropies must carry grad.
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -2284,15 +2323,6 @@ class TestGRPOTrainer(TrlTestCase):
         )
         assert entropies.requires_grad
 
-        # Bonus off → entropies stay detached (preserving the memory optimization).
-        trainer.entropy_coef = 0.0
-        trainer.use_adaptive_entropy = False
-        trainer._entropy_bonus_enabled = False  # self.entropy_coef != 0.0 or self.use_adaptive_entropy
-        _, entropies, _ = trainer._get_per_token_logps_and_entropies(
-            model, input_ids, attention_mask, logits_to_keep=4, compute_entropy=True
-        )
-        assert not entropies.requires_grad
-
     def test_train_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
@@ -2306,6 +2336,38 @@ class TestGRPOTrainer(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_vllm
+    def test_train_vllm(self):
+        """Test that training works with vLLM for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            use_vllm=True,
+        )
+        trainer = GRPOTrainer(
+            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
             train_dataset=dataset,
@@ -2523,6 +2585,47 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    # Flash Attention needs a `head_size` multiple of 8, hence a `small-*` model (`tiny-*` ones have `head_size=2`)
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.8.0"),
+        reason="transformers continuous batching requires transformers>=5.8.0",
+    )
+    @pytest.mark.skipif(
+        not is_ampere_or_newer() and torch_device != "xpu",
+        reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
+        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
+    )
+    def test_train_with_transformers_continuous_batching(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=2,  # continuous batching adds about 1s per step
+            report_to="none",
+            use_transformers_continuous_batching=True,
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/small-Qwen3ForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_train_normalize_then_sum_aggregation(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -2651,6 +2754,9 @@ class TestGRPOTrainer(TrlTestCase):
 
         Here, we don't mock the generate method, be we rely on the fact that the model the probability of generating
         the EOS token is extremely low, so all generated completions are truncated.
+
+        The streamed log-prob path gathers only unmasked rows, so with nothing left it has to scatter back into a
+        tensor that is still attached to the model, otherwise `backward()` fails instead of contributing zero.
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -2770,8 +2876,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.parametrize("use_liger_kernel", [False, pytest.param(True, marks=require_liger_kernel)])
-    def test_train_delta_clipping(self, use_liger_kernel):
+    def test_train_delta_clipping(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -2781,7 +2886,6 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             delta=2.0,  # set delta to a non-None value
-            use_liger_kernel=use_liger_kernel,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -3034,6 +3138,37 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_stops_on_every_eos_token_id(self):
+        # Phi-3.5 ends a turn with `<|end|>`, which only its generation config declares as eos, not its tokenizer
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        assert 32007 in trainer.generation_config.eos_token_id  # `<|end|>`
+
+        def fake_generate(input_ids, **kwargs):
+            # 'Blue<|end|>and green': the turn ends on `<|end|>`, and generation goes on after it
+            completion_ids = torch.tensor([[10924, 32007, 322, 7933]] * input_ids.shape[0], device=input_ids.device)
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        # Completions are cut after `<|end|>` and count as terminated, not clipped
+        assert trainer.state.log_history[-1]["completions/mean_length"] == 2.0
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
+
     def test_train_with_chat_template_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -3152,6 +3287,131 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_log_completions(self):
+        # The logged completions mix types within a field: the tool returns content blocks while assistant content is
+        # a string, and `query` is a string in one call and a list in the other. The completions table must still be
+        # written (#7674).
+        def lookup_tool(query: str) -> list:
+            """
+            Looks up the items matching a query.
+
+            Args:
+                query: What to look up.
+
+            Returns:
+                The matching items, as text content blocks.
+            """
+            return [{"type": "text", "text": "crate"}]
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[lookup_tool],
+        )
+        tokenizer = trainer.processing_class
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call: two tool calls, then a text answer
+                texts = [
+                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": "crate"}}\n</tool_call><|im_end|>',
+                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": ["crate"]}}\n</tool_call><|im_end|>',
+                    "No tool needed.<|im_end|>",
+                ]
+            else:  # second call, for the two examples with a tool call
+                texts = ["Done!<|im_end|>"] * input_ids.shape[0]
+            rows = [tokenizer(text, add_special_tokens=False).input_ids for text in texts]
+            width = max(len(row) for row in rows)
+            completion_ids = [row + [tokenizer.pad_token_id] * (width - len(row)) for row in rows]
+            return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        assert completions.num_rows == 3
+        tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
+        assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_vllm_server(self):
+        # Regression test for #7416. In server mode, vLLM generates `num_generations` completions for every
+        # `num_generations`-th prompt. After a tool call, each sample has its own history, so each must be continued
+        # from its own history.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            vllm_mode="server",
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        # fmt: off
+        first_turn_ids = [
+            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 65, 788, 220, 19, 11248, 151658, 151645],
+            # an invalid tool call with wrong argument name, so that the two tool histories differ
+            # '<tool_call>\n{"name": "multiply_tool", "arguments": {"a": 3, "c": 4}}\n</tool_call><|im_end|>'
+            [151657, 198, 4913, 606, 788, 330, 64648, 22785, 497, 330, 16370, 788, 5212, 64, 788, 220, 18, 11, 330, 66, 788, 220, 19, 11248, 151658, 151645],
+            # "I don't know any tool<|im_end|>"
+            [40, 1513, 944, 1414, 894, 5392, 151645],
+        ]
+        # fmt: on
+
+        def fake_server_generate(prompts, images, num_generations, profiler):
+            # Mimic the server: only every `num_generations`-th prompt is sent, and it is sampled `num_generations` times
+            used_prompts = [prompt for prompt in prompts[::num_generations] for _ in range(num_generations)]
+            assert used_prompts == prompts, "A sample was continued from another sample's history"
+            if len(prompts) == 3:  # first call
+                completion_ids = first_turn_ids
+            else:  # second call only has the two examples with a tool call
+                completion_ids = [[17453, 0, 151645]] * len(prompts)  # 'Done!<|im_end|>'
+            logprobs = [[[-0.1]] * len(ids) for ids in completion_ids]
+            return prompts, completion_ids, logprobs, None
+
+        trainer.use_vllm = True
+        trainer._last_loaded_step = trainer.state.global_step
+        trainer.vllm_generation = SimpleNamespace(sync_weights=MagicMock(), generate=fake_server_generate)
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(2 / 3)
 
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.13.0.dev0"),
@@ -3311,6 +3571,104 @@ class TestGRPOTrainer(TrlTestCase):
     )
     @require_response_parsing
     @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_train_with_multiple_environments_same_tool_name(self):
+        # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
+        # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
+        # With `shuffle_dataset=False` and `num_generations=2`, every generation batch is [zip, zip, count, count].
+        dataset = Dataset.from_dict({"environment": ["zip", "count"] * 8})
+
+        submitted = {"zip": [], "count": []}
+
+        class ZipEnvironment:
+            def reset(self, **kwargs):
+                return "Give the zip code."
+
+            def submit(self, answer: str) -> str:
+                """
+                Submit the zip code.
+
+                Args:
+                    answer: The zip code.
+
+                Returns:
+                    A confirmation.
+                """
+                submitted["zip"].append(answer)
+                return "ok"
+
+        class CountEnvironment:
+            def reset(self, **kwargs):
+                return "Count."
+
+            def submit(self, answer: int) -> str:
+                """
+                Submit the count.
+
+                Args:
+                    answer: The count.
+
+                Returns:
+                    A confirmation.
+                """
+                submitted["count"].append(answer)
+                return "ok"
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            shuffle_dataset=False,  # keep the [zip, zip, count, count] batch layout deterministic
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 4:  # first generation: batch is [zip, zip, count, count]
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 330, 19, 17, 95642, 151658, 151645],
+                        # "I won't<|im_end|>" + pad
+                        [40, 2765, 944, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                        # '<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>'
+                        [151657, 198, 4913, 606, 788, 330, 5955, 497, 330, 16370, 788, 5212, 9217, 788, 220, 19, 17, 11248, 151658, 151645],
+                        # "Done!<|im_end|>" + pad
+                        [17453, 0, 151645, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643, 151643],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # regeneration after tool execution: only the two examples that issued a tool call
+                completion_ids = torch.tensor(
+                    [
+                        [17453, 0, 151645],  # 'Done!<|im_end|>'
+                        [17453, 0, 151645],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert submitted["zip"] and all(answer == "42" for answer in submitted["zip"])
+        assert submitted["count"] and all(answer == 42 for answer in submitted["count"])
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
     def test_train_with_unknown_environment_raises(self):
         # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
         # environment should fail with a clear error rather than a bare KeyError mid-rollout.
@@ -3442,6 +3800,77 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.2.0"),
+        reason="Environment factory support is not available in transformers versions below 5.2.0",
+        strict=True,
+    )
+    @require_response_parsing
+    @patch.dict(os.environ, {"TRL_EXPERIMENTAL_SILENCE": "1"})
+    def test_tool_discovery_does_not_evaluate_environment_properties(self):
+        # Tool discovery must list the environment's methods on its class. `inspect.getmembers` calls `getattr` on
+        # every name before applying the predicate, so listing the instance evaluates its properties, and a property
+        # may be expensive or have side effects (a Harbor env scores the rollout from one). Here `reward` is inert on
+        # a fresh instance and raises once the environment has been reset: the first batch resets the pooled
+        # instances, so a second batch that listed the instance would raise before generating anything.
+        class PropertyEnvironment:
+            def __init__(self):
+                self.is_reset = False
+
+            def reset(self, **kwargs):
+                self.is_reset = True
+
+            @property
+            def reward(self) -> float:
+                if self.is_reset:
+                    raise RuntimeError("`reward` must not be evaluated while discovering tools")
+                return 0.0
+
+            def echo(self, text: str) -> str:
+                """
+                Echo the text back.
+
+                Args:
+                    text: Text to echo.
+
+                Returns:
+                    The text, unchanged.
+                """
+                return text
+
+        def reward_func(completions, **kwargs):
+            # Never reads `environments`, so nothing but tool discovery can touch the `reward` property.
+            return [1.0] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=2,  # the first batch resets the pooled instances, the second re-lists their tools
+            report_to="none",
+        )
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=reward_func,
+            args=training_args,
+            environment_factory=PropertyEnvironment,
+        )
+
+        def fake_generate(input_ids, **kwargs):
+            # "I won't increment<|im_end|>" — no tool call, so one generation round per step.
+            completion_ids = torch.tensor(
+                [[40, 2765, 944, 16252, 151645]] * input_ids.shape[0], device=input_ids.device
+            )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The regression is only exercised if the instances the last batch listed had really been reset before it.
+        assert all(environment.is_reset for environment in trainer.environments)
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.2.0"),
@@ -3962,6 +4391,30 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_reward_model_pad_token_id_synced_with_text_config(self):
+        # A composite reward model resolves the pad token through its text config, not the top-level one.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration", num_labels=1
+        )
+        reward_processing_class = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        )
+        reward_processing_class.pad_token = reward_processing_class.eos_token
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_model,
+            reward_processing_classes=reward_processing_class,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        pad_token_id = trainer.reward_processing_classes[0].pad_token_id
+        assert pad_token_id is not None
+        assert reward_model.config.get_text_config().pad_token_id == pad_token_id
+
 
 @require_vision
 class TestGRPOTrainerVLM(TrlTestCase):
@@ -4039,6 +4492,19 @@ class TestGRPOTrainerVLM(TrlTestCase):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_generation_suppresses_image_token(self):
+        # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
     def test_train_vlm_with_pad_to_multiple_of(self):
         # Models like Gemma3 use other forward keyword arguments like token_type_ids that also need to be padded when
@@ -4228,6 +4694,68 @@ class TestGRPOTrainerVLM(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
         ],
     )
+    @require_peft
+    @require_bitsandbytes
+    def test_train_vlm_peft_dora_and_quantization(self, model_id):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        trainer = GRPOTrainer(
+            model=model_id,  # pass the model as an identifier, so that the trainer applies the quantization config
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            quantization_config=quantization_config,
+            peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], use_dora=True),
+        )
+
+        # Check that the trainer applied the quantization config when loading the model
+        assert trainer.model.base_model.model.is_loaded_in_4bit
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the peft params have changed, and that they are cast to bfloat16, as recommended by the QLoRA
+        # paper. The base model params are not checked: bitsandbytes casts the biases of a Linear4bit in-place during
+        # the forward pass, so some of them change in a way that is unrelated to training.
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # The DoRA magnitude vector is the exception: it must stay in float32, since its optimizer updates can be
+            # smaller than bfloat16 can represent, which would otherwise silently freeze it, see #7268
+            if "lora_magnitude_vector" in n:
+                assert param.dtype == torch.float32, f"Parameter {n} is not in float32."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+            elif "lora" in n:  # We expect the peft params to be different
+                assert param.dtype == torch.bfloat16, f"Parameter {n} is not in bfloat16."
+                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        ],
+    )
     def test_train_vlm_and_importance_sampling(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -4243,55 +4771,6 @@ class TestGRPOTrainerVLM(TrlTestCase):
             # note: num_generations=2 is only suitable for CI testing; production training should use more generations
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             steps_per_generation=2,  # increase the steps per generation to trigger IS
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model=model_id,
-            reward_funcs=reward_func,
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @pytest.mark.parametrize(
-        "model_id",
-        [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-                marks=pytest.mark.xfail(
-                    (Version("5.2.0") < Version(transformers.__version__))
-                    and not is_liger_kernel_available(min_version="0.8.0"),
-                    reason="Upstream issue tracked at https://github.com/linkedin/Liger-Kernel/issues/1117",
-                ),
-            ),
-        ],
-    )
-    @require_liger_kernel
-    def test_train_vlm_and_liger(self, model_id):
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            """Reward function that rewards longer completions."""
-            return [float(len(completion[0]["content"])) for completion in completions]
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
-            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
-            # note: num_generations=2 is only suitable for CI testing; production training should use more generations
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_liger_kernel=True,  # enable Liger kernel
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -4394,6 +4873,8 @@ class TestGRPOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        # Some samples have no image: their batches leave the vision tower without gradients
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -4604,436 +5085,68 @@ class TestGRPOTrainerVLM(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-
-@pytest.mark.slow
-@require_torch_accelerator
-class TestGRPOTrainerSlow(TrlTestCase):
-    def setup_method(self):
-        self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        self.eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test")
-        self.max_length = 128
-
-    def teardown_method(self):
-        gc.collect()
-        backend_empty_cache(torch_device)
-        gc.collect()
-
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
-    @require_liger_kernel
-    @xfail_data_parallel
-    def test_train_with_liger_grpo_kernel(self, model_name):
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            use_liger_kernel=True,
-            max_completion_length=self.max_length,
-            report_to="none",
-            logging_strategy="no",
-        )
+    @require_response_parsing
+    def test_train_with_tools_gemma4(self):
+        # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
+        def screenshot_tool() -> str:
+            """Simple text-returning tool."""
+            return "The image shows a red square."
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
-
-        trainer = GRPOTrainer(
-            model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            processing_class=tokenizer,
-        )
-        from trl.losses import FusedLinearGRPOLoss
-
-        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
-
-        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
-
-        trainer.train()
-
-        for n, param in previous_trainable_params.items():
-            new_param = model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(model, trainer)
-
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
-            "trl-internal-testing/tiny-MistralForCausalLM-0.2",
-        ],
-    )
-    @require_liger_kernel
-    @require_peft
-    @xfail_data_parallel
-    def test_train_with_liger_grpo_kernel_and_peft(self, model_name):
-        from peft import LoraConfig, TaskType
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            use_liger_kernel=True,
-            max_completion_length=self.max_length,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=512,
             report_to="none",
-            logging_strategy="no",
         )
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
-
-        # Configure PEFT with LoRA
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False,
-            r=8,
-            lora_alpha=32,
-            lora_dropout=0.1,
-            target_modules=["q_proj", "v_proj"],
-        )
-
         trainer = GRPOTrainer(
-            model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
             args=training_args,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            processing_class=tokenizer,
-            peft_config=peft_config,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
         )
-        from trl.losses import FusedLinearGRPOLoss
 
-        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-        # Verify PEFT adapter is properly initialized
-        from peft import PeftModel
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                completion_ids = torch.tensor(
+                    [
+                        # '<|tool_call>call:screenshot_tool{}<tool_call|><|tool_response>'
+                        [48, 6639, 236787, 76794, 236779, 13205, 16454, 49, 50],
+                        # "I don't know any tool<turn|>" + padding
+                        [236777, 1537, 236789, 236745, 1281, 1027, 5904, 106, 0],
+                    ],
+                    device=input_ids.device,
+                )
+            else:  # second call: 1 tool call succeeded
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<turn|>'
+                        [34496, 236888, 106],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
 
-        assert isinstance(trainer.model, PeftModel), "Model should be wrapped with PEFT"
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
 
-        # Store adapter weights before training
-        previous_trainable_params = {
-            n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
-        }
-        assert len(previous_trainable_params) > 0, "No trainable parameters found in PEFT model"
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both completions end on one of Gemma 4's eos ids, so none is clipped
+        assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
 
-        trainer.train()
-
-        # Verify adapter weights have changed after training
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(model, trainer)
-
-    @require_liger_kernel
-    @xfail_data_parallel
-    def test_liger_grpo_kernel_importance_sampling(self):
-        model_name = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            use_liger_kernel=True,
-            max_completion_length=self.max_length,
-            importance_sampling_level="sequence",
-            report_to="none",
-            logging_strategy="no",
-        )
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
-
-        trainer = GRPOTrainer(
-            model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            processing_class=tokenizer,
-        )
-        from trl.losses import FusedLinearGRPOLoss
-
-        assert isinstance(trainer.liger_loss, FusedLinearGRPOLoss)
-
-        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
-
-        trainer.train()
-
-        for n, param in previous_trainable_params.items():
-            new_param = model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(model, trainer)
-
-    # Flash Attention requires a `head_size` multiple of 8, hence the `small-*` models (`head_size` 32 and 128)
-    # rather than the `tiny-*` ones (`head_size=2`) used before. This drops the coverage of
-    # `trl-internal-testing/tiny-LlamaForCausalLM-3.2` and `trl-internal-testing/tiny-MistralForCausalLM-0.2`;
-    # restoring it needs `small-LlamaForCausalLM-3.2` and `small-MistralForCausalLM-0.2`, which don't exist yet.
-    @pytest.mark.parametrize(
-        "model_name",
-        [
-            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-            "trl-internal-testing/small-Qwen3ForCausalLM",
-        ],
-    )
-    @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
-        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
-    )
-    def test_train_with_transformers_continuous_batching(self, model_name):
-        """Test that training works with transformers continuous batching (requires GPU)."""
-        if not Version(transformers.__version__) >= Version("5.8.0"):
-            pytest.skip("transformers continuous batching requires transformers>=5.8.0.")
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_transformers_continuous_batching=True,
-            report_to="none",
-            logging_strategy="no",
-        )
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, dtype="float32")
-
-        trainer = GRPOTrainer(
-            model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=self.train_dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        release_memory(model, trainer)
-
-    @require_vllm
-    @require_bitsandbytes
-    @require_peft
-    def test_vlm_processor_vllm_colocate_mode(self):
-        """
-        Test that VLM processors work with vLLM in colocate mode.
-
-        This test uses multiple memory optimization techniques to ensure it runs on limited hardware:
-        - LoRA (Low-Rank Adaptation) with minimal rank (r=4)
-        - 4-bit quantization with BitsAndBytesConfig
-        - Gradient checkpointing
-        - Minimal batch sizes and sequence lengths
-        - Very low GPU memory utilization (5%)
-        """
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        config = GRPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=1,  # Minimal batch size
-            gradient_accumulation_steps=2,  # Make effective batch size 2, divisible by num_generations
-            num_generations=2,
-            max_completion_length=4,  # Very short completions to reduce memory
-            use_vllm=True,  # Enable vLLM
-            vllm_mode="colocate",  # Use colocate mode to avoid server dependency
-            vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
-            bf16=False,  # bf16=True raises on devices without bf16 support; this test never calls train(), so it is unused
-            report_to="none",
-            logging_strategy="no",
-        )
-
-        # Create a VLM processor
-        processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left")
-
-        # Verify processor has both required attributes for VLM detection
-        assert hasattr(processor, "tokenizer")
-        assert hasattr(processor, "image_processor")
-
-        def dummy_reward_func(completions, **kwargs):
-            return [1.0] * len(completions)
-
-        # Use LoRA configuration for memory efficiency
-        lora_config = LoraConfig(
-            r=4,  # Very low rank for minimal memory
-            lora_alpha=8,
-            target_modules=["q_proj", "v_proj"],  # Minimal target modules
-            lora_dropout=0.1,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        # Use 4-bit quantization for further memory reduction
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-
-        original_env = {}
-        required_env_vars = {
-            "RANK": "0",
-            "LOCAL_RANK": "0",
-            "WORLD_SIZE": "1",
-            "LOCAL_WORLD_SIZE": "1",
-            "MASTER_ADDR": "localhost",
-            "MASTER_PORT": "12355",
-        }
-
-        for key, value in required_env_vars.items():
-            original_env[key] = os.environ.get(key)
-            os.environ[key] = value
-
-        try:
-            # Test VLM processor with vLLM colocate mode
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                try:
-                    # Load model with quantization for memory efficiency
-                    model = AutoModelForCausalLM.from_pretrained(
-                        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                        quantization_config=quantization_config,
-                        dtype=torch.bfloat16,
-                    )
-
-                    trainer = GRPOTrainer(
-                        model=model,
-                        reward_funcs=dummy_reward_func,
-                        args=config,
-                        train_dataset=dataset,
-                        processing_class=processor,  # VLM processor
-                        peft_config=lora_config,  # Use LoRA for memory efficiency
-                    )
-
-                    # Should detect VLM processor correctly and allow vLLM
-                    assert trainer.use_vllm, "vLLM should be enabled for VLM processors in colocate mode"
-                    assert trainer.vllm_mode == "colocate", "Should use colocate mode"
-
-                    # Check if signature columns were set properly
-                    if trainer._signature_columns is not None:
-                        # Should include 'image' in signature columns for VLM processors
-                        assert "image" in trainer._signature_columns, (
-                            "Should include 'image' in signature columns for VLM"
-                        )
-
-                    # Should not emit any warnings about VLM incompatibility
-                    incompatibility_warnings = [
-                        str(w_item.message)
-                        for w_item in w
-                        if "does not support VLMs" in str(w_item.message)
-                        or "not compatible" in str(w_item.message).lower()
-                    ]
-                    assert len(incompatibility_warnings) == 0, (
-                        f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}"
-                    )
-
-                    # Test passes if we get this far without exceptions
-
-                except Exception as e:
-                    # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
-                    if any(
-                        keyword in str(e).lower()
-                        for keyword in [
-                            "outofmemoryerror",
-                            "cuda",
-                            "memory",
-                            "insufficient",
-                            "no such device",
-                            "free memory",
-                            "gpu memory utilization",
-                            "decrease gpu memory",
-                        ]
-                    ):
-                        pytest.skip(f"Skipping vLLM colocate test due to hardware constraints: {e}")
-                    elif "KeyError" in str(e) and "RANK" in str(e):
-                        pytest.skip(f"Skipping vLLM colocate test due to environment setup issues: {e}")
-                    elif "ValueError" in str(e) and "memory" in str(e).lower():
-                        pytest.skip(f"Skipping vLLM colocate test due to memory constraints: {e}")
-                    else:
-                        raise
-        finally:
-            # Restore original environment variables
-            for key, original_value in original_env.items():
-                if original_value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = original_value
-
-            release_memory(model, trainer)
-
-    @require_vllm
-    def test_train_vllm(self):
-        """Test that training works with vLLM for generation."""
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            report_to="none",
-            logging_strategy="no",
-            use_vllm=True,
-        )
-
-        try:
-            trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-
-            # Check that the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-        except Exception as e:
-            # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
-            if any(
-                keyword in str(e).lower()
-                for keyword in [
-                    "outofmemoryerror",
-                    "cuda",
-                    "memory",
-                    "insufficient",
-                    "no such device",
-                    "free memory",
-                    "gpu memory utilization",
-                    "decrease gpu memory",
-                ]
-            ):
-                pytest.skip(f"Skipping vLLM training test due to hardware constraints: {e}")
-            elif "KeyError" in str(e) and "RANK" in str(e):
-                pytest.skip(f"Skipping vLLM training test due to environment setup issues: {e}")
-            elif "ValueError" in str(e) and "memory" in str(e).lower():
-                pytest.skip(f"Skipping vLLM training test due to memory constraints: {e}")
-            else:
-                raise
-
-        release_memory(trainer.model, trainer)

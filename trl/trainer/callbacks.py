@@ -68,6 +68,7 @@ def _generate_completions(
     accelerator: Accelerator,
     generation_config: GenerationConfig | None,
     batch_size: int = 1,
+    gradient_checkpointing_kwargs: dict | None = None,
 ) -> list[str]:
     """
     Generates completions for a list of pre-formatted prompts from the given model.
@@ -85,6 +86,8 @@ def _generate_completions(
             Configuration for text generation.
         batch_size (`int`, *optional*, defaults to `1`):
             The number of prompts to process in each batch.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
 
     Returns:
         `list[str]`:
@@ -92,7 +95,9 @@ def _generate_completions(
     """
     completions = []
     # TODO: Override model.generation_config with generation_kwargs
-    with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
+    with unwrap_model_for_generation(
+        model, accelerator, gradient_checkpointing_kwargs=gradient_checkpointing_kwargs
+    ) as unwrapped_model:
         for idx in range(0, len(prompts), batch_size):
             batch = prompts[idx : idx + batch_size]
             tokenized_batch = tokenizer(batch, return_tensors="pt", padding=True, truncation=True).to(model.device)
@@ -328,6 +333,7 @@ class LogCompletionsCallback(TrainerCallback):
                 accelerator=accelerator,
                 generation_config=self.generation_config,
                 batch_size=args.per_device_eval_batch_size,
+                gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs,
             )
             completions = gather_object(completions)
             prompts = gather_object(prompts)
@@ -512,6 +518,7 @@ class WeaveCallback(TrainerCallback):
                 accelerator=accelerator,
                 generation_config=self.generation_config,
                 batch_size=args.per_device_eval_batch_size,
+                gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs,
             )
 
             all_prompts = gather_object(prompts)
