@@ -590,7 +590,7 @@ class TestMultiTeacherRouting:
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
-            return [7]
+            return [7], loop.model_version
 
         async def fake_post(base_url, path, payload, timeout):
             requests.append((base_url, payload))
@@ -1212,6 +1212,45 @@ class TestRolloutRequestModel(TrlTestCase):
         assert loop._request_model == "trl-policy-v0"
         loop._model_version_value.value = 3
         assert loop._request_model == "trl-policy-v3"
+
+    @pytest.mark.parametrize(
+        ("lora_name", "expected_model"),
+        [("trl-policy", "trl-policy-v9"), (None, "Qwen/Qwen3-4B")],
+    )
+    def test_rollout_records_the_version_actually_requested_during_weight_sync(self, lora_name, expected_model):
+        """Pin provenance at HTTP dispatch, even when a sync races with preparation/scoring."""
+        loop = self._loop(lora_name)
+        loop.teacher_model_names = {"default": "teacher-model"}
+        requests = []
+
+        async def fake_post(base_url, path, payload, timeout):
+            requests.append((base_url, payload["model"]))
+            if base_url == loop.vllm_server_url:
+                # Simulate another policy publish while generation/teacher scoring are in flight.
+                loop._model_version_value.value = 10
+                return {"choices": [{"token_ids": [7]}]}
+            return {
+                "choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]
+            }
+
+        loop._post = fake_post
+        original_generate = loop._generate_one_turn
+
+        async def publish_new_version_before_generation(prompt_ids):
+            # Before the fix, the sample was tagged v0 at task entry while the request
+            # correctly targeted v9 after this update. The stale-sample gate could then
+            # reject a fresh rollout, and traces misreported its sampling policy.
+            loop._model_version_value.value = 9
+            return await original_generate(prompt_ids)
+
+        loop._generate_one_turn = publish_new_version_before_generation
+        sample = asyncio.run(
+            loop._generate_and_score_one(0, {"prompt": [{"role": "user", "content": "hi"}]})
+        )
+        assert sample.model_version == 9
+        assert requests[0] == (loop.vllm_server_url, expected_model)
+        assert requests[1] == ("http://localhost:8001", "teacher-model")
+        assert loop._request_model == ("trl-policy-v10" if lora_name else "Qwen/Qwen3-4B")
 
 
 # A LoRA-capable server, as reported by `/server_info`. `max_loras` covers the `max_staleness + 1` servable policy

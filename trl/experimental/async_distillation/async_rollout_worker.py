@@ -286,14 +286,17 @@ class _AsyncRolloutLoop:
     def model_version(self) -> int:
         return int(self._model_version_value.value)
 
-    @property
-    def _request_model(self) -> str:
-        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
-        # serves the base model, so the published version has to be part of the request. `model_version` reads the
-        # shared `mp.Value`, so a sync is picked up without extra IPC.
+    def _request_model_for_version(self, model_version: int) -> str:
+        # The vLLM model name must be built from the SAME version snapshot that travels with the rollout.
+        # Never re-read the shared policy version while routing an already assembled request.
         if self.lora_name is None:
             return self.model_name
-        return f"{self.lora_name}-v{self.model_version}"
+        return f"{self.lora_name}-v{model_version}"
+
+    @property
+    def _request_model(self) -> str:
+        # For callers with no in-flight rollout, expose the currently published model name.
+        return self._request_model_for_version(self.model_version)
 
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -524,13 +527,12 @@ class _AsyncRolloutLoop:
         return teacher_id, self.teacher_server_urls[teacher_id]
 
     async def _generate_and_score_one(self, prompt_id: int, row: dict[str, Any]) -> RolloutSample:
-        model_version = self.model_version
         t_dispatch = time.monotonic()
         prompt = row["prompt"]
         prompt_ids = self.tokenizer.apply_chat_template(
             prompt, return_dict=False, add_generation_prompt=True, **self.chat_template_kwargs
         )
-        completion_ids = await self._generate_one_turn(prompt_ids)
+        completion_ids, model_version = await self._generate_one_turn(prompt_ids)
         completion_text = self.tokenizer.decode(completion_ids, skip_special_tokens=False)
         completion = [{"role": "assistant", "content": completion_text}]
 
@@ -568,9 +570,13 @@ class _AsyncRolloutLoop:
             metrics={},
         )
 
-    async def _generate_one_turn(self, prompt_ids: list[int]) -> list[int]:
+    async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], int]:
+        # Linearization point: capture the published policy version exactly when constructing the
+        # generation request. This version must travel with the returned tokens all the way to the
+        # RolloutSample used by the staleness gate, even if a sync finishes before teacher scoring.
+        model_version = self.model_version
         payload = {
-            "model": self._request_model,
+            "model": self._request_model_for_version(model_version),
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -591,7 +597,7 @@ class _AsyncRolloutLoop:
             max_attempts=30,
             label="student vllm /v1/completions",
         )
-        return output["choices"][0]["token_ids"]
+        return output["choices"][0]["token_ids"], model_version
 
     async def _score_with_teacher(
         self, prompt_ids: list[int], completion_ids: list[int], teacher_server_url: str, teacher_model_name: str
