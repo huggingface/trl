@@ -517,15 +517,24 @@ class _TrainBeginCallback(TrainerCallback):
         self._trainer = trainer
         self._fired = False
 
-    def on_train_begin(self, _args, _state, _control, **_kwargs):
+    def on_train_begin(self, _args, _state, control, **_kwargs):
         if self._fired:
-            return
+            return control
+
+        # A resumed checkpoint may already satisfy the prompt/group epoch target. Do not
+        # cold-sync weights or start a rollout worker for a run that must not take another step.
+        target = self._trainer._epoch_stop_prompts
+        if target is not None and self._trainer._prompts_before_resume >= target:
+            control.should_training_stop = True
+            return control
+
         self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
         self._trainer._sync_weight()
         if self._trainer.accelerator.is_main_process and self._trainer.rollout_worker is not None:
             self._trainer.rollout_worker.start()
+        return control
 
 
 class _EpochStopCallback(TrainerCallback):
@@ -541,6 +550,13 @@ class _EpochStopCallback(TrainerCallback):
     def __init__(self, trainer: "AsyncDistillationTrainer", target_prompts: int):
         self._trainer = trainer
         self._target = target_prompts
+
+    def on_train_begin(self, _args, _state, control, **_kwargs):
+        # The restored cursor is identical on every rank, so this check needs no collective.
+        # Checking only on_step_end would consume one more rollout and optimizer step first.
+        if self._trainer._prompts_before_resume >= self._target:
+            control.should_training_stop = True
+        return control
 
     def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
