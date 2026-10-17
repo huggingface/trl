@@ -2671,34 +2671,36 @@ class GRPOTrainer(_BaseTrainer):
                 else:
                     logps_diff = per_token_logps_diff
 
-                vllm_importance_sampling_ratio = torch.exp(logps_diff)
+                raw_vllm_importance_sampling_ratio = torch.exp(logps_diff)
 
                 # vllm_importance_sampling_ratio.shape:
                 #   token_* modes:     (B, T)  (per-token ratio)
                 #   sequence_* modes:  (B, 1)  (per-sequence ratio)
 
+                min_val = (
+                    self.vllm_importance_sampling_clip_min
+                    if self.vllm_importance_sampling_clip_min is not None
+                    else -math.inf
+                )
+                max_val = (
+                    self.vllm_importance_sampling_clip_max
+                    if self.vllm_importance_sampling_clip_max is not None
+                    else math.inf
+                )
+
+                # Ratios outside [C_min, C_max], which are clipped (truncate modes) or masked (mask modes)
+                invalid_mis_mask = (raw_vllm_importance_sampling_ratio < min_val) | (
+                    raw_vllm_importance_sampling_ratio > max_val
+                )
+
                 if self.vllm_importance_sampling_mode in ["sequence_truncate", "token_truncate"]:
                     vllm_importance_sampling_ratio = torch.clamp(
-                        vllm_importance_sampling_ratio,
+                        raw_vllm_importance_sampling_ratio,
                         min=self.vllm_importance_sampling_clip_min,
                         max=self.vllm_importance_sampling_clip_max,
                     )
                 elif self.vllm_importance_sampling_mode in ["sequence_mask", "token_mask"]:
-                    min_val = (
-                        self.vllm_importance_sampling_clip_min
-                        if self.vllm_importance_sampling_clip_min is not None
-                        else -math.inf
-                    )
-                    max_val = (
-                        self.vllm_importance_sampling_clip_max
-                        if self.vllm_importance_sampling_clip_max is not None
-                        else math.inf
-                    )
-
-                    invalid_mis_mask = (vllm_importance_sampling_ratio < min_val) | (
-                        vllm_importance_sampling_ratio > max_val
-                    )
-                    vllm_importance_sampling_ratio = vllm_importance_sampling_ratio.masked_fill(
+                    vllm_importance_sampling_ratio = raw_vllm_importance_sampling_ratio.masked_fill(
                         invalid_mis_mask, value=0.0
                     )
                 else:
@@ -2873,9 +2875,14 @@ class GRPOTrainer(_BaseTrainer):
             )
             if sequence_level_is:
                 flat_is_ratio = vllm_importance_sampling_ratio.flatten()
+                raw_flat_is_ratio = raw_vllm_importance_sampling_ratio.flatten()
+                flat_invalid_mis_mask = invalid_mis_mask.flatten()
             else:
                 flat_is_ratio = vllm_importance_sampling_ratio[mask]
+                raw_flat_is_ratio = raw_vllm_importance_sampling_ratio[mask]
+                flat_invalid_mis_mask = invalid_mis_mask[mask]
 
+            # Stats related to importance sampling ratio after masking/truncation
             min_importance_sampling_ratio = (
                 torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
             )
@@ -2893,6 +2900,31 @@ class GRPOTrainer(_BaseTrainer):
             )
             self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
                 nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+            )
+
+            # Stats related to importance sampling ratio before masking/truncation
+            min_raw_importance_sampling_ratio = (
+                torch.min(raw_flat_is_ratio) if raw_flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            mean_raw_importance_sampling_ratio = (
+                torch.mean(raw_flat_is_ratio) if raw_flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            max_raw_importance_sampling_ratio = (
+                torch.max(raw_flat_is_ratio) if raw_flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            self._metrics[mode]["sampling/raw_importance_sampling_ratio/min"].append(
+                nanmin(self.accelerator.gather(min_raw_importance_sampling_ratio)).item()
+            )
+            self._metrics[mode]["sampling/raw_importance_sampling_ratio/mean"].append(
+                self.accelerator.gather(mean_raw_importance_sampling_ratio).nanmean().item()
+            )
+            self._metrics[mode]["sampling/raw_importance_sampling_ratio/max"].append(
+                nanmax(self.accelerator.gather(max_raw_importance_sampling_ratio)).item()
+            )
+            num_modified_is_ratios = self.accelerator.gather(flat_invalid_mis_mask.sum()).sum().item()
+            num_is_ratios = self.accelerator.gather(torch.tensor(flat_is_ratio.numel(), device=device)).sum().item()
+            self._metrics[mode]["sampling/frac_modified_importance_sampling_ratio"].append(
+                num_modified_is_ratios / num_is_ratios if num_is_ratios > 0 else 0.0
             )
 
         output = {
