@@ -518,9 +518,6 @@ class _TrainBeginCallback(TrainerCallback):
         self._fired = False
 
     def on_train_begin(self, _args, _state, control, **_kwargs):
-        if self._fired:
-            return control
-
         # A resumed checkpoint may already satisfy the prompt/group epoch target. Do not
         # cold-sync weights or start a rollout worker for a run that must not take another step.
         target = self._trainer._epoch_stop_prompts
@@ -528,6 +525,8 @@ class _TrainBeginCallback(TrainerCallback):
             control.should_training_stop = True
             return control
 
+        if self._fired:
+            return control
         self._fired = True
         if self._trainer.accelerator.is_main_process and self._trainer.weight_transfer is not None:
             self._trainer.weight_transfer.init_weight_transfer()
