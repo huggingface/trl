@@ -185,6 +185,26 @@ def _narrow_top1_actual_support(
     return narrow_token_ids, teacher_support_logps, valid_candidate_mask
 
 
+def _has_teacher_signal_mask(input_ids, teacher_topk_ids, teacher_topk_logprobs, beta):
+    """Return positions with at least one candidate used by the configured divergence.
+
+    Keep this predicate shared by collation and loss accounting: the global token
+    denominator must count exactly the positions that the loss can consume.
+    """
+    valid_candidate_mask_wide = teacher_topk_ids != -1
+    if beta == 0.0:
+        valid_candidate_mask = valid_candidate_mask_wide
+    else:
+        _, _, valid_candidate_mask = _narrow_top1_actual_support(
+            teacher_topk_ids,
+            teacher_topk_logprobs,
+            input_ids,
+            valid_candidate_mask_wide,
+            beta,
+        )
+    return valid_candidate_mask.any(dim=-1)
+
+
 # Number of valid completion positions projected through the `lm_head` per chunk (mirrors
 # `DistillationTrainer`'s `_CHUNKED_LM_HEAD_CHUNK_SIZE`).
 _CHUNKED_LM_HEAD_CHUNK_SIZE = 256
@@ -736,6 +756,9 @@ class DataCollatorForRollout(DataCollatorMixin):
             Maps each configured `teacher_server_urls` key to a stable integer index, packed per-position (like every
             other per-token field) as `teacher_id_idx` so `compute_loss` can break `jsd`/`entropy`/ `teacher_entropy`
             down per teacher (MOPD). `None` when there's only one teacher (no breakdown needed).
+        beta (`float`, *optional*, defaults to `0.0`):
+            Divergence interpolation coefficient. Must match the trainer so token counts use the same teacher-support
+            rule as the loss.
         prompts_trained (`set[int]`, *optional*):
             The trainer's set of distinct prompt ids trained so far, shared by reference and updated with this
             micro-batch's prompts; read by [`_EpochStopCallback`] to decide when an epoch target is met.
@@ -748,6 +771,7 @@ class DataCollatorForRollout(DataCollatorMixin):
     pad_token_id: int
     num_processes: int = 1
     teacher_id_to_idx: dict[str, int] | None = None
+    beta: float = 0.0
     return_tensors: str = "pt"
     # Distinct prompts trained so far, shared by reference with the trainer.
     prompts_trained: set[int] = field(default_factory=set)
@@ -804,9 +828,13 @@ class DataCollatorForRollout(DataCollatorMixin):
         all_examples = [example for group in groups for example in group]
         self.prompts_trained.update(example["prompt_id"] for example in all_examples)
 
-        # Total valid completion tokens across the micro-batch. Repeated per rank so that DataLoaderDispatcher
-        # (dispatch_batches=True) slices correctly on dim=0.
-        n_trained_tokens = sum(int(example["completion_mask"].sum()) for example in all_examples)
+        # Count only completion positions the configured divergence can consume. A completion token with no
+        # usable teacher candidate is forwarded but contributes no loss, so including it in the denominator would
+        # silently shrink the gradient whenever a teacher response has missing/invalid prompt logprobs.
+        has_teacher_signal = _has_teacher_signal_mask(input_ids, teacher_topk_ids, teacher_topk_logprobs, self.beta)
+        effective_completion_mask = completion_mask.bool() & has_teacher_signal
+        n_trained_tokens = int(effective_completion_mask.sum())
+        # Repeat the global count per rank so DataLoaderDispatcher (dispatch_batches=True) slices correctly on dim=0.
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
         sample_tokens = [len(example["input_ids"]) for example in all_examples]
@@ -841,11 +869,18 @@ class DataCollatorForRollout(DataCollatorMixin):
         aggregated here instead of being packed into NaN-padded tensors, broadcast to every rank and reduced back —
         which is what this trainer used to do to compute a number rank 0 already had.
         """
-        # A training row's tokens split in two: those the loss is taken over (`completion_mask == 1`) and those merely
-        # forwarded — the prompt, and any completion position the teacher scored no candidate for. FLOPs are spent on
-        # both, so both are worth a number, and their ratio is what says how much of the forward earns no gradient.
+        # A token earns gradient only if it is in the completion and the configured divergence has at least
+        # one usable teacher candidate at that position. Prompts, padding, and missing teacher scores are forwarded
+        # but excluded from the trained-token count.
         forwarded = [len(example["input_ids"]) for example in all_examples]
-        trained = [int(example["completion_mask"].sum()) for example in all_examples]
+        trained = []
+        for example in all_examples:
+            input_ids = torch.as_tensor(example["input_ids"], dtype=torch.long).unsqueeze(0)
+            candidate_ids = torch.as_tensor(example["teacher_topk_ids"], dtype=torch.long).unsqueeze(0)
+            candidate_logprobs = torch.as_tensor(example["teacher_topk_logprobs"], dtype=torch.float32).unsqueeze(0)
+            has_signal = _has_teacher_signal_mask(input_ids, candidate_ids, candidate_logprobs, self.beta)[0]
+            completion_mask = torch.as_tensor(example["completion_mask"], dtype=torch.bool)
+            trained.append(int((completion_mask & has_signal).sum()))
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
         self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
@@ -1553,6 +1588,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     self.processing_class.pad_token_id,
                     num_processes,
                     self._teacher_id_to_idx if len(self._teacher_ids) > 1 else None,
+                    beta=self.args.beta,
                     prompts_trained=self._trained_prompts,
                     metrics=self._metrics["train"],
                     # `or 0` because only rank 0 fills an unset budget from the vLLM server above; the other ranks
@@ -1638,11 +1674,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         has_teacher_signal = valid_candidate_mask.any(dim=-1)
         # DDP/FSDP averages gradients across ranks (world_size). To get correct per-token normalization we scale by
         # 1/tokens_per_rank = world_size / global_n_tokens, so after DDP averaging the effective scale is 1/global_n_tokens.
-        # Mirrors AsyncGRPOTrainer.compute_loss's scaling: this is infra-level (padding-free packing, DDP averaging,
-        # gradient accumulation), not policy-gradient-specific, so it needs no adaptation here. `global_n_tokens` is
-        # computed by the collator from `completion_mask` alone, so it does not shrink when `has_teacher_signal`
-        # excludes a position above; a run with such gaps is very slightly under-scaled rather than exactly
-        # renormalized, which is an acceptable trade-off for what should be a rare, teacher-side data gap.
+        # The collator uses the same divergence-specific teacher-support predicate as this loss, so the denominator
+        # excludes completion positions that have no usable teacher signal instead of silently diluting the gradient.
         token_mask_1d = (completion_mask.bool() & has_teacher_signal)[0]  # (seq_len - 1,), batch dim always 1
 
         # Memory-efficient path: get the student's backbone hidden states (skip `lm_head`, so this alone never
