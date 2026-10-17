@@ -20,6 +20,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import accelerate
+import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
@@ -102,6 +103,7 @@ def _unwrap_model_for_generation(
     model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
+    gradient_checkpointing_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -114,6 +116,8 @@ def _unwrap_model_for_generation(
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which
             can be more memory-efficient but may lead to slower generation times.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
 
     Yields:
         Unwrapped model.
@@ -143,7 +147,7 @@ def _unwrap_model_for_generation(
     else:
         yield unwrapped_model
     if is_gradient_checkpointing:
-        unwrapped_model.gradient_checkpointing_enable()
+        unwrapped_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
 
 
 @contextmanager
@@ -196,6 +200,7 @@ def unwrap_model_for_generation(
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
     generation_kwargs: dict | None = None,
+    gradient_checkpointing_kwargs: dict | None = None,
 ):
     """
     Context manager to unwrap distributed or accelerated models for generation tasks.
@@ -216,13 +221,18 @@ def unwrap_model_for_generation(
             If provided, temporarily overrides the model's generation_config during generation. The original config is
             automatically restored when exiting the context. This is useful for using different generation parameters
             during training vs. inference.
+        gradient_checkpointing_kwargs (`dict`, *optional*):
+            Additional kwargs for gradient checkpointing enabling.
 
     Yields:
         Unwrapped model with optionally overridden generation_config.
     """
     with (
         _unwrap_model_for_generation(
-            model, accelerator, gather_deepspeed3_params=gather_deepspeed3_params
+            model,
+            accelerator,
+            gather_deepspeed3_params=gather_deepspeed3_params,
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs,
         ) as unwrapped_model,
         _override_model_generation_config(unwrapped_model, generation_kwargs=generation_kwargs),
     ):
@@ -308,15 +318,17 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
                     "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
                 )
                 ignored_params = None
-            fully_shard(
-                model,
-                reshard_after_forward=fsdp_plugin.reshard_after_forward,
-                offload_policy=fsdp_plugin.cpu_offload,
+            fsdp2_kwargs = {
+                "reshard_after_forward": fsdp_plugin.reshard_after_forward,
+                "offload_policy": fsdp_plugin.cpu_offload,
                 # `fully_shard` doesn't accept `None` in case of `MixedPrecisionPolicy`
-                mp_policy=fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
-                mesh=mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
-                ignored_params=ignored_params,
-            )
+                "mp_policy": fsdp_plugin.mixed_precision_policy or MixedPrecisionPolicy(),
+                "mesh": mesh[tuple(accelerator.parallelism_config.fsdp_dim_names)] if mesh is not None else None,
+            }
+            # `ignored_params` is only supported in torch >= 2.7.0
+            if Version(torch.__version__) >= Version("2.7.0"):
+                fsdp2_kwargs["ignored_params"] = ignored_params
+            fully_shard(model, **fsdp2_kwargs)
         else:
             raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()

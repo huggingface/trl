@@ -44,6 +44,8 @@ config = Gemma2Config(
     head_dim=2,
     query_pre_attn_scalar=2,
     eos_token_id=[1, 107],
+    cache_implementation="hybrid",
+    hidden_act="gelu_pytorch_tanh",
 )
 model = Gemma2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

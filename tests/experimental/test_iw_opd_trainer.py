@@ -32,11 +32,11 @@ from trl.experimental.iw_opd.iw_opd_trainer import (
     build_teacher_request_inputs,
 )
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_torch_accelerator
+from ..testing_utils import TrlTestCase
 
 
 def _make_distillation_config_kwargs(tmp_path):
-    return {"output_dir": str(tmp_path), "report_to": "none", "use_cpu": True, "bf16": False}
+    return {"output_dir": str(tmp_path), "report_to": "none"}
 
 
 def _build_server_result(teacher_logits, inputs, temperature=1.0):
@@ -138,16 +138,6 @@ def _variable_length_dataset():
     )
 
 
-def test_distillation_config_rejects_liger_with_teacher_server(tmp_path):
-    with pytest.raises(ValueError, match="use_liger_kernel=True is not supported with use_teacher_server=True"):
-        IWOPDConfig(
-            **_make_distillation_config_kwargs(tmp_path),
-            use_teacher_server=True,
-            teacher_model_server_url="http://localhost:8000",
-            use_liger_kernel=True,
-        )
-
-
 def test_distillation_config_rejects_invalid_reverse_kl_top_1_mode(tmp_path):
     with pytest.raises(ValueError, match="reverse_kl_top_1_mode must be one of"):
         IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), reverse_kl_top_1_mode="invalid")
@@ -166,17 +156,6 @@ def test_distillation_config_rejects_invalid_iw_opd_gamma(tmp_path):
 def test_distillation_config_rejects_invalid_iw_opd_epsilon(tmp_path):
     with pytest.raises(ValueError, match="iw_opd_epsilon must be positive"):
         IWOPDConfig(**_make_distillation_config_kwargs(tmp_path), iw_opd_epsilon=0.0)
-
-
-def test_distillation_config_rejects_iw_opd_with_liger(tmp_path):
-    with pytest.raises(
-        ValueError, match="use_liger_kernel=True is not supported with distillation_objective='iw_opd'"
-    ):
-        IWOPDConfig(
-            **_make_distillation_config_kwargs(tmp_path),
-            distillation_objective="iw_opd",
-            use_liger_kernel=True,
-        )
 
 
 def test_distillation_config_rejects_iw_opd_when_not_fully_on_policy(tmp_path):
@@ -309,11 +288,23 @@ def test_build_teacher_request_inputs(
 
 
 class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
-    def test_variable_lengths_use_neg_inf_sentinel_at_padding(self):
-        mock_self = MagicMock()
-        mock_self.teacher_client.get_sequence_logprobs = MagicMock(return_value=_ragged_server_response())
-        mock_self.loss_top_k = 1
-        mock_self.temperature = 1.0
+    def test_variable_lengths_use_neg_inf_sentinel_at_padding(self, monkeypatch):
+        from trl.generation import vllm_client as vllm_client_module
+
+        # Stand in for the teacher server, which cannot run here
+        teacher_client = MagicMock()
+        teacher_client.get_sequence_logprobs.return_value = _ragged_server_response()
+        monkeypatch.setattr(vllm_client_module, "VLLMClient", lambda *args, **kwargs: teacher_client)
+        trainer = IWOPDTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=IWOPDConfig(
+                output_dir=self.tmp_dir,
+                report_to="none",
+                use_teacher_server=True,
+                teacher_model_server_url="http://localhost:8000",
+            ),
+            train_dataset=_variable_length_dataset(),
+        )
 
         inputs = {
             "input_ids": torch.tensor([[10, 11, 90, 0, 0], [10, 11, 90, 9217, 100]]),
@@ -321,7 +312,7 @@ class TestGetTeacherTokenLogprobsFromServer(TrlTestCase):
             "labels": torch.tensor([[-100, -100, 90, -100, -100], [-100, -100, 90, 9217, 100]]),
         }
 
-        out = IWOPDTrainer._get_teacher_token_logprobs_from_server(mock_self, inputs, aligned_prompt_length=2)
+        out = trainer._get_teacher_token_logprobs_from_server(inputs, aligned_prompt_length=2)
 
         assert out["actual_logprobs"].shape == (2, 3)
         assert out["topk_logprobs"].shape == (2, 3, 1)
@@ -607,29 +598,6 @@ class TestIWOPDTrainer(TrlTestCase):
         # Doubling the global count exactly halves the loss (sum / num_items is linear in 1/num_items).
         torch.testing.assert_close(loss_double, loss_mean / 2, rtol=1e-4, atol=1e-6)
 
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_distillation_trainer_with_liger(self):
-        import importlib
-
-        training_args = self._make_args(use_liger_kernel=True, use_cpu=False)
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        trainer = IWOPDTrainer(
-            model=self.model_id,
-            teacher_model=self.model_id,
-            args=training_args,
-            train_dataset=dataset,
-            processing_class=self.tokenizer,
-        )
-
-        try:
-            assert trainer.use_liger_loss is True
-            trainer.train()
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-        finally:
-            importlib.reload(importlib.import_module(trainer.model.__module__))
-
     def test_sampled_mode_matches_between_local_and_external_teachers(self, monkeypatch):
         import trl.generation.vllm_client as vllm_client_module
 
@@ -878,7 +846,6 @@ class TestIWOPDTrainerServerPath(TrlTestCase):
             save_strategy="no",
             report_to="none",
             logging_steps=1,
-            use_cpu=not torch.cuda.is_available(),
             bf16=False,
         )
         model = AutoModelForCausalLM.from_pretrained(self.model_id, dtype=torch.float32).to(self.device)

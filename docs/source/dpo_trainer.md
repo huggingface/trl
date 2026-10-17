@@ -151,10 +151,7 @@ While training and evaluating, we record the following metrics:
 Some argument combinations are intentionally restricted in the current [`DPOTrainer`] implementation:
 
 - `use_weighting=True` is not supported with `loss_type="aot"` or `loss_type="aot_unpaired"`.
-- With `use_liger_kernel=True`:
-  - only a single `loss_type` is supported,
-  - `compute_metrics` is not supported,
-  - `precompute_ref_log_probs=True` is not supported.
+- PEFT adapters targeting `lm_head` are not supported (use `modules_to_save=["lm_head"]` instead).
 - `sync_ref_model=True` is not supported when training with PEFT models that do not keep a standalone `ref_model`.
 - `sync_ref_model=True` cannot be combined with `precompute_ref_log_probs=True`.
 - `precompute_ref_log_probs=True` is not supported with `IterableDataset` (train or eval).
@@ -237,10 +234,6 @@ trainer.train()
 > ```python
 > DPOConfig(learning_rate=1e-5, ...)
 > ```
-
-### Train with Liger Kernel
-
-Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like FlashAttention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
 
 ### Rapid Experimentation for DPO
 

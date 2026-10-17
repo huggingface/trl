@@ -19,9 +19,9 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import threading
 import time
 from collections import OrderedDict, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -36,14 +36,12 @@ from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
-import trl.experimental.async_grpo.async_rollout_worker as worker
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
-    _balance_by_squared_length,
     _iter_vllm_named_params,
     _reduce_metric,
     round_lora_rank,
@@ -63,10 +61,17 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _common_prefix_len,
     _SampleBuilder,
 )
+from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
 from trl.trainer.base_trainer import _BaseTrainer
-from trl.trainer.utils import get_callable_name
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    is_ampere_or_newer,
+    require_peft,
+    require_response_parsing,
+    require_torch_accelerator,
+    require_vllm,
+)
 
 
 # The trainer loads the model with Flash Attention, which requires a `head_size` multiple of 8. Hence the `small-*`
@@ -110,9 +115,10 @@ class _StubRolloutWorker:
                 sample = RolloutSample(
                     prompt=row["prompt"],
                     completion=completions[idx],
-                    input_ids=prompt_ids + completion_ids,
-                    completion_mask=[0] * len(prompt_ids) + [1] * len(completion_ids),
-                    old_log_probs=[0.0] * len(prompt_ids) + [-0.5] * len(completion_ids),
+                    input_ids=np.array(prompt_ids + completion_ids, dtype=np.int64),
+                    completion_mask=np.array([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64),
+                    old_log_probs=np.array([0.0] * len(prompt_ids) + [-0.5] * len(completion_ids), dtype=np.float32),
+                    sampling_mask=[[] for _ in prompt_ids + completion_ids],
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
@@ -311,8 +317,8 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
@@ -337,7 +343,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            token_budget=256,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
+            token_budget=64,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
             report_to="none",
         )
@@ -376,7 +382,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_steps=2,
             save_steps=1,
             max_completion_length=8,
-            token_budget=256,
+            token_budget=64,
             vllm_server_timeout=5.0,
             report_to="none",
         )
@@ -403,7 +409,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,
             max_steps=3,
             max_completion_length=8,
-            token_budget=256,
+            token_budget=64,
             vllm_server_timeout=5.0,
             report_to="none",
         )
@@ -483,14 +489,12 @@ def _vision_parameter_names(model) -> set[str]:
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 @pytest.mark.parametrize(
     "model_id",
     [
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
     ],
 )
@@ -570,47 +574,50 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
+def _checkpoint_trainer(output_dir, dataset_start_index=0):
+    model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+    trainer = AsyncGRPOTrainer(
+        model=model_id,
+        reward_funcs=dummy_reward_func,
+        args=AsyncGRPOConfig(output_dir=output_dir, report_to="none"),
+        train_dataset=dataset,
+        rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+        weight_transfer=_StubWeightTransfer(),
+    )
+    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
+    trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
+    trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    return trainer
+
+
+class TestRolloutStartIndex(TrlTestCase):
+    def test_rollout_loop_skips_to_start_index(self):
+        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
+        loop = _rollout_loop(dataset=dataset, num_generations=2, dataset_start_index=3)
+        it = loop._repeat_iterator()
+        _group_id, row = next(it)
+        assert row["prompt"] == "row_3"
+
+
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+)
 class TestRolloutStateCheckpoint(TrlTestCase):
-    """Prompt-index checkpoint/resume logic — no GPU or vLLM required."""
+    """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
 
-    def _make_rollout_loop(self, dataset, dataset_start_index=0, num_generations=2):
-        ctx = mp.get_context("spawn")
-        kwargs = dict(
-            model_name="test",
-            dataset=dataset,
-            reward_funcs=[dummy_reward_func],
-            processing_class=MagicMock(),
-            rollout_buffer=ctx.Queue(),
-            metrics_queue=ctx.Queue(),
-            model_version_value=ctx.Value("i", 0),
-            heartbeat_value=ctx.Value("d", 0.0),
-            failed_event=ctx.Event(),
-            exception_info_queue=ctx.Queue(),
-            num_generations=num_generations,
-            dataset_start_index=dataset_start_index,
-        )
-        with patch("trl.experimental.async_grpo.async_rollout_worker.add_response_schema", side_effect=lambda x: x):
-            return _AsyncRolloutLoop(**kwargs)
-
-    def _stub_trainer_for_save(self, trained_groups, dataset_start_index=10, groups_before_resume=0, model_version=7):
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)  # __new__ skips __init__ (requires GPU + model)
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.is_main_process = True
-        trainer.model_version = model_version
-        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
-        trainer._trained_groups = trained_groups
-        trainer._groups_before_resume = groups_before_resume
-        trainer.state = MagicMock()
+    def _trainer_at_step_5(self, trained_groups, dataset_start_index=10):
+        trainer = _checkpoint_trainer(self.tmp_dir, dataset_start_index)
         trainer.state.global_step = 5
-        trainer._get_output_dir = lambda trial: self.tmp_dir
+        trainer._trained_groups = trained_groups
         return trainer
 
     def test_save_checkpoint_writes_rollout_state(self):
-        trainer = self._stub_trainer_for_save({0, 1, 2, 3, 4}, dataset_start_index=10, groups_before_resume=40)
+        trainer = self._trainer_at_step_5({0, 1, 2, 3, 4}, dataset_start_index=10)
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
-            trainer._save_checkpoint(MagicMock(), None)
+            trainer._save_checkpoint(trainer.model, None)
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             data = json.load(f)
@@ -620,7 +627,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
         # file has to exist by the time it runs. Writing it from an `on_save` callback would not: `Trainer` fires
         # `on_save` only after `_save_checkpoint` returns, leaving the Hub copy without it.
-        trainer = self._stub_trainer_for_save({0, 1})
+        trainer = self._trainer_at_step_5({0, 1})
         written_before_super = []
 
         def record(*_args, **_kwargs):
@@ -629,27 +636,20 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             )
 
         with patch.object(_BaseTrainer, "_save_checkpoint", side_effect=record):
-            trainer._save_checkpoint(MagicMock(), None)
+            trainer._save_checkpoint(trainer.model, None)
 
         assert written_before_super == [True]
 
     def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
         # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
         # prompts get re-generated on resume instead of being silently skipped.
-        trainer = self._stub_trainer_for_save({0, 1, 3, 4, 5}, dataset_start_index=0)
+        trainer = self._trainer_at_step_5({0, 1, 3, 4, 5}, dataset_start_index=0)
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
-            trainer._save_checkpoint(MagicMock(), None)
+            trainer._save_checkpoint(trainer.model, None)
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             assert json.load(f)["prompt_index"] == 2
-
-    def test_rollout_loop_skips_to_start_index(self):
-        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]})
-        loop = self._make_rollout_loop(dataset, dataset_start_index=3)
-        it = loop._repeat_iterator()
-        _group_id, row = next(it)
-        assert row["prompt"] == "row_3"
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
@@ -657,14 +657,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
-        # __new__ skips __init__ (requires GPU + model)
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
-        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {}
-        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.is_main_process = False  # skip finally-block teardown
-        trainer._groups_before_resume = 0
+        trainer = _checkpoint_trainer(self.tmp_dir)
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
             trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
@@ -686,13 +679,8 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
             json.dump({"prompt_index": 5}, f)
 
-        trainer = AsyncGRPOTrainer.__new__(AsyncGRPOTrainer)
-        trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-        trainer.rollout_worker._loop_kwargs = {}
-        trainer.train_dataset = Dataset.from_dict({"prompt": list(range(100))})
-        trainer.accelerator = MagicMock()
-        trainer.accelerator.is_main_process = False
-        trainer._groups_before_resume = 0
+        trainer = _checkpoint_trainer(self.tmp_dir)
+        trainer.model_version = 7  # a version the resume has to reset, not the 0 `__init__` starts from
 
         with patch.object(_BaseTrainer, "_inner_training_loop", return_value=None):
             trainer._inner_training_loop(resume_from_checkpoint=checkpoint_dir)
@@ -700,28 +688,35 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         assert trainer.model_version == 0
 
 
+def _rollout_loop(**kwargs):
+    # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
+    model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    kwargs = {
+        "model_name": model_id,
+        "dataset": load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train"),
+        "reward_funcs": [dummy_reward_func],
+        "processing_class": tokenizer,
+        "eos_token_ids": [tokenizer.eos_token_id],
+        "rollout_buffer": mp.Queue(),
+        "model_version_value": mp.Value("i", 0),
+        "heartbeat_value": mp.Value("d", 0.0),
+        "failed_event": mp.Event(),
+        "exception_info_queue": mp.Queue(),
+        "metrics_queue": mp.Queue(),
+        **kwargs,
+    }
+    return _AsyncRolloutLoop(**kwargs)
+
+
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
     """Unit tests for the rollout worker's environment/tool wiring (no vLLM required)."""
 
     def _make_loop(self, environment_factory, dataset=None):
-        model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
         if dataset is None:
             dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
-        return _AsyncRolloutLoop(
-            model_name=model_id,
-            dataset=dataset,
-            reward_funcs=[dummy_reward_func],
-            processing_class=AutoTokenizer.from_pretrained(model_id),
-            rollout_buffer=mp.Queue(),
-            model_version_value=mp.Value("i", 0),
-            heartbeat_value=mp.Value("d", 0.0),
-            failed_event=mp.Event(),
-            exception_info_queue=mp.Queue(),
-            metrics_queue=mp.Queue(),
-            environment_factory=environment_factory,
-            num_generations=2,
-            max_inflight_tasks=4,
+        return _rollout_loop(
+            dataset=dataset, environment_factory=environment_factory, num_generations=2, max_inflight_tasks=4
         )
 
     def test_multiple_environments_expose_only_their_own_tools(self):
@@ -767,6 +762,85 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         finally:
             loop._loop.close()
 
+    def test_tool_discovery_does_not_evaluate_properties(self):
+        # The init-time probe lists an environment's tool methods. `inspect.getmembers` calls `getattr` on every name
+        # before applying the predicate, so listing the instance would evaluate this property; listing the class
+        # leaves it inert.
+        class PropertyEnvironment:
+            def reset(self, **kwargs): ...
+
+            @property
+            def reward(self) -> float:
+                raise RuntimeError("`reward` must not be evaluated while discovering tools")
+
+            def echo(self, text: str) -> str:
+                """Echo the text back.
+
+                Args:
+                    text: Text to echo.
+
+                Returns:
+                    The text, unchanged.
+                """
+                return text
+
+        loop = self._make_loop(PropertyEnvironment)
+        try:
+            assert [tool.__name__ for tool in loop._env_tools[None]] == ["echo"]
+            assert [tool.__name__ for tool in loop.tools] == ["echo"]
+        finally:
+            loop._loop.close()
+
+    @require_response_parsing
+    def test_environment_calls_run_off_the_event_loop_and_are_timed(self):
+        reset_threads = []
+
+        class SlowEnvironment:
+            def reset(self, **kwargs):
+                reset_threads.append(threading.current_thread())
+                time.sleep(0.02)
+
+            def step(self) -> str:
+                """
+                Take a step.
+                """
+                time.sleep(0.02)
+                return "ok"
+
+            def get_reward(self):
+                time.sleep(0.02)
+                loop._loop.call_soon_threadsafe(loop._stop_event.set)
+                return 1.0
+
+        loop = self._make_loop(SlowEnvironment)
+        tool_call = loop.tokenizer.encode(_TOOL_CALL.replace('"t"', '"step"'), add_special_tokens=False)
+        final = loop.tokenizer.encode(_FINAL, add_special_tokens=False)
+
+        async def _generate_one_turn(prompt_ids):
+            ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
+            return ids, [-0.1] * len(ids), None
+
+        loop._generate_one_turn = _generate_one_turn
+        PartialState()
+        try:
+            loop._loop.run_until_complete(loop._run_loops(stop_event=loop._stop_event))
+        finally:
+            loop._loop.close()
+
+        rates = defaultdict(lambda: [0.0, 0.0])
+        while True:
+            try:
+                payload = loop._metrics_queue.get(timeout=1)
+            except queue.Empty:
+                break
+            for key, value in payload.items():
+                if isinstance(value, tuple):
+                    rates[key][0] += value[0]
+                    rates[key][1] += value[1]
+        assert reset_threads and all(t is not threading.main_thread() for t in reset_threads)
+        for key in ("env/reset_s", "env/reward_s", "tools/step/latency_s"):
+            assert rates[key][0] / rates[key][1] >= 0.02
+
     def test_unknown_environment_raises(self):
         # An example whose `environment` field doesn't match any configured environment should fail with a clear error
         # rather than a bare KeyError mid-rollout. The check fires before any generation, so no vLLM is needed here.
@@ -795,20 +869,32 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             loop._loop.close()
 
 
+_TOKEN_IDS = itertools.count(1)
+
+
 def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) -> dict:
     # First token is a prompt token (completion_mask 0); the rest are completion tokens.
+    input_ids = np.array([next(_TOKEN_IDS) for _ in range(length)], dtype=np.int64)
     return {
-        "input_ids": list(range(length)),
-        "completion_mask": [0] + [1] * (length - 1),
-        "old_log_probs": [0.0] * length,
+        "input_ids": input_ids,
+        "completion_mask": np.array([0] + [1] * (length - 1), dtype=np.int64),
+        "old_log_probs": np.zeros(length, dtype=np.float32),
+        "sampling_mask": [[] for _ in range(length)],
         "advantage": advantage,
-        "group_id": 0,
+        "group_id": int(input_ids[0]),
         "metrics": {"reward": reward},
     }
 
 
-def _squared_load(group: list[dict]) -> int:
-    return sum(len(sample["input_ids"]) ** 2 for sample in group)
+def _tree_row(samples: list[dict]) -> TreeRow:
+    row = TreeRow()
+    for sample in samples:
+        row.add(sample)
+    return row
+
+
+def _micro_batches(batcher):
+    return ([row.samples for row in rows] for rows in batcher)
 
 
 def _row_tokens(group: list[dict]) -> int:
@@ -820,7 +906,7 @@ class TestPackingAwareBatching(TrlTestCase):
 
     def test_balance_partitions_all_samples_into_non_empty_rows(self):
         samples = [_rollout_sample(length) for length in (5, 1, 1, 1, 1)]
-        groups = _balance_by_squared_length(samples, num_groups=2)
+        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
 
         assert len(groups) == 2
         assert all(len(group) > 0 for group in groups)
@@ -828,29 +914,29 @@ class TestPackingAwareBatching(TrlTestCase):
         flat = [sample for group in groups for sample in group]
         assert sorted(len(s["input_ids"]) for s in flat) == sorted(len(s["input_ids"]) for s in samples)
 
-    def test_balance_equalizes_squared_length(self):
-        # [3, 3, 2, 2] across two rows packs as [3, 2] | [3, 2] -> equal Σ Lᵢ², not equal counts by accident.
+    def test_balance_equalizes_attention_cost(self):
+        # [3, 3, 2, 2] across two rows packs as [3, 2] | [3, 2] -> equal attention cost, not equal counts by accident.
         samples = [_rollout_sample(length) for length in (3, 3, 2, 2)]
-        groups = _balance_by_squared_length(samples, num_groups=2)
+        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
 
-        loads = [_squared_load(group) for group in groups]
+        loads = [_tree_row(group).load for group in groups]
         assert loads[0] == loads[1]
 
-    def test_balance_prefers_squared_length_over_count(self):
-        # One long sample alone balances Σ Lᵢ² better than splitting by count: [4] | [3, 2, 1].
+    def test_balance_prefers_attention_cost_over_count(self):
+        # One long sample alone balances attention cost better than splitting by count: [4] | [3, 2, 1].
         samples = [_rollout_sample(length) for length in (4, 3, 2, 1)]
-        groups = _balance_by_squared_length(samples, num_groups=2)
+        groups = next(_micro_batches(FixedCountBatcher(iter(samples), num_processes=2, microbatch_size=len(samples))))
 
         counts = sorted(len(group) for group in groups)
         assert counts == [1, 3]
-        loads = sorted(_squared_load(group) for group in groups)
-        assert loads == [14, 16]  # [3,2,1] -> 9+4+1=14, [4] -> 16
+        loads = sorted(_tree_row(group).load for group in groups)
+        assert loads == [10, 10]  # causal score pairs: [4] -> 10, [3, 2, 1] -> 6 + 3 + 1
 
     def test_token_budget_batcher_respects_budget_and_fills_every_row(self):
         source = (_rollout_sample(3) for _ in range(100))
         batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
 
-        micro_batches = list(itertools.islice(iter(batcher), 5))
+        micro_batches = list(itertools.islice(_micro_batches(batcher), 5))
         assert len(micro_batches) == 5
         for groups in micro_batches:
             assert len(groups) == 2
@@ -866,8 +952,8 @@ class TestPackingAwareBatching(TrlTestCase):
             (_rollout_sample(2) for _ in range(100)), num_processes=2, token_budget=8, metrics=defaultdict(list)
         )
 
-        long_mb = next(iter(long_batcher))
-        short_mb = next(iter(short_batcher))
+        long_mb = next(_micro_batches(long_batcher))
+        short_mb = next(_micro_batches(short_batcher))
 
         assert all(len(group) == 1 for group in long_mb)  # 5 + 5 > 8 -> one per row
         assert all(len(group) == 4 for group in short_mb)  # 2 * 4 = 8 -> four per row
@@ -877,7 +963,7 @@ class TestPackingAwareBatching(TrlTestCase):
         PartialState()  # the drop path logs via accelerate's logger, which needs an initialized state
         source = (_rollout_sample(n) for n in ([12] + [3] * 60))
         batcher = TokenBudgetBatcher(source, num_processes=2, token_budget=8, metrics=defaultdict(list))
-        for groups in itertools.islice(iter(batcher), 5):
+        for groups in itertools.islice(_micro_batches(batcher), 5):
             assert len(groups) == 2
             assert all(len(group) > 0 for group in groups)  # every row stays non-empty
             lengths = [len(sample["input_ids"]) for group in groups for sample in group]
@@ -887,7 +973,7 @@ class TestPackingAwareBatching(TrlTestCase):
         source = (_rollout_sample(length) for length in itertools.cycle((4, 3, 2, 1)))
         batcher = FixedCountBatcher(source, num_processes=2, microbatch_size=4)
 
-        micro_batches = list(itertools.islice(iter(batcher), 3))
+        micro_batches = list(itertools.islice(_micro_batches(batcher), 3))
         assert len(micro_batches) == 3
         for groups in micro_batches:
             assert len(groups) == 2
@@ -897,37 +983,69 @@ class TestPackingAwareBatching(TrlTestCase):
     def test_collator_pads_unequal_rows(self):
         # The planner hands the collator a pre-partitioned micro-batch, wrapped in a length-1 list by the dataloader.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
-        a = _rollout_sample(3, advantage=1.0, reward=0.5)  # input_ids [0, 1, 2]
-        b = _rollout_sample(2, advantage=-1.0, reward=0.25)  # input_ids [0, 1]
+        a = _rollout_sample(3, advantage=1.0, reward=0.5)
+        b = _rollout_sample(2, advantage=-1.0, reward=0.25)
         groups = [[a], [b]]
 
-        batch = collator([groups])
+        batch = collator([[_tree_row(group) for group in groups]])
 
-        assert batch["input_ids"].tolist() == [[0, 1, 2], [0, 1, 0]]  # row b right-padded with pad_token_id
+        assert batch["input_ids"].tolist() == [
+            a["input_ids"].tolist(),
+            b["input_ids"].tolist() + [0],
+        ]  # b right-padded with pad_token_id
         assert batch["attention_mask"].tolist() == [[1, 1, 1], [1, 1, 0]]
         assert batch["position_ids"].tolist() == [[0, 1, 2], [0, 1, 0]]  # resets per sequence, 0-padded
-        assert batch["completion_mask"].tolist() == [[0, 1, 1], [0, 1, 0]]
-        assert batch["advantages"].tolist() == [[1.0, 1.0, 1.0], [-1.0, -1.0, 0.0]]  # per-token, 0-padded
+        assert batch["shift_labels"].tolist() == [
+            a["input_ids"][1:].tolist() + [-100],
+            b["input_ids"][1:].tolist() + [-100, -100],
+        ]
+        assert batch["token_index"].tolist() == [[0, 1], [0, -1]]  # -1 marks inter-rank padding
+        assert batch["advantages"].tolist() == [[1.0, 1.0], [-1.0, 0.0]]
+        assert batch["segment_id"].tolist() == [[0, 0], [0, 0]]  # one sample per row
         assert batch["global_n_tokens"].tolist() == [3.0, 3.0]  # a: 2 + b: 1 completion tokens
         assert batch["global_n_forward_tokens"].tolist() == [5.0, 5.0]  # every token forwarded, prompts included
         # Per-sample rewards are aggregated here on rank 0 rather than broadcast with the batch and reduced back.
         assert collator.metrics["reward"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
+        assert collator.metrics["batch/packing_ratio"] == [(5, 5)]  # nothing shared, every raw token forwarded
+
+    def test_collator_pads_sampling_masks_to_the_widest(self):
+        # Candidate sets are ragged across tokens and samples: padded with -1 to the widest in the micro-batch. Each
+        # sits at the position that predicts its token, like `shift_labels`.
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
+        a = _rollout_sample(3)
+        a["sampling_mask"] = [[], [1, 5, 7], [2]]
+        b = _rollout_sample(2)
+        b["sampling_mask"] = [[], [1, 9]]
+
+        batch = collator([[_tree_row([a]), _tree_row([b])]])
+
+        assert batch["sampling_mask"].tolist() == [
+            [[1, 5, 7], [2, -1, -1], [-1, -1, -1]],
+            [[1, 9, -1], [-1, -1, -1], [-1, -1, -1]],
+        ]
+        batch = collator([[_tree_row([_rollout_sample(3)]), _tree_row([_rollout_sample(2)])]])
+        assert batch["sampling_mask"].shape == (2, 3, 0)
 
     def test_collator_packs_multiple_samples_per_row(self):
-        # Two samples per row: position_ids reset at each sequence start and advantages expand per token.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
-        a = _rollout_sample(3, advantage=1.0, reward=0.5)  # input_ids [0, 1, 2]
-        c = _rollout_sample(2, advantage=2.0, reward=0.25)  # input_ids [0, 1]
-        b = _rollout_sample(2, advantage=-1.0, reward=0.75)  # input_ids [0, 1]
-        d = _rollout_sample(3, advantage=-2.0, reward=0.5)  # input_ids [0, 1, 2]
+        a = _rollout_sample(3, advantage=1.0, reward=0.5)
+        c = _rollout_sample(2, advantage=2.0, reward=0.25)
+        b = _rollout_sample(2, advantage=-1.0, reward=0.75)
+        d = _rollout_sample(3, advantage=-2.0, reward=0.5)
         groups = [[a, c], [b, d]]  # both rows pack to 5 tokens -> no inter-rank padding
 
-        batch = collator([groups])
+        batch = collator([[_tree_row(group) for group in groups]])
 
-        assert batch["input_ids"].tolist() == [[0, 1, 2, 0, 1], [0, 1, 0, 1, 2]]
+        assert batch["input_ids"].tolist() == [
+            a["input_ids"].tolist() + c["input_ids"].tolist(),
+            b["input_ids"].tolist() + d["input_ids"].tolist(),
+        ]
         assert batch["position_ids"].tolist() == [[0, 1, 2, 0, 1], [0, 1, 0, 1, 2]]  # resets at each sequence start
-        assert batch["completion_mask"].tolist() == [[0, 1, 1, 0, 1], [0, 1, 0, 1, 1]]
-        assert batch["advantages"].tolist() == [[1.0, 1.0, 1.0, 2.0, 2.0], [-1.0, -1.0, -2.0, -2.0, -2.0]]
+        labels = [s["input_ids"][1:].tolist() + [-100] for s in (a, c, b, d)]
+        assert batch["shift_labels"].tolist() == [labels[0] + labels[1], labels[2] + labels[3]]
+        assert batch["token_index"].tolist() == [[0, 1, 3], [0, 2, 3]]
+        assert batch["advantages"].tolist() == [[1.0, 1.0, 2.0], [-1.0, -2.0, -2.0]]
+        assert batch["segment_id"].tolist() == [[0, 0, 1], [0, 1, 1]]
         assert batch["global_n_tokens"].tolist() == [6.0, 6.0]  # a:2 + c:1 + b:1 + d:2 completion tokens
         assert batch["global_n_forward_tokens"].tolist() == [10.0, 10.0]  # 3 + 2 + 2 + 3
         assert collator.metrics["reward"] == [0.5]  # (0.5 + 0.25 + 0.75 + 0.5) / 4
@@ -944,9 +1062,284 @@ class TestPackingAwareBatching(TrlTestCase):
 
         for groups in ([[plain], [tooled]], [[tooled], [plain]]):
             collator.metrics.clear()
-            collator([groups])
+            collator([[_tree_row(group) for group in groups]])
             assert collator.metrics["reward"] == [0.5]  # (1.0 + 0.0) / 2, over both samples
             assert collator.metrics["tools/call_frequency"] == [4.0]  # only the sample that carries it
+
+
+def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group_id: int = 0):
+    return {
+        "input_ids": np.array(tokens, dtype=np.int64),
+        "completion_mask": np.array([0] * n_prompt + [1] * (len(tokens) - n_prompt), dtype=np.int64),
+        "old_log_probs": np.array([0.0] * n_prompt + [-0.5] * (len(tokens) - n_prompt), dtype=np.float32),
+        "sampling_mask": [[] for _ in tokens],
+        "advantage": advantage,
+        "group_id": group_id,
+        "metrics": {"reward": 0.0},
+    }
+
+
+class TestTreePacking(TrlTestCase):
+    """Tree packing is CPU bookkeeping up to the attention call, so everything but the forward runs without a GPU."""
+
+    ROWS = [
+        _tree_sample([101, 102, 103, 201, 202], n_prompt=3, advantage=1.0),
+        _tree_sample([101, 102, 103, 301, 302], n_prompt=3, advantage=-1.0),
+        _tree_sample([101, 102, 103, 201, 202, 401], n_prompt=3, advantage=0.5),
+    ]
+
+    def test_shared_prefixes_are_forwarded_once(self):
+        row = _tree_row(self.ROWS).pack()
+
+        assert row["input_ids"].tolist() == [101, 102, 103, 201, 202, 202, 401, 103, 301, 302]
+        assert row["position_ids"].tolist() == [0, 1, 2, 3, 4, 4, 5, 2, 3, 4]
+
+    def test_one_packed_position_feeds_several_loss_terms(self):
+        row = _tree_row(self.ROWS).pack()
+
+        assert row["shift_labels"].tolist() == [-100, -100, 201, 202, -100, 401, -100, 301, 302, -100]
+        assert row["token_index"].tolist() == [2, 3, 7, 8, 2, 3, 5]
+        assert row["advantages"].tolist() == [1.0, 1.0, -1.0, -1.0, 0.5, 0.5, 0.5]
+        assert row["segment_id"].tolist() == [0, 0, 1, 1, 2, 2, 2]
+
+    def test_every_row_sees_exactly_its_own_causal_mask(self):
+        row = _tree_row(self.ROWS).pack()
+
+        seen = []
+        for q_start, q_end, k_start, k_end in zip(
+            row["tree_cu_seqlens_q"][:-1],
+            row["tree_cu_seqlens_q"][1:],
+            row["tree_cu_seqlens_k"][:-1],
+            row["tree_cu_seqlens_k"][1:],
+            strict=True,
+        ):
+            path = row["tree_kv_index"][k_start:k_end]
+            for q in range(q_start, q_end):
+                visible = path[: len(path) - (q_end - q) + 1]
+                assert visible[-1] == q
+                seen.append(tuple(row["input_ids"][visible].tolist()))
+        prefixes = {tuple(s["input_ids"][: i + 1]) for s in self.ROWS for i in range(len(s["input_ids"]))}
+
+        assert set(seen) == prefixes
+
+    def test_collator_pads_tree_rows_and_keeps_the_segments_aligned(self):
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
+        groups = [self.ROWS, [_tree_sample([101, 102, 103, 201, 202], n_prompt=3)]]
+
+        batch = collator([[_tree_row(group) for group in groups]])
+
+        assert batch["input_ids"].tolist() == [
+            [101, 102, 103, 201, 202, 202, 401, 103, 301, 302],
+            [101, 102, 103, 201, 202, 0, 0, 0, 0, 0],
+        ]
+        assert batch["attention_mask"].tolist() == [[1] * 10, [1] * 5 + [0] * 5]
+        assert batch["tree_cu_seqlens_q"].tolist() == [[0, 2, 4, 5, 7, 10], [0, 5, -1, -1, -1, -1]]
+        assert batch["tree_cu_seqlens_k"].tolist() == [[0, 2, 6, 11, 17, 22], [0, 5, -1, -1, -1, -1]]
+        assert batch["tree_max_seqlens"].tolist() == [[3, 6], [5, 5]]
+        assert batch["shift_labels"][1].tolist() == [-100, -100, 201, 202] + [-100] * 6
+        assert collator.metrics["batch/packing_ratio"] == [(21, 15)]  # 21 raw tokens forwarded as 15
+
+    def test_cost_counts_unique_tokens_and_surviving_score_pairs(self):
+        row = _tree_row(self.ROWS)
+        assert (len(row.tokens), row.load) == (10, 15 + 12 + 11)  # depths 1..5, then 3..5 and 5..6 for the branches
+
+    def test_groups_share_a_common_prefix(self):
+        rows = [_tree_sample([1, 2, 3, last], n_prompt=1, group_id=g) for g, last in ((0, 4), (1, 5))]
+        packed = _tree_row(rows).pack()
+
+        assert packed["input_ids"].tolist() == [1, 2, 3, 4, 3, 5]
+
+    def _stream(self, n_groups, rows_per_group=2):
+        """Groups of rows over their own 6-token prompt: 8 raw tokens each, but only 3 novel after the first."""
+        for g in range(n_groups):
+            for i in range(rows_per_group):
+                yield _tree_sample([1000 * g + t for t in range(6)] + [100 + i, 200 + i], n_prompt=6, group_id=g)
+
+    def test_budget_bounds_unique_tokens_so_more_rows_fit(self):
+        tree = next(_micro_batches(TokenBudgetBatcher(self._stream(50), 2, 22, defaultdict(list))))
+
+        assert sum(len(group) for group in tree) == 8  # two 11-unique-token groups per row, of two rows each
+
+    def test_planner_reads_one_sample_of_lookahead(self):
+        reads = 0
+
+        def counted(source):
+            nonlocal reads
+            for sample in source:
+                reads += 1
+                yield sample
+
+        batcher = TokenBudgetBatcher(counted(self._stream(50)), 2, 20, defaultdict(list))
+        micro_batch = next(_micro_batches(batcher))
+
+        assert reads == sum(len(group) for group in micro_batch) + 1
+
+    def test_a_group_stays_in_one_row_so_its_rows_share(self):
+        batcher = TokenBudgetBatcher(self._stream(50), 2, 20, defaultdict(list))
+
+        for micro_batch in itertools.islice(_micro_batches(batcher), 5):
+            rows_by_group = defaultdict(set)
+            for i, group in enumerate(micro_batch):
+                for sample in group:
+                    rows_by_group[sample["group_id"]].add(i)
+            assert all(len(rows) == 1 for rows in rows_by_group.values())
+
+    def test_rows_of_identical_samples_still_close_a_micro_batch(self):
+        source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(10_000))
+        batcher = TokenBudgetBatcher(source, 2, 20, defaultdict(list))
+
+        micro_batch = next(_micro_batches(batcher))
+
+        assert all(len(group) > 0 for group in micro_batch)
+        assert all(sum(sum(s["completion_mask"]) for s in group) <= 20 for group in micro_batch)
+
+    def test_a_split_group_can_be_rejoined_on_either_row(self):
+        prompt = list(range(1, 4))
+        stream = [
+            _tree_sample(prompt + list(range(10, 10 + n)), len(prompt) + n - t, group_id=0)
+            for n, t in ((3, 3), (6, 6), (4, 4), (5, 5), (7, 4))
+        ]
+        stream.append(_tree_sample(list(range(20, 34)), n_prompt=7, group_id=1))  # fits in neither row: closes
+        batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list))
+
+        micro_batch = next(_micro_batches(batcher))
+
+        assert sum(len(group) for group in micro_batch) == 5
+
+    def test_a_lone_group_fills_every_row_of_a_fixed_count_micro_batch(self):
+        source = (_tree_sample(list(range(6)) + [100 + i], n_prompt=6, group_id=i // 8) for i in range(16))
+        batcher = FixedCountBatcher(source, num_processes=8, microbatch_size=8)
+
+        for micro_batch in itertools.islice(_micro_batches(batcher), 2):
+            assert all(len(group) > 0 for group in micro_batch)
+
+    def test_a_group_is_split_rather_than_let_a_rank_starve(self):
+        source = (_tree_sample(list(range(6)) + [100 + i, 200 + i], n_prompt=6, group_id=0) for i in range(100))
+        batcher = TokenBudgetBatcher(source, 2, 10, defaultdict(list))
+
+        for micro_batch in itertools.islice(_micro_batches(batcher), 3):
+            assert all(len(group) > 0 for group in micro_batch)
+
+
+def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
+    """Main's sequence packing: the samples end to end, `position_ids` restarting at each one, nothing shared."""
+    rows = [_tree_row([sample]).pack() for sample in samples]
+    offsets = list(itertools.accumulate((row["input_ids"].numel() for row in rows), initial=0))
+    batch = {key: torch.cat([row[key] for row in rows])[None] for key in rows[0]}
+    batch["token_index"] = torch.cat(
+        [row["token_index"] + offset for row, offset in zip(rows, offsets, strict=False)]
+    )[None]
+    batch["segment_id"] = torch.cat([row["segment_id"] + i for i, row in enumerate(rows)])[None]
+    batch["tree_kv_index"] = torch.arange(offsets[-1])[None]
+    batch["tree_cu_seqlens_q"] = batch["tree_cu_seqlens_k"] = torch.tensor([offsets], dtype=torch.int32)
+    longest = max(len(sample["input_ids"]) for sample in samples)
+    batch["tree_max_seqlens"] = torch.tensor([[longest, longest]])
+    batch["attention_mask"] = torch.ones_like(batch["input_ids"])
+    batch["global_n_tokens"] = torch.tensor([float(batch["token_index"].numel())])
+    batch["global_n_forward_tokens"] = torch.tensor([float(offsets[-1])])
+    batch["mean_seq_len"] = torch.tensor([offsets[-1] / len(samples)])
+    return batch
+
+
+@require_torch_accelerator
+@pytest.mark.parametrize(
+    ("model_id", "model_init_kwargs"),
+    [
+        pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param(
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",
+            {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
+            id="gemma2-sliding-window-softcap",
+            marks=pytest.mark.skipif(
+                torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
+            ),
+        ),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
+    ],
+)
+class TestTreePackingParity(TrlTestCase):
+    """A tree-packed micro-batch must give the GRPO loss and gradients of main's sequence packing of the same samples."""
+
+    def _samples(self):
+        samples = []
+        for group_id in range(2):
+            prompt = [1 + 100 * group_id + i for i in range(64)]
+            completions = [[1000 + 100 * i + j for j in range(24)] for i in range(4)]
+            completions += [completions[0][:12] + [2000 + 100 * i + j for j in range(12)] for i in range(2)]
+            for i, completion in enumerate(completions):
+                sample = _tree_sample(prompt + completion, len(prompt), advantage=i - 2.5, group_id=group_id)
+                sample["old_log_probs"] = np.full(len(sample["input_ids"]), -12.0, dtype=np.float32)
+                samples.append(sample)
+        return samples
+
+    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                model_init_kwargs={"dtype": torch.bfloat16, **model_init_kwargs},
+                router_aux_loss_coef=0.0,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        trainer.current_gradient_accumulation_steps = 1
+        model = trainer.model.to(torch_device)
+        samples = self._samples()
+        collator = DataCollatorForRollout(pad_token_id=0)
+        runs = [
+            (TREE_ATTENTION, collator([[_tree_row(samples)]])),
+            (
+                "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
+                _sequence_packed_batch(samples),
+            ),
+        ]
+
+        losses, grads = [], []
+        for attn_implementation, batch in runs:
+            model.set_attn_implementation(attn_implementation)
+            model.zero_grad()
+            loss = trainer.compute_loss(model, {key: value.to(torch_device) for key, value in batch.items()})
+            loss.backward()
+            losses.append(loss.detach().float())
+            grads.append({name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None})
+
+        assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
+        torch.testing.assert_close(losses[0], losses[1], atol=1e-3, rtol=1e-3)
+        assert grads[0].keys() == grads[1].keys()
+        packed_grads, sequence_grads = (torch.cat([g.flatten() for g in run.values()]) for run in grads)
+        assert (packed_grads - sequence_grads).norm() < 5e-2 * sequence_grads.norm()
+
+
+class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
+    @pytest.mark.parametrize(
+        ("model_id", "match"),
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", "linear_attention", id="qwen35"
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", "linear_attention", id="qwen36-moe"
+            ),
+            pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
+        ],
+    )
+    def test_init_raises(self, model_id, match):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with pytest.raises(ValueError, match=match):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+                weight_transfer=_StubWeightTransfer(),
+            )
 
 
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
@@ -992,16 +1385,9 @@ class TestMetricReduction(TrlTestCase):
 class TestWorkerMetricPush(TrlTestCase):
     """The worker's payload has the same shape as the trainer's sink, so draining it is an append."""
 
-    def _loop(self):
-        loop = object.__new__(_AsyncRolloutLoop)
-        loop._metrics_queue = mp.Queue()
-        loop._counters = defaultdict(float)
-        loop._rates = defaultdict(lambda: [0.0, 0.0])
-        return loop
-
     def test_counters_and_rates_ride_along_and_reset(self):
-        loop = self._loop()
-        loop._counters["tools/search_call_total"] += 2
+        loop = _rollout_loop()
+        loop._counters["tools/search/call_total"] += 2
         loop._rates["tools/latency_s"][0] += 3.0
         loop._rates["tools/latency_s"][1] += 2
         loop._push_metrics({"rollout/score_s": 0.5})
@@ -1009,7 +1395,7 @@ class TestWorkerMetricPush(TrlTestCase):
         payload = loop._metrics_queue.get(timeout=5)
         assert payload == {
             "rollout/score_s": 0.5,
-            "tools/search_call_total": 2.0,
+            "tools/search/call_total": 2.0,
             "tools/latency_s": (3.0, 2.0),
         }
         # Counters carry deltas: whatever was pushed must not be pushed again.
@@ -1017,20 +1403,12 @@ class TestWorkerMetricPush(TrlTestCase):
         assert loop._metrics_queue.get(timeout=5) == {}
 
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
-        loop = self._loop()
-        loop._metrics_queue = mp.Queue(maxsize=1)
+        loop = _rollout_loop(metrics_queue=mp.Queue(maxsize=1))
         for _ in range(50):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
 
 
 class TestToolExecution(TrlTestCase):
-    def _loop(self):
-        loop = object.__new__(_AsyncRolloutLoop)
-        loop._counters = defaultdict(float)
-        loop._rates = defaultdict(lambda: [0.0, 0.0])
-        loop._tool_pool = ThreadPoolExecutor(max_workers=4)
-        return loop
-
     @staticmethod
     def _call(name, **arguments):
         return {"type": "function", "function": {"name": name, "arguments": arguments}}
@@ -1046,7 +1424,7 @@ class TestToolExecution(TrlTestCase):
         async def failing_tool(value: int) -> str:
             raise RuntimeError(f"boom:{value}")
 
-        loop = self._loop()
+        loop = _rollout_loop(max_inflight_tasks=4)
         tool_dict = {
             "sync_tool": sync_tool,
             "async_tool": async_tool,
@@ -1067,7 +1445,7 @@ class TestToolExecution(TrlTestCase):
         assert messages[1]["content"] == "async:2"
         assert "boom:3" in messages[2]["content"]
         assert "unknown tool" in messages[3]["content"]
-        assert loop._counters["tools/failing_tool_failure_total"] == 1
+        assert loop._counters["tools/failing_tool/failure_total"] == 1
         assert loop._counters["tools/unknown_name_total"] == 1
         assert loop._rates["tools/latency_s"][1] == 3
 
@@ -1076,7 +1454,7 @@ class TestToolExecution(TrlTestCase):
             time.sleep(0.5)
             return "done"
 
-        loop = self._loop()
+        loop = _rollout_loop(max_inflight_tasks=4)
 
         async def scenario():
             ticks = 0
@@ -1098,6 +1476,16 @@ class TestToolExecution(TrlTestCase):
 
 
 class TestReconciler(TrlTestCase):
+    @pytest.mark.parametrize("mask", [None, [1, 0, 1], [0, 0, 0]])
+    def test_completion_masks_are_generic(self, mask):
+        rows = _finalize([TurnRecord([1, 2], [3, 4, 5], [-0.1, -0.2, -0.3], mask)])
+        if mask == [0, 0, 0]:
+            assert rows == []
+        else:
+            assert rows[0].completion_mask == [0, 0] + (mask if mask is not None else [1, 1, 1])
+            assert rows[0].input_ids == [1, 2, 3, 4, 5]
+            assert rows[0].old_log_probs[-3:] == [-0.1, -0.2, -0.3]
+
     def test_common_prefix_len(self):
         assert _common_prefix_len([1, 2, 3], [1, 2, 3]) == 3  # identical
         assert _common_prefix_len([1, 2], [1, 2, 3, 4]) == 2  # old is a prefix of new
@@ -1112,7 +1500,18 @@ class TestReconciler(TrlTestCase):
         assert rows[0].input_ids == [1, 2, 3, 10, 11]
         assert rows[0].completion_mask == [0, 0, 0, 1, 1]
         assert rows[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2]
+        assert rows[0].sampling_mask == [[], [], [], [], []]
         assert rows[0].rollout_id == "r0"
+
+    def test_sampling_mask_follows_the_sampled_tokens(self):
+        # Candidate sets ride with the sampled tokens; the prompt and a realigned tail are context and carry none.
+        turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2], output_sampling_mask=[[10, 12], [11]])
+        turn2 = TurnRecord([1, 2, 3, 10, 99, 20], [30], [-0.3], output_sampling_mask=[[30, 31, 32]])
+        rows = _finalize([turn1, turn2])
+        assert len(rows) == 1
+        assert rows[0].input_ids == [1, 2, 3, 10, 99, 20, 30]
+        assert rows[0].completion_mask == [0, 0, 0, 1, 0, 0, 1]
+        assert rows[0].sampling_mask == [[], [], [], [10, 12], [], [], [30, 31, 32]]
 
     def test_clean_chain_stays_one_row(self):
         # Turn 2's re-tokenized prompt starts with the held tokens (gen [10,11] + tool [20,21]) -> CLEAN.
@@ -1127,8 +1526,8 @@ class TestReconciler(TrlTestCase):
     def test_rewrite_forks_into_two_rows(self):
         # Divergence inside turn 1's answer + a turn >= fork_threshold -> FORK. Every generated token is
         # trained in exactly one row (turn 1's tokens are context in row 2).
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
-        turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32])
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
+        turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32], [-0.2] * 3)
         rows = _finalize([turn1, turn2], fork_threshold=2)
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
@@ -1139,16 +1538,18 @@ class TestReconciler(TrlTestCase):
     def test_fork_when_divergence_precedes_last_response(self):
         # matched < last_response_start_idx -> FORK regardless of threshold (distinct from the length trigger).
         builder = _SampleBuilder(fork_threshold=1024)
-        builder.append_turn(TurnRecord([1, 2, 3], [10, 11]), DriftKind.CLEAN)  # last_response_start_idx == 3
+        builder.append_turn(
+            TurnRecord([1, 2, 3], [10, 11], [-0.2] * 2), DriftKind.CLEAN
+        )  # last_response_start_idx == 3
         # 5 held tokens, only the first matches -> 4 tokens of drift, reported alongside the kind.
-        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30])) == (DriftKind.FORK, 4)
+        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30], [-0.2] * 1)) == (DriftKind.FORK, 4)
 
     def test_drift_tally_counts_transitions(self):
         # The tally is what makes `fork_threshold_tokens` tunable: it reports the drift the threshold is compared
         # against. It counts turn TRANSITIONS, so a single-turn rollout has none.
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13])
-        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20])
-        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30])
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
+        clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20], [-0.2] * 1)
+        forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30], [-0.2] * 1)
 
         _rows, tally = _chain_to_sequences([turn1], "r0", 2)
         assert tally == {"clean": 0, "realign": 0, "fork": 0, "transitions": 0, "drift_tokens": 0, "drift_max": 0}
@@ -1173,8 +1574,8 @@ class TestReconciler(TrlTestCase):
         # the prompt diverges at the answer start (large drift) while turn 2's own answer is tiny. The decision must
         # key on the drift (6 tokens invalidated), not the incoming turn's length (1) -> FORK, so turn 1 keeps its
         # training signal. (fork_threshold sits between the two: gating on output length would wrongly REALIGN.)
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15])  # long trained answer
-        turn2 = TurnRecord([1, 2, 3, 99, 88], [30])  # answer dropped by the template; short next turn
+        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15], [-0.2] * 6)  # long trained answer
+        turn2 = TurnRecord([1, 2, 3, 99, 88], [30], [-0.2] * 1)  # answer dropped by the template; short next turn
         rows = _finalize([turn1, turn2], fork_threshold=3)
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13, 14, 15]
@@ -1183,117 +1584,158 @@ class TestReconciler(TrlTestCase):
         assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1]
 
 
-# A tool-calling assistant turn keeps the loop going; a plain turn ends it.
-_TOOL_CALL = {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [{"type": "function", "function": {"name": "t", "arguments": {}}}],
-}
-_FINAL = {"role": "assistant", "content": "done"}
+# The vLLM server's turns, opened by Qwen3's empty thinking block: a tool call continues the loop, an answer ends it
+_TOOL_CALL = '<think>\n\n</think>\n\n<tool_call>\n{"name": "t", "arguments": {}}\n</tool_call><|im_end|>'
+_FINAL = "<think>\n\n</think>\n\ndone<|im_end|>"
 
 
-def _run(monkeypatch, *, prompt_ids, turns, assistants, fork_threshold=1024, max_iters=None):
-    """Drive _AsyncRolloutLoop._generate_one on scripted per-turn fixtures.
-
-    prompt_ids: list of the token list `apply_chat_template` returns each turn. turns: list of (turn_ids, logprobs)
-    `_generate_one_turn` returns each turn. assistants: list of the message `parse_response` returns each turn.
+def t() -> str:
     """
-    pq, tq, aq = list(prompt_ids), list(turns), list(assistants)
-    monkeypatch.setattr(worker, "parse_response", lambda tokenizer, ids, prefix=None: aq.pop(0))
+    Return ok.
+    """
+    return "ok"
 
-    class _StubTokenizer:
-        # `completions/clipped_ratio` reads these to decide whether the last turn ended on EOS. The scripted turn ids
-        # below never end on 0, so every fixture rollout counts as clipped — irrelevant to what these tests assert.
-        eos_token_id = 0
-        pad_token_id = 0
 
-        def apply_chat_template(self, messages, **kwargs):
-            return pq.pop(0)
-
-    loop = object.__new__(_AsyncRolloutLoop)  # skip the heavy __init__; set only what _generate_one reads
-    loop.tokenizer = _StubTokenizer()
-    loop.tools = []
-    loop.chat_template = None
-    loop.chat_template_kwargs = {}
-    loop.max_tool_calling_iterations = max_iters
-    loop._fork_threshold_tokens = fork_threshold
-    # `_generate_one` pushes its rollout-structure metrics; collect them instead of sending them to a queue.
-    loop._pushed_metrics = []
-    loop._counters = defaultdict(float)
-    loop._rates = defaultdict(lambda: [0.0, 0.0])
-    loop._push_metrics = loop._pushed_metrics.append
+def _run(*, turns, max_iters=None):
+    """
+    Drive `_AsyncRolloutLoop._generate_one` with the real tokenizer, chat template and response parser, scripting only
+    the vLLM server, which generates the text of `turns` one turn after the other.
+    """
+    loop = _rollout_loop(tools=[t], max_tool_calling_iterations=max_iters)
+    outputs = [loop.tokenizer.encode(text, add_special_tokens=False) for text in turns]
 
     async def _generate_one_turn(prompt_ids):
-        return tq.pop(0)
-
-    async def _execute_tool_calls(tool_calls, tool_dict):
-        return [{"role": "tool", "name": "t", "content": "ok"}], 1, 0
+        ids = outputs.pop(0)
+        return ids, [-0.1] * len(ids), None
 
     loop._generate_one_turn = _generate_one_turn
-    loop._execute_tool_calls = _execute_tool_calls
 
     # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
-    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {}, []))
+    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
 
 
+class TestGenerateOneTurn(TrlTestCase):
+    def _generate(self, loop, response):
+        requests = []
+
+        async def fake_post(path, payload, timeout):
+            requests.append((path, payload))
+            return response
+
+        loop._post = fake_post
+        return requests, asyncio.run(loop._generate_one_turn([1, 2, 3]))
+
+    def test_full_vocabulary_sampling_uses_the_completions_endpoint(self):
+        loop = _rollout_loop()
+        response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
+        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        assert requests[0][0] == "/v1/completions"
+        assert requests[0][1]["prompt"] == [1, 2, 3]
+        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], None)
+
+    def test_truncated_sampling_returns_the_candidate_sets(self):
+        loop = _rollout_loop(top_p=0.9, top_k=4)
+        response = {
+            "choices": [
+                {
+                    "token_ids": [4, 5],
+                    "logprobs": {
+                        "content": [{"token": "token_id:4", "logprob": -0.1}, {"token": "token_id:5", "logprob": -0.2}]
+                    },
+                    "sampling_mask": [[4, 7], [5]],
+                }
+            ]
+        }
+        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        assert requests[0][0] == "/inference/v1/generate"
+        assert requests[0][1]["token_ids"] == [1, 2, 3]
+        assert requests[0][1]["sampling_params"]["top_p"] == 0.9
+        assert requests[0][1]["sampling_params"]["top_k"] == 4
+        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]])
+
+    def _check(self, loop, model_config, paths, version="0.31.0"):
+        class FakeSession:
+            def get(self, url, **kwargs):
+                if url.endswith("/version"):
+                    body = {"version": version}
+                elif url.endswith("/server_info"):
+                    body = {"vllm_config": {"model_config": model_config}}
+                else:
+                    body = {"paths": paths}
+
+                class Response:
+                    async def __aenter__(self):
+                        return self
+
+                    async def __aexit__(self, *exc):
+                        pass
+
+                    def raise_for_status(self):
+                        pass
+
+                    async def json(self):
+                        return body
+
+                return Response()
+
+        loop.session = FakeSession()
+        asyncio.run(loop._check_sampling_replay())
+
+    def test_truncated_sampling_checks_the_server_up_front(self):
+        loop = _rollout_loop(top_p=0.9, top_k=4)
+        self._check(loop, {"return_sampling_mask": True}, {"/inference/v1/generate": {}})
+        with pytest.raises(RuntimeError, match="--return-sampling-mask"):
+            self._check(loop, {"return_sampling_mask": False}, {"/inference/v1/generate": {}})
+        with pytest.raises(RuntimeError, match="--enable-scale-out"):
+            self._check(loop, {"return_sampling_mask": True}, {"/v1/completions": {}})
+        with pytest.raises(RuntimeError, match="vLLM server \\(>= 0.28\\)"):
+            self._check(loop, {}, {"/inference/v1/generate": {}})
+        loop = _rollout_loop()
+        loop.session = None
+        asyncio.run(loop._check_sampling_replay())
+
+    def test_older_vllm_keeps_the_full_vocabulary(self, caplog):
+        # A vLLM too old to record the set keeps the completions path, with a warning about the biased ratio
+        PartialState()  # accelerate's logger reads it
+        loop = _rollout_loop(top_p=0.9, top_k=4)
+        with caplog.at_level("WARNING"):
+            self._check(loop, {}, {"/v1/completions": {}}, version="0.27.1")
+        assert "vLLM 0.27.1" in caplog.text
+        response = {"choices": [{"token_ids": [4], "logprobs": {"token_logprobs": [-0.1]}}]}
+        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        assert requests[0][0] == "/v1/completions"
+        assert requests[0][1]["top_p"] == 0.9
+        assert sampling_mask is None
+
+    def test_top_p_requires_top_k(self):
+        with pytest.raises(ValueError, match="top_k"):
+            AsyncGRPOConfig(top_p=0.9)
+
+
+@require_response_parsing
 class TestRolloutLoop(TrlTestCase):
-    def test_single_turn_no_tool_call(self, monkeypatch):
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3]],
-            turns=[([10, 11], [-0.1, -0.2])],
-            assistants=[_FINAL],
-        )
+    def test_single_turn_no_tool_call(self):
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_FINAL])
         assert len(sequences) == 1
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1]
-        assert sequences[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2]
-        assert completion_ids == [10, 11]
+        n = len(completion_ids)
+        assert sequences[0].input_ids[-n:] == completion_ids
+        assert sequences[0].completion_mask == [0] * (len(sequences[0].input_ids) - n) + [1] * n
+        assert sequences[0].old_log_probs[-n:] == [-0.1] * n
         assert [m["role"] for m in completion] == ["assistant"]
         assert n_calls == 0 and n_failures == 0
 
-    def test_clean_two_turns_stay_one_row(self, monkeypatch):
-        # Turn 2's re-tokenized prompt starts with what we held (gen tokens + tool tokens) -> CLEAN.
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3], [1, 2, 3, 10, 11, 20, 21]],
-            turns=[([10, 11], [-0.1, -0.2]), ([30, 31], [-0.3, -0.4])],
-            assistants=[_TOOL_CALL, _FINAL],
-        )
+    def test_clean_two_turns_stay_one_row(self):
+        # The training chat template is prefix-preserving, so turn 2's re-tokenized prompt extends turn 1 -> one row
+        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_TOOL_CALL, _FINAL])
         assert len(sequences) == 1
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11, 20, 21, 30, 31]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1, 0, 0, 1, 1]  # prompt=0, gen=1, tool=0, gen=1
-        assert sequences[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2, 0.0, 0.0, -0.3, -0.4]
-        assert completion_ids == [10, 11, 30, 31]  # generated tokens only, both turns
+        assert sum(sequences[0].completion_mask) == len(completion_ids)  # every generated token is trained once
         assert [m["role"] for m in completion] == ["assistant", "tool", "assistant"]
+        assert completion[1]["content"] == "ok"
         assert n_calls == 1 and n_failures == 0
 
-    def test_history_rewrite_forks_into_two_rows(self, monkeypatch):
-        # Turn 2's prompt diverges inside turn 1's answer and the new turn is >= fork_threshold -> FORK.
-        _, _, sequences, _, _, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3], [1, 2, 3, 99, 88, 77]],
-            turns=[([10, 11, 12, 13], [-0.1] * 4), ([30, 31, 32], [-0.2] * 3)],
-            assistants=[_TOOL_CALL, _FINAL],
-            fork_threshold=2,
-        )
-        assert len(sequences) == 2
-        assert sequences[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
-        assert sequences[0].completion_mask == [0, 0, 0, 1, 1, 1, 1]
-        assert sequences[1].input_ids == [1, 2, 3, 99, 88, 77, 30, 31, 32]
-        assert sequences[1].completion_mask == [0, 0, 0, 0, 0, 0, 1, 1, 1]  # 6 context (rewritten history) + 3 gen
-        # Every generated token is trained exactly once across the rows.
-        assert sum(sum(s.completion_mask) for s in sequences) == 4 + 3
-
-    def test_max_tool_calling_iterations_caps_turns(self, monkeypatch):
+    def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
-        completion, _, sequences, n_calls, _, _ = _run(
-            monkeypatch,
-            prompt_ids=[[1, 2, 3]],
-            turns=[([10, 11], [-0.1, -0.2])],
-            assistants=[_TOOL_CALL],
-            max_iters=0,
-        )
+        completion, _, sequences, n_calls, _, _ = _run(turns=[_TOOL_CALL], max_iters=0)
         assert len(sequences) == 1
         assert [m["role"] for m in completion] == ["assistant"]  # no tool message appended
         assert n_calls == 0
@@ -1309,16 +1751,6 @@ class AsyncTwoReward:
     # `inspect.iscoroutinefunction` does not see as asynchronous on its own.
     async def __call__(self, completions, **kwargs):
         return [1.0, 3.0]
-
-
-def _bare_loop(reward_funcs):
-    # _score_group only reads reward_funcs / reward_func_names / _env_reward_types off self, so we skip the heavy
-    # __init__ (tokenizer, asyncio loop, environments) and set just those.
-    loop = object.__new__(_AsyncRolloutLoop)
-    loop.reward_funcs = reward_funcs
-    loop.reward_func_names = [get_callable_name(f) for f in reward_funcs]
-    loop._env_reward_types = []  # no environment owns a reward in these tests
-    return loop
 
 
 def _group(completions_sequences, completions_ids):
@@ -1347,12 +1779,12 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
     def test_one_advantage_per_conversation_stamped_on_every_row(self):
         # conv 0: one row; conv 1: two rows (a fork).
-        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], "c0")
-        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], "c1")
-        seq_b2 = TrainingSequence([1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], "c1")
+        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], [[]] * 5, "c0")
+        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], [[]] * 5, "c1")
+        seq_b2 = TrainingSequence([1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], [[]] * 6, "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10, 11], [20, 21, 30]])
 
-        samples = asyncio.run(_bare_loop([two_reward])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
         # 1 row for conv 0 + 2 rows for conv 1 = 3 samples.
         assert len(samples) == 3
@@ -1365,19 +1797,22 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[1].advantage == samples[2].advantage
 
         # Each sample maps 1:1 onto its source TrainingSequence.
-        assert samples[0].input_ids == seq_a.input_ids and samples[0].completion_mask == seq_a.completion_mask
-        assert samples[0].old_log_probs == seq_a.old_log_probs
-        assert samples[1].input_ids == seq_b1.input_ids
-        assert samples[2].input_ids == seq_b2.input_ids
+        assert (
+            samples[0].input_ids.tolist() == seq_a.input_ids
+            and samples[0].completion_mask.tolist() == seq_a.completion_mask
+        )
+        assert samples[0].old_log_probs.tolist() == pytest.approx(seq_a.old_log_probs)
+        assert samples[1].input_ids.tolist() == seq_b1.input_ids
+        assert samples[2].input_ids.tolist() == seq_b2.input_ids
 
         assert all(s.model_version == 7 for s in samples)
 
     def test_async_callable_class_reward_func_is_awaited(self):
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
-        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
-        samples = asyncio.run(_bare_loop([AsyncTwoReward()])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
 
         # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
         assert samples[0].metrics["rewards/AsyncTwoReward"] == 1.0
@@ -1386,12 +1821,12 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[1].advantage == pytest.approx(1.0)
 
     def test_metrics_are_per_conversation_and_independent(self):
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
-        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
-        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
+        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
+        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], [[]] * 4, "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10], [20, 30]])
 
-        samples = asyncio.run(_bare_loop([two_reward])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
         assert samples[0].metrics["reward"] == 1.0
         assert samples[1].metrics["reward"] == 3.0 and samples[2].metrics["reward"] == 3.0
@@ -1405,11 +1840,11 @@ class TestScoreGroupOptionThree(TrlTestCase):
         def maybe_none(completions, **kwargs):
             return [None, 2.0]
 
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], "c0")
-        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
-        samples = asyncio.run(_bare_loop([maybe_none])._score_group(group))
+        samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
 
         assert len(samples) == 2
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
@@ -1419,8 +1854,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestEpochStop(TrlTestCase):
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct group_ids.
@@ -1471,6 +1906,12 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+    def test_epoch_stop_saves_the_final_step(self):
+        trainer, _ = self._train(fork_k=1)
+
+        # The run stops long before the default `save_steps=500`, so this checkpoint comes from the epoch stop alone.
+        assert os.listdir(self.tmp_dir) == [f"checkpoint-{trainer.state.global_step}"]
 
 
 @require_peft
@@ -1616,11 +2057,7 @@ class TestSaveLoraAdapter(TrlTestCase):
 
 class TestRolloutRequestModel(TrlTestCase):
     def _loop(self, lora_name):
-        loop = _AsyncRolloutLoop.__new__(_AsyncRolloutLoop)
-        loop.model_name = "Qwen/Qwen3-4B"
-        loop.lora_name = lora_name
-        loop._model_version_value = mp.Value("i", 0)
-        return loop
+        return _rollout_loop(model_name="Qwen/Qwen3-4B", lora_name=lora_name)
 
     def test_dense_runs_request_the_base_model(self):
         assert self._loop(None)._request_model == "Qwen/Qwen3-4B"
@@ -1736,8 +2173,8 @@ class TestSelectAdapterSync(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 @require_peft
 class TestAsyncGRPOTrainerPeft(TrlTestCase):
@@ -1784,7 +2221,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            token_budget=256,  # set explicitly so the batcher does not size itself from the server's max_model_len
+            token_budget=64,  # set explicitly so the batcher does not size itself from the server's max_model_len
             vllm_server_base_url=fake.url,
             vllm_server_timeout=5.0,
             report_to="none",
@@ -1837,6 +2274,12 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         )
         assert trainer._lora_sync is False
         assert fake_vllm.requests == []
+
+    def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
+        # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
+        # would leave the other ranks waiting in the collective that shares the sync mode.
+        with pytest.raises(ValueError, match="--max-lora-rank"):
+            self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])

@@ -98,7 +98,7 @@ training_args = GRPOConfig(
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
 
-TRL also provides an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](gspo_token).
+TRL shipped an experimental GSPO-token implementation up to v1.13; it is no longer part of the library and remains available in the git history. It differed from the sequence-level objective above only when the advantage varies with  \\( t \\), which TRL does not currently produce.
 
 #### Policy ratio: GRPO vs. GSPO
 
@@ -543,8 +543,7 @@ training_args = GRPOConfig(
 
 DeepSeek-V3.2 technical report introduces several techniques to enhance the performance of GRPO. In TRL we implement:
 
-- The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling
-ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
+- The **Unbiased KL Estimate**, which corrects the K3 estimator (as used in the original GRPO implementation) to obtain an unbiased KL estimate using the importance-sampling ratio between the current policy  \\( \pi_\theta \\) and the behavior policy  \\( \pi_{\text{old}} \\).
 
 $$
 \mathrm{D}_{\mathrm{KL}}\!\left(\pi_\theta(o_{i,t}) \,\|\, \pi_{\text{ref}}(o_{i,t})\right) =
@@ -598,6 +597,24 @@ training_args = GRPOConfig(
 
 While the paper doesn't specify a  \\( \textcolor{blue}{\delta} \\) value used, a good starting point could be  \\( \textcolor{blue}{\delta} = 0.5 \\). If training seems too conservative or too many sequences are masked, you can increase the value.
 For reference,  \\( \textcolor{blue}{\delta} = 1.0 \\) corresponds to an average log-ratio divergence of 1 nat per token, i.e. on sequences where this threshold is exceeded, the old policy was on average  \\( e^1 \approx 2.7 \\) times more likely to generate these tokens than the current policy.
+
+- The **Keep Sampling Mask** strategy, which keeps top-k/top-p sampling unbiased. The sampler draws each token from a truncated support  \\( \textcolor{red}{\mathcal{S}_{i,t}} \\), the tokens left after truncation, so the policy log-probability is renormalized over that same support:
+
+$$
+\log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
+$$
+
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0` or `top_k > 0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    top_p=0.95,
+    top_k=512,
+)
+```
 
 ### GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
 
@@ -1339,6 +1356,21 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 ```
 
+### Reducing Activation Recomputation in Large Transformer Models
+
+**📜 Paper**: https://huggingface.co/papers/2205.05198
+
+Full activation checkpointing recomputes every op in a checkpointed region during backward, including attention, even though only a few ops (attention among them) account for most of the recomputation cost relative to the memory they'd cost to keep. The paper's selective activation recomputation checkpoints only those expensive ops instead of the whole region. TRL implements this as selective activation checkpointing (SAC) for [`SFTTrainer`], saving the attention output during the forward pass so backward does not recompute it:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"selective": True},
+)
+```
+
 ## Parameter-Efficient Fine-Tuning (PEFT)
 
 For general details on using PEFT with TRL, please refer to the [PEFT Integration](peft_integration) guide.
@@ -1737,23 +1769,7 @@ MiniLLM is the first on-policy knowledge distillation method, which minimizes th
 
 It is a generalized version of [Think Machine Lab's On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/), with the option to add distribution-level single-step distillation signals (like GKD when `beta=1`) and long-context reverse KLD signals.
 
-Alternatively, you can use the [`experimental.minillm.MiniLLMTrainer`] and [`experimental.minillm.MiniLLMConfig`] to perform MiniLLM distillation as follows:
-
-```python
-from datasets import load_dataset
-from trl.experimental.minillm import MiniLLMTrainer
-
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-trainer = MiniLLMTrainer(
-    model="Qwen/Qwen3-0.6B",
-    teacher_model="Qwen/Qwen3-1.7B",
-    train_dataset=dataset,
-)
-trainer.train()
-```
-
-For more details, see the [MiniLLM Trainer documentation](minillm_trainer).
+TRL shipped an implementation as `MiniLLMTrainer` up to v1.14; it is no longer part of the library and remains available in the git history.
 
 ### Reinforcement Learning via Self-Distillation
 
@@ -1838,30 +1854,7 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
-```python
-from trl.experimental.ssd import SSDConfig, SSDTrainer
-
-training_args = SSDConfig(
-    temperature=0.6,                       # Training-time sampling temperature (T_train)
-    top_k=20,                              # Training-time top-k truncation
-    top_p=0.95,                            # Training-time top-p truncation
-    max_completion_length=65536,
-    learning_rate=5e-6,
-)
-
-trainer = SSDTrainer(
-    model="Qwen/Qwen3-4B-Instruct",
-    args=training_args,
-    train_dataset=...,
-)
-trainer.train()
-```
-
-Expected dataset columns:
-
-- `prompt`
-
-For more details, see the [SSD Trainer documentation](ssd_trainer).
+TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
 
 ## Distributed Training
 
