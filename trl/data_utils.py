@@ -403,6 +403,31 @@ def _tokenize(
     return result
 
 
+def common_prefix_length(ids: list[int], other_ids: list[int]) -> int:
+    """
+    Number of leading tokens `ids` and `other_ids` have in common.
+
+    Some chat templates render the prompt differently alone (with the generation prompt) than followed by a completion,
+    e.g. Gemma 4 12B ends the generation prompt with an empty thought block that the full conversation drops. The
+    completion then starts after this common prefix rather than after the tokenized prompt.
+
+    Args:
+        ids (`list[int]`):
+            First sequence of token ids.
+        other_ids (`list[int]`):
+            Second sequence of token ids.
+
+    Returns:
+        `int`: Length of the longest common prefix of the two sequences.
+    """
+    length = 0
+    for token, other_token in zip(ids, other_ids, strict=False):
+        if token != other_token:
+            break
+        length += 1
+    return length
+
+
 def _unpair_row(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
     batch_size = len(batch["chosen"])
     new_batch = {
