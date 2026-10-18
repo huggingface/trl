@@ -16,6 +16,7 @@ import json
 import os
 from unittest.mock import call, patch
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
@@ -238,3 +239,28 @@ class TestBEMACallback(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+    def test_frozen_parameters(self):
+        """Test that BEMACallback works when some parameters are frozen."""
+        for param in self.model.model.layers[0].parameters():
+            param.requires_grad_(False)
+        initial_params = {name: param.detach().clone() for name, param in self.model.named_parameters()}
+
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2)
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()
+
+        # Frozen parameters are left untouched in the BEMA model, trainable ones are updated
+        bema_model = AutoModelForCausalLM.from_pretrained(os.path.join(self.tmp_dir, "bema"))
+        for name, param in bema_model.named_parameters():
+            if name.startswith("model.layers.0."):
+                torch.testing.assert_close(param, initial_params[name])
+            else:
+                assert not torch.equal(param, initial_params[name]), f"{name} was not updated"
