@@ -1201,7 +1201,21 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
 class TestRolloutRequestModel(TrlTestCase):
     def _loop(self, lora_name):
-        return _rollout_loop(model_name="Qwen/Qwen3-4B", lora_name=lora_name)
+        # The request-version race is independent of tokenizer behavior. Keep this test CPU-only and offline.
+        class _Tokenizer:
+            eos_token_id = 2
+
+            def apply_chat_template(self, *args, **kwargs):
+                return [1, 2]
+
+            def decode(self, token_ids, skip_special_tokens=False):
+                return " ".join(str(token_id) for token_id in token_ids)
+
+        return _rollout_loop(
+            model_name="Qwen/Qwen3-4B",
+            lora_name=lora_name,
+            processing_class=_Tokenizer(),
+        )
 
     def test_dense_runs_request_the_base_model(self):
         assert self._loop(None)._request_model == "Qwen/Qwen3-4B"
