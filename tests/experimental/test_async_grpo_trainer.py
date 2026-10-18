@@ -640,16 +640,18 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         assert written_before_super == [True]
 
-    def test_save_checkpoint_skips_holes_left_by_stale_drops(self):
-        # Group 2 was never trained (all of its rollouts were dropped as stale), so the cursor stops there: those
-        # prompts get re-generated on resume instead of being silently skipped.
+    def test_save_checkpoint_advances_past_stale_dropped_groups(self):
+        # Group 2 was intentionally dropped as stale, so it is resolved for the rollout cursor.
         trainer = self._trainer_at_step_5({0, 1, 3, 4, 5}, dataset_start_index=0)
+        trainer._dropped_groups = {2}
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
-            assert json.load(f)["prompt_index"] == 2
+            state = json.load(f)
+        assert state["prompt_index"] == 6
+        assert state["groups_trained"] == 5
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")

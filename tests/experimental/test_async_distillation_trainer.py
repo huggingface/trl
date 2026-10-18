@@ -1125,22 +1125,26 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         return trainer
 
     @pytest.mark.parametrize(
-        ("trained_prompts", "dataset_start_index", "expected"),
+        ("trained_prompts", "dropped_prompts", "dataset_start_index", "expected"),
         [
-            ({0, 1, 2, 3, 4}, 10, 15),  # dataset_start_index(10) + first_untrained(5)
-            # Prompt 2 was never trained (its rollout was dropped as stale), so the cursor stops there: it gets
-            # re-generated on resume instead of being silently skipped.
-            ({0, 1, 3, 4, 5}, 0, 2),
+            ({0, 1, 2, 3, 4}, set(), 10, 15),  # dataset_start_index(10) + first_untrained(5)
+            # Prompt 2 was intentionally dropped as stale; it is resolved for the rollout cursor.
+            ({0, 1, 3, 4, 5}, {2}, 0, 6),
         ],
     )
-    def test_save_checkpoint_writes_rollout_state(self, trained_prompts, dataset_start_index, expected):
+    def test_save_checkpoint_writes_rollout_state(
+        self, trained_prompts, dropped_prompts, dataset_start_index, expected
+    ):
         trainer = self._trainer_at_step_5(trained_prompts, dataset_start_index=dataset_start_index)
+        trainer._dropped_prompts = dropped_prompts
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
-            assert json.load(f)["prompt_index"] == expected
+            state = json.load(f)
+        assert state["prompt_index"] == expected
+        assert state["prompts_trained"] == len(trained_prompts)
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
