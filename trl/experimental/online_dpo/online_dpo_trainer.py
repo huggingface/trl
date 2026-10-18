@@ -267,10 +267,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         if args is None:
             raise ValueError("`args` must be provided.")
 
-        # Check that the processing_class is provided
-        if processing_class is None:
-            raise ValueError("`processing_class` must be provided.")
-
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
@@ -302,6 +298,23 @@ class OnlineDPOTrainer(_BaseTrainer):
                 )
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
+
+        # Handle processing_class (optional): load it from the model when omitted, mirroring other trainers.
+        if processing_class is None:
+            model_name_or_path = model if isinstance(model, str) else getattr(getattr(model, "config", None), "_name_or_path", None)
+            if model_name_or_path is not None:
+                model_init_kwargs = args.model_init_kwargs or {}
+                processing_class = AutoTokenizer.from_pretrained(
+                    model_name_or_path,
+                    revision=model_init_kwargs.get("revision"),
+                    trust_remote_code=args.trust_remote_code,
+                )
+        if processing_class is not None:
+            if getattr(processing_class, "pad_token", None) is None:
+                processing_class.pad_token = processing_class.eos_token
+            model.config.get_text_config().pad_token_id = processing_class.pad_token_id
+            if hasattr(model, "generation_config"):
+                model.generation_config.pad_token_id = processing_class.pad_token_id
 
         # PEFT
         if peft_config is not None:
