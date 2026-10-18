@@ -1205,12 +1205,6 @@ class SDPOTrainer(_BaseTrainer):
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
         importance-sampling ratio between the current student and the student at rollout time.
         """
-        if distillation_logits.loss_mask.sum() == 0:
-            mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, 0.0)
-            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
-            return distillation_logits.student_logits.sum() * 0.0
-
         if self.args.distillation_mode == "topk_logits":
             if self.args.distillation_topk is None:
                 raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
@@ -1262,7 +1256,7 @@ class SDPOTrainer(_BaseTrainer):
         mask = distillation_logits.loss_mask
 
         def global_masked_mean(x):
-            local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            local_sum, local_count = (x * mask).sum().float(), mask.sum().float()
             totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
             return (totals[0] / totals[1].clamp(min=1.0)).item()
 
@@ -1319,7 +1313,7 @@ class SDPOTrainer(_BaseTrainer):
         )
 
         def global_masked_mean(x):
-            local_sum, local_count = (x * loss_mask).sum(), loss_mask.sum().float()
+            local_sum, local_count = (x * loss_mask).sum().float(), loss_mask.sum().float()
             totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
             return (totals[0] / totals[1].clamp(min=1.0)).item()
 
