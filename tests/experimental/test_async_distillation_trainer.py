@@ -1243,9 +1243,7 @@ class TestRolloutRequestModel(TrlTestCase):
                 # Simulate another policy publish while generation/teacher scoring are in flight.
                 loop._model_version_value.value = 10
                 return {"choices": [{"token_ids": [7]}]}
-            return {
-                "choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]
-            }
+            return {"choices": [{"prompt_logprobs": [_position((7, -0.5, 1))] * len(payload["prompt"])}]}
 
         loop._post = fake_post
         original_generate = loop._generate_one_turn
@@ -1258,9 +1256,7 @@ class TestRolloutRequestModel(TrlTestCase):
             return await original_generate(prompt_ids)
 
         loop._generate_one_turn = publish_new_version_before_generation
-        sample = asyncio.run(
-            loop._generate_and_score_one(0, {"prompt": [{"role": "user", "content": "hi"}]})
-        )
+        sample = asyncio.run(loop._generate_and_score_one(0, {"prompt": [{"role": "user", "content": "hi"}]}))
         assert sample.model_version == 9
         assert requests[0] == (loop.vllm_server_url, expected_model)
         assert requests[1] == ("http://localhost:8001", "teacher-model")
