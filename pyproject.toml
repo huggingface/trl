@@ -71,7 +71,7 @@ openreward = [
     "openreward>=0.1.109",
 ]
 peft = [
-    "peft>=0.13.0"
+    "peft>=0.17.0"
 ]
 quality = [
     "pre-commit",
@@ -108,7 +108,7 @@ dev = [
     # openreward
     "openreward>=0.1.109",
     # peft
-    "peft>=0.13.0",
+    "peft>=0.17.0",
     # quality
     "pre-commit",
     "hf-doc-builder",

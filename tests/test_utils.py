@@ -1377,6 +1377,13 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
 
 
 _FUSED_LM_HEAD_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-BeamForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="Beam was introduced in transformers-5.20.1",
+        ),
+    ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
     pytest.param(
@@ -1404,6 +1411,13 @@ _FUSED_LM_HEAD_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2-MoE requires transformers>=5.0.0",
         ),
     ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
@@ -1695,6 +1709,13 @@ class TestAddFusedLMHead:
 
 
 _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-BeamForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="Beam was introduced in transformers-5.20.1",
+        ),
+    ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
@@ -1720,6 +1741,13 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2-MoE requires transformers>=5.0.0",
         ),
     ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
