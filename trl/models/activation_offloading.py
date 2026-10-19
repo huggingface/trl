@@ -24,7 +24,6 @@ import sys
 import psutil
 import torch
 from accelerate.logging import get_logger
-from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
 from transformers import is_torch_npu_available
@@ -34,15 +33,11 @@ if is_torch_npu_available():
     import torch_npu  # noqa: F401
 
 
-# Import DTensor for FSDP v2 support with version-aware import path
+# Import DTensor for FSDP v2 support
 DTensor = None
 if torch.distributed.is_available():
     try:
-        if is_torch_version(">=", "2.5.0"):
-            from torch.distributed.tensor import DTensor
-        else:
-            # from torch 2.0.0 (oldest supported accelerate torch version), DTensor is in torch.distributed._tensor
-            from torch.distributed._tensor import DTensor
+        from torch.distributed.tensor import DTensor
     except (ImportError, AttributeError):
         DTensor = None
 
@@ -98,7 +93,7 @@ class OffloadActivations(saved_tensors_hooks):
             be moved back onto GPU more quickly but is a limited resource.
         use_streams (`bool`, *optional*, defaults to `True`):
             Whether to use streams for performance optimization where the communications get overlapped with the
-            computation. Requires a torch build after torch-2.5.0.
+            computation.
         min_offload_size (`int`, *optional*, defaults to `1024`):
             Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
             do not want to waste bandwidth and resources moving it to CPU and back.
@@ -148,9 +143,7 @@ class OffloadActivations(saved_tensors_hooks):
         self.use_pin_memory = use_pin_memory
         self.virtual_memory_safe_pct = 60  # we should not exceed this percentage of memory
 
-        self.accelerator_type = (
-            torch.accelerator.current_accelerator().type if hasattr(torch, "accelerator") else "cuda"
-        )
+        self.accelerator_type = torch.accelerator.current_accelerator().type
         self.device_module = torch.get_device_module(self.accelerator_type)
 
         # For streaming
@@ -232,9 +225,7 @@ class OffloadActivations(saved_tensors_hooks):
                 return tensor_id
 
             # Check if tensor is a parameter or buffer
-            if isinstance(activation, torch.nn.Parameter) or (
-                hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer)
-            ):
+            if isinstance(activation, (torch.nn.Parameter, torch.nn.Buffer)):
                 self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
@@ -657,7 +648,7 @@ def get_act_offloading_ctx_manager(
             be moved back onto GPU more quickly but is a limited resource.
         use_streams (`bool`, *optional*, defaults to `True`):
             Whether to use streams for performance optimization where the communications get overlapped with the
-            computation. Requires a torch build after torch-2.5.0.
+            computation.
         min_offload_size (`int`, *optional*, defaults to `1024`):
             Minimum number of bytes a Tensor must be in order to qualify for offloading. If the tensor is too small, we
             do not want to waste bandwidth and resources moving it to CPU and back.

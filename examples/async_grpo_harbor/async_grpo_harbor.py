@@ -137,7 +137,7 @@ def task_indices(spec: str) -> list[int] | None:
     if not spec:
         return None
     if spec.startswith("@"):
-        spec = pathlib.Path(spec[1:]).read_text()
+        spec = pathlib.Path(spec[1:]).read_text(encoding="utf-8")
     return [int(x) for x in spec.replace("\n", ",").split(",") if x.strip()]
 
 

@@ -1236,12 +1236,11 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # candidate token ids per position (the teacher's top-k + tail), not just the realized token's logprob, which
         # is all that head supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
         # a different mechanism that does support multiple candidate ids per position.
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
-            **model_init_kwargs,
+        model_init_kwargs.setdefault(
+            "attn_implementation",
+            "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
         )
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=None, **model_init_kwargs)
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -2038,7 +2037,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
-            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
 
@@ -2064,7 +2063,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 elif not isinstance(self.train_dataset, Dataset):
                     logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
                 else:
-                    with open(rollout_state_file) as f:
+                    with open(rollout_state_file, encoding="utf-8") as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
                     self._prompts_before_resume = rollout_state["prompt_index"]
