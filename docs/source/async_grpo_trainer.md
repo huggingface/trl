@@ -287,7 +287,7 @@ How it works, on two rollouts of one prompt:
 
 A few consequences:
 
-- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is, and splits a group only when a rank would otherwise forward nothing.
+- **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is. When that row is full, the sample goes to another row if a rank is still empty, or if that does not raise the most loaded row, which sets the micro-batch's time; otherwise the micro-batch closes.
 - **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
 

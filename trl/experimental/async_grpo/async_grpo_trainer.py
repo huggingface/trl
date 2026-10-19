@@ -526,9 +526,9 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         """Pick the row `sample` belongs in, or `None` when the micro-batch has to close first.
 
         A sample is cheapest in a row that already holds its `group_id`, so those rows get first refusal — all of them,
-        since an earlier split can leave one group on several rows. When none of them has room the sample can still be
-        split off, but only to keep a rank from forwarding nothing; otherwise closing the micro-batch is cheaper, since
-        the sample then keeps its prefix in a fresh row.
+        since an earlier split can leave one group on several rows. When none of them has room, the sample goes to the
+        least loaded row it fits in. Once every rank is busy, it only does so if that does not raise the most loaded
+        row: the micro-batch takes as long as that row, so the split is free, whereas closing would add a micro-batch.
         """
 
         def least_loaded(candidates: list[TreeRow]) -> TreeRow | None:
@@ -542,9 +542,11 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         placed = least_loaded(home)
         if placed is not None:
             return placed
-        if home and all(row.samples for row in rows):
-            return None
-        return least_loaded(rows)
+        placed = least_loaded(rows)
+        if placed is not None and home and all(row.samples for row in rows):
+            if placed.load + placed.cost(sample) > max(row.load for row in rows):
+                return None
+        return placed
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):

@@ -64,6 +64,17 @@ class TreeRow:
         novel = len(input_ids) - shared
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
+    def cost(self, sample: dict[str, Any]) -> int:
+        """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
+        input_ids = sample["input_ids"].tolist()
+        children, shared = self.roots, 0
+        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
+            if key not in children:
+                break
+            children = self.children[children[key]]
+            shared += 1
+        return sum(depth + 1 for depth in range(shared, len(input_ids)))
+
     def add(self, sample: dict[str, Any]) -> None:
         input_ids = sample["input_ids"].tolist()
         children = self.roots
