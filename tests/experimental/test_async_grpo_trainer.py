@@ -972,6 +972,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 completion_mask=[0, 1, 1],
                 old_log_probs=[0.0, -0.1, -0.1],
                 sampling_mask=[[], [], []],
+                sampler_logprobs=[{}, {}, {}],
                 rollout_id="r",
             )
             return [{"role": "assistant", "content": "x"}], [2, 3], [sequence], 0, 0, None
