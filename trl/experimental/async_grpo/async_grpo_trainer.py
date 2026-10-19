@@ -402,7 +402,8 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "completion_mask": sample.completion_mask,
                 "old_log_probs": sample.old_log_probs,
                 "sampling_mask": sample.sampling_mask,
-                "sampler_logprobs": sample.sampler_logprobs,
+                "sampler_ids": sample.sampler_ids,
+                "sampler_log_probs": sample.sampler_log_probs,
                 "advantage": sample.advantage,
                 "group_id": sample.group_id,
                 "metrics": sample.metrics,  # per-sample rewards; aggregated by the collator, never sent to the model

@@ -32,6 +32,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import chain, repeat
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
@@ -257,7 +258,8 @@ class RolloutSample:
     completion_mask: np.ndarray
     old_log_probs: np.ndarray
     sampling_mask: list[list[int]]
-    sampler_logprobs: list[dict[int, float]]
+    sampler_ids: np.ndarray  # (len(input_ids), K), the sampler's most likely next tokens by position, padded with -1
+    sampler_log_probs: np.ndarray  # (len(input_ids), K), their log-probs, padded with -inf
     advantage: float
     model_version: int
     group_id: int
@@ -1301,6 +1303,19 @@ class _AsyncRolloutLoop:
                 **tm,
             }
             for seq in sequences:
+                width = max(map(len, seq.sampler_logprobs))
+                shape = (len(seq.input_ids), width)
+                tops = seq.sampler_logprobs
+                sampler_ids = np.fromiter(
+                    chain.from_iterable(chain(top, repeat(-1, width - len(top))) for top in tops),
+                    dtype=np.int64,
+                    count=shape[0] * width,
+                ).reshape(shape)
+                sampler_log_probs = np.fromiter(
+                    chain.from_iterable(chain(top.values(), repeat(-math.inf, width - len(top))) for top in tops),
+                    dtype=np.float32,
+                    count=shape[0] * width,
+                ).reshape(shape)
                 samples.append(
                     RolloutSample(
                         prompt=prompt,
@@ -1309,7 +1324,8 @@ class _AsyncRolloutLoop:
                         completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
                         old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
                         sampling_mask=seq.sampling_mask,
-                        sampler_logprobs=seq.sampler_logprobs,
+                        sampler_ids=sampler_ids,
+                        sampler_log_probs=sampler_log_probs,
                         advantage=float(advantage),
                         model_version=group.model_version,
                         group_id=group.group_id,
