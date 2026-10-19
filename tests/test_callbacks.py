@@ -16,10 +16,11 @@ import json
 import os
 from unittest.mock import call, patch
 
+import pytest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
-from trl import BEMACallback, LogCompletionsCallback
+from trl import BEMACallback, LogCompletionsCallback, WeaveCallback
 
 from .testing_utils import TrlTestCase, require_comet, require_wandb
 
@@ -41,6 +42,54 @@ class TestLogCompletionsCallback(TrlTestCase):
         self.dataset = dataset.map(tokenize_function, batched=True)
 
         self.generation_config = GenerationConfig(max_length=32)
+
+    def test_num_prompts_validation(self):
+        trainer = Trainer(
+            model=self.model,
+            args=TrainingArguments(output_dir=self.tmp_dir),
+            eval_dataset=self.dataset["test"],
+            processing_class=self.tokenizer,
+        )
+        dataset_size = len(self.dataset["test"])
+        callback = LogCompletionsCallback(trainer, num_prompts=None)
+        assert len(callback.eval_dataset) == dataset_size
+
+        callback = LogCompletionsCallback(trainer, num_prompts=1)
+        assert len(callback.eval_dataset) == 1
+
+        callback = LogCompletionsCallback(trainer, num_prompts=dataset_size)
+        assert len(callback.eval_dataset) == dataset_size
+
+        for num_prompts in [0, -1]:
+            with pytest.raises(ValueError):
+                LogCompletionsCallback(trainer, num_prompts=num_prompts)
+
+        with pytest.raises(ValueError, match=fr"{dataset_size + 1}.*{dataset_size}"):
+            LogCompletionsCallback(trainer, num_prompts=dataset_size + 1)
+
+    def test_weave_num_prompts_validation(self):
+        trainer = Trainer(
+            model=self.model,
+            args=TrainingArguments(output_dir=self.tmp_dir),
+            eval_dataset=self.dataset["test"],
+            processing_class=self.tokenizer,
+        )
+        dataset_size = len(self.dataset["test"])
+        callback = WeaveCallback(trainer, num_prompts=None)
+        assert len(callback.eval_dataset) == dataset_size
+
+        callback = WeaveCallback(trainer, num_prompts=1)
+        assert len(callback.eval_dataset) == 1
+
+        callback = WeaveCallback(trainer, num_prompts=dataset_size)
+        assert len(callback.eval_dataset) == dataset_size
+
+        for num_prompts in [0, -1]:
+            with pytest.raises(ValueError):
+                WeaveCallback(trainer, num_prompts=num_prompts)
+
+        with pytest.raises(ValueError, match=fr"{dataset_size + 1}.*{dataset_size}"):
+            WeaveCallback(trainer, num_prompts=dataset_size + 1)
 
     @require_wandb
     def test_basic_wandb(self):

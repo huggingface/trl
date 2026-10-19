@@ -283,8 +283,8 @@ class LogCompletionsCallback(TrainerCallback):
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             The generation config to use for generating completions.
         num_prompts (`int`, *optional*):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
-            the evaluation dataset.
+            The number of prompts to generate completions for. Must be between `1` and the number of examples in the
+            evaluation dataset. If not provided, defaults to the number of examples in the evaluation dataset.
         freq (`int`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
@@ -308,6 +308,12 @@ class LogCompletionsCallback(TrainerCallback):
             self.eval_dataset = self.trainer.eval_dataset
 
         if num_prompts is not None:
+            if num_prompts < 1:
+                raise ValueError(f"num_prompts must be positive, got {num_prompts}.")
+            if num_prompts > len(self.eval_dataset):
+                raise ValueError(
+                    f"num_prompts ({num_prompts}) cannot be greater than the evaluation dataset size ({len(self.eval_dataset)})."
+                )
             self.eval_dataset = self.eval_dataset.select(range(num_prompts))
 
     def on_step_end(self, args, state, control, **kwargs):
@@ -414,8 +420,8 @@ class WeaveCallback(TrainerCallback):
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config to use for generating completions.
         num_prompts (`int`, *optional*):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
-            the evaluation dataset.
+            The number of prompts to generate completions for. Must be between `1` and the number of examples in the
+            evaluation dataset. If not provided, defaults to the number of examples in the evaluation dataset.
         dataset_name (`str`, *optional*, defaults to `"eval_dataset"`):
             Name for the dataset metadata in Weave.
         model_name (`str`, *optional*):
@@ -448,6 +454,12 @@ class WeaveCallback(TrainerCallback):
             self.eval_dataset = self.trainer.eval_dataset
 
         if num_prompts is not None:
+            if num_prompts < 1:
+                raise ValueError(f"num_prompts must be positive, got {num_prompts}.")
+            if num_prompts > len(self.eval_dataset):
+                raise ValueError(
+                    f"num_prompts ({num_prompts}) cannot be greater than the evaluation dataset size ({len(self.eval_dataset)})."
+                )
             self.eval_dataset = self.eval_dataset.select(range(num_prompts))
 
     def _initialize_weave(self):
