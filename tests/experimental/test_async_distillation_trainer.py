@@ -1139,7 +1139,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
-        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"), encoding="utf-8") as f:
             assert json.load(f)["prompt_index"] == expected
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
@@ -1162,7 +1162,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -1187,7 +1187,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 5}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)

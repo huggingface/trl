@@ -461,7 +461,7 @@ class TestGetDataset:
         """
 
         # Write YAML to a temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", encoding="utf-8") as tmpfile:
             tmpfile.write(yaml_content)
             tmpfile.flush()
             parser = TrlParser((DatasetMixtureConfig,))
@@ -497,7 +497,7 @@ class TestGetDataset:
         """
 
         # Write YAML to a temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", encoding="utf-8") as tmpfile:
             tmpfile.write(yaml_content)
             tmpfile.flush()
             parser = TrlParser((DatasetMixtureConfig,))

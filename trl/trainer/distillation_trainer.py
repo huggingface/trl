@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import transformers
 from accelerate.logging import get_logger
@@ -1983,12 +1984,13 @@ class DistillationTrainer(_BaseTrainer):
                 "completion": self._logs["completion"],
             }
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            pq.write_table(
+                Dataset.from_dict(table, on_mixed_types="use_json").data.table,
                 os.path.join(
                     self.args.output_dir,
                     "completions",
                     f"completions_{self.state.global_step:05d}.parquet",
-                )
+                ),
             )
 
             for logging_backend in logging_backends:

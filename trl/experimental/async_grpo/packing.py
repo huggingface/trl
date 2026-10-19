@@ -170,6 +170,9 @@ def _flash_attn():
 
     if torch.version.hip:
         return get_kernel("kernels-community/aiter-flash-attn", version=2)
+    # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+        return get_kernel("kernels-community/flash-attn4", version=0)
     return get_kernel("kernels-community/flash-attn3", version=1)
 
 
