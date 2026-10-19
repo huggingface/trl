@@ -30,10 +30,12 @@ from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
+import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
@@ -1114,6 +1116,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
         # Check tree attention compat
         if layer_types:
+            if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
+                raise ValueError(
+                    f"Tree packing of {type(model).__name__}'s gated DeltaNet layers requires transformers>=5.15.0: "
+                    "before it, these layers call the functions they stored at init rather than the module-level "
+                    "ones tree packing patches, so they would scan across samples."
+                )
             if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
                 raise ValueError(
                     f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
