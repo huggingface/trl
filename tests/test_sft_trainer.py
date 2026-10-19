@@ -333,6 +333,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
@@ -352,6 +359,13 @@ class TestSFTTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2-MoE requires transformers>=5.0.0",
                 ),
             ),
         ],
@@ -769,6 +783,15 @@ class TestSFTTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                0.0,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
             # Dense model: no coefficient to inherit
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
         ],
@@ -1614,9 +1637,9 @@ class TestSFTTrainer(TrlTestCase):
         template_path = pathlib.Path(self.tmp_dir) / "checkpoint-9" / "chat_template.jinja"
         assert template_path.exists(), f"Chat template not found at {template_path}"
 
-        with open(template_path) as f:
+        with open(template_path, encoding="utf-8") as f:
             template_content = f.read()
-        with open(training_args.chat_template_path) as f:
+        with open(training_args.chat_template_path, encoding="utf-8") as f:
             original_template_content = f.read()
         assert template_content == original_template_content, "Chat template content does not match the original"
 
