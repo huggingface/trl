@@ -83,7 +83,8 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    import peft
+    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -534,6 +535,30 @@ class DistillationTrainer(_BaseTrainer):
                     "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
                     "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
                     "adapter such as LoRA instead."
+                )
+            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and any(
+                    isinstance(module, torch.nn.Linear)
+                    and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                    for name, module in model.named_modules()
+                )
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                logger.warning(
+                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
+                    "train them too. See https://github.com/huggingface/trl/issues/7767."
                 )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
