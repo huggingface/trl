@@ -541,7 +541,7 @@ class DistillationTrainer(_BaseTrainer):
                 isinstance(peft_config, LoraConfig)
                 and Version(transformers.__version__) >= Version("5.0.0")
                 and Version(peft.__version__) < Version("0.19.0")
-                and (Version(peft.__version__) < Version("0.17.0") or not peft_config.target_parameters)
+                and not peft_config.target_parameters
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and (
                     isinstance(peft_config.target_modules, str)
