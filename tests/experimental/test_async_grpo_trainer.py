@@ -1250,9 +1250,15 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
             id="gemma2-sliding-window-softcap",
-            marks=pytest.mark.skipif(
-                torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
-            ),
+            marks=[
+                pytest.mark.skipif(
+                    torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
+                ),
+                pytest.mark.skipif(
+                    torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10,
+                    reason="The FlashAttention-4 kernel used on Blackwell fails with softcap",
+                ),
+            ],
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
@@ -1292,13 +1298,14 @@ class TestTreePackingParity(TrlTestCase):
         model = trainer.model.to(torch_device)
         samples = self._samples()
         collator = DataCollatorForRollout(pad_token_id=0)
-        runs = [
-            (TREE_ATTENTION, collator([[_tree_row(samples)]])),
-            (
-                "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
-                _sequence_packed_batch(samples),
-            ),
-        ]
+        # The sequence-packing reference uses the kernel that tree attention picks for this device
+        if torch.version.hip:
+            reference = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            reference = "kernels-community/flash-attn4"
+        else:
+            reference = "kernels-community/flash-attn3"
+        runs = [(TREE_ATTENTION, collator([[_tree_row(samples)]])), (reference, _sequence_packed_batch(samples))]
 
         losses, grads = [], []
         for attn_implementation, batch in runs:

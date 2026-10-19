@@ -82,7 +82,7 @@ CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 
 ## AMD GPUs
 
-The trainer runs on AMD GPUs (ROCm) with no extra setup: the commands above work as they are. Training uses the [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) attention kernel on AMD GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on NVIDIA GPUs, both downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs.
+The trainer runs on AMD GPUs (ROCm) with no extra setup: the commands above work as they are. Training uses the [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) attention kernel on AMD GPUs, [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs, all downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
 
 ## Vision-language models
 
