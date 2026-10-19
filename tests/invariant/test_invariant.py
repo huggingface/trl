@@ -115,7 +115,7 @@ def run(config: CorrectnessConfig) -> Trajectory:
         state_paths = list(Path(tmpdir).glob("**/trainer_state.json"))
         if not state_paths:
             raise RuntimeError(f"trainer_state.json not produced in {tmpdir}")
-        state = json.loads(state_paths[0].read_text())
+        state = json.loads(state_paths[0].read_text(encoding="utf-8"))
 
     steps = [
         StepRecord(
@@ -136,11 +136,11 @@ def run(config: CorrectnessConfig) -> Trajectory:
 
 def save(trajectory: Trajectory, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(trajectory), indent=2))
+    path.write_text(json.dumps(asdict(trajectory), indent=2), encoding="utf-8")
 
 
 def load(path: Path) -> Trajectory:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     return Trajectory(
         config=data["config"],
         env=data["env"],
