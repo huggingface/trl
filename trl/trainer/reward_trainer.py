@@ -549,7 +549,7 @@ class RewardTrainer(_BaseTrainer):
                     for name, module in model.named_modules()
                 )
                 and (
-                    isinstance(peft_config.target_modules, str)
+                    peft_config.target_modules == "all-linear"
                     or any(
                         name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
                         for name in peft_config.target_modules or []
