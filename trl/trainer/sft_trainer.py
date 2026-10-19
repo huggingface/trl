@@ -875,7 +875,7 @@ class SFTTrainer(_BaseTrainer):
                 and not peft_config.target_parameters
                 and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
                 and (
-                    isinstance(peft_config.target_modules, str)
+                    peft_config.target_modules == "all-linear"
                     or any(
                         name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
                         for name in peft_config.target_modules or []
