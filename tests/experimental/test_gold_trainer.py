@@ -19,7 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
+from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -2297,6 +2299,11 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
+@pytest.mark.xfail(
+    condition=Version(transformers.__version__) >= Version("5.20.1"),
+    reason="SmolVLM forward with images is broken in transformers>=5.20.1 (see #7790)",
+    strict=True,
+)
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
 
