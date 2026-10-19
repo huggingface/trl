@@ -401,6 +401,14 @@ When TRL needs an API newer than the floor, the default is a version guard, not 
 
 The minimum-versions CI job pins every dependency exactly at its floor, so a floor change also updates its pin.
 
+### Python versions
+
+TRL follows the [CPython release cycle](https://devguide.python.org/versions/): a new Python version comes out every October and is supported for 5 years.
+
+* **Adding a new version**: once PyTorch and the core dependencies publish wheels for it and the test suite passes, add it to the classifiers in `pyproject.toml` and to the nightly matrix in `.github/workflows/tests_python_versions.yml`.
+* **Dropping a version**: drop it once it reaches end of life. The schedule only gives the month, and the actual end of life is the date of the final release, which can fall anywhere in that month, so drop it after that release is out, and move the minimum-versions CI job to the new oldest version. A version that old is always past the 2-year mark of [Dependency version floors](#dependency-version-floors).
+* **Default version**: PR CI, the documentation build, the release workflow and the Docker images run on a single Python version, and the nightly matrix covers the other supported ones. The exception is the minimum-versions job, which runs on the oldest supported Python so that every floor installs and it can pin each one exactly. The default is the version most TRL users run, as shown by the download stats on [pypistats](https://pypistats.org/packages/trl). Review it every October, after the new CPython release, and switch when another version has overtaken it. A newer version that few users run would leave the version most of them use tested only nightly.
+
 ### Working with warnings
 
 Warnings play a critical role in guiding users toward resolving potential issues, but they should be used thoughtfully to avoid unnecessary noise. Unlike logging, which provides informational context or operational details, warnings signal conditions that require attention and action. Overusing warnings can dilute their importance, leading users to ignore them entirely.
