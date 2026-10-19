@@ -2636,6 +2636,8 @@ class TestGRPOTrainer(TrlTestCase):
     )
     def test_train_with_activation_offloading(self, model_name):
         """Test that training works with activation offloading (requires GPU)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
@@ -2653,7 +2655,7 @@ class TestGRPOTrainer(TrlTestCase):
             model=model,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
-            train_dataset=self.train_dataset,
+            train_dataset=dataset,
         )
 
         previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
