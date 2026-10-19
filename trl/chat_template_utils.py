@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import re
 import warnings
 from collections.abc import Callable
@@ -1330,6 +1331,11 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
             # Some templates (e.g. Qwen3.5) omit arguments for valid no-arg calls; normalize to {}.
             if "arguments" not in func or func["arguments"] is None:
                 func["arguments"] = {}
+            # Models sometimes write the arguments as a JSON-encoded string; decode it.
+            if isinstance(func["arguments"], str):
+                func["arguments"] = json.loads(func["arguments"])
+            if not isinstance(func["arguments"], dict):
+                raise ValueError(f"tool_calls[{idx}]['function']['arguments'] must be a dict.")
         else:
             # Handle flat structure: {"name": ..., "arguments": ...}
             if not isinstance(tool_call.get("name"), str):
@@ -1337,6 +1343,11 @@ def _validate_tool_calls(tool_calls: list | None) -> None:
             # Some templates (e.g. Qwen3.5) omit arguments for valid no-arg calls; normalize to {}.
             if "arguments" not in tool_call or tool_call["arguments"] is None:
                 tool_call["arguments"] = {}
+            # Models sometimes write the arguments as a JSON-encoded string; decode it.
+            if isinstance(tool_call["arguments"], str):
+                tool_call["arguments"] = json.loads(tool_call["arguments"])
+            if not isinstance(tool_call["arguments"], dict):
+                raise ValueError(f"tool_calls[{idx}]['arguments'] must be a dict.")
 
 
 def parse_response(

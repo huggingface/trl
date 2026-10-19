@@ -1787,6 +1787,28 @@ class TestParseResponse:
 
         assert parsed == expected
 
+    def test_parse_response_string_tool_arguments(self, model_name):
+        if model_name != "trl-internal-testing/tiny-Qwen3MoeForCausalLM":
+            pytest.skip("For simplicity, we only test string-encoded arguments on one tokenizer.")
+        processing_class = self._load(model_name)
+        messages = [{"role": "user", "content": "Multiply 3 by 4."}]
+        prefix = processing_class.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        text = processing_class.apply_chat_template(
+            messages + [{"role": "assistant", "content": "", "tool_calls": tool_calls}], tokenize=False
+        )
+        response = text[len(processing_class.decode(prefix)) :]
+
+        # The model writes the arguments as a JSON-encoded string
+        encoded = response.replace('{"a": 3, "b": 4}', '"{\\"a\\": 3, \\"b\\": 4}"')
+        parsed = parse_response(processing_class, processing_class(encoded)["input_ids"], prefix=prefix)
+        assert parsed["tool_calls"] == tool_calls
+
+        # Arguments that don't decode to a dict make the tool call malformed, so the text is kept as content
+        malformed = response.replace('{"a": 3, "b": 4}', '"3, 4"')
+        parsed = parse_response(processing_class, processing_class(malformed)["input_ids"], prefix=prefix)
+        assert "tool_calls" not in parsed
+
     def test_parse_response_truncated(self, model_name):
         processing_class = self._load(model_name)
         # Here we use 2 tool calls as it seems to be a more common source of failure when truncated.
