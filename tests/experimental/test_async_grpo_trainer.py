@@ -30,21 +30,17 @@ import numpy as np
 import pytest
 import requests
 import torch
-import transformers
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
-from packaging.version import Version
 from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 
-# `trl.experimental.async_grpo` requires transformers>=5.2.0, and fails to import on older versions
-if Version(transformers.__version__) < Version("5.2.0"):
-    pytest.skip("AsyncGRPOTrainer requires transformers>=5.2.0", allow_module_level=True)
+pytest.importorskip("transformers", minversion="5.2.0")
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer  # noqa: E402
-from trl.experimental.async_grpo.async_grpo_trainer import (  # noqa: E402
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
     RolloutWorkerProtocol,
@@ -56,7 +52,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (  # noqa: E402
     select_adapter_sync,
     validate_lora_for_vllm_sync,
 )
-from trl.experimental.async_grpo.async_rollout_worker import (  # noqa: E402
+from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
     DriftKind,
     RolloutGroup,
@@ -68,10 +64,10 @@ from trl.experimental.async_grpo.async_rollout_worker import (  # noqa: E402
     _common_prefix_len,
     _SampleBuilder,
 )
-from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow  # noqa: E402
-from trl.trainer.base_trainer import _BaseTrainer  # noqa: E402
+from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
+from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import (  # noqa: E402
+from ..testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_peft,
