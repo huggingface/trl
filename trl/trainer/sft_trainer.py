@@ -184,9 +184,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if not self.padding_free:
             attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
-        # If padding_free, flatten everything into a single sequence
+        # If padding_free, flatten everything into a single sequence. Packed examples already fill their rows, so they
+        # stay as rows: the sequence boundaries below index the flattened rows, which is how the varlen kernels read them
         output = {}
-        if self.padding_free:
+        if self.padding_free and batch_seq_lengths is None:
             input_ids = [torch.cat(input_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
             position_ids = [torch.cat(position_ids, dim=0)]
@@ -205,17 +206,22 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             output["position_ids"] = pad(
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
+            # The padding of each row is one sequence, not one per padding token
+            for row, ids in zip(output["position_ids"], position_ids, strict=True):
+                row[len(ids) :] = torch.arange(row.numel() - len(ids))
             output["labels"][output["position_ids"] == 0] = -100
             # Sequence boundaries for the varlen kernels (flash attention, linear attention). Computed here, on CPU,
             # since the model would otherwise derive them from `position_ids` with device-to-host syncs in every layer.
-            seq_starts = (output["position_ids"][0] == 0).nonzero().flatten()
-            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].size(1)])]).to(torch.int32)
+            seq_starts = (output["position_ids"].flatten() == 0).nonzero().flatten()
+            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].numel()])]).to(torch.int32)
+            # Rounded up to a multiple of 16 with empty sequences, so that a compiled model only sees a few shapes
+            cu_seq_lens = torch.cat([cu_seq_lens, cu_seq_lens[-1:].repeat(-cu_seq_lens.numel() % 16)])
             output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
             output["max_length_q"] = output["max_length_k"] = int(cu_seq_lens.diff().max())
             # Sequence index of each token, for the short convolutions of linear-attention layers
             output["seq_idx"] = torch.repeat_interleave(
                 torch.arange(cu_seq_lens.numel() - 1, dtype=torch.int32), cu_seq_lens.diff()
-            )[None]
+            ).view_as(output["position_ids"])
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(
@@ -1673,7 +1679,7 @@ class SFTTrainer(_BaseTrainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                local_num_tokens = torch.tensor(inputs["position_ids"].numel(), device=inputs["position_ids"].device)
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
