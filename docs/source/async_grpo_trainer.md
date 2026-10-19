@@ -287,7 +287,7 @@ A few consequences:
 - **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is, and splits a group only when a rank would otherwise forward nothing.
 - **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
-- **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, …): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state (`trl/kernels/tree_gated_delta_rule.py`). Models with any other non-attention layer are refused at init.
+- **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, …): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state (`trl/experimental/async_grpo/tree_gated_delta_rule.py`). This needs `transformers>=5.15.0`, where these layers call the module-level functions that tree packing patches. Models with any other non-attention layer are refused at init.
 
 What it buys: with nothing shared, it runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 

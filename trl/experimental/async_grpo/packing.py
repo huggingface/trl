@@ -266,7 +266,7 @@ def patch_tree_gdn(model) -> bool:
         return False
     if modeling in _PATCHED:
         return True
-    from ...kernels.tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
+    from .tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
 
     def causal_conv1d_fn(hidden_states, weight, bias=None, activation=None, **kwargs):
         if "tree_segment_parents" not in kwargs:
