@@ -114,10 +114,11 @@ class _StubRolloutWorker:
             self._model = loader.from_pretrained(tokenizer.name_or_path)
         with torch.no_grad():
             log_p = self._model(torch.tensor([ids])).logits[0, n_prompt - 1 : -1].float().log_softmax(-1)
-        old_log_probs, sampling_mask, sampler_logprobs = (
+        old_log_probs, sampling_mask, sampler_ids, sampler_log_probs = (
             [0.0] * n_prompt,
             [[] for _ in range(n_prompt)],
-            [{} for _ in range(n_prompt)],
+            [[-1, -1]] * n_prompt,
+            [[-math.inf, -math.inf]] * n_prompt,
         )
         for token, row in zip(ids[n_prompt:], log_p, strict=True):
             candidates = [token, (token + 1) % len(row), (token + 2) % len(row)] if self._candidate_sets else []
@@ -128,8 +129,9 @@ class _StubRolloutWorker:
             top = row.topk(2)
             old_log_probs.append(row[token].item())
             sampling_mask.append(candidates)
-            sampler_logprobs.append(dict(zip(top.indices.tolist(), top.values.tolist(), strict=False)))
-        return old_log_probs, sampling_mask, sampler_logprobs
+            sampler_ids.append(top.indices.tolist())
+            sampler_log_probs.append(top.values.tolist())
+        return old_log_probs, sampling_mask, np.array(sampler_ids), np.array(sampler_log_probs, dtype=np.float32)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for group_id, row in enumerate(itertools.cycle(dataset)):
@@ -148,7 +150,7 @@ class _StubRolloutWorker:
             advantages = (rewards - rewards.mean()) / rewards.std()
             for idx in range(num_generations):
                 completion_ids = prompt_completion_ids[idx][len(prompt_ids) :]
-                old_log_probs, sampling_mask, sampler_logprobs = self._sample(
+                old_log_probs, sampling_mask, sampler_ids, sampler_log_probs = self._sample(
                     tokenizer, prompt_ids + completion_ids, len(prompt_ids)
                 )
                 sample = RolloutSample(
@@ -158,7 +160,8 @@ class _StubRolloutWorker:
                     completion_mask=np.array([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64),
                     old_log_probs=np.array(old_log_probs, dtype=np.float32),
                     sampling_mask=sampling_mask,
-                    sampler_logprobs=sampler_logprobs,
+                    sampler_ids=sampler_ids,
+                    sampler_log_probs=sampler_log_probs,
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
@@ -1106,7 +1109,8 @@ def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) ->
         "completion_mask": np.array([0] + [1] * (length - 1), dtype=np.int64),
         "old_log_probs": np.zeros(length, dtype=np.float32),
         "sampling_mask": [[] for _ in range(length)],
-        "sampler_logprobs": [{} for _ in range(length)],
+        "sampler_ids": np.full((length, 0), -1, dtype=np.int64),
+        "sampler_log_probs": np.full((length, 0), -np.inf, dtype=np.float32),
         "advantage": advantage,
         "group_id": int(input_ids[0]),
         "metrics": {"reward": reward},
@@ -1241,10 +1245,12 @@ class TestPackingAwareBatching(TrlTestCase):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
         a = _rollout_sample(3)
         a["sampling_mask"] = [[], [1, 5, 7], [2]]
-        a["sampler_logprobs"] = [{}, {1: -0.1, 5: -0.2}, {2: 0.0}]
+        a["sampler_ids"] = np.array([[-1, -1], [1, 5], [2, -1]])
+        a["sampler_log_probs"] = np.array([[-np.inf, -np.inf], [-0.1, -0.2], [0.0, -np.inf]], dtype=np.float32)
         b = _rollout_sample(2)
         b["sampling_mask"] = [[], [1, 9]]
-        b["sampler_logprobs"] = [{}, {1: -0.3}]
+        b["sampler_ids"] = np.array([[-1], [1]])
+        b["sampler_log_probs"] = np.array([[-np.inf], [-0.3]], dtype=np.float32)
 
         batch = collator([[_tree_row([a]), _tree_row([b])]])
 
@@ -1309,7 +1315,8 @@ def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group
         "completion_mask": np.array([0] * n_prompt + [1] * (len(tokens) - n_prompt), dtype=np.int64),
         "old_log_probs": np.array([0.0] * n_prompt + [-0.5] * (len(tokens) - n_prompt), dtype=np.float32),
         "sampling_mask": [[] for _ in tokens],
-        "sampler_logprobs": [{} for _ in tokens],
+        "sampler_ids": np.full((len(tokens), 0), -1, dtype=np.int64),
+        "sampler_log_probs": np.full((len(tokens), 0), -np.inf, dtype=np.float32),
         "advantage": advantage,
         "group_id": group_id,
         "metrics": {"reward": 0.0},

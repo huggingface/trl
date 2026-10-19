@@ -16,6 +16,7 @@ import math
 from functools import cache
 from typing import Any
 
+import numpy as np
 import torch
 from transformers import AttentionInterface
 from transformers.integrations.flash_attention import get_target_dtype
@@ -143,21 +144,27 @@ class TreeRow:
 
         shift_labels = [-100] * len(input_ids)
         sampling_mask = [[] for _ in input_ids]
-        sampler_logprobs = [{} for _ in input_ids]
+        num_logprobs = max(sample["sampler_ids"].shape[1] for sample in self.samples)
+        sampler_ids = np.full((len(input_ids), num_logprobs), -1, dtype=np.int64)
+        sampler_log_probs = np.full((len(input_ids), num_logprobs), -math.inf, dtype=np.float32)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
             ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
+            first = len(token_index)
             for p in range(1, len(nodes)):
                 if mask[p]:
                     shift_labels[packed[nodes[p - 1]]] = ids[p]
                     sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
-                    sampler_logprobs[packed[nodes[p - 1]]] = sample["sampler_logprobs"][p]
                     token_index.append(packed[nodes[p - 1]])
                     old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
+            trained = np.flatnonzero(sample["completion_mask"][1:]) + 1
+            sampler_ids[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
+            sampler_log_probs[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][
+                trained
+            ]
         width = max(map(len, sampling_mask))
-        num_logprobs = max(map(len, sampler_logprobs))
         return {
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
@@ -165,12 +172,8 @@ class TreeRow:
             "sampling_mask": torch.tensor(
                 [candidates + [-1] * (width - len(candidates)) for candidates in sampling_mask], dtype=torch.long
             ).view(len(input_ids), width),
-            "sampler_ids": torch.tensor(
-                [list(top) + [-1] * (num_logprobs - len(top)) for top in sampler_logprobs], dtype=torch.long
-            ).view(len(input_ids), num_logprobs),
-            "sampler_log_probs": torch.tensor(
-                [list(top.values()) + [-math.inf] * (num_logprobs - len(top)) for top in sampler_logprobs]
-            ).view(len(input_ids), num_logprobs),
+            "sampler_ids": torch.from_numpy(sampler_ids),
+            "sampler_log_probs": torch.from_numpy(sampler_log_probs),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
             "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
             "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
