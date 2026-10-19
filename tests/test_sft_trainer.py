@@ -361,6 +361,13 @@ class TestSFTTrainer(TrlTestCase):
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2-MoE requires transformers>=5.0.0",
+                ),
+            ),
         ],
     )
     def test_train(self, model_id):
@@ -1630,9 +1637,9 @@ class TestSFTTrainer(TrlTestCase):
         template_path = pathlib.Path(self.tmp_dir) / "checkpoint-9" / "chat_template.jinja"
         assert template_path.exists(), f"Chat template not found at {template_path}"
 
-        with open(template_path) as f:
+        with open(template_path, encoding="utf-8") as f:
             template_content = f.read()
-        with open(training_args.chat_template_path) as f:
+        with open(training_args.chat_template_path, encoding="utf-8") as f:
             original_template_content = f.read()
         assert template_content == original_template_content, "Chat template content does not match the original"
 

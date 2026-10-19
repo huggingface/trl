@@ -31,6 +31,7 @@ from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 import torch.utils.data
 import transformers
@@ -3347,12 +3348,13 @@ class GRPOTrainer(_BaseTrainer):
             }
 
             df_base = pd.DataFrame(table)
-            df_base.to_parquet(
+            pq.write_table(
+                Dataset.from_dict(table, on_mixed_types="use_json").data.table,
                 os.path.join(
                     self.args.output_dir,
                     "completions",
                     f"completions_{self.state.global_step:05d}.parquet",
-                )
+                ),
             )
 
             images_raw = self._logs["images"] or []
