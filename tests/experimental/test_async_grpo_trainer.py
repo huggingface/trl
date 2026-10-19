@@ -1225,33 +1225,69 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
+_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
+_FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
+_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
+    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
+    "text config",
+    strict=True,
+)
+
+
 @require_torch_accelerator
 @pytest.mark.parametrize(
     ("model_id", "model_init_kwargs"),
     [
         pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            {},
+            id="qwen25-vl",
+            marks=_VLM_TEXT_HEAD_DIM_4,
+        ),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", _FA3_HEAD_DIM, id="llama31"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", _FA3_HEAD_DIM, id="llama32"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", _FA3_HEAD_DIM, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", _FA3_HEAD_DIM, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
             id="gemma2-sliding-window-softcap",
             marks=pytest.mark.skipif(
                 torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
             ),
         ),
+        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
+        pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
+        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", {}, id="deepseek-v3"),
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, id="glm4-moe"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, id="cohere"),
         pytest.param(
             "trl-internal-testing/tiny-Cohere2ForCausalLM",
-            {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
             id="cohere2-interleaved-sliding-window",
         ),
         pytest.param(
-            "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-            {"head_dim": 32, "ignore_mismatched_sizes": True},
-            id="glm4-moe",
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            {**_FA3_ONE_HEAD, "sliding_window": 16},
+            id="olmo3-interleaved-sliding-window",
         ),
-        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
-        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
+        pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
+        pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, id="llava"),
+        pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, id="idefics3"),
+        pytest.param(
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl", marks=_VLM_TEXT_HEAD_DIM_4
+        ),
     ],
 )
 class TestTreePackingParity(TrlTestCase):
@@ -1317,6 +1353,8 @@ class TestTreePackingParity(TrlTestCase):
         assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
         torch.testing.assert_close(packed_loss, alone_loss, atol=1e-3, rtol=1e-3)
         assert packed_grads.keys() == alone_grads.keys()
+        for name, grad in alone_grads.items():
+            assert (packed_grads[name] - grad).norm() < 5e-2 * grad.norm(), name
         packed_grads, alone_grads = (
             torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
         )
@@ -1331,6 +1369,10 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
             pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
+            pytest.param("trl-internal-testing/tiny-Llama4ForCausalLM", "chunked_attention", id="llama4"),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV4ForCausalLM", "compressed_sparse_attention", id="deepseek-v4"
+            ),
         ],
     )
     def test_init_raises(self, model_id, match):
