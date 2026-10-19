@@ -12,14 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Python < 3.14 evaluates annotations at definition time, and `tl` (for `tl.constexpr`) only exists with Triton
+from __future__ import annotations
+
 import math
 
 import torch
-import triton
-import triton.language as tl
+from transformers.utils import is_triton_available
 
 from ..trainer.utils import maybe_gather_lm_head_ctx
-from .chunked_logprob import _BLOCK_SIZE, _MM_OUT_DTYPE, _addmm_fp32, _transform
+from .chunked_logprob import _BLOCK_SIZE, _MM_OUT_DTYPE, _addmm_fp32, _jit, _torch_transform, _transform, _use_triton
+
+
+if is_triton_available():
+    import triton
+    import triton.language as tl
 
 
 # The projections run on `[TOKEN_CHUNK_SIZE, VOCAB_CHUNK_SIZE]` tiles, so neither model's logits exist in full
@@ -27,7 +34,7 @@ TOKEN_CHUNK_SIZE = 4096
 VOCAB_CHUNK_SIZE = 32768
 
 
-@triton.jit
+@_jit
 def _stats_kernel(
     s_ptr,
     s_stride,
@@ -95,7 +102,7 @@ def _stats_kernel(
     tl.store(s_weighted_gap_ptr + row, s_gap)
 
 
-@triton.jit
+@_jit
 def _jsd_kernel(
     s_ptr,
     s_stride,
@@ -117,6 +124,13 @@ def _jsd_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     # Second pass of the generalized JSD, which needs both normalizers to form the mixture m = (1 - beta) p_s + beta p_t
+    # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
+    beta = tl.cast(beta, tl.float32)
+    s_scale = tl.cast(s_scale, tl.float32)
+    s_softcap = tl.cast(s_softcap, tl.float32)
+    t_scale = tl.cast(t_scale, tl.float32)
+    t_softcap = tl.cast(t_softcap, tl.float32)
+    inv_t = tl.cast(inv_t, tl.float32)
     row = tl.program_id(0).to(tl.int64)
     s_row = s_ptr + row * s_stride
     t_row = t_ptr + row * t_stride
@@ -148,7 +162,7 @@ def _jsd_kernel(
     tl.store(kl_student_ptr + row, kl_student)
 
 
-@triton.jit
+@_jit
 def _backward_kernel(
     s_ptr,
     s_stride,
@@ -171,6 +185,13 @@ def _backward_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     # Overwrite one block of the student tile with the gradient of the divergence with respect to the projection output
+    # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
+    beta = tl.cast(beta, tl.float32)
+    s_scale = tl.cast(s_scale, tl.float32)
+    s_softcap = tl.cast(s_softcap, tl.float32)
+    t_scale = tl.cast(t_scale, tl.float32)
+    t_softcap = tl.cast(t_softcap, tl.float32)
+    inv_t = tl.cast(inv_t, tl.float32)
     row = tl.program_id(0).to(tl.int64)
     offsets = tl.program_id(1) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_cols
@@ -209,6 +230,126 @@ def _backward_kernel(
         grad = grad * (1 - th * th)
     grad = grad * s_scale
     tl.store(s_ptrs, grad.to(s_ptr.dtype.element_ty), mask=mask)
+
+
+def _stats_tile(
+    s_tile,
+    s_stride,
+    t_tile,
+    t_stride,
+    s_max,
+    s_sum,
+    s_x_sum,
+    t_max,
+    t_sum,
+    t_weighted_gap,
+    s_weighted_gap,
+    n_cols,
+    s_scale,
+    s_softcap,
+    t_scale,
+    t_softcap,
+    inv_t,
+    S_HAS_SOFTCAP,
+    T_HAS_SOFTCAP,
+    BLOCK_SIZE,
+):
+    # `_stats_kernel` in torch, for devices without Triton: the whole tile at once instead of one program per token
+    zs = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP)
+    zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
+    gap = zt - zs
+
+    new_s_m = torch.maximum(s_max, zs.amax(-1))
+    s_rescale = torch.exp(s_max - new_s_m)
+    es = torch.exp(zs - new_s_m.unsqueeze(-1))
+    s_sum.mul_(s_rescale).add_(es.sum(-1))
+    s_x_sum.mul_(s_rescale).add_((es * zs).sum(-1))
+    s_weighted_gap.mul_(s_rescale).sub_((es * gap).sum(-1))
+    s_max.copy_(new_s_m)
+
+    new_t_m = torch.maximum(t_max, zt.amax(-1))
+    t_rescale = torch.exp(t_max - new_t_m)
+    et = torch.exp(zt - new_t_m.unsqueeze(-1))
+    t_sum.mul_(t_rescale).add_(et.sum(-1))
+    t_weighted_gap.mul_(t_rescale).add_((et * gap).sum(-1))
+    t_max.copy_(new_t_m)
+
+
+def _jsd_tile(
+    s_tile,
+    s_stride,
+    t_tile,
+    t_stride,
+    s_log_z,
+    t_log_z,
+    jsd,
+    kl_student,
+    n_cols,
+    beta,
+    s_scale,
+    s_softcap,
+    t_scale,
+    t_softcap,
+    inv_t,
+    S_HAS_SOFTCAP,
+    T_HAS_SOFTCAP,
+    BLOCK_SIZE,
+):
+    # `_jsd_kernel` in torch, for devices without Triton: the whole tile at once instead of one program per token
+    log_ps = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP) - s_log_z.unsqueeze(-1)
+    log_pt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP) - t_log_z.unsqueeze(-1)
+    log_m = torch.logaddexp(log_ps + math.log(1 - beta), log_pt + math.log(beta))
+    kl_s = torch.exp(log_ps) * (log_ps - log_m)
+    jsd += (beta * torch.exp(log_pt) * (log_pt - log_m) + (1 - beta) * kl_s).sum(-1)
+    kl_student += kl_s.sum(-1)
+
+
+def _backward_tile(
+    s_tile,
+    s_stride,
+    t_tile,
+    t_stride,
+    s_log_z,
+    t_log_z,
+    aux,
+    grad_divergence,
+    n_cols,
+    beta,
+    s_scale,
+    s_softcap,
+    t_scale,
+    t_softcap,
+    inv_t,
+    MODE,
+    S_HAS_SOFTCAP,
+    T_HAS_SOFTCAP,
+    BLOCK_SIZE,
+):
+    # `_backward_kernel` in torch, for devices without Triton: the whole tile at once instead of one block per program
+    y = s_tile * s_scale
+    if S_HAS_SOFTCAP:
+        th = torch.tanh(y / s_softcap)
+        zs = s_softcap * th * inv_t
+    else:
+        zs = y * inv_t
+    zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
+    log_ps = zs - s_log_z.unsqueeze(-1)
+    log_pt = zt - t_log_z.unsqueeze(-1)
+    ps = torch.exp(log_ps)
+    if MODE == 0:
+        # forward KL(p_t || p_s)
+        grad = ps - torch.exp(log_pt)
+    elif MODE == 1:
+        # reverse KL(p_s || p_t), `aux` is the per-token KL
+        grad = ps * (log_ps - log_pt - aux.unsqueeze(-1))
+    else:
+        # generalized JSD, `aux` is the per-token KL(p_s || m)
+        log_m = torch.logaddexp(log_ps + math.log(1 - beta), log_pt + math.log(beta))
+        grad = (1 - beta) * ps * (log_ps - log_m - aux.unsqueeze(-1))
+    grad = grad * grad_divergence.unsqueeze(-1) * inv_t
+    if S_HAS_SOFTCAP:
+        grad = grad * (1 - th * th)
+    s_tile.copy_(grad * s_scale)
 
 
 def _compute_dtype(hidden: torch.Tensor) -> torch.dtype:
@@ -294,7 +435,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
                     _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                     _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
-                    _stats_kernel[(n,)](
+                    fold = _stats_kernel[(n,)] if _use_triton(device) else _stats_tile
+                    fold(
                         s_tile,
                         s_tile.stride(0),
                         t_tile,
@@ -318,7 +460,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
                         _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                         _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
-                        _jsd_kernel[(n,)](
+                        fold = _jsd_kernel[(n,)] if _use_triton(device) else _jsd_tile
+                        fold(
                             s_tile,
                             s_tile.stride(0),
                             t_tile,
@@ -410,7 +553,12 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
                     _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                     _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
-                    _backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))](
+                    fold = (
+                        _backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))]
+                        if _use_triton(student_hidden.device)
+                        else _backward_tile
+                    )
+                    fold(
                         s_tile,
                         s_tile.stride(0),
                         t_tile,

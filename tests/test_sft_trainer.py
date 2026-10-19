@@ -41,7 +41,6 @@ from .testing_utils import (
     require_kernels,
     require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_torch_accelerator,
     require_vision,
 )
@@ -131,10 +130,21 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5], dtype=torch.int32))
+        assert result["max_length_q"] == 3
 
     def test_padding_free_without_labels(self):
         """Padding-free mode without labels: labels default to the input IDs (document starts masked)."""
@@ -143,10 +153,21 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5], dtype=torch.int32))
+        assert result["max_length_q"] == 3
 
     def test_packing(self):
         """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
@@ -160,10 +181,24 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, 6, -100, 8, 9, 10, -100]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 6, 10, 11], dtype=torch.int32))
+        assert result["max_length_q"] == 4
+        torch.testing.assert_close(
+            result["seq_idx"], torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 3]], dtype=torch.int32)
+        )
 
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
@@ -184,10 +219,21 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
-        assert set(result.keys()) == {"input_ids", "position_ids", "labels"}
+        assert set(result.keys()) == {
+            "input_ids",
+            "position_ids",
+            "labels",
+            "cu_seq_lens_q",
+            "cu_seq_lens_k",
+            "max_length_q",
+            "max_length_k",
+            "seq_idx",
+        }
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 0, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, -100, -100, -100]]))
+        torch.testing.assert_close(result["cu_seq_lens_q"], torch.tensor([0, 3, 5, 6, 7, 8], dtype=torch.int32))
+        assert result["max_length_q"] == 3
 
     def test_custom_position_ids_but_no_padding_free(self):
         """Test that custom position_ids are ignored if padding_free is False."""
@@ -287,6 +333,13 @@ class TestSFTTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
@@ -306,6 +359,13 @@ class TestSFTTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2-MoE requires transformers>=5.0.0",
                 ),
             ),
         ],
@@ -657,7 +717,7 @@ class TestSFTTrainer(TrlTestCase):
             else:  # We expect the peft params to be different
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -688,6 +748,44 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    @pytest.mark.skipif(
+        Version(transformers.__version__) >= Version("5.0.0")
+        and is_peft_available()
+        and Version(peft.__version__) < Version("0.21.3.dev0"),
+        reason="With transformers v5, peft<0.19 skips the routed experts (#7765), and peft<0.21.3 the dense and shared "
+        "expert layers (#7767)",
+    )
+    def test_train_moe_with_peft_config_trains_all_mlp_layers(self):
+        # GLM-4-MoE has a dense first layer and shared experts with the same module names as its routed experts
+        model_id = "trl-internal-testing/tiny-Glm4MoeForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        previous_params = {n: param.clone() for n, param in model.named_parameters()}
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_modules=["gate_proj", "up_proj", "down_proj"]),
+        )
+
+        trainer.train()
+
+        # Merging the adapter into the base weights shows which weights the training changed
+        merged_model = trainer.model.merge_and_unload()
+        changed = [
+            n for n, param in merged_model.named_parameters() if not torch.equal(previous_params[n], param.cpu())
+        ]
+        assert any(".mlp.experts." in n for n in changed), f"No routed expert weight has changed, only {changed}."
+        assert any(".mlp.shared_experts." in n for n in changed), (
+            f"No shared expert weight has changed, only {changed}."
+        )
+        assert any("layers.0.mlp." in n for n in changed), f"No dense layer weight has changed, only {changed}."
+
     @pytest.mark.parametrize(
         "model_id, expect_coef, expect_aux_loss",
         [
@@ -695,6 +793,15 @@ class TestSFTTrainer(TrlTestCase):
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
             ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                0.0,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
             # Dense model: no coefficient to inherit
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", 0.0, False),
         ],
@@ -961,26 +1068,6 @@ class TestSFTTrainer(TrlTestCase):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
-
-    @pytest.mark.parametrize(
-        "attn_implementation, expect_warning",
-        [
-            ("kernels-community/flash-attn2", False),
-            ("kernels-community/flash-attn2@v2", False),
-            ("eager", True),
-        ],
-    )
-    def test_padding_free_warns_only_for_unsupported_attention(self, attn_implementation, expect_warning, caplog):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        # Only the config value matters here: the warning is emitted at init, so no attention kernel is ever loaded.
-        model.config._attn_implementation = attn_implementation
-        training_args = SFTConfig(output_dir=self.tmp_dir, padding_free=True, max_length=None, report_to="none")
-
-        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
-            SFTTrainer(model=model, args=training_args, train_dataset=dataset)
-
-        assert ("supported Flash Attention variant" in caplog.text) == expect_warning
 
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
@@ -1560,9 +1647,9 @@ class TestSFTTrainer(TrlTestCase):
         template_path = pathlib.Path(self.tmp_dir) / "checkpoint-9" / "chat_template.jinja"
         assert template_path.exists(), f"Chat template not found at {template_path}"
 
-        with open(template_path) as f:
+        with open(template_path, encoding="utf-8") as f:
             template_content = f.read()
-        with open(training_args.chat_template_path) as f:
+        with open(training_args.chat_template_path, encoding="utf-8") as f:
             original_template_content = f.read()
         assert template_content == original_template_content, "Chat template content does not match the original"
 
@@ -2061,6 +2148,13 @@ class TestSFTTrainer(TrlTestCase):
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ),
         ],
     )
     @require_vision
@@ -2092,6 +2186,9 @@ class TestSFTTrainer(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
+                assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
@@ -2124,6 +2221,8 @@ class TestSFTTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        # Some samples have no image: their batches leave the vision tower without gradients
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
@@ -2204,6 +2303,9 @@ class TestSFTTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+
+        # The vision tower gets no gradients, so DDP must search for unused parameters
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

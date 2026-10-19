@@ -278,7 +278,11 @@ class VLLMGeneration:
         self.min_p = min_p
         self.max_completion_length = max_completion_length
         self.logprobs = logprobs
-        self.generation_kwargs = generation_kwargs or {}
+        self.generation_kwargs = {}
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features; -100 is the lowest bias vLLM accepts
+            self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
+        self.generation_kwargs.update(generation_kwargs or {})
 
         # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
         # it requires gathering the parameters, and constant afterwards.
@@ -407,8 +411,8 @@ class VLLMGeneration:
 
     def _iter_fsdp2_params(self, module: nn.Module):
         """FSDP2-specific parameter iteration."""
-        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
-        for name, param in module.state_dict().items():
+        # For FSDP2, module.named_parameters() covers all parameters and yields tied weights once, as vLLM requires
+        for name, param in module.named_parameters():
             # When using PEFT, we need to recover the original parameter name
             name = name.removeprefix("base_model.model.").replace(".base_layer", "")
             # Skip PEFT layers: they don't exist in vLLM, and they are merged already.
@@ -526,7 +530,7 @@ class VLLMGeneration:
         if features is None:
             return None
 
-        image_token_id = self.processing_class.image_token_id
+        image_token_id = self.model.config.image_token_id
         placeholders = []
         offset = 0
         while offset < len(prompt_ids):
