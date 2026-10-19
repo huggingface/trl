@@ -36,6 +36,9 @@ from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
+
+pytest.importorskip("transformers", minversion="5.2.0")
+
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
