@@ -76,9 +76,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          # Keep the image's ROCm torch stack when resolving the dev dependencies
-          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
+          pip install ".[dev]"
 
       - name: Verify ROCm and GPU isolation
         run: |
@@ -144,9 +142,7 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          # Keep the image's ROCm torch stack when resolving the dev dependencies
-          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
+          pip install ".[dev]"
 
       - name: Verify ROCm and GPU isolation
         run: |
