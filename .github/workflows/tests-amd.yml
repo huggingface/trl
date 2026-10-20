@@ -84,11 +84,7 @@ jobs:
           python -m pip install --upgrade pip
           # Keep the image's ROCm torch stack when resolving optional dependencies.
           python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          # The dev dependencies, with Liger installed separately so its `triton` dependency cannot replace the
-          # image's ROCm Triton.
-          python -m pip install -c /tmp/rocm-constraints.txt \
-            ".[deepspeed,kernels,openreward,peft,quality,quantization,test,vlm]" jmespath
-          python -m pip install --no-deps "liger-kernel>=0.8.2"
+          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
           # Match transformers' AMD CI cleanup of NVIDIA-only packages.
           python -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
 
@@ -155,11 +151,7 @@ jobs:
           python -m pip install --upgrade pip
           # Keep the image's ROCm torch stack when resolving optional dependencies.
           python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          # The dev dependencies, with Liger installed separately so its `triton` dependency cannot replace the
-          # image's ROCm Triton.
-          python -m pip install -c /tmp/rocm-constraints.txt \
-            ".[deepspeed,kernels,openreward,peft,quality,quantization,test,vlm]" jmespath
-          python -m pip install --no-deps "liger-kernel>=0.8.2"
+          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
           # Match transformers' AMD CI cleanup of NVIDIA-only packages.
           python -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
 
