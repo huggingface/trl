@@ -1,9 +1,44 @@
 name: Tests on AMD ROCm
 
 on:
+  push:
+    branches:
+      - main
+      - ci-*
+    paths:
+      # Run only when relevant files are modified
+      - ".github/workflows/tests-amd.yml"
+      - ".github/actions/**"
+      - "Makefile"
+      - "examples/**.py"
+      - "tests/**"
+      - "trl/**"
+      - "pyproject.toml"
+      # Exclude if only experimental code/tests, except the async trainers tested below
+      - "!trl/experimental/**"
+      - "!tests/experimental/**"
+      - "trl/experimental/async_grpo/**"
+      - "trl/experimental/async_distillation/**"
+      - "tests/experimental/test_async_grpo_trainer.py"
+      - "tests/experimental/test_async_distillation_trainer.py"
+  pull_request:
+    paths:
+      # Run only when relevant files are modified
+      - ".github/workflows/tests-amd.yml"
+      - ".github/actions/**"
+      - "Makefile"
+      - "examples/**.py"
+      - "tests/**"
+      - "trl/**"
+      - "pyproject.toml"
+      # Exclude if only experimental code/tests, except the async trainers tested below
+      - "!trl/experimental/**"
+      - "!tests/experimental/**"
+      - "trl/experimental/async_grpo/**"
+      - "trl/experimental/async_distillation/**"
+      - "tests/experimental/test_async_grpo_trainer.py"
+      - "tests/experimental/test_async_distillation_trainer.py"
   workflow_dispatch:
-  schedule:
-    - cron: "17 4 * * *"
 
 env:
   TQDM_DISABLE: 1
@@ -12,6 +47,10 @@ env:
   TRL_EXPERIMENTAL_SILENCE: 1
   # Install into the image's ROCm Python instead of creating a venv with CUDA torch.
   PIP_BREAK_SYSTEM_PACKAGES: "1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions: {}
 
@@ -99,7 +138,7 @@ jobs:
           ${{ matrix.pytest_args }}
 
       - name: Post to Slack
-        if: always()
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
