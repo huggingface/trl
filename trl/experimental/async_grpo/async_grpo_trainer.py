@@ -238,11 +238,11 @@ class _TrainBeginCallback(TrainerCallback):
 class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
-    An epoch is counted in distinct prompt-groups actually trained (accumulated in the collator, which runs on the main
-    process just before the model forward). This is fork-independent: all generations of a prompt and all forked rows
-    of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
-    process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
-    workers in lockstep.
+    An epoch is counted in distinct prompt-groups consumed: trained (accumulated in the collator, which runs on the
+    main process just before the model forward) or dropped for zero advantage. This is fork-independent: all
+    generations of a prompt and all forked rows of a conversation share one `group_id`, so a conversation forking into
+    many rows still counts once. Only the main process collates (`dispatch_batches=True`), so the stop decision is
+    reduced across ranks to keep data-parallel workers in lockstep.
     """
 
     def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
@@ -251,8 +251,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
-        reached = torch.tensor(int(trained >= self._target), device=acc.device)
+        consumed = self._trainer._groups_before_resume + len(self._trainer._consumed_groups())
+        reached = torch.tensor(int(consumed >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
             # `max_steps` is only a safety ceiling here, so `DefaultFlowCallback` never reaches its end-of-training save.
@@ -1882,17 +1882,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
+    def _consumed_groups(self) -> set[int]:
+        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+            with contextlib.suppress(queue.Empty):
+                while True:
+                    self._filtered_groups.add(self.rollout_worker.filtered_groups.get_nowait())
+        return self._trained_groups | self._filtered_groups
+
     def _save_checkpoint(self, model, trial):
         if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            with contextlib.suppress(queue.Empty):
-                while True:
-                    self._filtered_groups.add(self.rollout_worker.filtered_groups.get_nowait())
-            done = self._trained_groups | self._filtered_groups
-            first_undone = next(g for g in itertools.count() if g not in done)
-            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_undone
+            consumed = self._consumed_groups()
+            first_unconsumed = next(g for g in itertools.count() if g not in consumed)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_unconsumed
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}

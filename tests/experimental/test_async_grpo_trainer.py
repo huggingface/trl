@@ -34,7 +34,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, TrainerControl
 from transformers.testing_utils import torch_device
 
 
@@ -46,6 +46,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
     FixedCountBatcher,
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
+    _EpochStopCallback,
     _iter_vllm_named_params,
     _reduce_metric,
     round_lora_rank,
@@ -679,6 +680,15 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             assert json.load(f)["prompt_index"] == 15
+
+    def test_epoch_stop_counts_filtered_groups(self):
+        trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=0)
+        trainer.rollout_worker.filtered_groups.put(2)
+        control = TrainerControl()
+
+        _EpochStopCallback(trainer, target_groups=5).on_step_end(trainer.args, trainer.state, control)
+
+        assert control.should_training_stop
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
