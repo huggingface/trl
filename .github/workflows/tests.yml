@@ -342,8 +342,9 @@ jobs:
         shell: bash
     if: github.event.pull_request.draft == false
     env:
-      # `-n auto` would start one worker per CPU (160 on these runners), all on the same GPU: use as many as the CUDA job
-      PYTEST_XDIST_AUTO_NUM_WORKERS: 24
+      # The pod sees 160 CPUs but its quota is 19 (`cpu.max`): one worker per CPU of the quota, one thread per worker
+      PYTEST_XDIST_AUTO_NUM_WORKERS: 19
+      OMP_NUM_THREADS: 1
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -373,9 +374,6 @@ jobs:
 
       - name: Check the ROCm build of torch
         run: |
-          # Temporary: the pod's CPU and memory limits, to size the pytest workers
-          cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max || true
-          nproc
           source .venv/bin/activate
           python - <<'PY'
           import torch
