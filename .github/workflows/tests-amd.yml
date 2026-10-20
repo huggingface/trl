@@ -37,6 +37,8 @@ env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
+  # `-n auto` would start one worker per CPU (160 on these runners), all on the same GPUs: use as many as the CUDA job
+  PYTEST_XDIST_AUTO_NUM_WORKERS: 24
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
