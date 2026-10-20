@@ -52,10 +52,9 @@ jobs:
     runs-on:
       group: hfc-amd-mi300-1gpu
     container:
-      image: rocm/pytorch:rocm10.1.0_ubuntu26.04_py3.14_pytorch_release_2.14.0
-      # Forward HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES assigned by the runner,
-      # matching transformers' AMD CI. Do not override these with CUDA_VISIBLE_DEVICES.
-      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host --shm-size "16gb"
+      image: rocm/dev-ubuntu-24.04:7.2.4
+      # The runner assigns the GPUs through HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES in its env file
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host
     defaults:
       run:
         shell: bash
@@ -64,38 +63,42 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
       - name: Install Make and Git
         run: |
-          apt-get update && apt-get install -y make git curl python3-venv
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
-          # The image's ROCm torch stack lives in the system Python, next to Debian packages pip cannot upgrade
-          python3 -m venv --system-site-packages .venv
+          uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          pip install ".[dev]"
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+          uv pip install ".[dev]"
 
-      - name: Verify ROCm and GPU isolation
+      - name: Check the ROCm build of torch
         run: |
           source .venv/bin/activate
           python - <<'PY'
           import torch
 
           assert torch.version.hip, "CUDA torch got installed"
-          assert torch.cuda.is_available(), "ROCm GPU is unavailable"
-          # ROCm may report zero devices before HIP is initialized.
+          # ROCm may report zero devices before HIP is initialized
           torch.cuda.init()
           assert torch.cuda.device_count() == 1, "Unexpected GPU isolation"
-          print("ROCm torch", torch.__version__, "| HIP", torch.version.hip)
-          for i in range(torch.cuda.device_count()):
-              print(i, torch.cuda.get_device_name(i))
-          # Check ROCm Triton still works after installing optional dependencies.
+          # A dependency requiring `triton` installs the CUDA build over ROCm's `pytorch-triton-rocm`
           x = torch.arange(16, device="cuda", dtype=torch.float32)
           torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
-          print("ROCm Triton compilation passed")
           PY
 
       - name: Test with pytest
@@ -118,10 +121,9 @@ jobs:
     runs-on:
       group: hfc-amd-mi300-2gpu
     container:
-      image: rocm/pytorch:rocm10.1.0_ubuntu26.04_py3.14_pytorch_release_2.14.0
-      # Forward HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES assigned by the runner,
-      # matching transformers' AMD CI. Do not override these with CUDA_VISIBLE_DEVICES.
-      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host --shm-size "16gb"
+      image: rocm/dev-ubuntu-24.04:7.2.4
+      # The runner assigns the GPUs through HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES in its env file
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host
     defaults:
       run:
         shell: bash
@@ -130,38 +132,42 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
       - name: Install Make and Git
         run: |
-          apt-get update && apt-get install -y make git curl python3-venv
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
-          # The image's ROCm torch stack lives in the system Python, next to Debian packages pip cannot upgrade
-          python3 -m venv --system-site-packages .venv
+          uv venv
+          uv pip install --upgrade setuptools wheel
 
       - name: Install dependencies
         run: |
           source .venv/bin/activate
-          pip install ".[dev]"
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+          uv pip install ".[dev]"
 
-      - name: Verify ROCm and GPU isolation
+      - name: Check the ROCm build of torch
         run: |
           source .venv/bin/activate
           python - <<'PY'
           import torch
 
           assert torch.version.hip, "CUDA torch got installed"
-          assert torch.cuda.is_available(), "ROCm GPU is unavailable"
-          # ROCm may report zero devices before HIP is initialized.
+          # ROCm may report zero devices before HIP is initialized
           torch.cuda.init()
           assert torch.cuda.device_count() == 2, "Unexpected GPU isolation"
-          print("ROCm torch", torch.__version__, "| HIP", torch.version.hip)
-          for i in range(torch.cuda.device_count()):
-              print(i, torch.cuda.get_device_name(i))
-          # Check ROCm Triton still works after installing optional dependencies.
+          # A dependency requiring `triton` installs the CUDA build over ROCm's `pytorch-triton-rocm`
           x = torch.arange(16, device="cuda", dtype=torch.float32)
           torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
-          print("ROCm Triton compilation passed")
           PY
 
       - name: Run distributed tests
