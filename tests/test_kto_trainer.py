@@ -33,7 +33,6 @@ from .testing_utils import (
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_torch_accelerator,
     require_vision,
 )
@@ -881,7 +880,7 @@ class TestKTOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -1554,6 +1553,13 @@ class TestKTOTrainerVLM(TrlTestCase):
                     reason="Qwen3.5 models were introduced in transformers-5.2.0",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.0"),
+                    reason="Muse Spark Open was introduced in transformers-5.20.0",
+                ),
+            ),
         ],
     )
     def test_train_vlm(self, model_id):
@@ -1583,6 +1589,9 @@ class TestKTOTrainerVLM(TrlTestCase):
                 "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
             ) and ("encoder.layers.1" in n or "post_layernorm" in n):
                 assert torch.equal(param, new_param), f"Param {n} expected frozen by LLaVA design, but changed"
+            # Muse Spark Open: no dataset here feeds `audio_tower`, so it gets no gradient. Assert it stays frozen.
+            elif model_id == "trl-internal-testing/tiny-MuseSparkForConditionalGeneration" and "audio_tower" in n:
+                assert torch.equal(param, new_param), f"Param {n} expected frozen, but changed"
             else:
                 assert not torch.equal(param, new_param), f"Param {n} is not updated"
 
@@ -1662,6 +1671,9 @@ class TestKTOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+
+        # The vision tower gets no gradients, so DDP must search for unused parameters
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

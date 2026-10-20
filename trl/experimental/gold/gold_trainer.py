@@ -1249,7 +1249,10 @@ class GOLDTrainer(SFTTrainer):
         }
 
         with unwrap_model_for_generation(
-            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             (
                 new_input_ids,
@@ -1625,6 +1628,7 @@ class GOLDTrainer(SFTTrainer):
             self.model,
             self.accelerator,
             generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             max_completion_length = self.generation_config.max_new_tokens
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
