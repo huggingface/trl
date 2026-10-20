@@ -118,6 +118,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         super().__init__(**loop_kwargs)
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
+        if harness_adapter is None and (self.top_p < 1.0 or self.top_k > 0):
+            raise ValueError(
+                "`top_p < 1.0` or `top_k > 0` needs the candidate set of every sampled token, which an agent-owned "
+                "loop does not record. Pass a `harness_adapter` so TRL samples each turn, or sample the full vocabulary."
+            )
         if harness_adapter is None:
             sampling_kwargs = {
                 "temperature": self.temperature,
@@ -298,9 +303,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         `turn_times` gets `(request time, reply time, requested tool names)` per turn, for the tool latency metrics.
         """
         t_request = time.monotonic()
+        tools = _tools_to_schema(tools)
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
-            tools=_tools_to_schema(tools),
+            tools=tools,
             add_generation_prompt=True,
             tokenize=True,
             return_dict=False,
@@ -308,9 +314,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
-        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
-        response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids))
+        turn_ids, logprobs, sampling_mask = asyncio.run_coroutine_threadsafe(
+            self._generate_one_turn(prompt_ids), self._loop
+        ).result()
+        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs, output_sampling_mask=sampling_mask))
+        response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools))
         turn_times.append((t_request, time.monotonic(), [tc.name for tc in response.tool_calls]))
         return ModelStepResult(response=response, prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs)
 
