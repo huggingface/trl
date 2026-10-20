@@ -118,6 +118,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         super().__init__(**loop_kwargs)
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
+        if harness_adapter is None and (self.top_p < 1.0 or self.top_k > 0):
+            raise ValueError(
+                "`top_p < 1.0` or `top_k > 0` needs the candidate set of every sampled token, which an agent-owned "
+                "loop does not record. Pass a `harness_adapter` so TRL samples each turn, or sample the full vocabulary."
+            )
         if harness_adapter is None:
             sampling_kwargs = {
                 "temperature": self.temperature,
@@ -309,8 +314,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
-        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
+        turn_ids, logprobs, sampling_mask = asyncio.run_coroutine_threadsafe(
+            self._generate_one_turn(prompt_ids), self._loop
+        ).result()
+        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs, output_sampling_mask=sampling_mask))
         response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools))
         turn_times.append((t_request, time.monotonic(), [tc.name for tc in response.tool_calls]))
         return ModelStepResult(response=response, prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs)

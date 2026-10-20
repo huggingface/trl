@@ -98,7 +98,7 @@ def _resolve_agent(agent: str | type[HarborEnv]) -> type[HarborEnv]:
 def _read_task_meta(task_dir: Path) -> dict[str, Any]:
     """Pull a few useful fields out of ``task.toml`` for the dataset rows / reward funcs."""
     try:
-        cfg = tomllib.loads((task_dir / "task.toml").read_text())
+        cfg = tomllib.loads((task_dir / "task.toml").read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         return {}
     meta = cfg.get("metadata", {})
