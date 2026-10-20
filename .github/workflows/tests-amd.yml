@@ -37,8 +37,6 @@ env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
-  # Install into the image's ROCm Python instead of creating a venv with CUDA torch.
-  PIP_BREAK_SYSTEM_PACKAGES: "1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -68,17 +66,24 @@ jobs:
 
       - name: Install Make and Git
         run: |
-          apt-get update && apt-get install -y make git curl
+          apt-get update && apt-get install -y make git curl python3-venv
+
+      - name: Create Python virtual environment
+        run: |
+          # The image's ROCm torch stack lives in the system Python, next to Debian packages pip cannot upgrade
+          python3 -m venv --system-site-packages .venv
 
       - name: Install dependencies
         run: |
-          # Keep the image's ROCm torch stack when resolving optional dependencies.
-          python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
+          source .venv/bin/activate
+          # Keep the image's ROCm torch stack when resolving the dev dependencies
+          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
+          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
 
       - name: Verify ROCm and GPU isolation
         run: |
-          python3 - <<'PY'
+          source .venv/bin/activate
+          python - <<'PY'
           import torch
 
           assert torch.version.hip, "CUDA torch got installed"
@@ -97,6 +102,7 @@ jobs:
 
       - name: Test with pytest
         run: |
+          source .venv/bin/activate
           make test
 
       - name: Post to Slack
@@ -128,17 +134,24 @@ jobs:
 
       - name: Install Make and Git
         run: |
-          apt-get update && apt-get install -y make git curl
+          apt-get update && apt-get install -y make git curl python3-venv
+
+      - name: Create Python virtual environment
+        run: |
+          # The image's ROCm torch stack lives in the system Python, next to Debian packages pip cannot upgrade
+          python3 -m venv --system-site-packages .venv
 
       - name: Install dependencies
         run: |
-          # Keep the image's ROCm torch stack when resolving optional dependencies.
-          python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
+          source .venv/bin/activate
+          # Keep the image's ROCm torch stack when resolving the dev dependencies
+          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
+          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
 
       - name: Verify ROCm and GPU isolation
         run: |
-          python3 - <<'PY'
+          source .venv/bin/activate
+          python - <<'PY'
           import torch
 
           assert torch.version.hip, "CUDA torch got installed"
@@ -157,6 +170,7 @@ jobs:
 
       - name: Run distributed tests
         run: |
+          source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
 
       - name: Post to Slack
