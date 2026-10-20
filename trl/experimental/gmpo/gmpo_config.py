@@ -45,3 +45,11 @@ class GMPOConfig(GRPOConfig):
             "ratio is exp(-epsilon). GMPO recommends 0.4."
         },
     )
+
+    loss_type: str = field(
+        default="grpo",
+        metadata={
+            "help": "Ignored in GMPO. GMPO always uses per-sequence-mean / grad-accum normalization, regardless of "
+            "the value of this parameter."
+        },
+    )
