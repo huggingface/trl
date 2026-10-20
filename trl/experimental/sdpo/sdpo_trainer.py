@@ -1247,9 +1247,6 @@ class SDPOTrainer(_BaseTrainer):
                 self.args.distillation_is_clip,
             )
 
-        # Reduce in fp32: an empty row clamps the normalizer to 1, so the loss-scale gradient reaches the zero mask at
-        # full magnitude and overflows fp16 to inf, which the mask then turns into nan.
-        per_token_loss = per_token_loss.float()
         loss = (per_token_loss * distillation_logits.loss_mask).sum(-1) / distillation_logits.loss_mask.sum(-1).clamp(
             min=1.0
         )
@@ -1353,7 +1350,6 @@ class SDPOTrainer(_BaseTrainer):
                 per_token_loss, student_per_token_logps, old_per_token_logps, self.args.distillation_is_clip
             )
 
-        per_token_loss = per_token_loss.float()
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
         self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
