@@ -373,6 +373,9 @@ jobs:
 
       - name: Check the ROCm build of torch
         run: |
+          # Temporary: the pod's CPU and memory limits, to size the pytest workers
+          cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max || true
+          nproc
           source .venv/bin/activate
           python - <<'PY'
           import torch
