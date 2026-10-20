@@ -36,6 +36,7 @@ from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -72,6 +73,7 @@ from .utils import (
     disable_dropout_in_model,
     get_config_model_id,
     identity,
+    model_accepts_images,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
@@ -386,7 +388,8 @@ class DistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 model_name_or_path,
                 revision=model_revision,
                 truncation_side="left",
