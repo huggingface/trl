@@ -936,14 +936,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ```
 
     Args:
-        model (`str`):
-            Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
-            repo on huggingface.co, or a path to a *directory* containing model weights saved using
-            [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
-            vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
-            models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise. The
-            model name is also used to identify the model on the vLLM server used for generation.
+        model (`str` or [`~transformers.PreTrainedModel`]):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
+              vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
+              models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise.
+            - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
+              tree attention backend for packed training.
+
+            The model name from the config is used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
@@ -1050,7 +1055,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: str,
+        model: "str | PreTrainedModel",
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -1065,7 +1070,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model.split("/")[-1]
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
@@ -1079,16 +1085,25 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
-        model_init_kwargs = args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-        model_init_kwargs.setdefault("dtype", args.dtype)
-        model_revision = model_init_kwargs.get("revision")
-        model = create_model_from_path(
-            model,
-            device_map=None,
-            attn_implementation=TREE_ATTENTION,
-            **model_init_kwargs,
-        )
+        if isinstance(model, str):
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_init_kwargs.setdefault("dtype", args.dtype)
+            model_revision = model_init_kwargs.get("revision")
+            model = create_model_from_path(
+                model,
+                device_map=None,
+                attn_implementation=TREE_ATTENTION,
+                **model_init_kwargs,
+            )
+        else:
+            model_revision = None
+            model.set_attn_implementation(TREE_ATTENTION)
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -1362,6 +1377,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                             "shapes": weight_shapes,
                         },
                         weight_sync_timeout=self.args.weight_sync_timeout,
+                        compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                     )
 
             if rollout_worker is not None:

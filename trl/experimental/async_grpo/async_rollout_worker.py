@@ -16,11 +16,13 @@ import asyncio
 import enum
 import functools
 import inspect
+import math
 import multiprocessing as mp
 import os
 import pickle
 import queue
 import random
+import re
 import threading
 import time
 import traceback
@@ -496,6 +498,10 @@ class _AsyncRolloutLoop:
         # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
         self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_inflight_tasks), thread_name_prefix="grpo-tool")
 
+        self._inflight_cap = max_inflight_tasks
+        self._total_rollouts = 0
+        self._metrics_poll_s = 5.0
+
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
         if self.tools and not is_chat_template_prefix_preserving(self.tokenizer):
@@ -579,25 +585,101 @@ class _AsyncRolloutLoop:
             )
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=self.max_inflight_tasks)) as session:
+        connector = aiohttp.TCPConnector(limit=self.max_inflight_tasks + 1)
+        async with aiohttp.ClientSession(connector=connector) as session:
             self.session = session
             await self._check_sampling_replay()
+            await self._init_inflight_cap()
             logger.info(
                 f"vllm worker started: num_generations={self.num_generations}, "
-                f"max_inflight_tasks={self.max_inflight_tasks}, temperature={self.temperature}, "
-                f"top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
+                f"max_inflight_tasks={self.max_inflight_tasks}, inflight_cap={self._inflight_cap}, "
+                f"temperature={self.temperature}, top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
                 f"repetition_penalty={self.repetition_penalty}"
             )
             await asyncio.gather(
                 asyncio.create_task(self._generate_loop(stop_event=stop_event)),
                 asyncio.create_task(self._score_loop(stop_event=stop_event)),
+                asyncio.create_task(self._control_loop(stop_event=stop_event)),
             )
+
+    async def _init_inflight_cap(self) -> None:
+        """Start the cap at `KV cache tokens / max_model_len`: as many requests as fit at full length."""
+        try:
+            async with self.session.get(f"{self.vllm_server_url}/metrics") as response:
+                response.raise_for_status()
+                text = await response.text()
+            async with self.session.get(f"{self.vllm_server_url}/v1/models") as response:
+                response.raise_for_status()
+                models = await response.json()
+        except Exception as e:
+            logger.warning(f"Could not read the vLLM server's KV capacity, starting at max_inflight_tasks: {e!r}")
+            return
+        kv_matches = re.findall(r'^vllm:cache_config_info\{.*kv_cache_size_tokens="(\d+)"', text, re.M)
+        if not kv_matches:
+            logger.warning("`/metrics` has no `kv_cache_size_tokens`, starting at max_inflight_tasks")
+            return
+        kv_tokens = sum(map(int, kv_matches))
+        max_model_len = max(model["max_model_len"] for model in models["data"] if model["max_model_len"])
+        self._inflight_cap = max(1, min(self.max_inflight_tasks, kv_tokens // max_model_len))
+
+    async def _control_loop(self, stop_event: asyncio.Event) -> None:
+        """Size the in-flight cap from the vLLM server's load, polled from `/metrics`.
+
+        Cut the cap by 30% when the server's KV cache usage passes 0.8, once the pool has drained below the previous
+        cut. Nothing is cancelled; admissions stop until enough rollouts finish. Grow it by 25% while usage stays under
+        0.6 with nothing queued, once per turnover of the pool. Preemptions are reported, not acted on: a weight sync
+        resets the server's caches, which preempts every running request.
+        """
+        rollouts_at_change = 0
+        preemptions_seen = 0.0
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
+                return
+            except TimeoutError:
+                pass
+            try:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with self.session.get(f"{self.vllm_server_url}/metrics", timeout=timeout) as response:
+                    response.raise_for_status()
+                    text = await response.text()
+            except Exception as e:
+                logger.warning(f"vLLM /metrics poll failed, in-flight cap unchanged: {e!r}")
+                continue
+            usage_matches = re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)
+            queued_matches = re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)
+            if not usage_matches or not queued_matches:
+                # An empty match looks identical to a genuinely idle server (usage=0.0, queued=0), which is exactly
+                # the condition that grows the cap -- so a metrics rename/reformat must not fall through to that
+                # arithmetic silently.
+                logger.warning("vLLM /metrics missing KV usage or queue depth, in-flight cap unchanged")
+                continue
+            usage = max(map(float, usage_matches))
+            running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
+            queued = sum(map(float, queued_matches))
+            preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
+            if usage > 0.8 and self._inflight <= self._inflight_cap:
+                self._inflight_cap = max(1, int(self._inflight_cap * 0.7))
+                rollouts_at_change = self._total_rollouts
+                logger.info(f"[control] cut in-flight cap to {self._inflight_cap} (kv cache usage {usage:.2f})")
+            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
+                self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_inflight_tasks)
+                rollouts_at_change = self._total_rollouts
+            self._push_metrics(
+                {
+                    "rollout/inflight_cap": float(self._inflight_cap),
+                    "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_running_requests": running,
+                    "rollout/vllm_queued_requests": queued,
+                    "rollout/vllm_preemptions_total": preemptions - preemptions_seen,
+                }
+            )
+            preemptions_seen = preemptions
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
-        free_slots = set(range(self.max_inflight_tasks))
+        inflight_tasks: dict[asyncio.Task, tuple[int, Any, object, Messages]] = {}
         work_iter = self._repeat_iterator()
         loop = asyncio.get_running_loop()
 
@@ -606,9 +688,8 @@ class _AsyncRolloutLoop:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
                 self._heartbeat_value.value = time.time()
-                while free_slots and not stop_event.is_set():
+                while len(inflight_tasks) < self._inflight_cap and not stop_event.is_set():
                     group_id, row = next(work_iter)
-                    slot = free_slots.pop()
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the
                     # standalone tools.
@@ -693,7 +774,7 @@ class _AsyncRolloutLoop:
                     task = asyncio.create_task(
                         self._generate_one(prompt, tool_dict=tool_dict, tools=tools, group_id=group_id)
                     )
-                    inflight_tasks[task] = (group_id, slot, name, environment, prompt)
+                    inflight_tasks[task] = (group_id, name, environment, prompt)
 
                 self._inflight = len(inflight_tasks)  # gauge, reported by the score loop's push
                 if not inflight_tasks:
@@ -707,10 +788,10 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot, name, environment, prompt = inflight_tasks.pop(task)
-                    free_slots.add(slot)
+                    group_id, name, environment, prompt = inflight_tasks.pop(task)
                     if task.exception() is not None:
                         raise task.exception()
+                    self._total_rollouts += 1
 
                     (
                         completion,
