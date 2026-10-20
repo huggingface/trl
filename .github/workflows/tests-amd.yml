@@ -81,16 +81,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python3 -m pip install --upgrade pip
           # Keep the image's ROCm torch stack when resolving optional dependencies.
-          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
+          python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
+          python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
           # Match transformers' AMD CI cleanup of NVIDIA-only packages.
-          python -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
+          python3 -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
 
       - name: Verify ROCm and GPU isolation
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import torch
 
           assert torch.version.hip, "CUDA torch got installed"
@@ -148,16 +148,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python3 -m pip install --upgrade pip
           # Keep the image's ROCm torch stack when resolving optional dependencies.
-          python -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
-          python -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
+          python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
+          python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
           # Match transformers' AMD CI cleanup of NVIDIA-only packages.
-          python -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
+          python3 -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
 
       - name: Verify ROCm and GPU isolation
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import torch
 
           assert torch.version.hip, "CUDA torch got installed"
