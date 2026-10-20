@@ -76,8 +76,6 @@ jobs:
           # Keep the image's ROCm torch stack when resolving optional dependencies.
           python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
           python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
-          # Match transformers' AMD CI cleanup of NVIDIA-only packages.
-          python3 -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
 
       - name: Verify ROCm and GPU isolation
         run: |
@@ -139,8 +137,6 @@ jobs:
           # Keep the image's ROCm torch stack when resolving optional dependencies.
           python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
           python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
-          # Match transformers' AMD CI cleanup of NVIDIA-only packages.
-          python3 -m pip uninstall -y py3nvml pynvml nvidia-ml-py apex
 
       - name: Verify ROCm and GPU isolation
         run: |
