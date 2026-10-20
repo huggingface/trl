@@ -14,13 +14,9 @@ on:
       - "tests/**"
       - "trl/**"
       - "pyproject.toml"
-      # Exclude if only experimental code/tests, except the async trainers tested below
+      # Exclude if only experimental code/tests
       - "!trl/experimental/**"
       - "!tests/experimental/**"
-      - "trl/experimental/async_grpo/**"
-      - "trl/experimental/async_distillation/**"
-      - "tests/experimental/test_async_grpo_trainer.py"
-      - "tests/experimental/test_async_distillation_trainer.py"
   pull_request:
     paths:
       # Run only when relevant files are modified
@@ -31,13 +27,9 @@ on:
       - "tests/**"
       - "trl/**"
       - "pyproject.toml"
-      # Exclude if only experimental code/tests, except the async trainers tested below
+      # Exclude if only experimental code/tests
       - "!trl/experimental/**"
       - "!tests/experimental/**"
-      - "trl/experimental/async_grpo/**"
-      - "trl/experimental/async_distillation/**"
-      - "tests/experimental/test_async_grpo_trainer.py"
-      - "tests/experimental/test_async_distillation_trainer.py"
   workflow_dispatch:
 
 env:
@@ -45,7 +37,6 @@ env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
-  TRL_EXPERIMENTAL_SILENCE: 1
   # Install into the image's ROCm Python instead of creating a venv with CUDA torch.
   PIP_BREAK_SYSTEM_PACKAGES: "1"
 
@@ -110,10 +101,6 @@ jobs:
       - name: Test with pytest
         run: |
           make test
-
-      - name: Test the async trainers with pytest
-        run: |
-          pytest -n auto -s -v tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
