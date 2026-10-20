@@ -61,9 +61,6 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
-liger = [
-    "liger-kernel>=0.8.2"
-]
 math_verify = [
     "math-verify>=0.5.2",
 ]
@@ -103,8 +100,6 @@ dev = [
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
-    # liger
-    "liger-kernel>=0.8.2",
     # openreward
     "openreward>=0.1.109",
     # peft
