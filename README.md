@@ -28,6 +28,8 @@
 
 **🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
+**🚀 Training on AMD GPUs:** TRL's trainers run on [AMD Instinct GPUs](https://huggingface.co/docs/trl/amd_gpus) through PyTorch's ROCm build, tested in CI on MI300X.
+
 ## Overview
 
 TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.

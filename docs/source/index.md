@@ -18,6 +18,8 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 **🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
+**🚀 Training on AMD GPUs:** TRL's trainers run on [AMD Instinct GPUs](amd_gpus) through PyTorch's ROCm build, tested in CI on MI300X.
+
 ## Taxonomy
 
 Below is an overview of TRL trainers, organized by maturity and method type.
