@@ -56,7 +56,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import TREE_ATTENTION, TreeRow, register_tree_attention
+from .packing import TREE_ATTENTION, GRPORow, register_tree_attention
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -428,12 +428,17 @@ class FixedCountBatcher(torch.utils.data.IterableDataset):
             Number of DP ranks; the number of rows (one per rank) in each micro-batch.
         microbatch_size (`int`):
             Number of samples buffered into each micro-batch before it is partitioned and emitted.
+        share_prefixes (`bool`, *optional*, defaults to `True`):
+            Whether the samples of a row share their common prefixes (see [`~packing.GRPORow`]).
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int):
+    def __init__(
+        self, dataset: "RolloutQueueDataset", num_processes: int, microbatch_size: int, share_prefixes: bool = True
+    ):
         self.dataset = dataset
         self.num_processes = num_processes
         self.microbatch_size = microbatch_size
+        self.share_prefixes = share_prefixes
 
     def __iter__(self):
         batch = []
@@ -450,10 +455,10 @@ class FixedCountBatcher(torch.utils.data.IterableDataset):
                 groups += [largest[: len(largest) // 2], largest[len(largest) // 2 :]]
             priced = []
             for group in groups:
-                priced.append(TreeRow())
+                priced.append(GRPORow(self.share_prefixes))
                 for queued in group:
                     priced[-1].add(queued)
-            rows = [TreeRow() for _ in range(self.num_processes)]
+            rows = [GRPORow(self.share_prefixes) for _ in range(self.num_processes)]
             for group in sorted(priced, key=lambda row: row.load, reverse=True):
                 row = min(rows, key=lambda row: row.load)
                 for queued in group.samples:
@@ -492,16 +497,26 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
             Maximum tokens forwarded in a single row (one rank's forward).
         metrics (`dict`):
             The trainer's metric sink, appended to when a sample is dropped for exceeding the budget.
+        share_prefixes (`bool`, *optional*, defaults to `True`):
+            Whether the samples of a row share their common prefixes (see [`~packing.GRPORow`]).
     """
 
-    def __init__(self, dataset: "RolloutQueueDataset", num_processes: int, token_budget: int, metrics: dict):
+    def __init__(
+        self,
+        dataset: "RolloutQueueDataset",
+        num_processes: int,
+        token_budget: int,
+        metrics: dict,
+        share_prefixes: bool = True,
+    ):
         self.dataset = dataset
         self.num_processes = num_processes
         self.token_budget = token_budget
         self.metrics = metrics  # the trainer's sink, for the drop counter below
+        self.share_prefixes = share_prefixes
 
     def __iter__(self):
-        rows = [TreeRow() for _ in range(self.num_processes)]
+        rows = [GRPORow(self.share_prefixes) for _ in range(self.num_processes)]
         for sample in self.dataset:
             n = len(sample["input_ids"])
             if n > self.token_budget:
@@ -520,9 +535,9 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
                     break
                 # No more place in rows
                 yield rows
-                rows = [TreeRow() for _ in range(self.num_processes)]
+                rows = [GRPORow(self.share_prefixes) for _ in range(self.num_processes)]
 
-    def _place(self, rows: list[TreeRow], sample: dict[str, Any]) -> TreeRow | None:
+    def _place(self, rows: list[GRPORow], sample: dict[str, Any]) -> GRPORow | None:
         """Pick the row `sample` belongs in, or `None` when the micro-batch has to close first.
 
         A sample is cheapest in a row that already holds its `group_id`, so those rows get first refusal — all of them,
@@ -531,7 +546,7 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         the sample then keeps its prefix in a fresh row.
         """
 
-        def least_loaded(candidates: list[TreeRow]) -> TreeRow | None:
+        def least_loaded(candidates: list[GRPORow]) -> GRPORow | None:
             return min(
                 (row for row in candidates if row.fits(sample, self.token_budget)),
                 key=lambda row: row.load,
@@ -563,7 +578,7 @@ class DataCollatorForRollout(DataCollatorMixin):
     the batch stays rectangular for `DataLoaderDispatcher` to scatter row `i` -> rank `i`; this inter-rank padding is
     stripped per-rank in `compute_loss`.
 
-    Each row is a [`~packing.TreeRow`], so a token shared by several of its samples is forwarded once.
+    Each row is a [`~packing.GRPORow`], so a token shared by several of its samples is forwarded once.
 
     The micro-batch arrives already partitioned into `num_processes` rows by the upstream planner
     ([`FixedCountBatcher`] or [`TokenBudgetBatcher`]) — which balances each row's attention cost to avoid stragglers at
@@ -621,7 +636,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         self._log_metrics(rows=rows, all_examples=all_examples, padded=batch["attention_mask"])
         return batch
 
-    def _log_metrics(self, rows: list[TreeRow], all_examples: list[dict[str, Any]], padded: torch.Tensor) -> None:
+    def _log_metrics(self, rows: list[GRPORow], all_examples: list[dict[str, Any]], padded: torch.Tensor) -> None:
         """Append this micro-batch's sample and packing metrics straight into the trainer's sink.
 
         Rank 0 holds the whole micro-batch, so the per-sample rewards can be aggregated here instead of being packed
@@ -1072,8 +1087,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
-        register_tree_attention()
-
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
@@ -1081,11 +1094,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_init_kwargs = args.model_init_kwargs or {}
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
         model_init_kwargs.setdefault("dtype", args.dtype)
+
+        # Tree attention by default. Any other implementation (e.g. sdpa or flash_attention_2 on non-Hopper GPUs) trains
+        # on plain padding-free packing instead: rows share no prefix, and the model gets each sample's boundaries.
+        attn_implementation = model_init_kwargs.pop("attn_implementation", TREE_ATTENTION)
+        self.tree_attention = attn_implementation == TREE_ATTENTION
+        if self.tree_attention:
+            register_tree_attention()
+
         model_revision = model_init_kwargs.get("revision")
         model = create_model_from_path(
             model,
             device_map=None,
-            attn_implementation=TREE_ATTENTION,
+            attn_implementation=attn_implementation,
             **model_init_kwargs,
         )
 
@@ -1095,16 +1116,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
         text_config = model.config.get_text_config()
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
         # Check tree attention compat
-        if layer_types:
-            raise ValueError(
-                f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing only routes attention layers "
-                "along each sample's own path; a recurrent or convolutional layer would scan across samples."
-            )
-        if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
-            raise ValueError(
-                f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
-                "support."
-            )
+        if self.tree_attention:
+            if layer_types:
+                raise ValueError(
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing only routes attention layers "
+                    "along each sample's own path; a recurrent or convolutional layer would scan across samples."
+                )
+            if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
+                raise ValueError(
+                    f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
+                    "support."
+                )
 
         # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
         # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
@@ -1443,11 +1465,15 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 logger.info(f"token_budget unset; defaulting to vLLM max_model_len={self.args.token_budget}")
             # TokenBudgetBatcher caps each row at `token_budget` tokens (dynamic count, bounds peak memory);
             # FixedCountBatcher uses a fixed `per_device_train_batch_size × num_processes` samples per micro-batch.
+            # Only tree attention can follow a shared prefix; any other attention implementation needs each sample as
+            # its own chain.
             if self.args.token_budget > 0:
-                dataset = TokenBudgetBatcher(dataset, num_processes, self.args.token_budget, self._metrics["train"])
+                dataset = TokenBudgetBatcher(
+                    dataset, num_processes, self.args.token_budget, self._metrics["train"], self.tree_attention
+                )
             else:
                 dataset = FixedCountBatcher(
-                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes
+                    dataset, num_processes, self.args.per_device_train_batch_size * num_processes, self.tree_attention
                 )
         else:
             dataset = _EmptyIterableDataset()
@@ -1511,10 +1537,31 @@ class AsyncGRPOTrainer(_BaseTrainer):
         sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
         if sampling_mask.shape[-1] == 0:
             sampling_mask = None
-        tree_kwargs = {
-            key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
-        }
-        tree_kwargs["tree_max_seqlen_q"], tree_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
+
+        if self.tree_attention:
+            attn_kwargs = {
+                key: inputs[key][inputs[key] >= 0]
+                for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
+            }
+            attn_kwargs["tree_max_seqlen_q"], attn_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
+        else:
+            # Rows share no prefix here, so each segment is one whole sample: its boundaries are what the varlen
+            # kernels (flash attention, linear attention) need to keep the packed samples apart
+            cu_seq_lens = inputs["tree_cu_seqlens_q"][inputs["tree_cu_seqlens_q"] >= 0]
+            max_length = int(inputs["tree_max_seqlens"][0, 0])
+            # Sequence index of each token, for the short convolutions of linear-attention layers
+            seq_idx = torch.repeat_interleave(
+                torch.arange(cu_seq_lens.numel() - 1, dtype=torch.int32, device=cu_seq_lens.device),
+                cu_seq_lens.diff(),
+                output_size=input_ids.size(1),
+            )[None]
+            attn_kwargs = {
+                "cu_seq_lens_q": cu_seq_lens,
+                "cu_seq_lens_k": cu_seq_lens,
+                "max_length_q": max_length,
+                "max_length_k": max_length,
+                "seq_idx": seq_idx,
+            }
 
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
@@ -1526,7 +1573,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             support_ids=sampling_mask,
             fused_lm_head=True,
             **router_kwargs,
-            **tree_kwargs,
+            **attn_kwargs,
         )
         log_probs = outputs.log_probs.flatten()[token_index]
         entropy = outputs.entropy.flatten()[token_index]
