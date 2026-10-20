@@ -20,7 +20,6 @@ from collections.abc import Callable
 import psutil
 import pytest
 import torch
-from packaging.version import Version
 from transformers import is_bitsandbytes_available, is_comet_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
@@ -47,10 +46,6 @@ from trl.import_utils import (
 )
 
 
-if is_peft_available():
-    import peft
-
-
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
@@ -60,11 +55,6 @@ require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
 require_openreward = pytest.mark.skipif(not is_openreward_available(), reason="test requires openreward")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
-# `LoraConfig.target_parameters` was added in peft 0.17.0; on older versions the field doesn't exist at all.
-require_peft_target_parameters = pytest.mark.skipif(
-    not is_peft_available() or Version(peft.__version__) < Version("0.17.0"),
-    reason="test requires peft>=0.17.0 for `LoraConfig.target_parameters`",
-)
 require_requests = pytest.mark.skipif(not is_requests_available(), reason="test requires requests")
 # Response parsing needs jmespath only on transformers < 5.13, which ships the legacy `response_schema` parser; the
 # new-style `response_template` parser doesn't use it. See `_SUPPORTS_RESPONSE_TEMPLATE`.

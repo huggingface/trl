@@ -1083,9 +1083,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model_revision = model_init_kwargs.get("revision")
         self.attn_implementation = model_init_kwargs.pop("attn_implementation", None)
         if self.attn_implementation is None:
-            self.attn_implementation = (
-                "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3"
-            )
+            if torch.version.hip:
+                self.attn_implementation = "kernels-community/aiter-flash-attn@v2"
+            elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+                # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above),
+                # FlashAttention-4 does.
+                self.attn_implementation = "kernels-community/flash-attn4"
+            else:
+                self.attn_implementation = "kernels-community/flash-attn3"
         if lazy_import_flash_attention(self.attn_implementation)[0][1] is None:
             raise ValueError("Tree attention requires a FlashAttention implementation with variable-length support.")
         # The model uses the tree adapter; each forward selects the Trainer's underlying FlashAttention backend.
@@ -1368,6 +1373,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                             "shapes": weight_shapes,
                         },
                         weight_sync_timeout=self.args.weight_sync_timeout,
+                        compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                     )
 
             if rollout_worker is not None:

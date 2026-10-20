@@ -19,7 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
+from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -1576,12 +1578,13 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(tmp_p
     """Cross-architecture VLM ULD must render the teacher prompt through the teacher processor (so it
     actually sees the image via pixel_values) while keeping completion byte offsets relative to the original completion
     text — the coordinate system shared with the student."""
-    trainer = GOLDTrainer(
-        model=_TINY_SMOLVLM,
-        teacher_model=_TINY_QWEN3_VL,
-        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True, use_extended_uld=True),
-        train_dataset=vlm_dataset,
-    )
+    with pytest.warns(UserWarning, match="Cross-architecture VLM distillation"):
+        trainer = GOLDTrainer(
+            model=_TINY_SMOLVLM,
+            teacher_model=_TINY_QWEN3_VL,
+            args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True, use_extended_uld=True),
+            train_dataset=vlm_dataset,
+        )
 
     images, prompts = trainer._extract_images_and_prompts(vlm_examples)
     completion_texts = _get_assistant_texts(vlm_examples)
@@ -2296,6 +2299,11 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
+@pytest.mark.xfail(
+    condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0.dev0"),
+    reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
+    strict=True,
+)
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
 
