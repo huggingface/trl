@@ -72,7 +72,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python3 -m pip install --upgrade pip
           # Keep the image's ROCm torch stack when resolving optional dependencies.
           python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
           python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
@@ -133,7 +132,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python3 -m pip install --upgrade pip
           # Keep the image's ROCm torch stack when resolving optional dependencies.
           python3 -m pip freeze | grep -Ei '^(torch|torchvision|torchaudio|triton|triton-rocm|pytorch-triton-rocm)==' > /tmp/rocm-constraints.txt
           python3 -m pip install -c /tmp/rocm-constraints.txt ".[dev]"
