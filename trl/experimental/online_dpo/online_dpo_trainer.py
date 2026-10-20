@@ -1023,6 +1023,8 @@ class OnlineDPOTrainer(_BaseTrainer):
                 vision_generation_kwargs["image_sizes"] = torch.cat([prompt_inputs["image_sizes"]] * 2)
             if "image_grid_thw" in prompt_inputs:
                 vision_generation_kwargs["image_grid_thw"] = torch.cat([prompt_inputs["image_grid_thw"]] * 2)
+            if "mm_token_type_ids" in prompt_inputs:
+                vision_generation_kwargs["mm_token_type_ids"] = torch.cat([prompt_inputs["mm_token_type_ids"]] * 2)
 
         with (
             profiling_context(self, "transformers.generate"),
@@ -1120,6 +1122,12 @@ class OnlineDPOTrainer(_BaseTrainer):
                 model_kwargs["image_sizes"] = vision_inputs["image_sizes"]
             if "image_grid_thw" in vision_inputs:
                 model_kwargs["image_grid_thw"] = vision_inputs["image_grid_thw"]
+            # If mm_token_type_ids are used, extend them with zeros for the completion part
+            if "mm_token_type_ids" in vision_inputs:
+                mm_token_type_ids = vision_inputs["mm_token_type_ids"]
+                model_kwargs["mm_token_type_ids"] = torch.cat(
+                    [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
+                )
 
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, **model_kwargs)
