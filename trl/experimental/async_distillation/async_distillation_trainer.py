@@ -1236,10 +1236,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # candidate token ids per position (the teacher's top-k + tail), not just the realized token's logprob, which
         # is all that head supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
         # a different mechanism that does support multiple candidate ids per position.
-        model_init_kwargs.setdefault(
-            "attn_implementation",
-            "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3",
-        )
+        # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
+        if torch.version.hip:
+            attn_implementation = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            attn_implementation = "kernels-community/flash-attn4"
+        else:
+            attn_implementation = "kernels-community/flash-attn3"
+        model_init_kwargs.setdefault("attn_implementation", attn_implementation)
         model = AutoModelForCausalLM.from_pretrained(model_name, device_map=None, **model_init_kwargs)
 
         if args.use_liger_kernel:
