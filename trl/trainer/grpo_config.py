@@ -328,8 +328,7 @@ class GRPOConfig(_BaseConfig):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
 
-                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped to
-                [C_min, C_max].
+                - `"token_truncate"`: Token-level truncated IS. Per-token ratios are clipped to [C_min, C_max].
                 - `"token_mask"`: Token-level masked IS. Per-token ratios outside [C_min, C_max] are set to zero.
                 - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped to
                 [C_min, C_max] and applied to all tokens in the sequence.
