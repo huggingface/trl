@@ -48,7 +48,7 @@ jobs:
   tests:
     permissions:
       contents: read
-    name: Tests on AMD
+    name: Tests with latest dependencies
     runs-on:
       group: hfc-amd-mi300-1gpu
     container:
@@ -111,13 +111,13 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests on AMD
+          title: Tests with latest dependencies (AMD)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed:
     permissions:
       contents: read
-    name: Distributed tests on AMD
+    name: Distributed tests
     runs-on:
       group: hfc-amd-mi300-2gpu
     container:
@@ -180,5 +180,5 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Distributed tests on AMD
+          title: Distributed tests (AMD)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
