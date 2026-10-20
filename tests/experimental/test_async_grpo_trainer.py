@@ -36,6 +36,9 @@ from requests.adapters import BaseAdapter
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
+
+pytest.importorskip("transformers", minversion="5.2.0")
+
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -367,6 +370,48 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_model(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            device_map=None,
+            attn_implementation="eager",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        assert trainer.model is model
+        assert trainer.model.config._attn_implementation == TREE_ATTENTION
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
         # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
@@ -621,7 +666,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
-        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"), encoding="utf-8") as f:
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
 
@@ -650,13 +695,13 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
-        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"), encoding="utf-8") as f:
             assert json.load(f)["prompt_index"] == 2
 
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -678,7 +723,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 5}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -790,6 +835,98 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         try:
             assert [tool.__name__ for tool in loop._env_tools[None]] == ["echo"]
             assert [tool.__name__ for tool in loop.tools] == ["echo"]
+        finally:
+            loop._loop.close()
+
+    def test_inflight_cap_follows_vllm_load(self):
+        # The in-flight cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
+        # when KV usage passes 0.8 and holds until the pool has drained below it.
+        import aiohttp
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
+        PartialState()  # the worker logs via accelerate's logger, which needs an initialized state
+        load = {"usage": 0.1, "polls": 0}
+
+        async def metrics(request):
+            load["polls"] += 1
+            usage = load.pop("spike", load["usage"])  # a spike is served to one poll only
+            return web.Response(
+                text=f'vllm:cache_config_info{{block_size="16",engine="0",kv_cache_size_tokens="4000"}} 1.0\n'
+                f'vllm:kv_cache_usage_perc{{engine="0"}} {usage}\n'
+                f'vllm:num_requests_waiting{{engine="0"}} 0.0\n'
+                f'vllm:num_preemptions_total{{engine="0"}} 0.0\n'
+            )
+
+        async def models(request):
+            return web.json_response(
+                {"data": [{"id": "m", "max_model_len": 1000}, {"id": "policy-v1", "max_model_len": None}]}
+            )
+
+        app = web.Application()
+        app.router.add_get("/metrics", metrics)
+        app.router.add_get("/v1/models", models)
+        loop = _rollout_loop(num_generations=2, max_inflight_tasks=8, score_queue_maxsize=1000)
+        loop._metrics_poll_s = 0.02
+        inflight = {"now": 0, "peak": 0}
+
+        async def fake_generate_one(prompt, tool_dict, tools, group_id=0):
+            inflight["now"] += 1
+            inflight["peak"] = max(inflight["peak"], inflight["now"])
+            await asyncio.sleep(0.05)
+            inflight["now"] -= 1
+            sequence = TrainingSequence(
+                input_ids=[1, 2, 3],
+                completion_mask=[0, 1, 1],
+                old_log_probs=[0.0, -0.1, -0.1],
+                sampling_mask=[[], [], []],
+                rollout_id="r",
+            )
+            return [{"role": "assistant", "content": "x"}], [2, 3], [sequence], 0, 0, None
+
+        loop._generate_one = fake_generate_one
+
+        async def wait_until(condition):
+            deadline = time.monotonic() + 5
+            while not condition():
+                assert time.monotonic() < deadline, "condition not met in time"
+                await asyncio.sleep(0.01)
+
+        async def run():
+            async with TestServer(app) as server, aiohttp.ClientSession() as session:
+                loop.vllm_server_url = str(server.make_url("")).rstrip("/")
+                loop.session = session
+                await loop._init_inflight_cap()
+                assert loop._inflight_cap == 4
+                stop_event = asyncio.Event()
+                tasks = [
+                    asyncio.create_task(loop._generate_loop(stop_event)),
+                    asyncio.create_task(loop._control_loop(stop_event)),
+                ]
+                await wait_until(lambda: loop._inflight_cap == 8)
+                await wait_until(lambda: inflight["peak"] == 8 and load["polls"] >= 2)
+                load["usage"] = 0.7
+                load["spike"] = 0.9
+                await wait_until(lambda: loop._inflight_cap < 8)
+                assert loop._inflight_cap == 5
+                await wait_until(lambda: inflight["now"] <= 5)
+                inflight["peak"] = 0
+                await asyncio.sleep(0.3)
+                assert inflight["peak"] <= 5
+                assert loop._inflight_cap == 5
+                load["usage"] = 0.1
+                await wait_until(lambda: loop._inflight_cap == 8)
+                stop_event.set()
+                await asyncio.gather(*tasks)
+
+        try:
+            asyncio.run(run())
+            groups = []
+            while not loop._groups_to_score.empty():
+                group = loop._groups_to_score.get_nowait()
+                if group is not None:  # the loop ends on a `None` sentinel for the score loop
+                    groups.append(group)
+            assert groups and all(len(group.completions) == 2 for group in groups)
         finally:
             loop._loop.close()
 
@@ -1262,9 +1399,15 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
             {**_FA3_HEAD_DIM, "sliding_window": 16},
             id="gemma2-sliding-window-softcap",
-            marks=pytest.mark.skipif(
-                torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
-            ),
+            marks=[
+                pytest.mark.skipif(
+                    torch.version.hip is not None, reason="The AITER kernel used on ROCm has no softcap"
+                ),
+                pytest.mark.skipif(
+                    torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10,
+                    reason="The FlashAttention-4 kernel used on Blackwell fails with softcap",
+                ),
+            ],
         ),
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
         pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
@@ -1327,6 +1470,13 @@ class TestTreePackingParity(TrlTestCase):
                 param.data.fill_(-4.0)
         samples = self._samples()
         collator = DataCollatorForRollout(pad_token_id=0)
+        # The per-sample reference uses the kernel that tree attention picks for this device
+        if torch.version.hip:
+            reference = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            reference = "kernels-community/flash-attn4"
+        else:
+            reference = "kernels-community/flash-attn3"
         packed = collator([[_tree_row(samples)]])
         alone = [DataCollatorForRollout(pad_token_id=0)([[_tree_row([sample])]]) for sample in samples]
         for batch in alone:
@@ -1344,9 +1494,7 @@ class TestTreePackingParity(TrlTestCase):
 
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
-        model.set_attn_implementation(
-            "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn3"
-        )
+        model.set_attn_implementation(reference)
         with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
             alone_loss, alone_grads = run(alone)
 
@@ -2099,7 +2247,9 @@ class TestSaveLoraAdapter(TrlTestCase):
         entries = os.listdir(namespace)
         assert entries == ["trl-policy-v1"]
         # vLLM keys on the directory basename and reads `adapter_config.json` from its root.
-        config = json.loads(open(os.path.join(namespace, "trl-policy-v1", "adapter_config.json")).read())
+        config = json.loads(
+            open(os.path.join(namespace, "trl-policy-v1", "adapter_config.json"), encoding="utf-8").read()
+        )
         assert config["peft_type"] == "LORA"
 
     def test_non_main_processes_write_nothing(self):

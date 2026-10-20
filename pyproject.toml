@@ -38,6 +38,7 @@ dependencies = [
     "psutil>=5.9.4",
     "pyarrow>=21.0.0",
     "pyyaml>=6.0.1",
+    "torch>=2.6.0",  # torch.accelerator, and the public FSDP2 API
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]
@@ -70,7 +71,7 @@ openreward = [
     "openreward>=0.1.109",
 ]
 peft = [
-    "peft>=0.13.0"
+    "peft>=0.17.0"
 ]
 quality = [
     "pre-commit",
@@ -87,7 +88,7 @@ test = [
     "pytest",
 ]
 vllm = [
-    "vllm>=0.22.0,<=0.31.0",
+    "vllm>=0.22.0,<=0.32.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -107,7 +108,7 @@ dev = [
     # openreward
     "openreward>=0.1.109",
     # peft
-    "peft>=0.13.0",
+    "peft>=0.17.0",
     # quality
     "pre-commit",
     "hf-doc-builder",
