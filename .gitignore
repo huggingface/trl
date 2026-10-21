@@ -146,3 +146,6 @@ uv.lock
 # AI agent generated artifacts
 /.claude/skills
 /.agents/skills/local-*/
+
+trackio*
+eval-results*
