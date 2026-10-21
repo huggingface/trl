@@ -6,7 +6,7 @@ A decision model, sometimes called a "System One" model, answers typed questions
 - `choice`: one option among named options, like routing a ticket to a team.
 - `score`: a level on an ordinal scale, like rating urgency.
 
-`transformers serve` answers these questions on its `/v1/systemone` endpoint with any chat model: the prompt describes the question with one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the next-token logits of the labels at the end of the prompt, normalized with a softmax, are the probabilities of the options. This example trains [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) to answer them well, on the exact prompt of the endpoint, so that the trained model is served as is.
+`transformers serve` answers these questions on its `/v1/systemone` endpoint with any chat model: the prompt describes the question with one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the next-token logits of the labels at the end of the prompt, normalized with a softmax, are the probabilities of the options. This example trains [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) to answer them well, on the exact prompt of the endpoint, so that the trained model is served as is.
 
 Training needs the `flash-linear-attention` and `causal-conv1d` kernels of Qwen3.5's linear attention layers: without `causal-conv1d`, the padding-free batches raise an error, since the reference implementation can't keep the packed prompts apart (and serving without the kernels is several times slower):
 
@@ -29,9 +29,9 @@ The data is 40k questions of [tasksource/tasksource-jev-typed-decisions](https:/
 python examples/sft_decision_model/1_sft.py
 ```
 
-On one RTX 4070 Laptop GPU (8 GB): 961 steps of 32 questions, 4.9 s/step, 6 GB peak; one epoch takes 78 minutes. The loss goes from 1.12 to 0.71 and the accuracy on the training questions from 51% to 73%.
+On one L4 (24 GB): 961 steps of 32 questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes. The loss goes from 0.98 to 0.59 and the accuracy on the training questions from 59% to 78%.
 
-The trained model is on the Hub as [rycerzes/Qwen3.5-2B-Decision](https://huggingface.co/rycerzes/Qwen3.5-2B-Decision) (with your own run, use the output directory). Serve it with `transformers serve`, which needs `requests` on top of the `serving` extra:
+The trained model is on the Hub as [rycerzes/Qwen3.5-4B-Decision](https://huggingface.co/rycerzes/Qwen3.5-4B-Decision) (with your own run, use the output directory). Serve it with `transformers serve`, which needs `requests` on top of the `serving` extra:
 
 ```sh
 pip install "transformers[serving]>=5.20.0" requests
@@ -40,7 +40,7 @@ transformers serve
 
 ```sh
 curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '{
-  "model": "rycerzes/Qwen3.5-2B-Decision",
+  "model": "rycerzes/Qwen3.5-4B-Decision",
   "state": "Our checkout has been returning 500 errors since this morning and customers cannot pay. We have lost dozens of orders.",
   "questions": {
     "team": {"type": "choice", "instructions": "Which team handles this?", "criteria": {"billing": "Charges, invoices and refunds", "engineering": "Bugs and outages", "sales": "New contracts"}},
@@ -52,39 +52,41 @@ curl http://localhost:8000/v1/systemone -H "Content-Type: application/json" -d '
 
 ```json
 {
-  "team": {"type": "choice", "choice": "engineering", "probabilities": {"billing": 0.106, "engineering": 0.883, "sales": 0.011}, "confidence": 0.825},
-  "urgency": {"type": "score", "score": 2.67, "probabilities": {"0": 0.010, "1": 0.032, "2": 0.235, "3": 0.723}, "confidence": 0.671, "legend": {...}},
-  "refund": {"type": "noul", "noul": 0.133}
+  "team": {"type": "choice", "choice": "engineering", "probabilities": {"billing": 0.004, "engineering": 0.996, "sales": 0.001}, "confidence": 0.994},
+  "urgency": {"type": "score", "score": 2.98, "probabilities": {"0": 0.000, "1": 0.000, "2": 0.023, "3": 0.976}, "confidence": 0.975, "legend": {...}},
+  "refund": {"type": "noul", "noul": 0.119}
 }
 ```
 
 (the `answers` of the response, rounded)
+
+![Training curves](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_decision_model_metrics.png)
 
 ## 2. Evaluation
 
 [`2_evaluate.py`](2_evaluate.py) sends the requests of two held-out sets to a running `transformers serve`, with all the questions of a state in one request:
 
 - [LocalLLaMA/typed-decisions](https://huggingface.co/datasets/LocalLLaMA/typed-decisions), test split: 400 states (security incidents, agent traces, invoices, customer service) with 5 questions each, and soft gold probabilities from 3 annotators.
-- [JevBench/jevbench](https://huggingface.co/datasets/JevBench/jevbench): 240 states with 8 to 12 questions each, 2,240 questions in all.
+- [JevBench/jevbench](https://huggingface.co/datasets/JevBench/jevbench): 240 states with 8 to 12 questions each, of which the 1,938 whose gold is one of their options (302 have the gold `unknown`).
 
 None of their 640 states is in the training questions, and none shares a 13-word sequence with them. Accuracy counts the questions whose most probable option is the most probable in the gold, and the Brier score is the squared distance between the probabilities of the options and the gold ones (0 is perfect, 2 the worst).
 
 ```sh
 transformers serve
-python examples/sft_decision_model/2_evaluate.py --model Qwen/Qwen3.5-2B --output base.jsonl
-python examples/sft_decision_model/2_evaluate.py --model Qwen3.5-2B-Decision --output trained.jsonl
+python examples/sft_decision_model/2_evaluate.py --model Qwen/Qwen3.5-4B --output base.jsonl
+python examples/sft_decision_model/2_evaluate.py --model Qwen3.5-4B-Decision --output trained.jsonl
 ```
 
 | | typed-decisions accuracy | typed-decisions Brier | JevBench accuracy | JevBench Brier |
 | --- | --- | --- | --- | --- |
-| Qwen3.5-2B | 45.4% | 0.372 | 73.1% | 0.308 |
-| after training | **53.9%** | **0.226** | **77.2%** | **0.239** |
+| Qwen3.5-4B | 56.0% | 0.331 | 87.4% | 0.184 |
+| after training | **67.3%** | **0.137** | **89.1%** | **0.141** |
 
 By question type:
 
 | | typed-decisions noul | choice | score | JevBench noul | choice | score |
 | --- | --- | --- | --- | --- | --- | --- |
-| Qwen3.5-2B | 50.5% | 47.7% | 39.9% | 82.5% | 74.1% | 26.4% |
-| after training | 51.2% | 52.5% | 57.1% | 84.6% | 79.3% | 37.3% |
+| Qwen3.5-4B | 65.5% | 61.5% | 44.9% | 97.4% | 86.5% | 40.8% |
+| after training | 74.5% | 68.2% | 61.4% | 98.4% | 89.6% | 42.9% |
 
-The probabilities improve more than the most probable options: the Brier score drops by 39% on typed-decisions and 22% on JevBench. Ordinal `score` questions gain the most, and remain the weakest type on JevBench.
+The Brier score drops by 59% on typed-decisions and 23% on JevBench, where the base model already answers most `noul` and `choice` questions right. Ordinal `score` questions gain the most on typed-decisions, and remain the weakest type on JevBench.
