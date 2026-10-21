@@ -246,7 +246,7 @@ jobs:
           uv pip install \
             ".[dev]" \
             "accelerate==1.11.0" \
-            "bitsandbytes==0.45.1" \
+            "bitsandbytes==0.45.2" \
             "datasets==4.7.0" \
             "huggingface_hub==0.34.0" \
             "liger-kernel==0.8.2" \
