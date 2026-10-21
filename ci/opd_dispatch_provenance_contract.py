@@ -30,7 +30,7 @@ class Loop:
         return await thunk()
     async def _post(self, url, endpoint, payload, timeout):
         assert url==self.vllm_server_url and endpoint=="/v1/completions"
-        assert payload["model"]=="policy-v9",payload
+        assert payload["model"]==("policy-v9" if self.lora_name else "base"),payload
         self.model_version=10  # publish new policy while request is in flight
         return {"choices":[{"token_ids":[7]}]}
 loop=Loop()
