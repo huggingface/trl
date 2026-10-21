@@ -22,11 +22,11 @@
 
 # docstyle-ignore
 """
-Trains Qwen/Qwen3.5-2B as a decision ("System One") model: it answers typed questions about a state with a probability
+Trains Qwen/Qwen3.5-4B as a decision ("System One") model: it answers typed questions about a state with a probability
 for each option, from the next-token logits of the option labels (`Yes`/`No`, `A`, `B`, ...) at the end of the prompt.
 The prompt is the one of the `/v1/systemone` endpoint of `transformers serve`, so the merged model is served as is.
-LoRA on 40k questions of tasksource-jev-typed-decisions, with their soft targets. On one RTX 4070 Laptop GPU (8 GB):
-961 steps of 32 questions, 4.9 s/step, 6 GB peak; one epoch takes 78 minutes.
+LoRA on 40k questions of tasksource-jev-typed-decisions, with their soft targets. On one L4 (24 GB): 961 steps of 32
+questions, 6.8 s/step, 10.6 GB peak; one epoch takes 108 minutes.
 
     python examples/sft_decision_model/1_sft.py
 """
@@ -42,8 +42,8 @@ from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 from trl.trainer.utils import pad
 
 
-MODEL = "Qwen/Qwen3.5-2B"
-OUTPUT_DIR = "Qwen3.5-2B-Decision"
+MODEL = "Qwen/Qwen3.5-4B"
+OUTPUT_DIR = "Qwen3.5-4B-Decision"
 MAX_LENGTH = 512
 
 
