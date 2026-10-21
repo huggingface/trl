@@ -39,6 +39,12 @@ subsequent sessions receive the new proxy URL.
 
 You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script. In that case, make sure that your environments are compatible with HF sandbox, by adding the attribute `docker_image` in the key `[environment]`, otherwise the training will silently fail. An example dataset can be found in [`ybelkada/SmolDataEnvs-harbor-train-sandbox`](https://huggingface.co/datasets/ybelkada/SmolDataEnvs-harbor-train-sandbox).
 
+HF sandboxes refuse the ownership changes Harbor's upload untar makes, so every verifier upload fails and all rewards are `None` (loss 0). The launcher patches Harbor for this; when running `openenv harbor serve` yourself, apply the same patch to the server's environment first:
+
+```sh
+python -c "import pathlib, harbor.environments.tar_transfer as t; p = pathlib.Path(t.__file__); p.write_text(p.read_text().replace('tar -xzf ', 'tar --no-same-owner -xzf '))"
+```
+
 ## Capture contract
 
 - OpenEnv supplies a validated `TrainingTrace` with required masks. Prompt and completion IDs come
