@@ -8,7 +8,7 @@ A decision model, sometimes called a "System One" model, answers typed questions
 
 `transformers serve` answers these questions on its `/v1/systemone` endpoint with any chat model: the prompt describes the question with one label per option (`Yes`/`No`, or `A`, `B`, `C`, ...), and the next-token logits of the labels at the end of the prompt, normalized with a softmax, are the probabilities of the options. This example trains [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) to answer them well, on the exact prompt of the endpoint, so that the trained model is served as is.
 
-Qwen3.5's linear attention layers need the `flash-linear-attention` and `causal-conv1d` kernels, without which they fall back to a reference implementation several times slower:
+Training needs the `flash-linear-attention` and `causal-conv1d` kernels of Qwen3.5's linear attention layers: without `causal-conv1d`, the padding-free batches raise an error, since the reference implementation can't keep the packed prompts apart (and serving without the kernels is several times slower):
 
 ```sh
 pip install flash-linear-attention
