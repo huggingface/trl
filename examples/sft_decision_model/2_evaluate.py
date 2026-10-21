@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "datasets>=5.0.0",  # `Json` feature
+#     "datasets>=4.7.0",  # `Json` feature
 # ]
 # ///
 
