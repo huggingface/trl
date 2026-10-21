@@ -19,7 +19,7 @@ The `kernels-community/flash-attn2` kernel used in the examples of this document
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    padding_free=True,
+    packing=True,
     model_init_kwargs={"attn_implementation": "kernels-community/aiter-flash-attn@v2"},
 )
 ```
