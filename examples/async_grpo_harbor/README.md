@@ -11,7 +11,7 @@ Use Python 3.12 and this TRL checkout. The typed capture API was merged in
 ```sh
 git clone https://github.com/huggingface/OpenEnv.git OpenEnv
 git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
-pip install -e . trackio datasets ./OpenEnv
+pip install -e . trackio datasets ./OpenEnv[harbor] kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
@@ -36,6 +36,8 @@ as job secrets. A bucket mounted at `/data` preserves checkpoints and logs.
 Use `--train-script-url` with the raw URL of the TRL revision being tested before the example is merged.
 Use `--tunnel-check-s 0` to disable tunnel supervision. A server restart interrupts existing sessions;
 subsequent sessions receive the new proxy URL.
+
+You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script.
 
 ## Capture contract
 

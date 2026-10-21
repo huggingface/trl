@@ -246,6 +246,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                     entries = captured.to_trace_entries()
                     trace = entries
                 except (ValueError, TypeError, KeyError) as exc:
+                    # OpenEnv rejects a single rollout whose capture has fatal findings (e.g. no model call, an empty
+                    # response). Drop it like a transport failure; malformed traces still stop the worker.
+                    if "fatal validation findings" in str(exc):
+                        logger.warning("capture rejected by OpenEnv (%s); scoring rollout as unscorable", exc)
+                        return self._EMPTY_ROLLOUT, None
                     raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
