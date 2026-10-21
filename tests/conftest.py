@@ -297,7 +297,10 @@ def undo_liger_kernel_patching(monkeypatch):
     `Trainer.train()`. Either way they are never reverted, which is why only the minimum-versions CI job fails: the
     Liger tests that use a Qwen3 model build a trainer but never train.
     """
-    if not is_liger_kernel_available():
+    from transformers.testing_utils import torch_device
+
+    # Importing Liger needs an accelerator, and without one no test applies its kernels
+    if not is_liger_kernel_available() or torch_device is None or torch_device == "cpu":
         yield
         return
 

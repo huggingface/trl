@@ -122,6 +122,7 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
+    @require_torch_accelerator
     def test_train_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
