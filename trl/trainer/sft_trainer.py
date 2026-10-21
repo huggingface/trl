@@ -932,10 +932,15 @@ class SFTTrainer(_BaseTrainer):
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
         # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
         # represent, silently freezing it, see #7268.
+
         if _is_quantized_model:
+            # Under PyTorch AMP (fp16=True), optimizer master weights must remain float32
+            # so that GradScaler can unscale gradients natively without NotImplementedError.
+            # Otherwise, cast to bfloat16 following QLoRA paper recommendations.
+            target_dtype = torch.float32 if getattr(args, "fp16", False) else torch.bfloat16
             for name, param in model.named_parameters():
                 if param.requires_grad and "lora_magnitude_vector" not in name:
-                    param.data = param.data.to(torch.bfloat16)
+                    param.data = param.data.to(target_dtype)
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
