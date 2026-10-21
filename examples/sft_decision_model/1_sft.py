@@ -16,7 +16,6 @@
 # dependencies = [
 #     "trl[peft]>=1.16.0",  # the sequence boundaries of the padding-free collator
 #     "transformers[serving]>=5.20.0",  # the prompt of the `/v1/systemone` endpoint
-#     "datasets>=5.0.0",  # `Json` feature
 #     "trackio",
 # ]
 # ///

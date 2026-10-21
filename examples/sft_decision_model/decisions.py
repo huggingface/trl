@@ -63,7 +63,7 @@ def load_eval(name: str) -> list[dict]:
     of [LocalLLaMA/typed-decisions](https://huggingface.co/datasets/LocalLLaMA/typed-decisions) (`"typed-decisions"`,
     400 states with 5 questions, soft gold from 3 annotators) or from
     [JevBench/jevbench](https://huggingface.co/datasets/JevBench/jevbench) (`"jevbench"`, 240 states with 8 to 12
-    questions).
+    questions, of which the 1,938 whose gold is one of their options).
     """
     if name == "typed-decisions":
         requests = []
@@ -81,6 +81,9 @@ def load_eval(name: str) -> list[dict]:
             options = list(criteria)
         else:
             criteria, options = row["levels"], [str(level) for level in range(len(row["levels"]))]
+        # 302 questions have the gold "unknown", which is none of their options
+        if row["gold"] not in options:
+            continue
         case = cases[row["case_id"]]
         case["state"] = row["state"]
         case["questions"][row["question_key"]] = {
