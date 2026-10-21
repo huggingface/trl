@@ -37,7 +37,7 @@ Use `--train-script-url` with the raw URL of the TRL revision being tested befor
 Use `--tunnel-check-s 0` to disable tunnel supervision. A server restart interrupts existing sessions;
 subsequent sessions receive the new proxy URL.
 
-You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script.
+You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script. In that case, make sure that your environments are compatible with HF sandbox, by adding the attribute `docker_image` in the key `[environment]`, otherwise the training will silently fail. An example dataset can be found in [`ybelkada/SmolDataEnvs-harbor-train-sandbox`](https://huggingface.co/datasets/ybelkada/SmolDataEnvs-harbor-train-sandbox).
 
 ## Capture contract
 
