@@ -11,6 +11,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 import numpy as np
 
 baseline = "--baseline" in sys.argv
@@ -25,7 +26,7 @@ methods = [n for n in clazz.body if isinstance(n, (ast.FunctionDef, ast.AsyncFun
 names = {n.name for n in methods}
 assert {"_generate_one_turn", "_generate_and_score_one"} <= names
 assert ("_request_model" in names) or ("_request_model_for_version" in names)
-scope = {"np": np, "random": random, "time": time,
+scope = {"np": np, "random": random, "time": time, "Any": Any,
          "RolloutSample": lambda **kwargs: SimpleNamespace(**kwargs)}
 exec(compile(ast.fix_missing_locations(ast.Module(body=methods, type_ignores=[])),
              str(source_path), "exec"), scope)
