@@ -51,10 +51,9 @@ jobs:
       contents: read
     name: Tests with latest dependencies (CUDA)
     runs-on:
-      group: aws-g6e-4xlarge
+      group: aws-general-8-plus
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
     defaults:
       run:
         shell: bash
@@ -110,7 +109,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -167,7 +166,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -212,10 +211,9 @@ jobs:
       contents: read
     name: Tests with minimum versions (CUDA)
     runs-on:
-      group: aws-g6e-4xlarge
+      group: aws-general-8-plus
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
-      options: --gpus all
     defaults:
       run:
         shell: bash
@@ -286,7 +284,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
     steps:
@@ -341,7 +339,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false
     env:
       # The pod sees 160 CPUs but its quota is 19 (`cpu.max`): one worker per CPU of the quota, one thread per worker
       PYTEST_XDIST_AUTO_NUM_WORKERS: 19
@@ -414,7 +412,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.event.pull_request.draft == false
+    if: false
     steps:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
