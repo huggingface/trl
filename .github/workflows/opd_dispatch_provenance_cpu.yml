@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "ci/opd_dispatch_provenance_contract.py"
+      - "ci/opd_rollout_end_to_end_provenance.py"
       - "trl/experimental/async_distillation/async_rollout_worker.py"
       - ".github/workflows/opd_dispatch_provenance_cpu.yml"
   workflow_dispatch:
@@ -19,3 +20,13 @@ jobs:
           python-version: "3.11"
       - name: Execute production source coroutine with version publish race
         run: python ci/opd_dispatch_provenance_contract.py
+      - name: Install minimal array dependency
+        run: python -m pip install numpy
+      - name: Verify patched complete rollout provenance
+        run: python ci/opd_rollout_end_to_end_provenance.py
+      - name: Reproduce wrong rollout provenance on untouched base
+        run: |
+          git fetch --no-tags --depth=1 origin review/upstream-trl-20261017
+          git show FETCH_HEAD:trl/experimental/async_distillation/async_rollout_worker.py > /tmp/opd_worker_baseline.py
+          python ci/opd_rollout_end_to_end_provenance.py /tmp/opd_worker_baseline.py --baseline
+
