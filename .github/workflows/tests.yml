@@ -251,6 +251,7 @@ jobs:
             "bitsandbytes==0.45.1" \
             "datasets==4.7.0" \
             "huggingface_hub==0.34.0" \
+            "liger-kernel==0.8.2" \
             "numpy==1.26.0" \
             "pandas==2.1.1" \
             "peft==0.17.0" \
