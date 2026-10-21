@@ -13,7 +13,7 @@ pip install trl
 
 ## Attention kernels
 
-Padding-free training and packing need a FlashAttention kernel. The `kernels-community/flash-attn2` kernel has no ROCm build, so use [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn), downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library (`pip install trl[kernels]`):
+The `kernels-community/flash-attn2` kernel used in the examples of this documentation has no ROCm build. On AMD GPUs, use [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn), downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library (`pip install trl[kernels]`):
 
 ```python
 from trl import SFTConfig
@@ -28,4 +28,4 @@ The kernel has no attention-logit soft-capping, and Transformers skips `attn_log
 
 ## Generation with vLLM
 
-GRPO and RLOO with `use_vllm=True` need vLLM's ROCm build, see the [vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu.html). This path is not covered by CI yet.
+GRPO and RLOO with `use_vllm=True` need vLLM's ROCm build, see the [vLLM installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu.html).
