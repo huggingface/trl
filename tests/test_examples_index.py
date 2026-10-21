@@ -22,7 +22,7 @@ SHARED_DIRS = {"accelerate_configs", "datasets"}
 
 def test_examples_index_matches_folders():
     folders = {d.name for d in (REPO_ROOT / "examples").iterdir() if d.is_dir() and d.name not in SHARED_DIRS}
-    overview = (REPO_ROOT / "docs" / "source" / "example_overview.md").read_text()
+    overview = (REPO_ROOT / "docs" / "source" / "example_overview.md").read_text(encoding="utf-8")
     rows = set(re.findall(r"\| \[`([a-z0-9_]+)`\]\(https://github\.com/huggingface/trl/tree/main/examples/", overview))
     missing_rows = folders - rows
     missing_folders = rows - folders
