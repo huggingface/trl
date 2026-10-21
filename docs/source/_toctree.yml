@@ -47,6 +47,8 @@
     title: Distributing Training
   - local: aws_trainium
     title: Training on AWS Trainium
+  - local: amd_gpus
+    title: Training on AMD GPUs
   - local: long_context_training
     title: Training Beyond 1M Tokens
   - local: use_model
