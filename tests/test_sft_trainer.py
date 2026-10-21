@@ -786,6 +786,75 @@ class TestSFTTrainer(TrlTestCase):
         )
         assert any("layers.0.mlp." in n for n in changed), f"No dense layer weight has changed, only {changed}."
 
+    @require_peft
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0")
+        or not is_peft_available()
+        or Version(peft.__version__) >= Version("0.19.0"),
+        reason="Only transformers v5 with peft<0.19 skips the routed experts (#7765)",
+    )
+    @pytest.mark.parametrize(
+        "target_modules, target_parameters, expect_error",
+        [
+            (["gate_proj", "up_proj", "down_proj"], None, True),
+            ("all-linear", None, True),
+            (r".*\.(q_proj|v_proj)", None, False),
+            (["gate_proj", "up_proj", "down_proj"], ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"], False),
+        ],
+    )
+    def test_moe_lora_raises_when_peft_skips_routed_experts(self, target_modules, target_parameters, expect_error):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        peft_config = LoraConfig(target_modules=target_modules, target_parameters=target_parameters)
+
+        if expect_error:
+            with pytest.raises(ValueError, match=r"peft>=0\.19\.0"):
+                SFTTrainer(
+                    model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                    args=training_args,
+                    train_dataset=dataset,
+                    peft_config=peft_config,
+                )
+        else:
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=peft_config,
+            )
+
+    @require_peft
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0")
+        or not is_peft_available()
+        or not Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0"),
+        reason="Only transformers v5 with peft 0.19 to 0.21.2 skips the dense and shared expert layers (#7767)",
+    )
+    @pytest.mark.parametrize(
+        "model_id, target_modules, expect_warning",
+        [
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False),
+            # no dense or shared expert layers to skip
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], False),
+        ],
+    )
+    def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
+        self, model_id, target_modules, expect_warning, caplog
+    ):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            SFTTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=target_modules),
+            )
+
+        assert ("https://github.com/huggingface/trl/issues/7767" in caplog.text) == expect_warning
+
     @pytest.mark.parametrize(
         "model_id, expect_coef, expect_aux_loss",
         [
