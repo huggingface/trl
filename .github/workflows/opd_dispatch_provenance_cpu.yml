@@ -1,0 +1,21 @@
+name: OPD async dispatch provenance (CPU)
+on:
+  pull_request:
+    paths:
+      - "ci/opd_dispatch_provenance_contract.py"
+      - "trl/experimental/async_distillation/async_rollout_worker.py"
+      - ".github/workflows/opd_dispatch_provenance_cpu.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Execute production source coroutine with version publish race
+        run: python ci/opd_dispatch_provenance_contract.py
