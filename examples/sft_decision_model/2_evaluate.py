@@ -26,8 +26,8 @@ gold) and Brier score (squared distance between the probabilities of the options
 the worst).
 
     transformers serve
-    python examples/sft_decision_model/2_evaluate.py --model Qwen/Qwen3.5-2B --output base.jsonl
-    python examples/sft_decision_model/2_evaluate.py --model Qwen3.5-2B-Decision --output trained.jsonl
+    python examples/sft_decision_model/2_evaluate.py --model Qwen/Qwen3.5-4B --output base.jsonl
+    python examples/sft_decision_model/2_evaluate.py --model Qwen3.5-4B-Decision --output trained.jsonl
 """
 
 import argparse
