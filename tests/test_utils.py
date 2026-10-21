@@ -45,6 +45,7 @@ from trl.trainer.utils import (
     get_peft_config,
     hash_module,
     is_async_callable,
+    model_accepts_images,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -289,6 +290,38 @@ class TestCreateModelFromPath(TrlTestCase):
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
 
+class TestModelAcceptsImages(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id, architecture, expected",
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", AutoModelForImageTextToText, True),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForImageTextToText,
+                True,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForCausalLM,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_model_accepts_images(self, model_id, architecture, expected):
+        model = architecture.from_pretrained(model_id)
+        assert model_accepts_images(model) is expected
+
+
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
@@ -321,6 +354,18 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+    @pytest.mark.parametrize(
+        "lora_target_modules",
+        [["q_proj"], "q_proj", ["self_attn.q_proj"], [r".*\.q_proj"], ["q_proj", "v_proj"], ["all-linear"]],
+    )
+    def test_lora_target_modules(self, lora_target_modules):
+        # A single value from the CLI or a config file is a module name, a regex or "all-linear" (#7795)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_args = ModelConfig(use_peft=True, lora_target_modules=lora_target_modules)
+        model = get_peft_model(model, get_peft_config(model_args))
+        targeted = {name.split(".lora_A")[0] for name, _ in model.named_parameters() if ".lora_A." in name}
+        assert any(name.endswith(".q_proj") for name in targeted)
 
 
 class TestGetCallableName(TrlTestCase):
