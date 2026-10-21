@@ -496,7 +496,7 @@ class KTOTrainer(_BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
-            - If provided, this model is used directly as the reference policy.
+            - If provided, this model is used directly as the reference policy. It cannot be a [`~peft.PeftModel`].
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before KTO training starts.
         args ([`KTOConfig`], *optional*):
@@ -647,6 +647,11 @@ class KTOTrainer(_BaseTrainer):
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
+            )
+        if ref_model is not None and is_peft_model(ref_model):
+            raise ValueError(
+                "`ref_model` cannot be a `PeftModel`. To train with PEFT, pass the `PeftModel` as `model` and omit "
+                "`ref_model`."
             )
 
         # Processing class
