@@ -24,7 +24,7 @@ training_args = SFTConfig(
 )
 ```
 
-Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported by this kernel.
+The kernel has no attention-logit soft-capping, and Transformers skips `attn_logit_softcapping` without a warning, so models that use it, such as Gemma 2, train with uncapped attention.
 
 ## Generation with vLLM
 
