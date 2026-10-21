@@ -209,7 +209,6 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     eos_token_ids = [tokenizer.eos_token_id]
 
-
     config = AsyncGRPOConfig(
         output_dir=output_dir,
         save_strategy="steps",
