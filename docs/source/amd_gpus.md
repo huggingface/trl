@@ -1,6 +1,6 @@
 # Training on AMD GPUs
 
-TRL trainers run on AMD Instinct GPUs without code changes. PyTorch's ROCm build exposes them as `cuda` devices, so the commands in the rest of the documentation work as they are. CI runs the test suite on AMD MI300X GPUs for every pull request that touches the library, on one GPU and on two (DDP, DeepSpeed ZeRO-2 and ZeRO-3, FSDP2).
+TRL trainers run on AMD Instinct GPUs without code changes. PyTorch's ROCm build exposes them as `cuda` devices, so the commands in the rest of the documentation work as they are.
 
 ## Installation
 
