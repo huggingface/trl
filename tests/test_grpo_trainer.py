@@ -2608,6 +2608,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_steps=2,  # continuous batching adds about 1s per step
             report_to="none",
             use_transformers_continuous_batching=True,
+            transformers_continuous_batching_config={"num_blocks": 16},  # reduce the KV cache size, see #7824
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
