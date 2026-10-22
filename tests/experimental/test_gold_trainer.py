@@ -19,7 +19,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
+from packaging.version import Version
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
@@ -2294,9 +2296,26 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     assert torch.isfinite(torch.tensor(train_output.training_loss))
 
 
+def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
+    # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=False),
+        train_dataset=vlm_dataset,
+    )
+
+    assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
+
+
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
+@pytest.mark.xfail(
+    condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0.dev0"),
+    reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
+    strict=True,
+)
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
 
