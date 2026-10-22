@@ -3445,7 +3445,7 @@ class TestGRPOTrainer(TrlTestCase):
             else:  # second call only has the two examples with a tool call
                 completion_ids = [[17453, 0, 151645]] * len(prompts)  # 'Done!<|im_end|>'
             logprobs = [[[-0.1]] * len(ids) for ids in completion_ids]
-            return prompts, completion_ids, logprobs, None
+            return prompts, completion_ids, logprobs, None, None
 
         trainer.use_vllm = True
         trainer._last_loaded_step = trainer.state.global_step
