@@ -1560,13 +1560,13 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         log_ratio = log_probs - old_log_probs
         coef_1 = torch.exp(log_ratio)
-        is_masked = (coef_1 < self.args.importance_sampling_min) | (coef_1 > self.args.importance_sampling_max)
+        low, high = self.args.vllm_importance_sampling_clip_min, self.args.vllm_importance_sampling_clip_max
+        is_masked = (coef_1 < low) | (coef_1 > high)
         if self.args.score_centering:
             # Score centering: https://huggingface.co/papers/2609.20807, Appendix A.2
             score_log_probs = outputs.score_log_probs[0][token_index]
             sampler_log_probs = inputs["sampler_log_probs"][mask_bool][token_index]
             with torch.no_grad():
-                low, high = self.args.importance_sampling_min, self.args.importance_sampling_max
                 q = sampler_log_probs.exp()
                 p = score_log_probs.exp() * (q > 0)
                 head = torch.where((p >= low * q) & (p <= high * q), p, 0.0)
@@ -1649,11 +1649,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/region_mean"].append((global_region_clip_sum / global_count).item())
-            self._metrics["train"]["importance_sampling/masked_mean"].append((global_masked_sum / global_count).item())
+            self._metrics["train"]["sampling/masked_mean"].append((global_masked_sum / global_count).item())
             if self.args.score_centering:
-                self._metrics["train"]["score_centering/sampler_mass"].append(
-                    (global_sampler_mass_sum / global_count).item()
-                )
+                self._metrics["train"]["sampling/sampler_mass"].append((global_sampler_mass_sum / global_count).item())
 
             num_seq = int(segment_id.max()) + 1  # completions in this rank's row
 

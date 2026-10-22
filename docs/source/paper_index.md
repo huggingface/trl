@@ -453,8 +453,8 @@ from trl.experimental.async_grpo import AsyncGRPOConfig
 
 training_args = AsyncGRPOConfig(
     ...,
-    importance_sampling_min=0.5,  # hyper-parameter C_min
-    importance_sampling_max=5.0,  # hyper-parameter C_max
+    vllm_importance_sampling_clip_min=0.5,  # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=5.0,  # hyper-parameter C_max
 )
 ```
 
@@ -732,8 +732,8 @@ from trl.experimental.async_grpo import AsyncGRPOConfig
 training_args = AsyncGRPOConfig(
     ...,
     score_centering=True,  # default; `False` trains with the clipped objective instead
-    importance_sampling_min=0.5,  # hyper-parameter C_min
-    importance_sampling_max=5.0,  # hyper-parameter C_max
+    vllm_importance_sampling_clip_min=0.5,  # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=5.0,  # hyper-parameter C_max
     num_sampler_logprobs=8,  # tokens per position the expectation is taken over
 )
 ```

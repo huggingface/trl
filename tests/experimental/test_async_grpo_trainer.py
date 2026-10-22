@@ -490,10 +490,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
         logs = trainer.state.log_history
         assert logs[-1]["train_loss"] is not None
-        steps = [log for log in logs if "importance_sampling/masked_mean" in log]
-        assert steps and all(0 <= log["importance_sampling/masked_mean"] <= 1 for log in steps)
+        steps = [log for log in logs if "sampling/masked_mean" in log]
+        assert steps and all(0 <= log["sampling/masked_mean"] <= 1 for log in steps)
         if training_args.score_centering:
-            assert all(0 < log["score_centering/sampler_mass"] <= 1 for log in steps)
+            assert all(0 < log["sampling/sampler_mass"] <= 1 for log in steps)
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
