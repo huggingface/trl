@@ -113,12 +113,12 @@ class AsyncGRPOConfig(_BaseConfig):
             sampler, so that a constant advantage does not pull the policy toward the sampler. The expectation is taken
             over the `num_sampler_logprobs` most likely tokens at each position, whose log-probabilities the sampler
             reports.
-        importance_sampling_min (`float`, *optional*, defaults to `0.5`):
-            Lower bound of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio falls
-            outside [`importance_sampling_min`, `importance_sampling_max`] are dropped from the loss (masked importance
-            sampling).
-        importance_sampling_max (`float`, *optional*, defaults to `5.0`):
-            Upper bound of the importance ratio.
+        vllm_importance_sampling_clip_min (`float`, *optional*, defaults to `0.5`):
+            Lower bound C_min of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio falls
+            outside [`vllm_importance_sampling_clip_min`, `vllm_importance_sampling_clip_max`] are dropped from the
+            loss (masked importance sampling).
+        vllm_importance_sampling_clip_max (`float`, *optional*, defaults to `5.0`):
+            Upper bound C_max of the importance ratio.
         num_sampler_logprobs (`int`, *optional*, defaults to `8`):
             Number of top log-probabilities requested from the vLLM sampler for every generated token, used by score
             centering. More cover more of the sampler's probability mass but cost more to serialize; the server's
@@ -357,16 +357,17 @@ class AsyncGRPOConfig(_BaseConfig):
             "score of each sampled token minus its expectation under the vLLM sampler."
         },
     )
-    importance_sampling_min: float = field(
+    vllm_importance_sampling_clip_min: float = field(
         default=0.5,
         metadata={
-            "help": "Lower bound of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio "
-            "falls outside [`importance_sampling_min`, `importance_sampling_max`] are dropped from the loss."
+            "help": "Lower bound C_min of the importance ratio between the policy and the vLLM sampler. Tokens whose "
+            "ratio falls outside [`vllm_importance_sampling_clip_min`, `vllm_importance_sampling_clip_max`] are "
+            "dropped from the loss."
         },
     )
-    importance_sampling_max: float = field(
+    vllm_importance_sampling_clip_max: float = field(
         default=5.0,
-        metadata={"help": "Upper bound of the importance ratio."},
+        metadata={"help": "Upper bound C_max of the importance ratio."},
     )
     num_sampler_logprobs: int = field(
         default=8,
