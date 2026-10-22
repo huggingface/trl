@@ -364,6 +364,10 @@ class SDPOTrainer(_BaseTrainer):
             raise ValueError("`reward_funcs` is required for SDPOTrainer because SDPO must score rollouts.")
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
+        if not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
@@ -1201,12 +1205,6 @@ class SDPOTrainer(_BaseTrainer):
         When `distillation_is_clip` is set and `old_per_token_logps` are available, the loss is corrected by a clipped
         importance-sampling ratio between the current student and the student at rollout time.
         """
-        if distillation_logits.loss_mask.sum() == 0:
-            mode = "train" if model.training else "eval"
-            self._log_self_distillation_metric(mode, 0.0)
-            # Keep the zero loss attached to the student graph so backward produces zero gradients instead of stopping.
-            return distillation_logits.student_logits.sum() * 0.0
-
         if self.args.distillation_mode == "topk_logits":
             if self.args.distillation_topk is None:
                 raise ValueError("`distillation_mode='topk_logits'` requires `distillation_topk` to be set.")
@@ -1255,13 +1253,14 @@ class SDPOTrainer(_BaseTrainer):
         loss = loss.mean()
 
         mode = "train" if model.training else "eval"
-        mean_distill_loss = (
-            per_token_loss * distillation_logits.loss_mask
-        ).sum() / distillation_logits.loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(
-            mode,
-            self.accelerator.gather(mean_distill_loss).mean().item(),
-        )
+        mask = distillation_logits.loss_mask
+
+        def global_masked_mean(x):
+            local_sum, local_count = (x * mask).sum().float(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
+        self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
         return loss
 
     def _compute_server_distillation_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
@@ -1313,14 +1312,15 @@ class SDPOTrainer(_BaseTrainer):
             required, teacher_per_token_logps, torch.zeros_like(teacher_per_token_logps)
         )
 
+        def global_masked_mean(x):
+            local_sum, local_count = (x * loss_mask).sum().float(), loss_mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
         # Diagnostic for disagreement between local student scores and server teacher scores on realized tokens.
         # Sudden jumps can indicate stale server weights or numerical drift.
-        abs_diff = ((student_per_token_logps.detach() - teacher_per_token_logps).abs() * loss_mask).sum() / (
-            loss_mask.sum().clamp(min=1.0)
-        )
-        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(
-            self.accelerator.gather(abs_diff).mean().item()
-        )
+        abs_diff = (student_per_token_logps.detach() - teacher_per_token_logps).abs()
+        self._metrics[mode]["self_distillation/server_logprob_abs_diff"].append(global_masked_mean(abs_diff))
 
         if self.args.distillation_mode == "sampled_token":
             # Reverse-KL token-level objective, matching `compute_sampled_token_self_distillation_loss`.
@@ -1352,8 +1352,7 @@ class SDPOTrainer(_BaseTrainer):
 
         loss = (per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)
         loss = loss.mean()
-        mean_distill_loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-        self._log_self_distillation_metric(mode, self.accelerator.gather(mean_distill_loss).mean().item())
+        self._log_self_distillation_metric(mode, global_masked_mean(per_token_loss))
         return loss
 
     def _get_teacher_token_logprobs_from_server(
