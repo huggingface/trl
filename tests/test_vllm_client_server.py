@@ -927,8 +927,9 @@ class TestVLLMClientServerVLM(TrlTestCase):
         env[VISIBLE_DEVICES] = str(backend_device_count(torch_device) - 1)
         env["VLLM_SERVER_DEV_MODE"] = "1"
 
-        # Start the server process
-        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS], env=env)
+        # Start the server process, with smaller images and context so its memory profiling fits a 24 GB GPU
+        args = ["--mm-processor-kwargs", '{"max_pixels": 1003520}', "--max-model-len", "4096"]
+        cls.server_process = subprocess.Popen(["vllm", "serve", cls.model_id, *VLLM_SERVE_TRL_ARGS, *args], env=env)
 
         # Initialize the client (no communicator needed for generation-only tests)
         cls.client = VLLMClient(connection_timeout=240, host="localhost")
