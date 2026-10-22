@@ -1391,6 +1391,28 @@ def get_config_model_id(config: PretrainedConfig) -> str:
     return getattr(config, "_name_or_path", "")
 
 
+def model_accepts_images(model: PreTrainedModel) -> bool:
+    """
+    Whether a model takes images as input, so that its processing class is a processor rather than a tokenizer.
+
+    A multimodal checkpoint loaded as a language model alone (e.g. Qwen3.5 with `AutoModelForCausalLM`) does not.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to inspect.
+
+    Returns:
+        `bool`:
+            Whether the model takes images as input.
+    """
+    # Before transformers 5.21, several VLMs (e.g. Qwen3.5) report `input_modalities == "text"`, see
+    # huggingface/transformers#49677
+    if Version(transformers.__version__) < Version("5.21.0"):
+        return "vision_config" in model.config.sub_configs
+    else:
+        return "image" in model.input_modalities
+
+
 @contextmanager
 def global_then_local_main_first():
     """

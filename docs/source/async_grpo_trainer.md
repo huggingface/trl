@@ -101,6 +101,8 @@ trainer = AsyncGRPOTrainer(
 
 The Trainer retains the selected backend and passes it through the shared tree attention adapter on every forward. Tree packing and sample boundaries are preserved. SDPA and eager attention are not supported. This setting applies to the training model, not the vLLM server.
 
+For an instantiated model, `model_init_kwargs` is ignored and the Trainer uses the platform default.
+
 ## AMD GPUs
 
 The trainer runs on AMD GPUs (ROCm) with no extra setup: the commands above work as they are. Training uses the [`kernels-community/aiter-flash-attn`](https://huggingface.co/kernels-community/aiter-flash-attn) attention kernel on AMD GPUs, [`kernels-community/flash-attn4`](https://huggingface.co/kernels-community/flash-attn4) on NVIDIA Blackwell GPUs and [`kernels-community/flash-attn3`](https://huggingface.co/kernels-community/flash-attn3) on other NVIDIA GPUs, all downloaded from the Hub by the [`kernels`](https://github.com/huggingface/kernels) library. Models that cap their attention logits (`attn_logit_softcapping`), such as Gemma 2, are not supported on AMD GPUs or on NVIDIA Blackwell GPUs.
