@@ -65,9 +65,9 @@ jobs:
         run: |
           source .venv/bin/activate
           if [ "$VLLM_END" = "floor" ]; then
-            uv pip install ".[test,vllm,vlm]" "vllm==$(grep -oP '"vllm>=\K[0-9.]+' pyproject.toml)"
+            uv pip install ".[test,vllm,vlm,peft]" "vllm==$(grep -oP '"vllm>=\K[0-9.]+' pyproject.toml)"
           else
-            uv pip install ".[test,vllm,vlm]"
+            uv pip install ".[test,vllm,vlm,peft]"
           fi
 
       - name: Check the environment
