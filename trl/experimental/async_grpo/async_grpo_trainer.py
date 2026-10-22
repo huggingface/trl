@@ -1504,6 +1504,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "token_index",
                 "old_log_probs",
                 "sampling_mask",
+                "sampling_mask_counts",
                 "advantages",
                 "segment_id",
                 "global_n_tokens",
@@ -1525,9 +1526,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
-        sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
-        if sampling_mask.shape[-1] == 0:
-            sampling_mask = None
+        counts = inputs["sampling_mask_counts"][mask_bool]
+        width = int(counts.max())
+        sampling_mask = None
+        if width:
+            candidates = inputs["sampling_mask"][inputs["sampling_mask"] >= 0]
+            row = torch.repeat_interleave(torch.arange(len(counts), device=counts.device), counts)
+            col = torch.arange(len(candidates), device=counts.device) - torch.repeat_interleave(
+                counts.cumsum(0) - counts, counts
+            )
+            sampling_mask = candidates.new_full((len(counts), width), -1)
+            sampling_mask[row, col] = candidates
+            sampling_mask = sampling_mask.unsqueeze(0)
         tree_kwargs = {
             key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
         }
