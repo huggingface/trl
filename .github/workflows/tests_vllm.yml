@@ -6,9 +6,7 @@ on:
 
   workflow_dispatch:
 
-  push:
-    branches:
-      - ci-*
+  pull_request:
     paths:
       - ".github/workflows/tests_vllm.yml"
 
