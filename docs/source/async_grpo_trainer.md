@@ -130,6 +130,9 @@ config = AsyncGRPOConfig(top_p=0.95, top_k=512)
 
 The server's log-probabilities never match the trainer's exactly: different kernels, a different precision, a policy a few steps behind. Importance weights alone do not correct for that, because the score  \\( \nabla_\theta \log \pi_\theta \\) of a sampled token does not average to zero under the sampler, so every update also pulls the policy toward the sampler ([Score centering](https://huggingface.co/papers/2609.20807)). By default the trainer subtracts that expectation at every position (`score_centering=True`), estimated over the sampler's `num_sampler_logprobs` most likely tokens, and drops the tokens whose importance ratio to the sampler falls outside `[importance_sampling_min, importance_sampling_max]`. For that the worker requests the top log-probabilities of every generated token from the server, which it serializes per token: a large `num_sampler_logprobs` slows the server down, and its `--max-logprobs` bounds what it accepts. `score_centering=False` trains with the clipped objective alone.
 
+> [!WARNING]
+> Serializing the top log-probabilities is CPU work in vLLM's API server, and with its default single API server `num_sampler_logprobs=8` halves generation throughput. Start the server with `--api-server-count 8` on vLLM 0.32 or later: measured on one H100 with 1.5B to 7B models, the top-8 log-probabilities then cost under 3% of generation throughput. On vLLM 0.31 the same flag still leaves a 20 to 40% loss, fixed upstream by [vllm-project/vllm#58181](https://github.com/vllm-project/vllm/pull/58181).
+
 ## LoRA
 
 Pass a `peft_config` to train a LoRA adapter instead of the full model:
