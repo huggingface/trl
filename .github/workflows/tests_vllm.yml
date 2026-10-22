@@ -64,11 +64,25 @@ jobs:
           VLLM_END: ${{ matrix.vllm }}
         run: |
           source .venv/bin/activate
-          if [ "$VLLM_END" = "floor" ]; then
-            uv pip install ".[test,vllm,vlm,peft,kernels]" "vllm==$(grep -oP '"vllm>=\K[0-9.]+' pyproject.toml)"
-          else
-            uv pip install ".[test,vllm,vlm,peft,kernels]"
+          uv pip install packaging
+          # Pin this end's vLLM exactly, so a conflicting requirement fails the install instead of moving vLLM
+          version=$(python - "$VLLM_END" <<'EOF'
+          import json, sys, tomllib, urllib.request
+          from packaging.requirements import Requirement
+          from packaging.version import Version
+          extra = tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["vllm"]
+          specifier = next(Requirement(r).specifier for r in extra if Requirement(r).name == "vllm")
+          releases = json.load(urllib.request.urlopen("https://pypi.org/pypi/vllm/json"))["releases"]
+          versions = sorted(v for v in map(Version, releases) if v in specifier)
+          print(versions[0] if sys.argv[1] == "floor" else versions[-1])
+          EOF
+          )
+          extras="test,vllm,vlm,peft"
+          # The async distillation trainer loads FlashAttention from the Hub; its tests only run at the latest end
+          if [ "$VLLM_END" != "floor" ]; then
+            extras="$extras,kernels"
           fi
+          uv pip install ".[$extras]" "vllm==$version"
 
       - name: Check the environment
         run: |
