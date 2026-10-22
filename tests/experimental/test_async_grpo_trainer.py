@@ -1361,7 +1361,7 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
 class TestTreePackingParity(TrlTestCase):
     """A tree-packed micro-batch must give the GRPO loss and gradients of main's sequence packing of the same samples."""
 
-    def _samples(self):
+    def _samples(self, truncated: bool):
         samples = []
         for group_id in range(2):
             prompt = [1 + 100 * group_id + i for i in range(64)]
@@ -1370,10 +1370,17 @@ class TestTreePackingParity(TrlTestCase):
             for i, completion in enumerate(completions):
                 sample = _tree_sample(prompt + completion, len(prompt), advantage=i - 2.5, group_id=group_id)
                 sample["old_log_probs"] = np.full(len(sample["input_ids"]), -12.0, dtype=np.float32)
+                if truncated:
+                    # Each completion token was drawn from a candidate set of 1 to 4 ids that holds it. The set depends
+                    # only on the token and its position, so samples sharing a prefix agree on it.
+                    for p in range(len(prompt), len(sample["input_ids"])):
+                        sample["sampling_mask"][p] = [int(sample["input_ids"][p]) + k for k in range(1 + p % 4)]
+                        sample["old_log_probs"][p] = -np.log(1 + p % 4)
                 samples.append(sample)
         return samples
 
-    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs):
+    @pytest.mark.parametrize("truncated", [False, True], ids=["full-vocab", "truncated-sampling"])
+    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs, truncated):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         trainer = AsyncGRPOTrainer(
             model=model_id,
@@ -1390,7 +1397,7 @@ class TestTreePackingParity(TrlTestCase):
         )
         trainer.current_gradient_accumulation_steps = 1
         model = trainer.model.to(torch_device)
-        samples = self._samples()
+        samples = self._samples(truncated)
         collator = DataCollatorForRollout(pad_token_id=0)
         # The sequence-packing reference uses the kernel that tree attention picks for this device
         if torch.version.hip:
