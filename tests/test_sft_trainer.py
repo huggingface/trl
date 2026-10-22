@@ -830,6 +830,8 @@ class TestSFTTrainer(TrlTestCase):
         or not Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0"),
         reason="Only transformers v5 with peft 0.19 to 0.21.2 skips the dense and shared expert layers (#7767)",
     )
+    # peft 0.21.0 to 0.21.2 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
+    @pytest.mark.filterwarnings("ignore:The following (rank|alpha)_pattern keys did not match:RuntimeWarning")
     @pytest.mark.parametrize(
         "model_id, target_modules, expect_warning",
         [
