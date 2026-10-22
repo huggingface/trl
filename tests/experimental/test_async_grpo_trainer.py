@@ -1544,7 +1544,16 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
         ),
         pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
         pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
-        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", {}, id="deepseek-v3"),
+        pytest.param(
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            {},
+            id="deepseek-v3",
+            marks=pytest.mark.skipif(
+                torch.version.hip is not None
+                or not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9),
+                reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
+            ),
+        ),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, id="glm4-moe"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, id="phi35"),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, id="cohere"),
