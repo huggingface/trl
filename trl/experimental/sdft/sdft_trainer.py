@@ -320,33 +320,6 @@ class SDFTTrainer(_BaseTrainer):
         if peft_config is not None or (is_peft_available() and getattr(model, "peft_config", None) is not None):
             model = prepare_peft_model(model, peft_config, args)
 
-        # The EMA teacher adapter must exist before accelerate/DeepSpeed wraps the model: ZeRO-3 registers every
-        # module exactly once at initialization and cannot adopt modules added afterwards.
-        if args.teacher_model_kind == "ema" and is_peft_model(model) and is_pure_lora_training(model):
-            active_adapter = model.active_adapter or "default"
-            # Resuming from a checkpoint (or loading a PEFT model that already bundles the teacher adapter) can
-            # mean "teacher" is already registered here; PEFT rejects re-adding an existing adapter name, and
-            # PEFTAdapterEMACallback._initialize_teacher_adapter already guards this same call for that reason.
-            if "teacher" not in model.peft_config:
-                model.add_adapter("teacher", model.peft_config[active_adapter])
-            # `PEFTAdapterEMACallback` zeroes the adapter too, but not until `Trainer.train()` starts; without
-            # this, a teacher forward before training (e.g. an early `evaluate()`) would see the adapter's
-            # default, non-zero PEFT init instead of the intended zero (no-op) EMA teacher.
-            PEFTAdapterEMACallback(model=model)._initialize_teacher_adapter()
-
-        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
-        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
-        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
-        # quantized models. See: https://github.com/huggingface/peft/issues/2889
-        # This runs after the EMA adapter is registered, because `add_adapter` casts the new adapter back to fp32
-        # (`autocast_adapter_dtype`). The teacher adapter is frozen by then, so LoRA parameters are matched by name.
-        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
-        # represent, silently freezing it, see #7268.
-        if is_quantized_model:
-            for name, param in model.named_parameters():
-                if "lora_magnitude_vector" not in name and (param.requires_grad or "lora_" in name):
-                    param.data = param.data.to(torch.bfloat16)
-
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
@@ -501,6 +474,19 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
+
+        # When using QLoRA, the PEFT adapter weights are converted to bf16 to follow the recommendations from the
+        # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
+        # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
+        # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # This runs after `_setup_teacher_model`, because `PEFTAdapterEMACallback` registers the EMA teacher adapter
+        # and `add_adapter` casts it back to fp32 (`autocast_adapter_dtype`). The teacher adapter is frozen, so LoRA
+        # parameters are matched by name. The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates
+        # can be smaller than bf16 can represent, silently freezing it, see #7268.
+        if is_quantized_model:
+            for name, param in self.model.named_parameters():
+                if "lora_magnitude_vector" not in name and (param.requires_grad or "lora_" in name):
+                    param.data = param.data.to(torch.bfloat16)
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:

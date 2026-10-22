@@ -20,18 +20,10 @@ Hand-built logits only; no model, tokenizer, vLLM, or GPU is involved, matching 
 
 import pytest
 import torch
-from datasets import Dataset
-from transformers.utils import is_peft_available
 
-from trl.experimental.sdft import SDFTConfig, SDFTTrainer
+from trl.experimental.sdft import SDFTConfig
 from trl.experimental.sdft.loss_utils import compute_divergence, compute_topk_self_distillation_loss
-from trl.experimental.sdpo import SDPOConfig, SDPOTrainer
-
-from ..testing_utils import TrlTestCase, require_peft
-
-
-if is_peft_available():
-    from peft import LoraConfig
+from trl.experimental.sdpo import SDPOConfig
 
 
 def _row(probs: list[float]) -> torch.Tensor:
@@ -179,37 +171,3 @@ class TestSDPOConfigParity:
             distillation_topk_support="student",  # the default — must not raise
         )
         assert config.distillation_topk_support == "teacher"
-
-
-class TestEMATeacherAdapterPreRegistration(TrlTestCase):
-    """The EMA `"teacher"` adapter must be registered in `__init__`.
-
-    ZeRO-3 registers every module once at initialization, so an adapter added later by `PEFTAdapterEMACallback` at
-    `train()` time cannot be adopted. Both trainers default to `teacher_model_kind="ema"`.
-    """
-
-    @require_peft
-    def test_sdft_registers_teacher_adapter_before_training(self):
-        trainer = SDFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=SDFTConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_kind="ema"),
-            train_dataset=Dataset.from_dict({"prompt": ["Solve 2+2."]}),
-            peft_config=LoraConfig(r=8, target_modules=["q_proj", "v_proj"]),
-        )
-
-        assert "teacher" in trainer.model.peft_config
-
-    @require_peft
-    def test_sdpo_registers_teacher_adapter_before_training(self):
-        def zero_reward(prompts, **kwargs):
-            return [0.0] * len(prompts)
-
-        trainer = SDPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=zero_reward,
-            args=SDPOConfig(output_dir=self.tmp_dir, report_to="none", teacher_model_kind="ema"),
-            train_dataset=Dataset.from_dict({"prompt": ["Solve 2+2."]}),
-            peft_config=LoraConfig(r=8, target_modules=["q_proj", "v_proj"]),
-        )
-
-        assert "teacher" in trainer.model.peft_config
