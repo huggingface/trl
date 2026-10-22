@@ -1090,8 +1090,8 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_kernels
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1100,12 +1100,16 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             padding_free=True,
             max_length=None,  # padding-free without packing doesn't enforce max_length
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            model_init_kwargs={
+                "attn_implementation": (
+                    "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn2"
+                )
+            },
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
