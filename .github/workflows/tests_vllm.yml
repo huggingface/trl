@@ -80,7 +80,8 @@ jobs:
       - name: Test the vLLM client and server
         run: |
           source .venv/bin/activate
-          pytest -v -rs tests/test_vllm_client_server.py
+          # A hung NCCL transfer otherwise runs until the runner drops the step and reports it as passed
+          timeout 45m pytest -v -rs tests/test_vllm_client_server.py
 
       - name: Test the trainers with vLLM
         if: ${{ !cancelled() }}
@@ -94,7 +95,7 @@ jobs:
           if [ "$VLLM_END" != "floor" ]; then
             files="$files tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py"
           fi
-          pytest -v -rs -k "vllm or adapter_name or manifest_and_streaming" $files
+          timeout 60m pytest -v -rs -k "vllm or adapter_name or manifest_and_streaming" $files
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()
