@@ -235,8 +235,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 if not isinstance(session, TrainableSession):
                     raise CaptureContractError("loop-owning training requires OpenEnv fetch_training_trace()")
                 loop_session = cast(TrainableSession, session)
+                exit_code = 0
                 try:
-                    loop_session.wait_for_completion()
+                    exit_code = loop_session.wait_for_completion()
                 except TimeoutError:
                     logger.warning("harness agent timed out; training captured turns, timed_out flagged")
                     timed_out = True
@@ -246,10 +247,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                     entries = captured.to_trace_entries()
                     trace = entries
                 except (ValueError, TypeError, KeyError) as exc:
-                    # OpenEnv rejects a single rollout whose capture has fatal findings (e.g. no model call, an empty
-                    # response). Drop it like a transport failure; malformed traces still stop the worker.
-                    if "fatal validation findings" in str(exc):
-                        logger.warning("capture rejected by OpenEnv (%s); scoring rollout as unscorable", exc)
+                    # A session that exited non-zero already reported a failed rollout, whose capture may be
+                    # untrainable (e.g. fatal validation findings). Drop it like a transport failure; a malformed
+                    # capture from a successful rollout still stops the worker.
+                    if exit_code != 0:
+                        logger.warning("capture of failed rollout (exit code %s) rejected: %s", exit_code, exc)
                         return self._EMPTY_ROLLOUT, None
                     raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
