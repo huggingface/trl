@@ -1879,6 +1879,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
             # adapter it requests from `model_version`, so bumping first would name one that is not loaded yet.
             self.vllm_client.load_lora_adapter(f"{self._lora_name}-v{version}", adapter_dir)
             self.vllm_client.resume()
+            # Forces the engine's lazy adapter load to happen now, while the rollout worker still doesn't know
+            # this version exists -- not after `update_model_version` lets real requests race it.
+            self.vllm_client.probe_lora_adapter(f"{self._lora_name}-v{version}")
             stale_version = version - (self.args.max_staleness + 1)
             if stale_version > 0:
                 self.vllm_client.unload_lora_adapter(f"{self._lora_name}-v{stale_version}")
