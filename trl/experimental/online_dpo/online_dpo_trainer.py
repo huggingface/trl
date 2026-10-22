@@ -1129,7 +1129,7 @@ class OnlineDPOTrainer(_BaseTrainer):
                 # Completion tokens are text tokens (see #7858)
                 mm_token_type_ids = vision_inputs["mm_token_type_ids"]
                 model_kwargs["mm_token_type_ids"] = torch.cat(
-                    [mm_token_type_ids, torch.zeros_like(completion_ids)], dim=1
+                    [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
                 )
 
         # Get the logprobs of the completions from the model
