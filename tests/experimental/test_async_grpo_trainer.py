@@ -1145,9 +1145,9 @@ class TestPackingAwareBatching(TrlTestCase):
         assert collator.metrics["reward"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
         assert collator.metrics["batch/packing_ratio"] == [(5, 5)]  # nothing shared, every raw token forwarded
 
-    def test_collator_pads_sampling_masks_to_the_widest(self):
-        # Candidate sets are ragged across tokens and samples: padded with -1 to the widest in the micro-batch. Each
-        # sits at the position that predicts its token, like `shift_labels`.
+    def test_collator_lays_sampling_masks_end_to_end(self):
+        # Candidate sets are ragged across tokens and samples: laid end to end per row with a count per position, each
+        # at the position that predicts its token, like `shift_labels`. Rows are padded to the longest with -1 and 0.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
         a = _rollout_sample(3)
         a["sampling_mask"] = [[], [1, 5, 7], [2]]
@@ -1156,12 +1156,11 @@ class TestPackingAwareBatching(TrlTestCase):
 
         batch = collator([[_tree_row([a]), _tree_row([b])]])
 
-        assert batch["sampling_mask"].tolist() == [
-            [[1, 5, 7], [2, -1, -1], [-1, -1, -1]],
-            [[1, 9, -1], [-1, -1, -1], [-1, -1, -1]],
-        ]
+        assert batch["sampling_mask"].tolist() == [[1, 5, 7, 2], [1, 9, -1, -1]]
+        assert batch["sampling_mask_counts"].tolist() == [[3, 1, 0], [2, 0, 0]]
         batch = collator([[_tree_row([_rollout_sample(3)]), _tree_row([_rollout_sample(2)])]])
-        assert batch["sampling_mask"].shape == (2, 3, 0)
+        assert batch["sampling_mask"].shape == (2, 0)
+        assert batch["sampling_mask_counts"].tolist() == [[0, 0, 0], [0, 0, 0]]
 
     def test_collator_packs_multiple_samples_per_row(self):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
@@ -1311,15 +1310,39 @@ class TestTreePacking(TrlTestCase):
 
         assert reads == sum(len(group) for group in micro_batch) + 1
 
-    def test_a_group_stays_in_one_row_so_its_rows_share(self):
-        batcher = TokenBudgetBatcher(self._stream(50), 2, 20, defaultdict(list))
+    def test_a_full_group_spills_into_a_lighter_row_rather_than_close(self):
+        prompt = list(range(6))
+        stream = [_tree_sample(prompt + [100 + i, 200 + i], n_prompt=6) for i in range(3)]
+        stream.insert(2, _tree_sample([50, 51], n_prompt=1, group_id=1))
+        stream.append(_tree_sample(prompt + [103, 203], n_prompt=6))  # its group's row is full, row 1 is light
+        stream.append(_tree_sample(list(range(20, 34)), n_prompt=7, group_id=2))  # fits in neither row: closes
+        batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list))
 
-        for micro_batch in itertools.islice(_micro_batches(batcher), 5):
-            rows_by_group = defaultdict(set)
-            for i, group in enumerate(micro_batch):
-                for sample in group:
-                    rows_by_group[sample["group_id"]].add(i)
-            assert all(len(rows) == 1 for rows in rows_by_group.values())
+        micro_batch = next(_micro_batches(batcher))
+
+        assert sum(len(group) for group in micro_batch) == 5
+        assert any(sample is stream[4] for sample in micro_batch[1])
+
+    def test_a_full_group_still_closes_when_spilling_would_lengthen_the_micro_batch(self):
+        prompt = list(range(6))
+        stream = [_tree_sample(prompt + [100 + i, 200 + i], n_prompt=6) for i in range(3)]
+        stream.insert(2, _tree_sample(list(range(50, 55)), n_prompt=1, group_id=1))
+        stream.append(_tree_sample(prompt + [103, 203, 303, 403, 503, 603], n_prompt=6))  # fits row 1, too costly
+        batcher = TokenBudgetBatcher(iter(stream), 2, 20, defaultdict(list))
+
+        micro_batch = next(_micro_batches(batcher))
+
+        assert sum(len(group) for group in micro_batch) == 4
+
+    def test_cost_is_the_load_add_adds(self):
+        row = _tree_row([_tree_sample(list(range(6)) + [100, 200], n_prompt=6)])
+        sample = _tree_sample(list(range(6)) + [101, 201], n_prompt=6)
+        load = row.load
+
+        cost = row.cost(sample)
+        row.add(sample)
+
+        assert cost == row.load - load == 6 + 7 + 8  # the shared prompt is free up to the fork, one token early
 
     def test_rows_of_identical_samples_still_close_a_micro_batch(self):
         source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(10_000))
@@ -1404,7 +1427,7 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
 class TestTreePackingParity(TrlTestCase):
     """A tree-packed micro-batch must give the GRPO loss and gradients of main's sequence packing of the same samples."""
 
-    def _samples(self):
+    def _samples(self, truncated: bool):
         samples = []
         for group_id in range(2):
             prompt = [1 + 100 * group_id + i for i in range(64)]
@@ -1413,10 +1436,17 @@ class TestTreePackingParity(TrlTestCase):
             for i, completion in enumerate(completions):
                 sample = _tree_sample(prompt + completion, len(prompt), advantage=i - 2.5, group_id=group_id)
                 sample["old_log_probs"] = np.full(len(sample["input_ids"]), -12.0, dtype=np.float32)
+                if truncated:
+                    # Each completion token was drawn from a candidate set of 1 to 4 ids that holds it. The set depends
+                    # only on the token and its position, so samples sharing a prefix agree on it.
+                    for p in range(len(prompt), len(sample["input_ids"])):
+                        sample["sampling_mask"][p] = [int(sample["input_ids"][p]) + k for k in range(1 + p % 4)]
+                        sample["old_log_probs"][p] = -np.log(1 + p % 4)
                 samples.append(sample)
         return samples
 
-    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs):
+    @pytest.mark.parametrize("truncated", [False, True], ids=["full-vocab", "truncated-sampling"])
+    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs, truncated):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         trainer = AsyncGRPOTrainer(
             model=model_id,
@@ -1433,7 +1463,7 @@ class TestTreePackingParity(TrlTestCase):
         )
         trainer.current_gradient_accumulation_steps = 1
         model = trainer.model.to(torch_device)
-        samples = self._samples()
+        samples = self._samples(truncated)
         collator = DataCollatorForRollout(pad_token_id=0)
         # The sequence-packing reference uses the kernel that tree attention picks for this device
         if torch.version.hip:
