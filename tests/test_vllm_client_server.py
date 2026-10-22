@@ -57,6 +57,9 @@ VLLM_SERVE_TRL_ARGS = [
     "processed_logprobs",
     "--max-logprobs",
     "-1",
+    # vLLM's default 0.9 leaves a 24 GB GPU too little room for the weight-sync receive buffers
+    "--gpu-memory-utilization",
+    "0.5",
 ]
 # From vLLM 0.30.0, the multimodal endpoints are only served with this flag, which earlier versions reject.
 if is_vllm_available(min_version="0.30.0"):
