@@ -561,6 +561,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             # Add min_p if supported
             if self.min_p is not None:
                 generation_kwargs["min_p"] = self.min_p
+            if isinstance(processing_class, ProcessorMixin):
+                # A sampled image token would mismatch the image features
+                generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             # Remove None values

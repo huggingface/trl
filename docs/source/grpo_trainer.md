@@ -218,7 +218,7 @@ pip install trl[vllm]
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
 > [!TIP]
-> By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
+> By default, sequence-level Masked Importance Sampling (`vllm_importance_sampling_mode="sequence_mask"`) is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Masked Importance Sampling](paper_index#masked-importance-sampling) and [Sequence-level Importance Sampling](paper_index#sequence-level-importance-sampling)
 
 #### Option 1: Colocate mode
 
