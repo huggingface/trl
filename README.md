@@ -22,6 +22,8 @@
 
 ## 🎉 What's New
 
+**🚀 Training on AMD GPUs:** TRL's trainers now run on [AMD Instinct GPUs](https://huggingface.co/docs/trl/amd_gpus) through PyTorch's ROCm build.
+
 **🔥 Beam:** Fine-tune [Beam](https://huggingface.co/reflection/Beam-1.0-501B-A23B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on a single node of 8 B300s. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_beam).
 
 **🔥 Muse Spark Open:** Fine-tune [Muse Spark Open](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), sharded across your GPUs at load time. See the [8-node LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_muse_spark_open).
