@@ -1856,6 +1856,33 @@ Simple Self-Distillation (SSD) improves code generation by sampling completions 
 
 TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
 
+### A Fix for Softmax and Cross-Entropy
+
+**📜 Paper**: https://huggingface.co/papers/2610.31642
+
+Identifies softmax collapse at high-confidence predictions and cancellation when student and teacher logits nearly
+agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
+probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
+KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+
+The paper studies modular arithmetic models rather than language models. The following configuration matches its
+soft-target distillation temperature and optimizer settings (Section 7), with forward KL sharing the student gradient
+of soft-target cross-entropy:
+
+```python
+from trl import DistillationConfig
+
+training_args = DistillationConfig(
+    beta=0.0,  # Forward KL has the same student gradient as soft-target cross-entropy.
+    temperature=4.0,  # "distillation temperature T=4"
+    learning_rate=2e-3,  # "eta=2 x 10^-3"
+    weight_decay=0.0,  # "lambda=0"
+    adam_epsilon=1e-8,  # "epsilon=10^-8"
+    max_steps=2000,  # "2,000 steps of Adam"
+)
+```
+
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
