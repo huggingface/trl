@@ -25,6 +25,7 @@ from transformers.utils import is_triton_available
 if is_triton_available():
     import triton
     import triton.language as tl
+    import triton.language.extra.libdevice as libdevice
 
 
 # Tokens per projection tile; the caller sets the vocabulary width with `chunk_size`
@@ -95,6 +96,8 @@ def _forward_kernel(
     targets_ptr,
     max_ptr,
     sum_exp_ptr,
+    other_sum_exp_ptr,
+    support_other_sum_exp_ptr,
     x_sum_exp_ptr,
     sq_sum_exp_ptr,
     z_sum_ptr,
@@ -123,6 +126,8 @@ def _forward_kernel(
     local = tl.load(targets_ptr + row) - vocab_start
     max_before_target = tl.load(max_before_target_ptr + row)
     s = tl.load(sum_exp_ptr + row)
+    os = tl.load(other_sum_exp_ptr + row)
+    sos = tl.load(support_other_sum_exp_ptr + row)
     xs = tl.load(x_sum_exp_ptr + row)
     sq = tl.load(sq_sum_exp_ptr + row)
     zs = tl.load(z_sum_ptr + row)
@@ -144,9 +149,12 @@ def _forward_kernel(
         rescale = tl.exp(m - new_m)
         e = tl.where(mask, tl.exp(z - new_m), 0.0)
         s = s * rescale + tl.sum(e, axis=0)
+        other_e = tl.where(offsets != local, e, 0.0)
+        os = os * rescale + tl.sum(other_e, axis=0)
         if HAS_SUPPORT:
             in_support = tl.load(support_mask_ptr + row * support_mask_stride + offsets, mask=mask, other=0) > 0
             ss = ss * rescale + tl.sum(tl.where(in_support, e, 0.0), axis=0)
+            sos = sos * rescale + tl.sum(tl.where(in_support, other_e, 0.0), axis=0)
         if HAS_ENTROPY:
             xs = xs * rescale + tl.sum(e * tl.where(mask, z, 0.0), axis=0)
         if HAS_LOG_SUM_SQ_PROBS:
@@ -154,6 +162,8 @@ def _forward_kernel(
         m = new_m
     tl.store(max_ptr + row, m)
     tl.store(sum_exp_ptr + row, s)
+    tl.store(other_sum_exp_ptr + row, os)
+    tl.store(support_other_sum_exp_ptr + row, sos)
     if HAS_SUPPORT:
         tl.store(support_sum_exp_ptr + row, ss)
     if HAS_ENTROPY:
@@ -177,6 +187,7 @@ def _backward_kernel(
     targets_ptr,
     log_z_ptr,
     support_log_z_ptr,
+    logprobs_ptr,
     entropy_ptr,
     grad_logprobs_ptr,
     grad_entropy_ptr,
@@ -221,7 +232,8 @@ def _backward_kernel(
             q = tl.where(in_support, tl.exp(z - tl.load(support_log_z_ptr + row)), 0.0)
         else:
             q = p
-        grad += g * (is_target.to(tl.float32) - q)
+        target_grad = -libdevice.expm1(tl.load(logprobs_ptr + row))
+        grad += g * tl.where(is_target, target_grad, -q)
     if HAS_ENTROPY_GRAD:
         # d(entropy) / dz_j = -p_j * (log p_j + entropy)
         g = tl.load(grad_entropy_ptr + row)
@@ -246,6 +258,8 @@ def _forward_tile(
     targets,
     running_max,
     sum_exp,
+    other_sum_exp,
+    support_other_sum_exp,
     x_sum_exp,
     sq_sum_exp,
     z_sum,
@@ -280,8 +294,11 @@ def _forward_tile(
     rescale = torch.exp(running_max - new_m)
     e = torch.exp(z - new_m.unsqueeze(-1))
     sum_exp.mul_(rescale).add_(e.sum(-1))
+    other_e = e.masked_fill(torch.arange(n_cols, device=z.device) == local.unsqueeze(-1), 0.0)
+    other_sum_exp.mul_(rescale).add_(other_e.sum(-1))
     if HAS_SUPPORT:
         support_sum_exp.mul_(rescale).add_((e * (support_mask > 0)).sum(-1))
+        support_other_sum_exp.mul_(rescale).add_((other_e * (support_mask > 0)).sum(-1))
     if HAS_ENTROPY:
         x_sum_exp.mul_(rescale).add_((e * z).sum(-1))
     if HAS_LOG_SUM_SQ_PROBS:
@@ -298,6 +315,7 @@ def _backward_tile(
     targets,
     log_z,
     support_log_z,
+    logprobs,
     entropy,
     grad_logprobs,
     grad_entropy,
@@ -329,7 +347,8 @@ def _backward_tile(
         # d(log p_target) / dz_j = 1[j = target] - p_j, with p the softmax over the support when one is given
         is_target = torch.arange(vocab_start, vocab_start + n_cols, device=z.device) == targets.unsqueeze(-1)
         q = torch.exp(z - support_log_z.unsqueeze(-1)) * (support_mask > 0) if HAS_SUPPORT else p
-        grad += grad_logprobs.unsqueeze(-1) * (is_target.float() - q)
+        target_grad = -torch.expm1(logprobs.unsqueeze(-1))
+        grad += grad_logprobs.unsqueeze(-1) * torch.where(is_target, target_grad, -q)
     if HAS_ENTROPY_GRAD:
         # d(entropy) / dz_j = -p_j * (log p_j + entropy)
         grad -= grad_entropy.unsqueeze(-1) * p * (log_p + entropy.unsqueeze(-1))
@@ -348,6 +367,9 @@ class ChunkedLogProbFunction(torch.autograd.Function):
     The projection runs in cuBLAS on `[TOKEN_CHUNK_SIZE, chunk_size]` tiles; a Triton kernel (torch ops on devices
     without Triton) folds each tile into online-logsumexp statistics in one pass. The backward recomputes each tile,
     turns it into the logits gradient in place, and accumulates the gradient GEMMs in fp32.
+
+    Target-excluding normalization preserves the loss and target gradient at high confidence, following
+    https://huggingface.co/papers/2610.31642.
 
     With `support_ids`, a `[N, K]` tensor of token ids padded with `-1`, the log-probabilities and their gradient are
     normalized over each row's support, the set of tokens the sampler could draw, instead of the whole vocabulary,
@@ -389,6 +411,8 @@ class ChunkedLogProbFunction(torch.autograd.Function):
 
         running_max = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        other_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        support_other_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         support_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         sq_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
@@ -419,6 +443,8 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     targets[token_start:token_end],
                     running_max[token_start:token_end],
                     sum_exp[token_start:token_end],
+                    other_sum_exp[token_start:token_end],
+                    support_other_sum_exp[token_start:token_end],
                     x_sum_exp[token_start:token_end],
                     sq_sum_exp[token_start:token_end],
                     z_sum[token_start:token_end],
@@ -436,7 +462,9 @@ class ChunkedLogProbFunction(torch.autograd.Function):
 
         log_z = running_max + torch.log(sum_exp)
         support_log_z = log_z if support_ids is None else running_max + torch.log(support_sum_exp)
-        logprobs = target_logit - support_log_z
+        # Exclude the target before summing: log1p preserves its loss even when its probability rounds to one.
+        others = other_sum_exp if support_ids is None else support_other_sum_exp
+        logprobs = -torch.nn.functional.softplus((running_max - target_logit) + torch.log(others))
         entropy = log_z - x_sum_exp / sum_exp if "entropy" in outputs else None
         log_sum_sq_probs = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp) if "log_sum_sq_probs" in outputs else None
         mean_logits = z_sum / vocab if "mean_logits" in outputs else None
@@ -444,7 +472,15 @@ class ChunkedLogProbFunction(torch.autograd.Function):
 
         # Without entropy there is no entropy gradient, so `log_z` only fills its slot
         ctx.save_for_backward(
-            hidden, weight, bias, targets, log_z, support_log_z, log_z if entropy is None else entropy, support_ids
+            hidden,
+            weight,
+            bias,
+            targets,
+            log_z,
+            support_log_z,
+            logprobs.clone(),
+            log_z if entropy is None else entropy,
+            support_ids,
         )
         ctx.compute_dtype = compute_dtype
         ctx.chunk_size = chunk_size
@@ -457,7 +493,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         # `trl.trainer.utils` imports this module, so import from it at call time
         from ..trainer.utils import maybe_gather_lm_head_ctx
 
-        hidden, weight, bias, targets, log_z, support_log_z, entropy, support_ids = ctx.saved_tensors
+        hidden, weight, bias, targets, log_z, support_log_z, logprobs, entropy, support_ids = ctx.saved_tensors
         compute_dtype = ctx.compute_dtype
         chunk_size = ctx.chunk_size
         needs_hidden_grad, needs_weight_grad, needs_bias_grad = ctx.needs_input_grad[:3]
@@ -503,6 +539,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                         targets[token_start:token_end],
                         log_z[token_start:token_end],
                         support_log_z[token_start:token_end],
+                        logprobs[token_start:token_end],
                         entropy[token_start:token_end],
                         grad_logprobs[token_start:token_end] if grad_logprobs is not None else log_z,
                         grad_entropy[token_start:token_end] if grad_entropy is not None else log_z,
