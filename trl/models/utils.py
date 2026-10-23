@@ -139,8 +139,10 @@ def _unwrap_model_for_generation(
 
             with deepspeed.zero.GatheredParameters(model.parameters()):
                 remove_hooks(model)
-                yield accelerator.unwrap_model(model)
-                add_hooks(model)
+                try:
+                    yield accelerator.unwrap_model(model)
+                finally:
+                    add_hooks(model)
     else:
         yield unwrapped_model
     if is_gradient_checkpointing:

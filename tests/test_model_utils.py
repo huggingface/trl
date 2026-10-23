@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import types
 from unittest.mock import patch
 
@@ -97,3 +98,43 @@ class TestUnwrapModelForGeneration:
                 torch.autograd.grad(loss, list(model.parameters()))
         else:
             torch.autograd.grad(loss, list(model.parameters()))
+
+    def test_reattaches_zero3_hooks_on_error(self):
+        # ZeRO-3 gathering and optimizer hooks need a distributed DeepSpeed engine, which unit tests cannot start.
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").to(torch_device)
+        accelerator = Accelerator()
+        calls = []
+
+        class GatheredParameters:
+            def __init__(self, params):
+                if not any(True for _ in params):
+                    raise AssertionError("expected parameters to gather")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        deepspeed_mod = types.ModuleType("deepspeed")
+        # unwrap_model imports this when DeepSpeed is installed. The stub replaces sys.modules for the whole call.
+        deepspeed_mod.DeepSpeedEngine = type("DeepSpeedEngine", (), {})
+        zero_mod = types.ModuleType("deepspeed.zero")
+        zero_mod.GatheredParameters = GatheredParameters
+        deepspeed_mod.zero = zero_mod
+
+        class Zero3Backend:
+            def __init__(self, accelerator):
+                self.is_zero3 = True
+
+        with (
+            patch.dict(sys.modules, {"deepspeed": deepspeed_mod}),
+            patch("trl.distributed.DistributedBackend", Zero3Backend),
+            patch("trl.models.utils.remove_hooks", lambda hooked: calls.append(("remove", hooked))),
+            patch("trl.models.utils.add_hooks", lambda hooked: calls.append(("add", hooked))),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            with unwrap_model_for_generation(model, accelerator):
+                raise RuntimeError("boom")
+
+        assert calls == [("remove", model), ("add", model)]
