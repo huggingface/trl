@@ -512,9 +512,9 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
     teacher), and anything in between the generalized JSD with mixture `(1 - beta) * p_student + beta * p_teacher`. The
     gradient flows to the student only; the entropy has none.
 
-    Following https://huggingface.co/papers/2610.31642, normalization excludes one maximum and a second projection pass
-    centers student-teacher logit differences before using log1p/expm1. This preserves small gradients near teacher
-    agreement and at high confidence, while keeping memory bounded by the projection tiles.
+    Following https://huggingface.co/papers/2610.31642, normalization excludes one maximum and a second pass centers
+    student-teacher logit differences before using log1p/expm1. This preserves small gradients near teacher agreement
+    and at high confidence, while keeping memory bounded by the projection tiles.
     """
 
     @staticmethod
@@ -600,11 +600,13 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                 # bounding expm1's argument avoids overflow for distant distributions.
                 center[sl] = -t_weighted_gap[sl] / (1 + t_sum[sl])
                 reverse_center[sl] = center[sl]
-                for start in range(0, vocab, VOCAB_CHUNK_SIZE):
+                # Traverse backwards to reuse the last projected tile from the statistics pass.
+                for start in reversed(range(0, vocab, VOCAB_CHUNK_SIZE)):
                     end = min(start + VOCAB_CHUNK_SIZE, vocab)
                     s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
-                    _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
-                    _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
+                    if end != vocab:
+                        _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
+                        _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
                     fold = _ratio_kernel[(n,)] if _use_triton(device) else _ratio_tile
                     fold(
                         s_tile,
@@ -629,8 +631,10 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     for start in range(0, vocab, VOCAB_CHUNK_SIZE):
                         end = min(start + VOCAB_CHUNK_SIZE, vocab)
                         s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
-                        _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
-                        _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
+                        # The ratio pass leaves the first tile in the buffers.
+                        if start != 0:
+                            _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
+                            _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
                         fold = _jsd_kernel[(n,)] if _use_triton(device) else _jsd_tile
                         fold(
                             s_tile,
