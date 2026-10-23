@@ -152,6 +152,29 @@ class TestCloneChatTemplate(TrlTestCase):
             == "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nHi, how can I help you?<|im_end|>\n"
         )
 
+    def test_clone_accepts_a_processor(self):
+        # A processor has no `.vocab`. The vocab lives on `.tokenizer` (issue #7775).
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
+        source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
+
+        class Processor:
+            def __init__(self, tokenizer):
+                self.tokenizer = tokenizer
+
+            @property
+            def chat_template(self):
+                return self.tokenizer.chat_template
+
+            @chat_template.setter
+            def chat_template(self, value):
+                self.tokenizer.chat_template = value
+
+        processor = Processor(tokenizer)
+        _, modified, _ = clone_chat_template(model, processor, source)
+        assert modified.tokenizer.eos_token == "<|im_end|>"
+        assert modified.chat_template == modified.tokenizer.chat_template
+
     def test_clone_with_sequence_classification_model(self):
         # This tokenizer doesn't have a chat_template by default
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GPTNeoXForSequenceClassification")

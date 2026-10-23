@@ -99,48 +99,54 @@ def clone_chat_template(
     # Load the source tokenizer containing the desired chat template
     tokenizer_source = AutoTokenizer.from_pretrained(source_tokenizer_path)
 
+    # A processor (a VLM's processing class) keeps the vocab on `.tokenizer` and has no `.vocab` of its own.
+    inner = getattr(tokenizer, "tokenizer", None)
+    tokens = inner if inner is not None and hasattr(inner, "vocab") and not hasattr(tokenizer, "vocab") else tokenizer
+
     # Copy the chat template from the source tokenizer
     tokenizer.chat_template = tokenizer_source.get_chat_template()
+    if tokens is not tokenizer:
+        tokens.chat_template = tokenizer.chat_template
 
     # Ensure all added tokens from the source are available in the target tokenizer
     added_tokens = [
-        token for token in tokenizer_source.added_tokens_decoder.values() if token.content not in tokenizer.vocab
+        token for token in tokenizer_source.added_tokens_decoder.values() if token.content not in tokens.vocab
     ]
-    tokenizer.add_tokens(added_tokens)
+    tokens.add_tokens(added_tokens)
 
     # Set the EOS token from the source tokenizer (important for generation)
-    tokenizer.eos_token = tokenizer_source.eos_token
-    model.config.get_text_config().eos_token_id = tokenizer.eos_token_id
+    tokens.eos_token = tokenizer_source.eos_token
+    model.config.get_text_config().eos_token_id = tokens.eos_token_id
     if model.can_generate():  # Non-generative models (e.g. SequenceClassification) may not have a generation_config
-        model.generation_config.eos_token_id = tokenizer.eos_token_id
+        model.generation_config.eos_token_id = tokens.eos_token_id
 
     # Resize model embeddings to include any new tokens, optionally rounding up to a multiple
     model.resize_token_embeddings(
         # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
         # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
         # as handling of special and added tokens varies across tokenizers.
-        new_num_tokens=len(tokenizer.vocab),
+        new_num_tokens=len(tokens.vocab),
         pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
 
     # After resizing, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
     # ensure vocabulary size matches the embedding matrix dimensions.
     idx = 0
-    while model.vocab_size > len(tokenizer.vocab):
+    while model.vocab_size > len(tokens.vocab):
         dummy_token = AddedToken(f"<extra_id_{idx}>")
-        is_added = tokenizer.add_tokens(dummy_token)
+        is_added = tokens.add_tokens(dummy_token)
         idx += 1
         if is_added == 1:
             added_tokens.append(dummy_token)
 
     # Verify that vocabulary size now matches embedding dimensions
-    if len(tokenizer.vocab) != model.vocab_size:
+    if len(tokens.vocab) != model.vocab_size:
         raise RuntimeError(
-            f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokenizer.vocab)}, but model "
+            f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokens.vocab)}, but model "
             f"embedding size is {model.vocab_size}. This indicates an internal error in the token alignment process."
         )
     added_tokens = [token.content for token in added_tokens]
-    added_tokens = tokenizer.convert_tokens_to_ids(added_tokens)
+    added_tokens = tokens.convert_tokens_to_ids(added_tokens)
     return model, tokenizer, added_tokens
 
 
