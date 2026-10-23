@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from itertools import chain
 from typing import Any
 
 import torch
@@ -64,6 +65,17 @@ class TreeRow:
         novel = len(input_ids) - shared
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
+    def cost(self, sample: dict[str, Any]) -> int:
+        """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
+        input_ids = sample["input_ids"].tolist()
+        children, shared = self.roots, 0
+        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
+            if key not in children:
+                break
+            children = self.children[children[key]]
+            shared += 1
+        return sum(depth + 1 for depth in range(shared, len(input_ids)))
+
     def add(self, sample: dict[str, Any]) -> None:
         input_ids = sample["input_ids"].tolist()
         children = self.roots
@@ -94,8 +106,9 @@ class TreeRow:
                 - `input_ids` (`N`): the unique tokens.
                 - `position_ids` (`N`): each token's position in its samples, which is its depth in the trie.
                 - `shift_labels` (`N`): next token each position predicts, `-100` where it is not trained.
-                - `sampling_mask` (`N`, `C`): candidate set the sampler drew that next token from, padded with `-1`;
-                  `C` is `0` without top-k/top-p truncation.
+                - `sampling_mask` (`T`), `sampling_mask_counts` (`N`): candidate sets the sampler drew the next tokens
+                  from, laid end to end in position order, and the size of each position's set; `T` is `0` without
+                  top-k/top-p truncation. Ragged, because the sets average a few tokens but can reach the top-k cap.
                 - `tree_kv_index` (`K`): packed position of every K/V row [`tree_attention`] gathers, the
                   root-to-segment paths of all segments laid end to end.
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
@@ -140,14 +153,12 @@ class TreeRow:
                     old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
-        width = max(map(len, sampling_mask))
         return {
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
             "shift_labels": torch.tensor(shift_labels),
-            "sampling_mask": torch.tensor(
-                [candidates + [-1] * (width - len(candidates)) for candidates in sampling_mask], dtype=torch.long
-            ).view(len(input_ids), width),
+            "sampling_mask": torch.tensor(list(chain.from_iterable(sampling_mask)), dtype=torch.long),
+            "sampling_mask_counts": torch.tensor(list(map(len, sampling_mask))),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
             "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
             "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
