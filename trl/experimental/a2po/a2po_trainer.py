@@ -31,10 +31,9 @@ from transformers import (
 )
 
 from ...data_utils import maybe_apply_chat_template
-from ...models import unwrap_model_for_generation
+from ...models import prepare_deepspeed, unwrap_model_for_generation
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import selective_log_softmax
-from ..utils import create_reference_model
+from ...trainer.utils import create_model_from_path, get_config_model_id, selective_log_softmax
 from .a2po_config import A2POConfig
 
 
@@ -125,8 +124,16 @@ class A2POTrainer(_BaseTrainer):
         # Inspect the forward method so Stage 2 can pass the argument only when it is supported.
         self.model_kwarg_keys = inspect.signature(model.forward).parameters.keys()
 
-        # Reference model: a frozen copy of the initial policy. Stage 1 samples from it and Stage 2 regularizes to it.
-        self.ref_model = create_reference_model(model)
+        # Reference model: the initial policy. Stage 1 samples from it and Stage 2 regularizes to it.
+        # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
+        model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+        # Distributed training requires device_map=None ("auto" fails)
+        if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+            model_init_kwargs["device_map"] = None
+        model_init_kwargs.setdefault("dtype", model.dtype)
+        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        self.ref_model = create_model_from_path(get_config_model_id(model.config), **model_init_kwargs)
+        self.ref_model.requires_grad_(False)
 
         # Processing class
         if processing_class is None:
@@ -194,7 +201,10 @@ class A2POTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
-        self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        if self.is_deepspeed_enabled:
+            self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+        else:
+            self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
     def _calculate_rewards(self, prompts, completions, **reward_kwargs):
         device = self.accelerator.device
