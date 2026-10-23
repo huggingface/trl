@@ -16,6 +16,7 @@ import json
 import os
 from unittest.mock import call, patch
 
+import pytest
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
 
@@ -119,6 +120,11 @@ class TestLogCompletionsCallback(TrlTestCase):
 
 
 class TestBEMACallback(TrlTestCase):
+    def test_update_freq_must_be_positive(self):
+        with pytest.raises(ValueError, match="update_freq"):
+            BEMACallback(update_freq=0)
+        with pytest.raises(ValueError, match="update_freq"):
+            BEMACallback(update_freq=-3)
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

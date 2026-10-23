@@ -152,6 +152,8 @@ class BEMACallback(_BEMACallback):
             device,
         )
         # Reference model update parameters
+        if ref_model_update_freq <= 0:
+            raise ValueError(f"`ref_model_update_freq` must be a positive integer, got {ref_model_update_freq}.")
         self.update_ref_model = update_ref_model
         self.ref_model_update_freq = ref_model_update_freq
         self.ref_model_update_after = ref_model_update_after

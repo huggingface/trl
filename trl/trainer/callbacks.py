@@ -664,6 +664,8 @@ class BEMACallback(TrainerCallback):
         device: str = "cpu",
     ):
         # User-provided hyperparams
+        if update_freq <= 0:
+            raise ValueError(f"`update_freq` must be a positive integer, got {update_freq}.")
         self.update_freq = update_freq
         self.ema_power = ema_power
         self.bias_power = bias_power
