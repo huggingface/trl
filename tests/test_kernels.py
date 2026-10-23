@@ -704,3 +704,46 @@ class TestHeadLossNumerics:
         ref.backward()
         torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=0, rtol=1e-5)
         torch.testing.assert_close(divergence.double().sum(), ref, atol=0, rtol=1e-5)
+
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("chunk_size", [2, 4])
+    @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
+    def test_independent_logit_shifts(self, device, chunk_size, beta):
+        from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+
+        epsilon = 2**-20
+        hidden = torch.eye(2, device=device)
+        student = torch.tensor([[32.0, -epsilon], [32.0, 0.0], [32.0, epsilon]], device=device, requires_grad=True)
+        teacher = torch.tensor([[-epsilon, 32.0], [0.0, 32.0], [epsilon, 32.0]], device=device)
+        with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
+            loss, _ = ChunkedDivergenceFunction.apply(hidden, student, None, hidden, teacher, None, beta)
+            loss.sum().backward()
+        logits = student.detach().double().t().requires_grad_()
+        log_q = logits.log_softmax(-1)
+        log_p = teacher.double().t().log_softmax(-1)
+        if beta == 0:
+            reference = (log_p.exp() * (log_p - log_q)).sum()
+        elif beta == 1:
+            reference = (log_q.exp() * (log_q - log_p)).sum()
+        else:
+            log_m = torch.logaddexp(log_q + math.log1p(-beta), log_p + math.log(beta))
+            reference = ((1 - beta) * log_q.exp() * (log_q - log_m) + beta * log_p.exp() * (log_p - log_m)).sum()
+        reference.backward()
+        torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=1e-13, rtol=1e-5)
+
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("chunk_size", [1, 2])
+    @pytest.mark.parametrize("beta", [1e-6, 1 - 1e-6])
+    def test_jsd_near_endpoint(self, device, chunk_size, beta):
+        from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+
+        beta = float(torch.tensor(beta, dtype=torch.float32))
+        hidden = torch.ones(1, 1, device=device)
+        student = torch.tensor([[-40.0], [40.0]], device=device, requires_grad=True)
+        teacher = -student.detach()
+        with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
+            loss, _ = ChunkedDivergenceFunction.apply(hidden, student, None, hidden, teacher, None, beta)
+            loss.sum().backward()
+        # Disjoint distributions approach the binary entropy of the mixture weight.
+        expected = torch.tensor(-beta * math.log(beta) - (1 - beta) * math.log1p(-beta), device=device)
+        torch.testing.assert_close(loss.sum(), expected, atol=0, rtol=1e-5)

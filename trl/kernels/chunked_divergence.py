@@ -76,7 +76,6 @@ def _stats_kernel(
         zt = _transform(
             tl.load(t_row + offsets, mask=mask, other=0.0).to(tl.float32), t_scale, t_softcap, inv_t, T_HAS_SOFTCAP
         )
-        gap = tl.where(mask, zt - zs, 0.0)
 
         new_s_m = tl.maximum(s_m, tl.max(tl.where(mask, zs, -float("inf")), axis=0))
         s_rescale = tl.exp(s_m - new_s_m)
@@ -85,9 +84,9 @@ def _stats_kernel(
         tile_s_max = tl.max(tl.where(mask, zs, -float("inf")), axis=0)
         tile_s_argmax = tl.min(tl.where(mask & (zs == tile_s_max), offsets, 2147483647), axis=0)
         tile_s_sum = tl.sum(tl.where((s_m < tile_s_max) & (offsets == tile_s_argmax), 0.0, es), axis=0)
+        s_shift = tl.where(s_m == -float("inf"), 0.0, s_m - new_s_m)
+        s_xs = (s_xs + (1 + s_s) * s_shift) * s_rescale + tl.sum(es * tl.where(mask, zs - new_s_m, 0.0), axis=0)
         s_s = s_s * s_rescale + tl.where(s_m < tile_s_max, s_rescale, 0.0) + tile_s_sum
-        s_xs = s_xs * s_rescale + tl.sum(es * tl.where(mask, zs, 0.0), axis=0)
-        s_m = new_s_m
 
         new_t_m = tl.maximum(t_m, tl.max(tl.where(mask, zt, -float("inf")), axis=0))
         t_rescale = tl.exp(t_m - new_t_m)
@@ -96,8 +95,12 @@ def _stats_kernel(
         tile_t_max = tl.max(tl.where(mask, zt, -float("inf")), axis=0)
         tile_t_argmax = tl.min(tl.where(mask & (zt == tile_t_max), offsets, 2147483647), axis=0)
         tile_t_sum = tl.sum(tl.where((t_m < tile_t_max) & (offsets == tile_t_argmax), 0.0, et), axis=0)
+        # Changing either running maximum shifts every previously accumulated logit gap.
+        gap_shift = tl.where(t_m == -float("inf"), 0.0, (t_m - new_t_m) - (s_m - new_s_m))
+        gap = tl.where(mask, (zt - new_t_m) - (zs - new_s_m), 0.0)
+        t_gap = (t_gap + (1 + t_s) * gap_shift) * t_rescale + tl.sum(et * gap, axis=0)
         t_s = t_s * t_rescale + tl.where(t_m < tile_t_max, t_rescale, 0.0) + tile_t_sum
-        t_gap = t_gap * t_rescale + tl.sum(et * gap, axis=0)
+        s_m = new_s_m
         t_m = new_t_m
     tl.store(s_max_ptr + row, s_m)
     tl.store(s_sum_ptr + row, s_s)
@@ -113,6 +116,8 @@ def _ratio_kernel(
     s_stride,
     t_ptr,
     t_stride,
+    s_max_ptr,
+    t_max_ptr,
     t_log_z_ptr,
     s_log_z_ptr,
     center_ptr,
@@ -143,6 +148,8 @@ def _ratio_kernel(
         zt = _transform(
             tl.load(t_ptr + row * t_stride + offsets, mask, 0).to(tl.float32), t_scale, t_softcap, inv_t, T_HAS_SOFTCAP
         )
+        zs = zs - tl.load(s_max_ptr + row)
+        zt = zt - tl.load(t_max_ptr + row)
         d = zs - zt - center
         near = near & (tl.max(tl.where(mask, tl.abs(d), 0.0), 0) <= 0.5)
         p = tl.where(mask, tl.exp(zt - tl.load(t_log_z_ptr + row)), 0.0)
@@ -159,6 +166,8 @@ def _ratio_tile(
     s_stride,
     t_tile,
     t_stride,
+    s_max,
+    t_max,
     t_log_z,
     s_log_z,
     center,
@@ -177,6 +186,8 @@ def _ratio_tile(
 ):
     zs = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP)
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
+    zs = zs - s_max.unsqueeze(-1)
+    zt = zt - t_max.unsqueeze(-1)
     d = zs - zt - center.unsqueeze(-1)
     near.logical_and_(d.abs().amax(-1) <= 0.5)
     p = torch.exp(zt - t_log_z.unsqueeze(-1))
@@ -191,6 +202,8 @@ def _jsd_kernel(
     s_stride,
     t_ptr,
     t_stride,
+    s_max_ptr,
+    t_max_ptr,
     s_log_z_ptr,
     t_log_z_ptr,
     center_ptr,
@@ -208,7 +221,7 @@ def _jsd_kernel(
     T_HAS_SOFTCAP: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Second pass of the generalized JSD, which needs both normalizers to form the mixture m = (1 - beta) p_s + beta p_t
+    # Accumulate generalized JSD using the mixture m = (1 - beta) p_s + beta p_t
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
     beta = tl.cast(beta, tl.float32)
     s_scale = tl.cast(s_scale, tl.float32)
@@ -232,11 +245,13 @@ def _jsd_kernel(
         zt = _transform(
             tl.load(t_row + offsets, mask=mask, other=0.0).to(tl.float32), t_scale, t_softcap, inv_t, T_HAS_SOFTCAP
         )
+        zs = zs - tl.load(s_max_ptr + row)
+        zt = zt - tl.load(t_max_ptr + row)
         log_ps = zs - s_log_z
         log_pt = zt - t_log_z
         ratio = zs - zt - tl.load(center_ptr + row) - tl.load(correction_ptr + row)
         # log(p_s / m) without subtracting nearly equal log-probabilities.
-        a = tl.log(1 - beta)
+        a = libdevice.log1p(-beta)
         b = tl.log(beta) - ratio
         top = tl.maximum(a, b)
         log_s_m = tl.where(
@@ -244,10 +259,18 @@ def _jsd_kernel(
             -libdevice.log1p(beta * libdevice.expm1(tl.minimum(tl.maximum(-ratio, -0.5), 0.5))),
             -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
         )
+        a = libdevice.log1p(-beta) + ratio
+        b = tl.log(beta)
+        top = tl.maximum(a, b)
+        log_t_m = tl.where(
+            tl.abs(ratio) <= 0.5,
+            -libdevice.log1p((1 - beta) * libdevice.expm1(tl.minimum(tl.maximum(ratio, -0.5), 0.5))),
+            -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
+        )
         ps = tl.where(mask, tl.exp(log_ps), 0.0)
         pt = tl.where(mask, tl.exp(log_pt), 0.0)
         kl_s = ps * tl.where(mask, log_s_m, 0.0)
-        jsd += tl.sum(beta * pt * tl.where(mask, log_s_m - ratio, 0.0) + (1 - beta) * kl_s, axis=0)
+        jsd += tl.sum(beta * pt * tl.where(mask, log_t_m, 0.0) + (1 - beta) * kl_s, axis=0)
         kl_student += tl.sum(kl_s, axis=0)
     tl.store(jsd_ptr + row, jsd)
     tl.store(kl_student_ptr + row, kl_student)
@@ -259,6 +282,8 @@ def _backward_kernel(
     s_stride,
     t_ptr,
     t_stride,
+    s_max_ptr,
+    t_max_ptr,
     s_log_z_ptr,
     t_log_z_ptr,
     center_ptr,
@@ -302,6 +327,8 @@ def _backward_kernel(
         inv_t,
         T_HAS_SOFTCAP,
     )
+    zs = zs - tl.load(s_max_ptr + row)
+    zt = zt - tl.load(t_max_ptr + row)
     log_ps = zs - tl.load(s_log_z_ptr + row)
     log_pt = zt - tl.load(t_log_z_ptr + row)
     ps = tl.exp(log_ps)
@@ -319,7 +346,7 @@ def _backward_kernel(
     else:
         # generalized JSD, `aux` is the per-token KL(p_s || m)
         # log(p_s / m) without subtracting nearly equal log-probabilities.
-        a = tl.log(1 - beta)
+        a = libdevice.log1p(-beta)
         b = tl.log(beta) - ratio
         top = tl.maximum(a, b)
         log_s_m = tl.where(
@@ -359,7 +386,6 @@ def _stats_tile(
     # `_stats_kernel` in torch, for devices without Triton: the whole tile at once instead of one program per token
     zs = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP)
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
-    gap = zt - zs
 
     new_s_m = torch.maximum(s_max, zs.amax(-1))
     s_rescale = torch.exp(s_max - new_s_m)
@@ -372,9 +398,9 @@ def _stats_tile(
         tile_s_argmax.unsqueeze(-1),
         torch.where(new_s_maximum.unsqueeze(-1), 0.0, es.gather(1, tile_s_argmax.unsqueeze(-1))),
     )
+    s_shift = torch.where(torch.isfinite(s_max), s_max - new_s_m, 0.0)
+    s_x_sum.add_((1 + s_sum) * s_shift).mul_(s_rescale).add_((es * (zs - new_s_m.unsqueeze(-1))).sum(-1))
     s_sum.mul_(s_rescale).add_(torch.where(new_s_maximum, s_rescale, 0.0)).add_(other_es.sum(-1))
-    s_x_sum.mul_(s_rescale).add_((es * zs).sum(-1))
-    s_max.copy_(new_s_m)
 
     new_t_m = torch.maximum(t_max, zt.amax(-1))
     t_rescale = torch.exp(t_max - new_t_m)
@@ -387,8 +413,12 @@ def _stats_tile(
         tile_t_argmax.unsqueeze(-1),
         torch.where(new_t_maximum.unsqueeze(-1), 0.0, et.gather(1, tile_t_argmax.unsqueeze(-1))),
     )
+    # Changing either running maximum shifts every previously accumulated logit gap.
+    gap_shift = torch.where(torch.isfinite(t_max), (t_max - new_t_m) - (s_max - new_s_m), 0.0)
+    gap = (zt - new_t_m.unsqueeze(-1)) - (zs - new_s_m.unsqueeze(-1))
+    t_weighted_gap.add_((1 + t_sum) * gap_shift).mul_(t_rescale).add_((et * gap).sum(-1))
     t_sum.mul_(t_rescale).add_(torch.where(new_t_maximum, t_rescale, 0.0)).add_(other_et.sum(-1))
-    t_weighted_gap.mul_(t_rescale).add_((et * gap).sum(-1))
+    s_max.copy_(new_s_m)
     t_max.copy_(new_t_m)
 
 
@@ -397,6 +427,8 @@ def _jsd_tile(
     s_stride,
     t_tile,
     t_stride,
+    s_max,
+    t_max,
     s_log_z,
     t_log_z,
     center,
@@ -415,18 +447,25 @@ def _jsd_tile(
     BLOCK_SIZE,
 ):
     # `_jsd_kernel` in torch, for devices without Triton: the whole tile at once instead of one program per token
-    log_ps = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP) - s_log_z.unsqueeze(-1)
-    log_pt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP) - t_log_z.unsqueeze(-1)
     zs = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP)
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
+    zs = zs - s_max.unsqueeze(-1)
+    zt = zt - t_max.unsqueeze(-1)
+    log_ps = zs - s_log_z.unsqueeze(-1)
+    log_pt = zt - t_log_z.unsqueeze(-1)
     ratio = zs - zt - center.unsqueeze(-1) - correction.unsqueeze(-1)
     log_s_m = torch.where(
         ratio.abs() <= 0.5,
         -torch.log1p(beta * torch.expm1(-ratio.clamp(-0.5, 0.5))),
-        -torch.logaddexp(torch.full_like(ratio, math.log(1 - beta)), math.log(beta) - ratio),
+        -torch.logaddexp(torch.full_like(ratio, math.log1p(-beta)), math.log(beta) - ratio),
+    )
+    log_t_m = torch.where(
+        ratio.abs() <= 0.5,
+        -torch.log1p((1 - beta) * torch.expm1(ratio.clamp(-0.5, 0.5))),
+        -torch.logaddexp(math.log1p(-beta) + ratio, torch.full_like(ratio, math.log(beta))),
     )
     kl_s = torch.exp(log_ps) * log_s_m
-    jsd += (beta * torch.exp(log_pt) * (log_s_m - ratio) + (1 - beta) * kl_s).sum(-1)
+    jsd += (beta * torch.exp(log_pt) * log_t_m + (1 - beta) * kl_s).sum(-1)
     kl_student += kl_s.sum(-1)
 
 
@@ -435,6 +474,8 @@ def _backward_tile(
     s_stride,
     t_tile,
     t_stride,
+    s_max,
+    t_max,
     s_log_z,
     t_log_z,
     center,
@@ -461,6 +502,8 @@ def _backward_tile(
     else:
         zs = y * inv_t
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
+    zs = zs - s_max.unsqueeze(-1)
+    zt = zt - t_max.unsqueeze(-1)
     log_ps = zs - s_log_z.unsqueeze(-1)
     log_pt = zt - t_log_z.unsqueeze(-1)
     ps = torch.exp(log_ps)
@@ -478,7 +521,7 @@ def _backward_tile(
         log_s_m = torch.where(
             ratio.abs() <= 0.5,
             -torch.log1p(beta * torch.expm1(-ratio.clamp(-0.5, 0.5))),
-            -torch.logaddexp(torch.full_like(ratio, math.log(1 - beta)), math.log(beta) - ratio),
+            -torch.logaddexp(torch.full_like(ratio, math.log1p(-beta)), math.log(beta) - ratio),
         )
         grad = (1 - beta) * ps * (log_s_m - aux.unsqueeze(-1))
     grad = grad * grad_divergence.unsqueeze(-1) * inv_t
@@ -593,8 +636,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         BLOCK_SIZE=_BLOCK_SIZE,
                         **kernel_args,
                     )
-                s_log_z = s_max[sl] + torch.log1p(s_sum[sl])
-                t_log_z = t_max[sl] + torch.log1p(t_sum[sl])
+                s_log_z = torch.log1p(s_sum[sl])
+                t_log_z = torch.log1p(t_sum[sl])
                 # Center the student-teacher logit difference under the teacher. Close distributions need
                 # log1p/expm1. Outside the small-gap region, use separate maximum and log1p normalizers instead;
                 # bounding expm1's argument avoids overflow for distant distributions.
@@ -613,6 +656,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         s_tile.stride(0),
                         t_tile,
                         t_tile.stride(0),
+                        s_max[sl],
+                        t_max[sl],
                         t_log_z,
                         s_log_z,
                         center[sl],
@@ -626,7 +671,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                 correction[sl] = torch.where(
                     near[sl], torch.log1p(correction[sl]), torch.log1p(s_sum[sl]) - torch.log1p(t_sum[sl])
                 )
-                center[sl] = torch.where(near[sl], center[sl], s_max[sl] - t_max[sl])
+                center[sl] = torch.where(near[sl], center[sl], 0.0)
                 if is_jsd:
                     for start in range(0, vocab, VOCAB_CHUNK_SIZE):
                         end = min(start + VOCAB_CHUNK_SIZE, vocab)
@@ -641,6 +686,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                             s_tile.stride(0),
                             t_tile,
                             t_tile.stride(0),
+                            s_max[sl],
+                            t_max[sl],
                             s_log_z,
                             t_log_z,
                             center[sl],
@@ -653,8 +700,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                             **kernel_args,
                         )
 
-        s_log_z = s_max + torch.log1p(s_sum)
-        t_log_z = t_max + torch.log1p(t_sum)
+        s_log_z = torch.log1p(s_sum)
+        t_log_z = torch.log1p(t_sum)
         entropy = s_log_z - s_x_sum / (1 + s_sum)
         if beta == 0.0:
             divergence = (center + t_weighted_gap / (1 + t_sum)) + correction
@@ -673,6 +720,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
             teacher_hidden,
             teacher_weight,
             teacher_bias,
+            s_max,
+            t_max,
             s_log_z,
             t_log_z,
             center,
@@ -695,6 +744,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
             teacher_hidden,
             teacher_weight,
             teacher_bias,
+            s_max,
+            t_max,
             s_log_z,
             t_log_z,
             center,
@@ -744,6 +795,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         s_tile.stride(0),
                         t_tile,
                         t_tile.stride(0),
+                        s_max[sl],
+                        t_max[sl],
                         s_log_z[sl],
                         t_log_z[sl],
                         center[sl],
