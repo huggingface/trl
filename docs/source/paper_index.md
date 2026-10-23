@@ -1865,9 +1865,10 @@ agree. TRL's chunked log-probability and distillation heads use target-excluding
 probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
 KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
 
-The paper studies modular arithmetic models rather than language models. The following configuration matches its
-soft-target distillation temperature and optimizer settings (Section 7), with forward KL sharing the student gradient
-of soft-target cross-entropy:
+The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
+student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
+paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be
+handled when constructing the models, independently of the config. Other trainer defaults remain unchanged.
 
 ```python
 from trl import DistillationConfig
@@ -1876,12 +1877,13 @@ training_args = DistillationConfig(
     beta=0.0,  # Forward KL has the same student gradient as soft-target cross-entropy.
     temperature=4.0,  # "distillation temperature T=4"
     learning_rate=2e-3,  # "eta=2 x 10^-3"
+    lr_scheduler_type="constant",
+    optim="adamw_torch",  # AdamW with zero weight decay has the same updates as Adam.
     weight_decay=0.0,  # "lambda=0"
     adam_epsilon=1e-8,  # "epsilon=10^-8"
     max_steps=2000,  # "2,000 steps of Adam"
 )
 ```
-
 
 ## Distributed Training
 
