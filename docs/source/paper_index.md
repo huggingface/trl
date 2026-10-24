@@ -1869,6 +1869,10 @@ Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.
 identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
 TRL's kernels preserve these gradients using stable FP32 formulas.
 
+The separate FSDP2 output-casting issue discussed in Appendix B.1 is addressed by
+[Accelerate #4403](https://github.com/huggingface/accelerate/pull/4403). Older Accelerate versions need a mixed
+precision policy with `output_dtype=None` to retain FP32 kernel outputs.
+
 The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
 student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
 paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be
