@@ -20,6 +20,8 @@ import torch.nn.functional as F
 from transformers.testing_utils import torch_device
 from transformers.utils import is_triton_available
 
+from trl.models.activation_offloading import OffloadActivations
+
 from .testing_utils import require_torch_accelerator, require_triton
 
 
@@ -91,6 +93,30 @@ class TestLogProbEntropy:
         torch.testing.assert_close(logprobs, reference_logprobs, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(entropy, reference_entropy, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(actual_grad, reference_logits.grad, rtol=1e-3, atol=1e-3)
+
+    @pytest.mark.parametrize("use_mask", [False, True])
+    @pytest.mark.parametrize("use_streams", [False, True])
+    def test_backward_with_activation_offloading(self, use_streams, use_mask):
+        # The offloader saves the sliced views below as contiguous copies, so backward must not index them with the
+        # strides seen in forward.
+        vocab_size = 2053
+        base_logits = (8 * torch.randn(3, 6, vocab_size, device=torch_device)).requires_grad_()
+        index = torch.randint(vocab_size, (3, 6), device=torch_device)
+        row_mask = torch.rand(3, 6, device=torch_device) > 0.3 if use_mask else None
+
+        def backward():
+            base_logits.grad = None
+            logprobs, entropy = selective_log_softmax_and_entropy(
+                base_logits[:, :-1], index[:, 1:], row_mask=None if row_mask is None else row_mask[:, 1:]
+            )
+            (logprobs + 0.5 * entropy).sum().backward()
+            return base_logits.grad
+
+        expected = backward()
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0):
+            actual = backward()
+
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_torch_compile_fullgraph(self):
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)

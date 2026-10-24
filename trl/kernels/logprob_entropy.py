@@ -190,21 +190,24 @@ class _LogProbEntropyFunction(torch.autograd.Function):
 
         ctx.set_materialize_grads(False)
         ctx.save_for_backward(logits, index, log_z, expected_logit, row_mask)
-        ctx.layout = batch_size, rows_per_batch, logits_batch_stride, logits_row_stride
-        ctx.index_strides = index_batch_stride, index_row_stride
-        ctx.mask_strides = mask_batch_stride, mask_row_stride
         ctx.temperature = temperature
         return logprobs, entropy
 
     @staticmethod
     def backward(ctx, grad_logprobs: torch.Tensor | None, grad_entropy: torch.Tensor | None):
         logits, index, log_z, expected_logit, row_mask = ctx.saved_tensors
-        batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = ctx.layout
+        # Read the strides off the unpacked tensors, not forward's: saved-tensor hooks such as activation offloading
+        # can return a sliced view as a contiguous copy.
+        batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = _layout(logits)
         n_rows = batch_size * rows_per_batch
         n_cols = logits.shape[-1]
-        index_batch_stride, index_row_stride = ctx.index_strides
-        mask_batch_stride, mask_row_stride = ctx.mask_strides
-        row_mask_ptr = index if row_mask is None else row_mask
+        _, _, index_batch_stride, index_row_stride = _layout(index.unsqueeze(-1))
+        if row_mask is None:
+            row_mask_ptr = index
+            mask_batch_stride = mask_row_stride = 0
+        else:
+            row_mask_ptr = row_mask
+            _, _, mask_batch_stride, mask_row_stride = _layout(row_mask.unsqueeze(-1))
         grad_logits = torch.empty_like(logits, memory_format=torch.contiguous_format)
         grad_logits_batch_stride, grad_logits_row_stride = rows_per_batch * n_cols, n_cols
 
