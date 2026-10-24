@@ -17,6 +17,8 @@ import torch
 import torch.nn.functional as F
 from accelerate import PartialState
 from torch import nn
+from torch.backends.cuda import SDPAParams, can_use_efficient_attention
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -214,8 +216,6 @@ class TestActivationOffloading(TrlTestCase):
     @pytest.mark.parametrize("use_streams", [False, True])
     def test_sdpa_efficient_attention_gradients(self, use_streams):
         """SDPA's memory-efficient attention backward depends on the layout of the transposed query and output it saves."""
-        from torch.nn.attention import SDPBackend, sdpa_kernel
-
         torch.manual_seed(0)
         batch, heads, seq, head_dim = 2, 4, 64, 32
         # half precision: the float32 kernel does not depend on the saved layout
@@ -226,6 +226,11 @@ class TestActivationOffloading(TrlTestCase):
         mask = torch.ones(batch, 1, seq, seq, device="cuda", dtype=torch.bool).tril()
         mask[1, :, :, seq // 2 :] = False  # padding: a mask routes SDPA to memory-efficient attention
         weight = torch.randn(batch, heads, seq, head_dim, device="cuda", dtype=torch.bfloat16)
+
+        with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+            params = SDPAParams(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), mask, 0.0, False, False)
+            if not can_use_efficient_attention(params):
+                pytest.skip("Memory-efficient SDPA is unavailable for these inputs")
 
         def grads():
             for t in (q, k, v):
