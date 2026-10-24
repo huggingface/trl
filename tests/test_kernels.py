@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 import torch
 import torch.nn.functional as F
+from accelerate import PartialState
 from transformers.testing_utils import torch_device
 from transformers.utils import is_triton_available
 
@@ -97,6 +98,7 @@ class TestLogProbEntropy:
     @pytest.mark.parametrize("use_mask", [False, True])
     @pytest.mark.parametrize("use_streams", [False, True])
     def test_backward_with_activation_offloading(self, use_streams, use_mask):
+        PartialState()
         # The offloader saves the sliced views below as contiguous copies, so backward must not index them with the
         # strides seen in forward.
         vocab_size = 2053

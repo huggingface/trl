@@ -15,6 +15,7 @@
 import pytest
 import torch
 import torch.nn.functional as F
+from accelerate import PartialState
 from torch import nn
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
@@ -31,6 +32,10 @@ if is_peft_available():
 
 
 class TestActivationOffloading(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
     @require_torch_accelerator
     @require_peft
     def test_offloading_with_peft_models(self) -> None:
