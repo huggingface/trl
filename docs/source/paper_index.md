@@ -1865,6 +1865,10 @@ agree. TRL's chunked log-probability and distillation heads use target-excluding
 probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
 KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
 
+Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
+identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
+TRL's kernels preserve these gradients using stable FP32 formulas.
+
 The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
 student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
 paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be

@@ -633,16 +633,18 @@ class TestHeadLossNumerics:
         logps, *_ = ChunkedLogProbFunction.apply(
             hidden, weight, None, targets, 1.0, chunk_size, None, 1.0, (), support
         )
-        (-logps.sum()).backward()
+        advantages = torch.tensor([0.5, -1.0, 2.0], device=device)
+        loss = -(logps * advantages).sum()
+        loss.backward()
         logits = (hidden.detach().double() @ weight.detach().double().t()).requires_grad_()
         if use_support:
             keep = F.one_hot(support + 1, 4)[..., 1:].any(1)
             ref_logps = logits.masked_fill(~keep, -torch.inf).log_softmax(-1)
         else:
             ref_logps = logits.log_softmax(-1)
-        loss = -ref_logps.diagonal().sum()
-        loss.backward()
-        torch.testing.assert_close(-logps.sum().double(), loss, atol=0, rtol=1e-6)
+        ref_loss = -(ref_logps.diagonal() * advantages.double()).sum()
+        ref_loss.backward()
+        torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-6)
         torch.testing.assert_close(
             weight.grad.double(), logits.grad.t(), atol=0, rtol=1e-2 if dtype == torch.bfloat16 else 1e-6
         )
