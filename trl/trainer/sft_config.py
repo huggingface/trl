@@ -83,9 +83,7 @@ class SFTConfig(_BaseConfig):
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
-            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
-            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
-            parameter.
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
         pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
             If set, the sequences will be padded to a multiple of this value. `"auto"` pads to a multiple of 128 on
             Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
@@ -241,8 +239,7 @@ class SFTConfig(_BaseConfig):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
-            "value of this parameter."
+            "structure."
         },
     )
     pad_to_multiple_of: int | str | None = field(
