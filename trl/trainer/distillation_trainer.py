@@ -1059,7 +1059,7 @@ class DistillationTrainer(_BaseTrainer):
 
             # Generate using vLLM with raw token IDs. Distillation is n=1 and uses the teacher distribution rather than
             # sampled logprobs, so we request one completion per prompt and discard vLLM's logprobs.
-            _, completion_ids, _, _ = self.vllm_generation.generate(
+            _, completion_ids, _, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
                 num_generations=1,

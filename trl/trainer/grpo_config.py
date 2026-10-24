@@ -323,7 +323,9 @@ class GRPOConfig(_BaseConfig):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
-            and constrained.
+            and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
+            the candidate set each token was sampled from, which requires `vllm_mode="colocate"`, `top_k > 0` and vLLM
+            0.28 or later. Otherwise, the IS ratios are biased.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -927,7 +929,9 @@ class GRPOConfig(_BaseConfig):
             "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
             "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
             "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
-            "IS ratios are computed and constrained."
+            "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
+            "logprobs are normalized over the candidate set each token was sampled from, which requires "
+            '`vllm_mode="colocate"`, `top_k > 0` and vLLM 0.28 or later. Otherwise, the IS ratios are biased.'
         },
     )
     vllm_importance_sampling_mode: str = field(

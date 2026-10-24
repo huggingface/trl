@@ -616,6 +616,19 @@ training_args = AsyncGRPOConfig(
 )
 ```
 
+It is also supported in the [`GRPOTrainer`] with vLLM in colocate mode (>= 0.28): with `top_k > 0` and the importance sampling correction enabled (the default), vLLM returns each token's support and the trainer renormalizes over it:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,
+    top_p=0.95,
+    top_k=512,
+)
+```
+
 ### GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
 
 **📜 Paper**: https://huggingface.co/papers/2601.05242
