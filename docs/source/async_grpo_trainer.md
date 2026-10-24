@@ -354,6 +354,9 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/vllm_running_requests`                                    | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/inflight` is what sits in the API server process, building responses                                                   |
 | `rollout/vllm_queued_requests`                                     | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero                                                                                    |
 | `rollout/vllm_preemptions_total`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
+| `rollout/zero_advantage_groups_total`, `reward_kept`               | groups dropped because every rollout got the same reward, and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track                      |
+
+A group whose rollouts all received the same reward (or none of which could be scored) has zero advantage everywhere, so the worker drops it instead of enqueuing it: it would cost a forward and backward and move nothing. The loop does not resample to replace a dropped group, so `batch/groups_per_step` goes down while the batch keeps its `samples_per_step` samples. A dropped group still counts toward an epoch, which stays one pass over the prompts.
 
 ### Tools
 
