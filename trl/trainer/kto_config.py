@@ -262,3 +262,8 @@ class KTOConfig(_BaseConfig):
         if self.pad_to_multiple_of == "auto":
             # Neuron compiles once per input shape, so padding bounds the number of compilations
             self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
+
+        if self.sync_ref_model and self.ref_model_sync_steps <= 0:
+            raise ValueError(
+                f"`ref_model_sync_steps` must be greater than 0 when `sync_ref_model=True`. Got {self.ref_model_sync_steps}."
+            )

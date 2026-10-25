@@ -1168,3 +1168,8 @@ class GRPOConfig(_BaseConfig):
                 "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
                 "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
             )
+
+        if self.sync_ref_model and self.ref_model_sync_steps <= 0:
+            raise ValueError(
+                f"`ref_model_sync_steps` must be greater than 0 when `sync_ref_model=True`. Got {self.ref_model_sync_steps}."
+            )

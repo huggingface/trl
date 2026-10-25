@@ -377,6 +377,11 @@ class DPOConfig(_BaseConfig):
                 stacklevel=3,
             )
 
+        if self.sync_ref_model and self.ref_model_sync_steps <= 0:
+            raise ValueError(
+                f"`ref_model_sync_steps` must be greater than 0 when `sync_ref_model=True`. Got {self.ref_model_sync_steps}."
+            )
+
         super().__post_init__()
         # The CLI passes the value as a string
         if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":

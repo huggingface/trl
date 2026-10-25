@@ -702,3 +702,8 @@ class RLOOConfig(_BaseConfig):
                 "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        if self.sync_ref_model and self.ref_model_sync_steps <= 0:
+            raise ValueError(
+                f"`ref_model_sync_steps` must be greater than 0 when `sync_ref_model=True`. Got {self.ref_model_sync_steps}."
+            )
