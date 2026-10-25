@@ -36,6 +36,7 @@ from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     GenerationConfig,
     PreTrainedModel,
@@ -72,6 +73,7 @@ from .utils import (
     disable_dropout_in_model,
     get_config_model_id,
     identity,
+    model_accepts_images,
     pad,
     print_prompt_completions_sample,
     repeat_iterable_dataset,
@@ -386,7 +388,8 @@ class DistillationTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 model_name_or_path,
                 revision=model_revision,
                 truncation_side="left",
@@ -535,6 +538,27 @@ class DistillationTrainer(_BaseTrainer):
                     "distillation loss bypasses `PeftModel.forward()` by calling the backbone directly, so virtual "
                     "tokens are never prepended and the loss is computed on the wrong sequence. Use a weight-based "
                     "adapter such as LoRA instead."
+                )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
                 )
             # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
             if (

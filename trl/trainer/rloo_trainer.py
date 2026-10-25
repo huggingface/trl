@@ -68,6 +68,7 @@ from .utils import (
     get_config_model_id,
     identity,
     is_async_callable,
+    model_accepts_images,
     nanmax,
     nanmin,
     nanstd,
@@ -297,7 +298,8 @@ class RLOOTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config),
                 revision=model_revision,
                 truncation_side="left",
@@ -392,6 +394,27 @@ class RLOOTrainer(_BaseTrainer):
                     "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
                     "peft, or load the model with `device_map=None`. See "
                     "https://github.com/huggingface/peft/issues/2821."
+                )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
                 )
             # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
             if (

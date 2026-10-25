@@ -526,9 +526,9 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         """Pick the row `sample` belongs in, or `None` when the micro-batch has to close first.
 
         A sample is cheapest in a row that already holds its `group_id`, so those rows get first refusal — all of them,
-        since an earlier split can leave one group on several rows. When none of them has room the sample can still be
-        split off, but only to keep a rank from forwarding nothing; otherwise closing the micro-batch is cheaper, since
-        the sample then keeps its prefix in a fresh row.
+        since an earlier split can leave one group on several rows. When none of them has room, the sample goes to the
+        least loaded row it fits in. Once every rank is busy, it only does so if that does not raise the most loaded
+        row: the micro-batch takes as long as that row, so the split is free, whereas closing would add a micro-batch.
         """
 
         def least_loaded(candidates: list[TreeRow]) -> TreeRow | None:
@@ -542,9 +542,11 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
         placed = least_loaded(home)
         if placed is not None:
             return placed
-        if home and all(row.samples for row in rows):
-            return None
-        return least_loaded(rows)
+        placed = least_loaded(rows)
+        if placed is not None and home and all(row.samples for row in rows):
+            if placed.load + placed.cost(sample) > max(row.load for row in rows):
+                return None
+        return placed
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
@@ -935,14 +937,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ```
 
     Args:
-        model (`str`):
-            Model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a model
-            repo on huggingface.co, or a path to a *directory* containing model weights saved using
-            [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-            with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
-            vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
-            models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise. The
-            model name is also used to identify the model on the vLLM server used for generation.
+        model (`str` or [`~transformers.PreTrainedModel`]):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
+              vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
+              models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise.
+            - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
+              tree attention backend for packed training.
+
+            The model name from the config is used to identify the model on the vLLM server used for generation.
         reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. May be omitted when the reward is supplied
@@ -1049,7 +1056,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: str,
+        model: "str | PreTrainedModel",
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: AsyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -1064,7 +1071,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model.split("/")[-1]
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
             args = AsyncGRPOConfig(f"{model_name}-AsyncGRPO")
 
         # Training arguments
@@ -1078,16 +1086,25 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
-        model_init_kwargs = args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-        model_init_kwargs.setdefault("dtype", args.dtype)
-        model_revision = model_init_kwargs.get("revision")
-        model = create_model_from_path(
-            model,
-            device_map=None,
-            attn_implementation=TREE_ATTENTION,
-            **model_init_kwargs,
-        )
+        if isinstance(model, str):
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_init_kwargs.setdefault("dtype", args.dtype)
+            model_revision = model_init_kwargs.get("revision")
+            model = create_model_from_path(
+                model,
+                device_map=None,
+                attn_implementation=TREE_ATTENTION,
+                **model_init_kwargs,
+            )
+        else:
+            model_revision = None
+            model.set_attn_implementation(TREE_ATTENTION)
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -1487,6 +1504,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "token_index",
                 "old_log_probs",
                 "sampling_mask",
+                "sampling_mask_counts",
                 "advantages",
                 "segment_id",
                 "global_n_tokens",
@@ -1508,9 +1526,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
         old_log_probs = inputs["old_log_probs"][selected]
         advantages = inputs["advantages"][selected]
         segment_id = inputs["segment_id"][selected]
-        sampling_mask = inputs["sampling_mask"][mask_bool].unsqueeze(0)
-        if sampling_mask.shape[-1] == 0:
-            sampling_mask = None
+        counts = inputs["sampling_mask_counts"][mask_bool]
+        width = int(counts.max())
+        sampling_mask = None
+        if width:
+            candidates = inputs["sampling_mask"][inputs["sampling_mask"] >= 0]
+            row = torch.repeat_interleave(torch.arange(len(counts), device=counts.device), counts)
+            col = torch.arange(len(candidates), device=counts.device) - torch.repeat_interleave(
+                counts.cumsum(0) - counts, counts
+            )
+            sampling_mask = candidates.new_full((len(counts), width), -1)
+            sampling_mask[row, col] = candidates
+            sampling_mask = sampling_mask.unsqueeze(0)
         tree_kwargs = {
             key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
         }
@@ -1771,7 +1798,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         model = self.accelerator.unwrap_model(self.model)
 
         logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.weight_transfer:
+        if self.accelerator.is_main_process:
             self.weight_transfer.pause()
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
@@ -1785,7 +1812,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_peft_model(model):
             model.merge_adapter()
         try:
-            if self.accelerator.is_main_process and self.weight_transfer:
+            if self.accelerator.is_main_process:
                 self.weight_transfer.send_weights(self._streaming_iter())
             else:
                 # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
@@ -1800,8 +1827,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
-            if self.weight_transfer:
-                self.weight_transfer.resume()
+            self.weight_transfer.resume()
             self.model_version += 1
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
