@@ -2277,6 +2277,9 @@ class GOLDTrainer(SFTTrainer):
                 Softmax temperature (default: 1.0)
             reduction:
                 Specifies the reduction to apply to the output (default: 'batchmean')
+            logits_are_probs:
+                Whether inputs are probabilities. For slices with unequal total mass, the KL endpoints include the mass
+                correction of generalized KL divergence instead of renormalizing away that mass.
 
         Returns:
             loss: Scalar tensor with the generalized JSD loss
@@ -2295,8 +2298,12 @@ class GOLDTrainer(SFTTrainer):
 
         if beta == 0:
             jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+            if logits_are_probs:
+                jsd = jsd + student_log_probs.exp() - teacher_log_probs.exp()
         elif beta == 1:
             jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
+            if logits_are_probs:
+                jsd = jsd + teacher_log_probs.exp() - student_log_probs.exp()
         else:
             # Compute the log of the mixture distribution
             # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture

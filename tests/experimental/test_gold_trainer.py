@@ -22,12 +22,15 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
+    PreTrainedTokenizerFast,
 )
 
 from trl.data_utils import prepare_multimodal_messages
@@ -1384,6 +1387,85 @@ def test_generalized_jsd_loss_accepts_probability_inputs():
     )
 
     torch.testing.assert_close(loss, expected)
+
+
+@pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+def test_generalized_jsd_probability_inputs_preserve_normalized_loss_and_gradients(beta):
+    student_logits = torch.tensor([[[0.6, 0.3, 0.1], [0.2, 0.7, 0.1]]]).log().requires_grad_()
+    teacher_logits = torch.tensor([[[0.5, 0.4, 0.1], [0.3, 0.6, 0.1]]]).log()
+    labels = torch.tensor([[0, -100]])
+
+    expected = GOLDTrainer.generalized_jsd_loss(student_logits, teacher_logits, labels=labels, beta=beta)
+    actual = GOLDTrainer.generalized_jsd_loss(
+        student_logits.softmax(-1), teacher_logits.softmax(-1), labels=labels, beta=beta, logits_are_probs=True
+    )
+
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(
+        torch.autograd.grad(actual, student_logits)[0], torch.autograd.grad(expected, student_logits)[0]
+    )
+
+
+@pytest.mark.parametrize("beta", [0.0, 1.0])
+@pytest.mark.parametrize("student_mass,teacher_mass", [(0.9, 1.0), (1.0, 0.9), (0.2, 0.3)])
+def test_generalized_jsd_probability_inputs_penalize_unequal_mass(beta, student_mass, teacher_mass):
+    mass = torch.tensor(student_mass, requires_grad=True)
+    conditional_probs = torch.tensor([[0.6, 0.4]])
+    loss = GOLDTrainer.generalized_jsd_loss(
+        mass * conditional_probs, teacher_mass * conditional_probs, beta=beta, logits_are_probs=True
+    )
+
+    assert torch.isfinite(loss) and loss > 0
+    loss.backward()
+    assert mass.grad * (student_mass - teacher_mass) > 0
+
+
+@pytest.mark.parametrize("beta", [0.0, 1.0])
+@pytest.mark.parametrize("extra_probability", [0.1, 0.8])
+@pytest.mark.parametrize("use_extended_uld", [False, True])
+def test_hybrid_uld_penalizes_student_only_probability_mass(tmp_path, beta, extra_probability, use_extended_uld):
+    teacher_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"A": 0, "EOS": 1}, unk_token="A")),
+        unk_token="A",
+        eos_token="EOS",
+    )
+    student_tokenizer = copy.deepcopy(teacher_tokenizer)
+    student_tokenizer.add_tokens(["EXTRA"])
+    config = GOLDConfig(
+        output_dir=str(tmp_path),
+        use_cpu=True,
+        bf16=False,
+        report_to="none",
+        use_uld_loss=True,
+        uld_use_hybrid_loss=True,
+        use_extended_uld=use_extended_uld,
+        beta=beta,
+    )
+    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
+    # The student agrees with the teacher conditional on the shared vocabulary.
+    shared_probability = (1.0 - extra_probability) / 2
+    student_logits = (
+        torch.tensor([[[shared_probability, shared_probability, extra_probability]]]).log().requires_grad_()
+    )
+    optimizer = torch.optim.SGD([student_logits], lr=1.0)
+    input_ids = torch.tensor([[0, 1]])
+    byte_offsets = torch.tensor([[[0, 1], [1, 1]]])
+    loss = loss_fn(
+        student_logits=student_logits.expand(1, 2, 3),
+        teacher_logits=torch.zeros(1, 2, 2),
+        student_labels=input_ids,
+        teacher_labels=input_ids,
+        student_input_ids=input_ids,
+        teacher_input_ids=input_ids,
+        student_byte_offsets=byte_offsets,
+        teacher_byte_offsets=byte_offsets,
+    )
+
+    assert torch.isfinite(loss) and loss >= 0
+    loss.backward()
+    assert student_logits.grad[0, 0, -1] > 0
+    optimizer.step()
+    assert student_logits.softmax(-1)[0, 0, -1] < extra_probability
 
 
 def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qwen_tokenizer):
