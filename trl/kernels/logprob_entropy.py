@@ -143,6 +143,16 @@ def _layout(tensor: torch.Tensor) -> tuple[int, int, int, int]:
     return tensor.shape[0], tensor.shape[1], tensor.stride(0), tensor.stride(1)
 
 
+def _row_strides(tensor: torch.Tensor) -> tuple[int, int]:
+    # Same as `_layout(tensor.unsqueeze(-1))[2:]`, but torch 2.6's Dynamo rejects `stride()` on a tensor created in
+    # an autograd.Function backward.
+    if tensor.ndim == 0:
+        return 0, 0
+    if tensor.ndim == 1:
+        return 0, tensor.stride(0)
+    return tensor.stride(0), tensor.stride(1)
+
+
 class _LogProbEntropyFunction(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -153,13 +163,13 @@ class _LogProbEntropyFunction(torch.autograd.Function):
         row_mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = _layout(logits)
-        _, _, index_batch_stride, index_row_stride = _layout(index.unsqueeze(-1))
+        index_batch_stride, index_row_stride = _row_strides(index)
         if row_mask is None:
             row_mask_ptr = index
             mask_batch_stride = mask_row_stride = 0
         else:
             row_mask_ptr = row_mask
-            _, _, mask_batch_stride, mask_row_stride = _layout(row_mask.unsqueeze(-1))
+            mask_batch_stride, mask_row_stride = _row_strides(row_mask)
         n_rows = batch_size * rows_per_batch
         n_cols = logits.shape[-1]
         logprobs = torch.empty(logits.shape[:-1], device=logits.device, dtype=torch.float32)
@@ -201,13 +211,13 @@ class _LogProbEntropyFunction(torch.autograd.Function):
         batch_size, rows_per_batch, logits_batch_stride, logits_row_stride = _layout(logits)
         n_rows = batch_size * rows_per_batch
         n_cols = logits.shape[-1]
-        _, _, index_batch_stride, index_row_stride = _layout(index.unsqueeze(-1))
+        index_batch_stride, index_row_stride = _row_strides(index)
         if row_mask is None:
             row_mask_ptr = index
             mask_batch_stride = mask_row_stride = 0
         else:
             row_mask_ptr = row_mask
-            _, _, mask_batch_stride, mask_row_stride = _layout(row_mask.unsqueeze(-1))
+            mask_batch_stride, mask_row_stride = _row_strides(row_mask)
         grad_logits = torch.empty_like(logits, memory_format=torch.contiguous_format)
         grad_logits_batch_stride, grad_logits_row_stride = rows_per_batch * n_cols, n_cols
 
