@@ -656,9 +656,10 @@ class TestHeadLossNumerics:
     def test_near_teacher(self, device, beta, perturbation, chunk_size):
         from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
 
-        hidden = torch.ones(1, 1, device=device, requires_grad=True)
-        teacher = torch.tensor([[2.0], [1.0], [0.0]], device=device)
-        student = (teacher + torch.tensor([[-perturbation], [perturbation], [0.0]], device=device)).requires_grad_()
+        hidden = torch.eye(2, device=device, requires_grad=True)
+        teacher = torch.tensor([[2.0, 1.0, 0.0], [2.0, 0.01, 0.0]], device=device).t()
+        delta = torch.tensor([[-perturbation, perturbation, 0.0], [0.0, perturbation / 10, 0.0]], device=device).t()
+        student = (teacher + delta).requires_grad_()
         with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
             divergence, _ = ChunkedDivergenceFunction.apply(
                 hidden, student, None, hidden.detach(), teacher, None, beta
@@ -686,15 +687,21 @@ class TestHeadLossNumerics:
     def test_concentrated_teacher(self, device, beta, chunk_size):
         from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
 
-        hidden = torch.ones(1, 1, device=device)
-        student = torch.tensor([[9.0], [-9.0], [-9.0]], device=device, requires_grad=True)
-        teacher = torch.tensor([[40.0], [-40.0], [-40.0]], device=device)
+        hidden = torch.eye(3, device=device)
+        student = (
+            torch.tensor([[9.0, -9.0, -9.0], [9.0, -9.0, -9.0], [20.0, -20.0, -20.0]], device=device)
+            .t()
+            .requires_grad_()
+        )
+        teacher = torch.tensor([[40.0, -40.0, -40.0], [-9.0, 9.0, -9.0], [-20.0, 20.0, -20.0]], device=device).t()
         with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
             divergence, _ = ChunkedDivergenceFunction.apply(hidden, student, None, hidden, teacher, None, beta)
             divergence.sum().backward()
-        # A float64 reference still resolves the student's target probability at margin 18.
+        # Use the paper's normalization even for the float64 reference.
         logits = student.detach().double().t().requires_grad_()
-        log_q = logits.log_softmax(-1)
+        is_max = torch.arange(3, device=device) == logits.argmax(-1, keepdim=True)
+        shifted = (logits - logits.max(-1, keepdim=True).values).masked_fill(is_max, 0.0)
+        log_q = shifted - F.softplus(shifted.masked_fill(is_max, -torch.inf).logsumexp(-1, keepdim=True))
         log_p = teacher.double().t().log_softmax(-1)
         if beta == 0:
             ref = (log_p.exp() * (log_p - log_q)).sum()
@@ -704,7 +711,7 @@ class TestHeadLossNumerics:
             log_m = torch.logaddexp(log_q + math.log(1 - beta), log_p + math.log(beta))
             ref = ((1 - beta) * log_q.exp() * (log_q - log_m) + beta * log_p.exp() * (log_p - log_m)).sum()
         ref.backward()
-        torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=0, rtol=1e-5)
+        torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=1e-22, rtol=1e-5)
         torch.testing.assert_close(divergence.double().sum(), ref, atol=0, rtol=1e-5)
 
     @pytest.mark.parametrize("device", ["cpu", torch_device])

@@ -36,6 +36,47 @@ VOCAB_CHUNK_SIZE = 32768
 
 
 @_jit
+def _logit_gap(zs, zt, s_ref, t_ref):
+    # Compensated subtraction preserves both small student-teacher differences and independent logit shifts.
+    delta = zs - zt
+    error = tl.where(tl.abs(zs) >= tl.abs(zt), (zs - delta) - zt, zs - (delta + zt))
+    shift = s_ref - t_ref
+    shift_error = tl.where(tl.abs(s_ref) >= tl.abs(t_ref), (s_ref - shift) - t_ref, s_ref - (shift + t_ref))
+    return (delta - shift) + (error - shift_error)
+
+
+def _torch_logit_gap(zs, zt, s_ref, t_ref):
+    # Compensated subtraction preserves both small student-teacher differences and independent logit shifts.
+    delta = zs - zt
+    error = torch.where(zs.abs() >= zt.abs(), (zs - delta) - zt, zs - (delta + zt))
+    shift = s_ref - t_ref
+    shift_error = torch.where(s_ref.abs() >= t_ref.abs(), (s_ref - shift) - t_ref, s_ref - (shift + t_ref))
+    return (delta - shift) + (error - shift_error)
+
+
+@_jit
+def _log_student_mixture(ratio, beta):
+    # log(p_s / m) without subtracting nearly equal log-probabilities.
+    a = libdevice.log1p(-beta)
+    b = tl.log(beta) - ratio
+    top = tl.maximum(a, b)
+    return tl.where(
+        tl.abs(ratio) <= 0.5,
+        -libdevice.log1p(beta * libdevice.expm1(tl.minimum(tl.maximum(-ratio, -0.5), 0.5))),
+        -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
+    )
+
+
+def _torch_log_student_mixture(ratio, beta):
+    # log(p_s / m) without subtracting nearly equal log-probabilities.
+    return torch.where(
+        ratio.abs() <= 0.5,
+        -torch.log1p(beta * torch.expm1(-ratio.clamp(-0.5, 0.5))),
+        -torch.logaddexp(torch.full_like(ratio, math.log1p(-beta)), math.log(beta) - ratio),
+    )
+
+
+@_jit
 def _stats_kernel(
     s_ptr,
     s_stride,
@@ -47,6 +88,7 @@ def _stats_kernel(
     t_max_ptr,
     t_sum_ptr,
     t_weighted_gap_ptr,
+    t_at_s_max_ptr,
     n_cols,
     s_scale,
     s_softcap,
@@ -67,6 +109,7 @@ def _stats_kernel(
     t_m = tl.load(t_max_ptr + row)
     t_s = tl.load(t_sum_ptr + row)
     t_gap = tl.load(t_weighted_gap_ptr + row)
+    t_at_s_max = tl.load(t_at_s_max_ptr + row)
     for start in range(0, n_cols, BLOCK_SIZE):
         offsets = start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_cols
@@ -83,6 +126,7 @@ def _stats_kernel(
         # Keep one maximum's unit mass out of the sum until log1p.
         tile_s_max = tl.max(tl.where(mask, zs, -float("inf")), axis=0)
         tile_s_argmax = tl.min(tl.where(mask & (zs == tile_s_max), offsets, 2147483647), axis=0)
+        t_at_s_max = tl.where(s_m < tile_s_max, tl.sum(tl.where(offsets == tile_s_argmax, zt, 0.0), 0), t_at_s_max)
         tile_s_sum = tl.sum(tl.where((s_m < tile_s_max) & (offsets == tile_s_argmax), 0.0, es), axis=0)
         s_shift = tl.where(s_m == -float("inf"), 0.0, s_m - new_s_m)
         s_xs = (s_xs + (1 + s_s) * s_shift) * s_rescale + tl.sum(es * tl.where(mask, zs - new_s_m, 0.0), axis=0)
@@ -96,8 +140,8 @@ def _stats_kernel(
         tile_t_argmax = tl.min(tl.where(mask & (zt == tile_t_max), offsets, 2147483647), axis=0)
         tile_t_sum = tl.sum(tl.where((t_m < tile_t_max) & (offsets == tile_t_argmax), 0.0, et), axis=0)
         # Changing either running maximum shifts every previously accumulated logit gap.
-        gap_shift = tl.where(t_m == -float("inf"), 0.0, (t_m - new_t_m) - (s_m - new_s_m))
-        gap = tl.where(mask, (zt - new_t_m) - (zs - new_s_m), 0.0)
+        gap_shift = tl.where(t_m == -float("inf"), 0.0, _logit_gap(t_m, s_m, new_t_m, new_s_m))
+        gap = tl.where(mask, _logit_gap(zt, zs, new_t_m, new_s_m), 0.0)
         t_gap = (t_gap + (1 + t_s) * gap_shift) * t_rescale + tl.sum(et * gap, axis=0)
         t_s = t_s * t_rescale + tl.where(t_m < tile_t_max, t_rescale, 0.0) + tile_t_sum
         s_m = new_s_m
@@ -108,6 +152,7 @@ def _stats_kernel(
     tl.store(t_max_ptr + row, t_m)
     tl.store(t_sum_ptr + row, t_s)
     tl.store(t_weighted_gap_ptr + row, t_gap)
+    tl.store(t_at_s_max_ptr + row, t_at_s_max)
 
 
 @_jit
@@ -124,6 +169,7 @@ def _ratio_kernel(
     correction_ptr,
     near_ptr,
     s_centered_gap_ptr,
+    t_at_s_max_ptr,
     n_cols,
     s_scale,
     s_softcap,
@@ -148,14 +194,16 @@ def _ratio_kernel(
         zt = _transform(
             tl.load(t_ptr + row * t_stride + offsets, mask, 0).to(tl.float32), t_scale, t_softcap, inv_t, T_HAS_SOFTCAP
         )
-        zs = zs - tl.load(s_max_ptr + row)
-        zt = zt - tl.load(t_max_ptr + row)
-        d = zs - zt - center
+        s_max = tl.load(s_max_ptr + row)
+        t_max = tl.load(t_max_ptr + row)
+        d = _logit_gap(zs, zt, s_max, t_max) - center
         near = near & (tl.max(tl.where(mask, tl.abs(d), 0.0), 0) <= 0.5)
-        p = tl.where(mask, tl.exp(zt - tl.load(t_log_z_ptr + row)), 0.0)
+        p = tl.where(mask, tl.exp((zt - t_max) - tl.load(t_log_z_ptr + row)), 0.0)
         correction += tl.sum(p * libdevice.expm1(tl.minimum(d, 0.5)), 0)
-        q = tl.where(mask, tl.exp(zs - tl.load(s_log_z_ptr + row)), 0.0)
-        s_centered_gap += tl.sum(q * d, 0)
+        q = tl.where(mask, tl.exp((zs - s_max) - tl.load(s_log_z_ptr + row)), 0.0)
+        # Center under the student's maximum so its small gradient never subtracts two large expectations.
+        s_gap = _logit_gap(zs, zt, s_max, tl.load(t_at_s_max_ptr + row))
+        s_centered_gap += tl.sum(q * tl.where(mask, s_gap, 0.0), 0)
     tl.store(correction_ptr + row, correction)
     tl.store(near_ptr + row, near)
     tl.store(s_centered_gap_ptr + row, s_centered_gap)
@@ -174,6 +222,7 @@ def _ratio_tile(
     correction,
     near,
     s_centered_gap,
+    t_at_s_max,
     n_cols,
     s_scale,
     s_softcap,
@@ -186,14 +235,14 @@ def _ratio_tile(
 ):
     zs = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP)
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
-    zs = zs - s_max.unsqueeze(-1)
-    zt = zt - t_max.unsqueeze(-1)
-    d = zs - zt - center.unsqueeze(-1)
+    d = _torch_logit_gap(zs, zt, s_max.unsqueeze(-1), t_max.unsqueeze(-1)) - center.unsqueeze(-1)
     near.logical_and_(d.abs().amax(-1) <= 0.5)
-    p = torch.exp(zt - t_log_z.unsqueeze(-1))
+    p = torch.exp((zt - t_max.unsqueeze(-1)) - t_log_z.unsqueeze(-1))
     correction.add_((p * torch.expm1(d.clamp(max=0.5))).sum(-1))
-    q = torch.exp(zs - s_log_z.unsqueeze(-1))
-    s_centered_gap.add_((q * d).sum(-1))
+    q = torch.exp((zs - s_max.unsqueeze(-1)) - s_log_z.unsqueeze(-1))
+    # Center under the student's maximum so its small gradient never subtracts two large expectations.
+    s_gap = _torch_logit_gap(zs, zt, s_max.unsqueeze(-1), t_at_s_max.unsqueeze(-1))
+    s_centered_gap.add_((q * s_gap).sum(-1))
 
 
 @_jit
@@ -208,6 +257,7 @@ def _jsd_kernel(
     t_log_z_ptr,
     center_ptr,
     correction_ptr,
+    jsd_max_ratio_ptr,
     jsd_ptr,
     kl_student_ptr,
     n_cols,
@@ -245,20 +295,12 @@ def _jsd_kernel(
         zt = _transform(
             tl.load(t_row + offsets, mask=mask, other=0.0).to(tl.float32), t_scale, t_softcap, inv_t, T_HAS_SOFTCAP
         )
-        zs = zs - tl.load(s_max_ptr + row)
-        zt = zt - tl.load(t_max_ptr + row)
-        log_ps = zs - s_log_z
-        log_pt = zt - t_log_z
-        ratio = zs - zt - tl.load(center_ptr + row) - tl.load(correction_ptr + row)
-        # log(p_s / m) without subtracting nearly equal log-probabilities.
-        a = libdevice.log1p(-beta)
-        b = tl.log(beta) - ratio
-        top = tl.maximum(a, b)
-        log_s_m = tl.where(
-            tl.abs(ratio) <= 0.5,
-            -libdevice.log1p(beta * libdevice.expm1(tl.minimum(tl.maximum(-ratio, -0.5), 0.5))),
-            -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
-        )
+        s_max = tl.load(s_max_ptr + row)
+        t_max = tl.load(t_max_ptr + row)
+        log_ps = (zs - s_max) - s_log_z
+        log_pt = (zt - t_max) - t_log_z
+        ratio = _logit_gap(zs, zt, s_max, t_max) - tl.load(center_ptr + row) - tl.load(correction_ptr + row)
+        log_s_m = _log_student_mixture(ratio, beta)
         a = libdevice.log1p(-beta) + ratio
         b = tl.log(beta)
         top = tl.maximum(a, b)
@@ -271,7 +313,8 @@ def _jsd_kernel(
         pt = tl.where(mask, tl.exp(log_pt), 0.0)
         kl_s = ps * tl.where(mask, log_s_m, 0.0)
         jsd += tl.sum(beta * pt * tl.where(mask, log_t_m, 0.0) + (1 - beta) * kl_s, axis=0)
-        kl_student += tl.sum(kl_s, axis=0)
+        anchor = _log_student_mixture(tl.load(jsd_max_ratio_ptr + row), beta)
+        kl_student += tl.sum(ps * tl.where(mask, log_s_m - anchor, 0.0), axis=0)
     tl.store(jsd_ptr + row, jsd)
     tl.store(kl_student_ptr + row, kl_student)
 
@@ -327,12 +370,12 @@ def _backward_kernel(
         inv_t,
         T_HAS_SOFTCAP,
     )
-    zs = zs - tl.load(s_max_ptr + row)
-    zt = zt - tl.load(t_max_ptr + row)
-    log_ps = zs - tl.load(s_log_z_ptr + row)
-    log_pt = zt - tl.load(t_log_z_ptr + row)
+    s_max = tl.load(s_max_ptr + row)
+    t_max = tl.load(t_max_ptr + row)
+    log_ps = (zs - s_max) - tl.load(s_log_z_ptr + row)
+    log_pt = (zt - t_max) - tl.load(t_log_z_ptr + row)
     ps = tl.exp(log_ps)
-    ratio = zs - zt - tl.load(center_ptr + row) - tl.load(correction_ptr + row)
+    ratio = _logit_gap(zs, zt, s_max, t_max) - tl.load(center_ptr + row) - tl.load(correction_ptr + row)
     if MODE == 0:
         # forward KL(p_t || p_s)
         grad = tl.where(
@@ -341,20 +384,14 @@ def _backward_kernel(
             -ps * libdevice.expm1(tl.minimum(-ratio, 0.0)),
         )
     elif MODE == 1:
-        # reverse KL(p_s || p_t), `aux` holds the center and the centered student expectation
-        grad = ps * (zs - zt - tl.load(aux_ptr + 2 * row) - tl.load(aux_ptr + 2 * row + 1))
+        # reverse KL(p_s || p_t), `aux` holds the teacher logit at the student maximum and the centered expectation
+        gap = _logit_gap(zs, zt, s_max, tl.load(aux_ptr + 2 * row))
+        grad = ps * (gap - tl.load(aux_ptr + 2 * row + 1))
     else:
-        # generalized JSD, `aux` is the per-token KL(p_s || m)
-        # log(p_s / m) without subtracting nearly equal log-probabilities.
-        a = libdevice.log1p(-beta)
-        b = tl.log(beta) - ratio
-        top = tl.maximum(a, b)
-        log_s_m = tl.where(
-            tl.abs(ratio) <= 0.5,
-            -libdevice.log1p(beta * libdevice.expm1(tl.minimum(tl.maximum(-ratio, -0.5), 0.5))),
-            -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
-        )
-        grad = (1 - beta) * ps * (log_s_m - tl.load(aux_ptr + row))
+        # generalized JSD, `aux` holds log(p_s / p_t) at the student maximum and the centered expectation
+        log_s_m = _log_student_mixture(ratio, beta)
+        anchor = _log_student_mixture(tl.load(aux_ptr + 2 * row), beta)
+        grad = (1 - beta) * ps * (log_s_m - anchor - tl.load(aux_ptr + 2 * row + 1))
     grad = grad * tl.load(grad_ptr + row) * inv_t
     if S_HAS_SOFTCAP:
         grad = grad * (1 - th * th)
@@ -373,6 +410,7 @@ def _stats_tile(
     t_max,
     t_sum,
     t_weighted_gap,
+    t_at_s_max,
     n_cols,
     s_scale,
     s_softcap,
@@ -392,6 +430,7 @@ def _stats_tile(
     es = torch.exp(zs - new_s_m.unsqueeze(-1))
     tile_s_max, tile_s_argmax = zs.max(-1)
     new_s_maximum = s_max < tile_s_max
+    t_at_s_max.copy_(torch.where(new_s_maximum, zt.gather(1, tile_s_argmax.unsqueeze(-1)).squeeze(-1), t_at_s_max))
     other_es = es.clone()
     other_es.scatter_(
         1,
@@ -414,8 +453,8 @@ def _stats_tile(
         torch.where(new_t_maximum.unsqueeze(-1), 0.0, et.gather(1, tile_t_argmax.unsqueeze(-1))),
     )
     # Changing either running maximum shifts every previously accumulated logit gap.
-    gap_shift = torch.where(torch.isfinite(t_max), (t_max - new_t_m) - (s_max - new_s_m), 0.0)
-    gap = (zt - new_t_m.unsqueeze(-1)) - (zs - new_s_m.unsqueeze(-1))
+    gap_shift = torch.where(torch.isfinite(t_max), _torch_logit_gap(t_max, s_max, new_t_m, new_s_m), 0.0)
+    gap = _torch_logit_gap(zt, zs, new_t_m.unsqueeze(-1), new_s_m.unsqueeze(-1))
     t_weighted_gap.add_((1 + t_sum) * gap_shift).mul_(t_rescale).add_((et * gap).sum(-1))
     t_sum.mul_(t_rescale).add_(torch.where(new_t_maximum, t_rescale, 0.0)).add_(other_et.sum(-1))
     s_max.copy_(new_s_m)
@@ -433,6 +472,7 @@ def _jsd_tile(
     t_log_z,
     center,
     correction,
+    jsd_max_ratio,
     jsd,
     kl_student,
     n_cols,
@@ -449,16 +489,11 @@ def _jsd_tile(
     # `_jsd_kernel` in torch, for devices without Triton: the whole tile at once instead of one program per token
     zs = _torch_transform(s_tile, s_scale, s_softcap, inv_t, S_HAS_SOFTCAP)
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
-    zs = zs - s_max.unsqueeze(-1)
-    zt = zt - t_max.unsqueeze(-1)
-    log_ps = zs - s_log_z.unsqueeze(-1)
-    log_pt = zt - t_log_z.unsqueeze(-1)
-    ratio = zs - zt - center.unsqueeze(-1) - correction.unsqueeze(-1)
-    log_s_m = torch.where(
-        ratio.abs() <= 0.5,
-        -torch.log1p(beta * torch.expm1(-ratio.clamp(-0.5, 0.5))),
-        -torch.logaddexp(torch.full_like(ratio, math.log1p(-beta)), math.log(beta) - ratio),
-    )
+    log_ps = (zs - s_max.unsqueeze(-1)) - s_log_z.unsqueeze(-1)
+    log_pt = (zt - t_max.unsqueeze(-1)) - t_log_z.unsqueeze(-1)
+    ratio = _torch_logit_gap(zs, zt, s_max.unsqueeze(-1), t_max.unsqueeze(-1))
+    ratio = ratio - center.unsqueeze(-1) - correction.unsqueeze(-1)
+    log_s_m = _torch_log_student_mixture(ratio, beta)
     log_t_m = torch.where(
         ratio.abs() <= 0.5,
         -torch.log1p((1 - beta) * torch.expm1(ratio.clamp(-0.5, 0.5))),
@@ -466,7 +501,8 @@ def _jsd_tile(
     )
     kl_s = torch.exp(log_ps) * log_s_m
     jsd += (beta * torch.exp(log_pt) * log_t_m + (1 - beta) * kl_s).sum(-1)
-    kl_student += kl_s.sum(-1)
+    anchor = _torch_log_student_mixture(jsd_max_ratio, beta)
+    kl_student += (torch.exp(log_ps) * (log_s_m - anchor.unsqueeze(-1))).sum(-1)
 
 
 def _backward_tile(
@@ -502,28 +538,25 @@ def _backward_tile(
     else:
         zs = y * inv_t
     zt = _torch_transform(t_tile, t_scale, t_softcap, inv_t, T_HAS_SOFTCAP)
-    zs = zs - s_max.unsqueeze(-1)
-    zt = zt - t_max.unsqueeze(-1)
-    log_ps = zs - s_log_z.unsqueeze(-1)
-    log_pt = zt - t_log_z.unsqueeze(-1)
+    log_ps = (zs - s_max.unsqueeze(-1)) - s_log_z.unsqueeze(-1)
+    log_pt = (zt - t_max.unsqueeze(-1)) - t_log_z.unsqueeze(-1)
     ps = torch.exp(log_ps)
-    ratio = zs - zt - center.unsqueeze(-1) - correction.unsqueeze(-1)
+    ratio = _torch_logit_gap(zs, zt, s_max.unsqueeze(-1), t_max.unsqueeze(-1))
+    ratio = ratio - center.unsqueeze(-1) - correction.unsqueeze(-1)
     if MODE == 0:
         # forward KL(p_t || p_s)
         grad = torch.where(
             ratio <= 0, torch.exp(log_pt) * torch.expm1(ratio.clamp(max=0)), -ps * torch.expm1((-ratio).clamp(max=0))
         )
     elif MODE == 1:
-        # reverse KL(p_s || p_t), `aux` holds the center and the centered student expectation
-        grad = ps * (zs - zt - aux[:, :1] - aux[:, 1:])
+        # reverse KL(p_s || p_t), `aux` holds the teacher logit at the student maximum and the centered expectation
+        gap = _torch_logit_gap(zs, zt, s_max.unsqueeze(-1), aux[:, :1])
+        grad = ps * (gap - aux[:, 1:])
     else:
-        # generalized JSD, `aux` is the per-token KL(p_s || m)
-        log_s_m = torch.where(
-            ratio.abs() <= 0.5,
-            -torch.log1p(beta * torch.expm1(-ratio.clamp(-0.5, 0.5))),
-            -torch.logaddexp(torch.full_like(ratio, math.log1p(-beta)), math.log(beta) - ratio),
-        )
-        grad = (1 - beta) * ps * (log_s_m - aux.unsqueeze(-1))
+        # generalized JSD, `aux` holds log(p_s / p_t) at the student maximum and the centered expectation
+        log_s_m = _torch_log_student_mixture(ratio, beta)
+        anchor = _torch_log_student_mixture(aux[:, :1], beta)
+        grad = (1 - beta) * ps * (log_s_m - anchor - aux[:, 1:])
     grad = grad * grad_divergence.unsqueeze(-1) * inv_t
     if S_HAS_SOFTCAP:
         grad = grad * (1 - th * th)
@@ -595,9 +628,9 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
 
         s_max, t_max = zeros() - math.inf, zeros() - math.inf
         s_sum, s_x_sum, t_sum, t_weighted_gap = zeros(), zeros(), zeros(), zeros()
-        jsd, kl_student = zeros(), zeros()
+        jsd, kl_student, jsd_max_ratio = zeros(), zeros(), zeros()
         center, correction = zeros(), zeros()
-        reverse_center, s_centered_gap = zeros(), zeros()
+        t_at_s_max, s_centered_gap = zeros(), zeros()
         near = torch.ones((N,), device=device, dtype=torch.bool)
         rows = min(N, TOKEN_CHUNK_SIZE)
         s_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=torch.float32)
@@ -632,6 +665,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         t_max[sl],
                         t_sum[sl],
                         t_weighted_gap[sl],
+                        t_at_s_max[sl],
                         end - start,
                         BLOCK_SIZE=_BLOCK_SIZE,
                         **kernel_args,
@@ -642,7 +676,6 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                 # log1p/expm1. Outside the small-gap region, use separate maximum and log1p normalizers instead;
                 # bounding expm1's argument avoids overflow for distant distributions.
                 center[sl] = -t_weighted_gap[sl] / (1 + t_sum[sl])
-                reverse_center[sl] = center[sl]
                 # Traverse backwards to reuse the last projected tile from the statistics pass.
                 for start in reversed(range(0, vocab, VOCAB_CHUNK_SIZE)):
                     end = min(start + VOCAB_CHUNK_SIZE, vocab)
@@ -664,6 +697,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         correction[sl],
                         near[sl],
                         s_centered_gap[sl],
+                        t_at_s_max[sl],
                         end - start,
                         BLOCK_SIZE=_BLOCK_SIZE,
                         **kernel_args,
@@ -673,6 +707,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                 )
                 center[sl] = torch.where(near[sl], center[sl], 0.0)
                 if is_jsd:
+                    # Center log(p_s / m) at the student's maximum before accumulating its expectation.
+                    jsd_max_ratio[sl] = (t_max[sl] - t_at_s_max[sl]) - center[sl] - correction[sl]
                     for start in range(0, vocab, VOCAB_CHUNK_SIZE):
                         end = min(start + VOCAB_CHUNK_SIZE, vocab)
                         s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
@@ -692,6 +728,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                             t_log_z,
                             center[sl],
                             correction[sl],
+                            jsd_max_ratio[sl],
                             jsd[sl],
                             kl_student[sl],
                             end - start,
@@ -707,11 +744,11 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
             divergence = (center + t_weighted_gap / (1 + t_sum)) + correction
             aux = divergence
         elif beta == 1.0:
-            divergence = (reverse_center - center) + s_centered_gap - correction
-            aux = torch.stack((reverse_center, s_centered_gap), dim=-1)
+            divergence = ((t_max - t_at_s_max) - center) + s_centered_gap - correction
+            aux = torch.stack((t_at_s_max, s_centered_gap), dim=-1)
         else:
             divergence = jsd
-            aux = kl_student
+            aux = torch.stack((jsd_max_ratio, kl_student), dim=-1)
 
         ctx.save_for_backward(
             student_hidden,
