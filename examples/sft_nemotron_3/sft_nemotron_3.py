@@ -51,7 +51,7 @@ torchrun --nproc_per_node 8 examples/sft_nemotron_3/sft_nemotron_3.py \
     --use_peft \
     --lora_r 8 \
     --lora_alpha 16 \
-    --lora_target_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj
+    --lora_target_modules q_proj k_proj v_proj o_proj up_proj down_proj in_proj
 """
 
 from datasets import load_dataset
@@ -101,6 +101,8 @@ def main(script_args, training_args, model_args):
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trainer.end()
 
 
 if __name__ == "__main__":

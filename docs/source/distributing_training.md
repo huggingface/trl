@@ -1,8 +1,5 @@
 # Distributing Training
 
-> [!WARNING]
-> Section under construction. Feel free to contribute!
-
 ## Multi-GPU Training with TRL
 
 The trainers in TRL are launched with [torchrun](https://docs.pytorch.org/docs/stable/elastic/run.html), PyTorch's distributed launcher. It starts one process per GPU:

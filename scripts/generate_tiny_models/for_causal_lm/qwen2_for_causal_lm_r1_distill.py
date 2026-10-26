@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 
@@ -42,6 +45,7 @@ config = Qwen2Config(
     max_window_layers=21,
     bos_token_id=151643,
     eos_token_id=151643,
+    use_mrope=False,
 )
 model = Qwen2ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)

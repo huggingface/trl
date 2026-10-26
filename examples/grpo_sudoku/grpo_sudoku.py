@@ -197,7 +197,7 @@ def resolve_system_prompt(path: str) -> str:
     prompt_path = Path(path)
     if not prompt_path.is_file():
         prompt_path = Path(__file__).parent / path
-    return prompt_path.read_text()
+    return prompt_path.read_text(encoding="utf-8")
 
 
 def sanitize_name(name: str) -> str:
@@ -665,6 +665,8 @@ def main() -> None:
 
     print(f"Starting GRPO training: {args.num_generations} generations, {args.max_turns} max turns")
     trainer.train()
+
+    trainer.end()
 
 
 if __name__ == "__main__":

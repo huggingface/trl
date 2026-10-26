@@ -16,7 +16,7 @@
 # dependencies = [
 #     "trl",
 #     "trackio",
-#     "transformers @ git+https://github.com/huggingface/transformers.git",  # gradient checkpointing `offload`
+#     "transformers>=5.17.0",  # gradient checkpointing `offload`
 # ]
 # ///
 
@@ -36,12 +36,11 @@ sliding-window or linear attention layers are refused. That rules out gpt-oss, G
 Qwen3.5 and later. Qwen3 and Qwen3-MoE are full attention. Qwen3-0.6B takes 137 s/step on the same node.
 """
 
-import inspect
-
 import torch
 import transformers
 from accelerate import ParallelismConfig
 from datasets import Dataset, load_dataset
+from packaging.version import Version
 
 from trl import SFTConfig, SFTTrainer
 
@@ -49,11 +48,11 @@ from trl import SFTConfig, SFTTrainer
 MODEL = "Qwen/Qwen3-8B"
 SEQ_LEN = 1_048_576
 
-# `offload` landed in transformers after 5.16.1 and is not in a release yet, so check for the parameter itself.
-if "offload" not in inspect.signature(transformers.PreTrainedModel.gradient_checkpointing_enable).parameters:
+# `offload` for gradient checkpointing was added in transformers 5.17.0.
+if Version(transformers.__version__) < Version("5.17.0"):
     raise RuntimeError(
-        f"This example needs gradient checkpointing `offload`, which is not in a released transformers yet. "
-        f"Install transformers from main. Got {transformers.__version__}."
+        f"This example needs gradient checkpointing `offload`, which requires transformers>=5.17.0. "
+        f"Got {transformers.__version__}."
     )
 
 
@@ -115,6 +114,8 @@ def main():
     trainer = SFTTrainer(model=MODEL, args=training_args, train_dataset=build_dataset())
     trainer.train()
     trainer.save_model(training_args.output_dir)
+
+    trainer.end()
 
 
 if __name__ == "__main__":

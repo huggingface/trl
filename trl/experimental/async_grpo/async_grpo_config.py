@@ -45,10 +45,10 @@ class AsyncGRPOConfig(_BaseConfig):
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
 
         > Parameters that control generation
 
@@ -60,10 +60,12 @@ class AsyncGRPOConfig(_BaseConfig):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to 1.0
-            to consider all tokens.
+            to consider all tokens. Below `1.0`, `top_k` must be set too, and the vLLM server (>= 0.28) started with
+            `--return-sampling-mask --enable-scale-out`: the trainer renormalizes its log-probabilities over the
+            candidate set each token was sampled from, as the server does. An older vLLM keeps the whole vocabulary.
         top_k (`int`, *optional*, defaults to `0`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `0`, top-k-filtering is
-            disabled and all tokens are considered.
+            disabled and all tokens are considered. Any other value needs the server flags described under `top_p`.
         min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range.
@@ -105,15 +107,32 @@ class AsyncGRPOConfig(_BaseConfig):
         epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        score_centering (`bool`, *optional*, defaults to `True`):
+            Whether to train with score centering ([paper](https://huggingface.co/papers/2609.20807)) instead of the
+            clipped objective: the importance-weighted score of each sampled token minus its expectation under the vLLM
+            sampler, so that a constant advantage does not pull the policy toward the sampler. The expectation is taken
+            over the `num_sampler_logprobs` most likely tokens at each position, whose log-probabilities the sampler
+            reports.
+        vllm_importance_sampling_clip_min (`float`, *optional*, defaults to `0.5`):
+            Lower bound C_min of the importance ratio between the policy and the vLLM sampler. Tokens whose ratio falls
+            outside [`vllm_importance_sampling_clip_min`, `vllm_importance_sampling_clip_max`] are dropped from the
+            loss (masked importance sampling).
+        vllm_importance_sampling_clip_max (`float`, *optional*, defaults to `5.0`):
+            Upper bound C_max of the importance ratio.
+        num_sampler_logprobs (`int`, *optional*, defaults to `8`):
+            Number of top log-probabilities requested from the vLLM sampler for every generated token, used by score
+            centering. More cover more of the sampler's probability mass but cost more to serialize; the server's
+            `--max-logprobs` bounds it.
         token_budget (`int`, *optional*):
-            Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic token-budgeted
-            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches whose rows each stay
-            within this budget, bounding peak memory independently of the sample count (the number of samples per row
-            becomes dynamic). If `None` (default), it is set to the vLLM server's `max_model_len` (queried at train
-            start) — the cap on prompt + completion length — so no rollout sample can ever exceed the budget. A sample
-            longer than `token_budget` fits in no row and is dropped with a warning. Set `<= 0` to disable token
-            budgeting and instead pack a fixed `per_device_train_batch_size × num_processes` samples per micro-batch, Σ
-            Lᵢ²-balanced across the rows.
+            Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic token-budgeted
+            micro-batching. When `> 0`, a `TokenBudgetBatcher` forms attention-cost-balanced micro-batches whose rows
+            each stay within this budget, bounding peak memory independently of the sample count (the number of samples
+            per row becomes dynamic). The budget bounds unique tokens rather than raw ones, so tokens shared by several
+            samples count once, and it bounds the row's loss terms too. If `None` (default), it is set to the vLLM
+            server's `max_model_len` (queried at train start) — the cap on prompt + completion length — so no rollout
+            sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
+            warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
+            num_processes` samples per micro-batch, balanced across the rows.
 
         > Parameters that control the async rollout pipeline
 
@@ -190,12 +209,12 @@ class AsyncGRPOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
 
@@ -331,16 +350,43 @@ class AsyncGRPOConfig(_BaseConfig):
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
     )
+    score_centering: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to train with score centering instead of the clipped objective: the importance-weighted "
+            "score of each sampled token minus its expectation under the vLLM sampler."
+        },
+    )
+    vllm_importance_sampling_clip_min: float = field(
+        default=0.5,
+        metadata={
+            "help": "Lower bound C_min of the importance ratio between the policy and the vLLM sampler. Tokens whose "
+            "ratio falls outside [`vllm_importance_sampling_clip_min`, `vllm_importance_sampling_clip_max`] are "
+            "dropped from the loss."
+        },
+    )
+    vllm_importance_sampling_clip_max: float = field(
+        default=5.0,
+        metadata={"help": "Upper bound C_max of the importance ratio."},
+    )
+    num_sampler_logprobs: int = field(
+        default=8,
+        metadata={
+            "help": "Number of top log-probabilities requested from the vLLM sampler for every generated token, used "
+            "by score centering."
+        },
+    )
     token_budget: int | None = field(
         default=None,
         metadata={
-            "help": "Maximum number of real tokens packed into a single row (one DP rank's forward) for dynamic "
-            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms Σ Lᵢ²-balanced micro-batches "
-            "whose rows each stay within this budget, bounding peak memory independently of the sample count. If "
-            "None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
+            "help": "Maximum number of tokens forwarded in a single row (one DP rank's forward) for dynamic "
+            "token-budgeted micro-batching. When > 0, a `TokenBudgetBatcher` forms attention-cost-balanced "
+            "micro-batches whose rows each stay within this budget, bounding peak memory independently of the sample "
+            "count. If None (default), it is set to the vLLM server's `max_model_len` (queried at train start), so no "
             "rollout sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is "
             "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
-            "`per_device_train_batch_size × num_processes` samples per micro-batch, Σ Lᵢ²-balanced across the rows."
+            "`per_device_train_batch_size × num_processes` samples per micro-batch, attention-cost-balanced across "
+            "the rows."
         },
     )
 
@@ -393,6 +439,15 @@ class AsyncGRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.score_centering and self.num_sampler_logprobs < 1:
+            raise ValueError("`score_centering=True` needs `num_sampler_logprobs >= 1`.")
+
+        if self.top_p < 1.0 and self.top_k == 0:
+            raise ValueError(
+                "`top_p < 1.0` needs `top_k > 0`: vLLM bounds the candidate set it returns for each sampled token "
+                "with `top_k` (e.g. `top_k=512`)."
+            )
 
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
