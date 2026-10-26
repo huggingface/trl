@@ -30,7 +30,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoTokenizer, TrainerControl
+from transformers import AutoTokenizer, TrainerControl, TrainerState
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
@@ -974,6 +974,9 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        # No `max_steps`, so the run stops after `num_train_epochs` passes over the prompts, plus at most one
+        # micro-batch of overshoot. `state.epoch` reports those passes rather than `global_step / max_steps`.
+        assert training_args.num_train_epochs <= trainer.state.epoch < training_args.num_train_epochs + 1
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
@@ -1081,26 +1084,33 @@ class TestEpochStop(TrlTestCase):
 
     The count spans a resume: the worker restarts `prompt_id` at 0, so the prompts trained before the checkpoint ride
     in `_prompts_before_resume` and are added back here, or a resumed run would train `num_train_epochs` more passes on
-    top of the ones already done.
+    top of the ones already done. The same count is reported in `state.epoch`: transformers derives it from
+    `max_steps`, which is only a safety ceiling here.
     """
 
     @pytest.mark.parametrize(
-        ("trained", "before_resume", "should_stop"),
+        ("trained", "before_resume", "expected_epoch", "should_stop"),
         [
-            ({0, 1, 2}, 0, False),
-            ({0, 1, 2, 3}, 0, True),
-            ({0, 1}, 2, True),  # a resumed run reaches the target counting the checkpoint's prompts
-            (set(), 4, True),  # ... and reaches it having trained nothing of its own
+            ({0, 1, 2}, 0, 1.5, False),
+            ({0, 1, 2, 3}, 0, 2.0, True),
+            ({0, 1, 2, 3, 4}, 0, 2.5, True),  # a step can overshoot the target
+            ({0}, 1, 1.0, False),  # a resumed run counts the prompts trained before the checkpoint
+            ({0, 1}, 2, 2.0, True),  # ... and reaches the target counting the checkpoint's prompts
+            (set(), 4, 2.0, True),  # ... and reaches it having trained nothing of its own
         ],
     )
-    def test_stops_once_the_prompt_target_is_reached(self, trained, before_resume, should_stop):
+    def test_reports_epoch_and_stops_once_the_prompt_target_is_reached(
+        self, trained, before_resume, expected_epoch, should_stop
+    ):
         trainer = _checkpoint_trainer(self.tmp_dir)
         trainer._trained_prompts = trained
         trainer._prompts_before_resume = before_resume
-        control = TrainerControl()
+        state, control = TrainerState(), TrainerControl()
 
-        _EpochStopCallback(trainer, target_prompts=4).on_step_end(trainer.args, None, control)
+        # 2 prompts, so a target of 4 is `num_train_epochs=2`.
+        _EpochStopCallback(trainer, target_prompts=4, num_prompts=2).on_step_end(trainer.args, state, control)
 
+        assert state.epoch == expected_epoch
         assert control.should_training_stop is should_stop
         assert control.should_save is should_stop  # the final step is saved, as when training reaches `max_steps`
 
