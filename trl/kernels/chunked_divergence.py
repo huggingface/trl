@@ -55,24 +55,24 @@ def _torch_logit_gap(zs, zt, s_ref, t_ref):
 
 
 @_jit
-def _log_student_mixture(ratio, beta):
+def _log_student_mixture(ratio, log_beta, log1m_beta):
     # log(p_s / m) without subtracting nearly equal log-probabilities.
-    a = libdevice.log1p(-beta)
-    b = tl.log(beta) - ratio
+    a = log1m_beta
+    b = log_beta - ratio
     top = tl.maximum(a, b)
     return tl.where(
         tl.abs(ratio) <= 0.5,
-        -libdevice.log1p(beta * libdevice.expm1(tl.minimum(tl.maximum(-ratio, -0.5), 0.5))),
+        -libdevice.log1p(tl.exp(log_beta) * libdevice.expm1(tl.minimum(tl.maximum(-ratio, -0.5), 0.5))),
         -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
     )
 
 
-def _torch_log_student_mixture(ratio, beta):
+def _torch_log_student_mixture(ratio, log_beta, log1m_beta):
     # log(p_s / m) without subtracting nearly equal log-probabilities.
     return torch.where(
         ratio.abs() <= 0.5,
-        -torch.log1p(beta * torch.expm1(-ratio.clamp(-0.5, 0.5))),
-        -torch.logaddexp(torch.full_like(ratio, math.log1p(-beta)), math.log(beta) - ratio),
+        -torch.log1p(math.exp(log_beta) * torch.expm1(-ratio.clamp(-0.5, 0.5))),
+        -torch.logaddexp(torch.full_like(ratio, log1m_beta), log_beta - ratio),
     )
 
 
@@ -261,7 +261,8 @@ def _jsd_kernel(
     jsd_ptr,
     kl_student_ptr,
     n_cols,
-    beta,
+    log_beta,
+    log1m_beta,
     s_scale,
     s_softcap,
     t_scale,
@@ -273,7 +274,8 @@ def _jsd_kernel(
 ):
     # Accumulate generalized JSD using the mixture m = (1 - beta) p_s + beta p_t
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
-    beta = tl.cast(beta, tl.float32)
+    log_beta = tl.cast(log_beta, tl.float32)
+    log1m_beta = tl.cast(log1m_beta, tl.float32)
     s_scale = tl.cast(s_scale, tl.float32)
     s_softcap = tl.cast(s_softcap, tl.float32)
     t_scale = tl.cast(t_scale, tl.float32)
@@ -300,20 +302,20 @@ def _jsd_kernel(
         log_ps = (zs - s_max) - s_log_z
         log_pt = (zt - t_max) - t_log_z
         ratio = _logit_gap(zs, zt, s_max, t_max) - tl.load(center_ptr + row) - tl.load(correction_ptr + row)
-        log_s_m = _log_student_mixture(ratio, beta)
-        a = libdevice.log1p(-beta) + ratio
-        b = tl.log(beta)
+        log_s_m = _log_student_mixture(ratio, log_beta, log1m_beta)
+        a = log1m_beta + ratio
+        b = log_beta
         top = tl.maximum(a, b)
         log_t_m = tl.where(
             tl.abs(ratio) <= 0.5,
-            -libdevice.log1p((1 - beta) * libdevice.expm1(tl.minimum(tl.maximum(ratio, -0.5), 0.5))),
+            -libdevice.log1p(tl.exp(log1m_beta) * libdevice.expm1(tl.minimum(tl.maximum(ratio, -0.5), 0.5))),
             -top - tl.log(tl.exp(a - top) + tl.exp(b - top)),
         )
         ps = tl.where(mask, tl.exp(log_ps), 0.0)
         pt = tl.where(mask, tl.exp(log_pt), 0.0)
         kl_s = ps * tl.where(mask, log_s_m, 0.0)
-        jsd += tl.sum(beta * pt * tl.where(mask, log_t_m, 0.0) + (1 - beta) * kl_s, axis=0)
-        anchor = _log_student_mixture(tl.load(jsd_max_ratio_ptr + row), beta)
+        jsd += tl.sum(tl.exp(log_beta) * pt * tl.where(mask, log_t_m, 0.0) + tl.exp(log1m_beta) * kl_s, axis=0)
+        anchor = _log_student_mixture(tl.load(jsd_max_ratio_ptr + row), log_beta, log1m_beta)
         kl_student += tl.sum(ps * tl.where(mask, log_s_m - anchor, 0.0), axis=0)
     tl.store(jsd_ptr + row, jsd)
     tl.store(kl_student_ptr + row, kl_student)
@@ -334,7 +336,8 @@ def _backward_kernel(
     aux_ptr,
     grad_ptr,
     n_cols,
-    beta,
+    log_beta,
+    log1m_beta,
     s_scale,
     s_softcap,
     t_scale,
@@ -347,7 +350,8 @@ def _backward_kernel(
 ):
     # Overwrite one block of the student tile with the gradient of the divergence with respect to the projection output
     # Before torch 2.15, torch.compile passes Python float arguments as fp64; keep the math in fp32
-    beta = tl.cast(beta, tl.float32)
+    log_beta = tl.cast(log_beta, tl.float32)
+    log1m_beta = tl.cast(log1m_beta, tl.float32)
     s_scale = tl.cast(s_scale, tl.float32)
     s_softcap = tl.cast(s_softcap, tl.float32)
     t_scale = tl.cast(t_scale, tl.float32)
@@ -389,9 +393,9 @@ def _backward_kernel(
         grad = ps * (gap - tl.load(aux_ptr + 2 * row + 1))
     else:
         # generalized JSD, `aux` holds log(p_s / p_t) at the student maximum and the centered expectation
-        log_s_m = _log_student_mixture(ratio, beta)
-        anchor = _log_student_mixture(tl.load(aux_ptr + 2 * row), beta)
-        grad = (1 - beta) * ps * (log_s_m - anchor - tl.load(aux_ptr + 2 * row + 1))
+        log_s_m = _log_student_mixture(ratio, log_beta, log1m_beta)
+        anchor = _log_student_mixture(tl.load(aux_ptr + 2 * row), log_beta, log1m_beta)
+        grad = tl.exp(log1m_beta) * ps * (log_s_m - anchor - tl.load(aux_ptr + 2 * row + 1))
     grad = grad * tl.load(grad_ptr + row) * inv_t
     if S_HAS_SOFTCAP:
         grad = grad * (1 - th * th)
@@ -476,7 +480,8 @@ def _jsd_tile(
     jsd,
     kl_student,
     n_cols,
-    beta,
+    log_beta,
+    log1m_beta,
     s_scale,
     s_softcap,
     t_scale,
@@ -493,15 +498,15 @@ def _jsd_tile(
     log_pt = (zt - t_max.unsqueeze(-1)) - t_log_z.unsqueeze(-1)
     ratio = _torch_logit_gap(zs, zt, s_max.unsqueeze(-1), t_max.unsqueeze(-1))
     ratio = ratio - center.unsqueeze(-1) - correction.unsqueeze(-1)
-    log_s_m = _torch_log_student_mixture(ratio, beta)
+    log_s_m = _torch_log_student_mixture(ratio, log_beta, log1m_beta)
     log_t_m = torch.where(
         ratio.abs() <= 0.5,
-        -torch.log1p((1 - beta) * torch.expm1(ratio.clamp(-0.5, 0.5))),
-        -torch.logaddexp(math.log1p(-beta) + ratio, torch.full_like(ratio, math.log(beta))),
+        -torch.log1p(math.exp(log1m_beta) * torch.expm1(ratio.clamp(-0.5, 0.5))),
+        -torch.logaddexp(log1m_beta + ratio, torch.full_like(ratio, log_beta)),
     )
     kl_s = torch.exp(log_ps) * log_s_m
-    jsd += (beta * torch.exp(log_pt) * log_t_m + (1 - beta) * kl_s).sum(-1)
-    anchor = _torch_log_student_mixture(jsd_max_ratio, beta)
+    jsd += (math.exp(log_beta) * torch.exp(log_pt) * log_t_m + math.exp(log1m_beta) * kl_s).sum(-1)
+    anchor = _torch_log_student_mixture(jsd_max_ratio, log_beta, log1m_beta)
     kl_student += (torch.exp(log_ps) * (log_s_m - anchor.unsqueeze(-1))).sum(-1)
 
 
@@ -519,7 +524,8 @@ def _backward_tile(
     aux,
     grad_divergence,
     n_cols,
-    beta,
+    log_beta,
+    log1m_beta,
     s_scale,
     s_softcap,
     t_scale,
@@ -554,9 +560,9 @@ def _backward_tile(
         grad = ps * (gap - aux[:, 1:])
     else:
         # generalized JSD, `aux` holds log(p_s / p_t) at the student maximum and the centered expectation
-        log_s_m = _torch_log_student_mixture(ratio, beta)
-        anchor = _torch_log_student_mixture(aux[:, :1], beta)
-        grad = (1 - beta) * ps * (log_s_m - anchor - aux[:, 1:])
+        log_s_m = _torch_log_student_mixture(ratio, log_beta, log1m_beta)
+        anchor = _torch_log_student_mixture(aux[:, :1], log_beta, log1m_beta)
+        grad = math.exp(log1m_beta) * ps * (log_s_m - anchor - aux[:, 1:])
     grad = grad * grad_divergence.unsqueeze(-1) * inv_t
     if S_HAS_SOFTCAP:
         grad = grad * (1 - th * th)
@@ -636,6 +642,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
         s_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=torch.float32)
         t_buf = torch.empty((rows, VOCAB_CHUNK_SIZE), device=device, dtype=torch.float32)
         is_jsd = 0.0 < beta < 1.0
+        # Taken from the float64 beta: near an endpoint, rounding beta to float32 first moves log(1 - beta) by ~1%
+        log_beta, log1m_beta = (math.log(beta), math.log1p(-beta)) if is_jsd else (0.0, 0.0)
 
         with (
             maybe_gather_lm_head_ctx(student_weight, student_bias),
@@ -732,7 +740,8 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                             jsd[sl],
                             kl_student[sl],
                             end - start,
-                            beta,
+                            log_beta,
+                            log1m_beta,
                             BLOCK_SIZE=_BLOCK_SIZE,
                             **kernel_args,
                         )
@@ -766,7 +775,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
             aux,
         )
         ctx.dtypes = s_dtype, t_dtype
-        ctx.beta = beta
+        ctx.log_betas = log_beta, log1m_beta
         ctx.mode = 0 if beta == 0.0 else 1 if beta == 1.0 else 2
         ctx.kernel_args = kernel_args
         ctx.mark_non_differentiable(entropy)
@@ -841,7 +850,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         aux[sl],
                         grad_divergence[sl],
                         end - start,
-                        ctx.beta,
+                        *ctx.log_betas,
                         MODE=ctx.mode,
                         BLOCK_SIZE=_BLOCK_SIZE,
                         **ctx.kernel_args,
