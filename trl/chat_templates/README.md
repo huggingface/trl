@@ -97,6 +97,10 @@ Later revision of the LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M`
 
 Later LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-24B-A2B` and `LiquidAI/LFM2.5-2.6B`). Same tool-call format as `lfm2_2_5_v2.jinja`, with two rendering differences: the generation prompt pre-fills `<think>`, so the model's output starts inside the reasoning block, and string arguments are escaped (`\\`, `\'`, `\n`, `\r`) while lists render as JSON. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_v3_template`.
 
+### `lfm2_2_5_v4.jinja`
+
+LFM2.5 chat template shipped by `LiquidAI/LFM2.5-1.2B-Instruct` (since [df58c17](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct/commit/df58c174f05ff733f83f8cae10ea9298224c8006)), `LiquidAI/LFM2.5-350M`, `LiquidAI/LFM2.5-1.2B-Thinking` and `LiquidAI/LFM2-24B-A2B`. Differs from `lfm2_2_5_v3.jinja` in two ways: the generation prompt does not pre-fill `<think>`, and only the last assistant turn keeps its reasoning, instead of every turn after the last user message. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing reuses `lfm2_2_5_v3_template`.
+
 ### `lfm2_2_5_vl.jinja`
 
 Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Same rendering as `lfm2_2_5.jinja` — including the `{% generation %}` markers, so no training patch is needed — plus multimodal `content` blocks (each `image` item renders as `<image>`) and more defensive handling of non-string content and flat `tool_calls`. Response parsing reuses `lfm2_2_5_template`.
