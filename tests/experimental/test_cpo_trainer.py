@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.cpo import CPOConfig, CPOTrainer
@@ -112,8 +112,8 @@ class TestCPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param)
 
     def test_cpo_trainer_truncation(self):
-        # Each response is truncated to `max_length` minus the prompt length. The prompt is never truncated, so a prompt
-        # longer than `max_length` is kept whole with an empty completion.
+        # Each response is truncated to `max_length` minus the prompt length. A prompt that fills `max_length` leaves no
+        # response, so its example is dropped.
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = CPOConfig(output_dir=self.tmp_dir, report_to="none")
         full = CPOTrainer(
@@ -124,10 +124,30 @@ class TestCPOTrainer(TrlTestCase):
             model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
         ).train_dataset
 
-        for full_row, truncated_row in zip(full, truncated, strict=True):
-            length = max(8, len(full_row["prompt_input_ids"]))
-            assert truncated_row["chosen_input_ids"] == full_row["chosen_input_ids"][:length]
-            assert truncated_row["rejected_input_ids"] == full_row["rejected_input_ids"][:length]
+        kept = [row for row in full if len(row["prompt_input_ids"]) < 8]
+        for full_row, truncated_row in zip(kept, truncated, strict=True):
+            assert truncated_row["chosen_input_ids"] == full_row["chosen_input_ids"][:8]
+            assert truncated_row["rejected_input_ids"] == full_row["rejected_input_ids"][:8]
+
+    def test_fully_truncated_completion_examples_dropped(self):
+        """An example whose prompt alone fills `max_length` loses every completion token in truncation, so it's dropped
+        during dataset preparation."""
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills up the whole max_length budget on its own"],
+                "chosen": [" there", " yes"],
+                "rejected": [" bye", " no"],
+            }
+        )
+
+        training_args = CPOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+        trainer = CPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        )
+
+        # Only the short-prompt example survives.
+        assert len(trainer.train_dataset) == 1
+        assert trainer.train_dataset[0]["prompt_input_ids"] == self.tokenizer("Hi")["input_ids"]
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
