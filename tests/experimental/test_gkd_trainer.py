@@ -571,7 +571,7 @@ class TestGKDTrainer(TrlTestCase):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
             lmbda=1.0,
-            max_new_tokens=4,
+            max_new_tokens=2,
             per_device_train_batch_size=2,
             report_to="none",
         )
@@ -589,5 +589,5 @@ class TestGKDTrainer(TrlTestCase):
 
         # Every completion is generated, so it has at most `max_new_tokens` label tokens
         for batch in batch_samples:
-            assert ((batch["labels"] != -100).sum(dim=1) <= 4).all()
+            assert ((batch["labels"] != -100).sum(dim=1) <= 2).all()
         assert num_items_in_batch == sum((batch["labels"] != -100).sum() for batch in batch_samples)
