@@ -1226,7 +1226,7 @@ class DPOTrainer(_BaseTrainer):
         model_hash = self._precompute_model_hash
         # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
         # value so all ranks share one cache file.
-        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
+        fingerprint = [Hasher.hash((dataset._fingerprint, model_hash, self.data_collator, self.ld_alpha))]
         broadcast_object_list(fingerprint, from_process=0)
         fingerprint = fingerprint[0]
         cache_file = dataset._get_cache_file_path(fingerprint)

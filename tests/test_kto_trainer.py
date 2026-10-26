@@ -1062,6 +1062,53 @@ class TestKTOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+    def test_precompute_ref_logps_cache_invalidated_by_collator(self):
+        # The reference-score cache must depend on the collator, otherwise a trainer can reuse scores computed with a
+        # different truncation limit (e.g. after changing a custom collator's `max_length`) for different inputs.
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["What is the answer to this question? " * 2] * 4,
+                "completion": ["a correct and detailed response. " * 3] * 4,
+                "label": [True, False, True, False],
+            }
+        )
+        shared_dir = f"{self.tmp_dir}/shared"
+        fresh_dir = f"{self.tmp_dir}/fresh"
+        dataset.save_to_disk(shared_dir)
+        dataset.save_to_disk(fresh_dir)
+
+        def build(dataset_dir, max_length):
+            args = KTOConfig(
+                output_dir=f"{self.tmp_dir}/output",
+                use_cpu=True,
+                bf16=False,
+                fp16=False,
+                gradient_checkpointing=False,
+                precompute_ref_log_probs=True,
+                max_length=None,
+                loss_type="apo_zero_unpaired",
+                per_device_train_batch_size=4,
+                precompute_ref_batch_size=4,
+                seed=3,
+                report_to="none",
+                disable_tqdm=True,
+                dataloader_pin_memory=False,
+            )
+            return KTOTrainer(
+                model=AutoModelForCausalLM.from_pretrained(self.model_id, dtype="float32"),
+                args=args,
+                processing_class=self.tokenizer,
+                data_collator=DataCollatorForUnpairedPreference(
+                    pad_token_id=self.tokenizer.pad_token_id, max_length=max_length
+                ),
+                train_dataset=Dataset.load_from_disk(dataset_dir),
+            )
+
+        build(shared_dir, max_length=40)  # Populate the cache with a 40-token limit.
+        reused = build(shared_dir, max_length=8)
+        fresh = build(fresh_dir, max_length=8)
+        assert reused.train_dataset["ref_logps"] == fresh.train_dataset["ref_logps"]
+
     @pytest.mark.parametrize("iterable_as", ["train", "eval", "eval_dict", "eval_iterable_dataset_dict"])
     def test_precompute_ref_log_probs_raises_for_iterable_dataset(self, iterable_as):
         # `precompute_ref_log_probs=True` caches reference log-probs by index, which requires random access and is

@@ -996,6 +996,67 @@ class TestDPOTrainer(TrlTestCase):
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
+    def test_precompute_ref_logps_cache_invalidated_by_collator_and_ld_alpha(self):
+        # The reference-score cache must depend on everything that changes the reference forward pass. Otherwise a
+        # trainer can reuse scores computed with a different collator (e.g. after changing a custom collator's
+        # `max_length`) or a different `ld_alpha`, silently combining scores from different inputs.
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["What is the answer to this question? " * 2] * 3,
+                "chosen": ["a correct and detailed response. " * 3] * 3,
+                "rejected": ["a wrong response. " * 3] * 3,
+            }
+        )
+        shared_dir = f"{self.tmp_dir}/shared"
+        fresh_dir = f"{self.tmp_dir}/fresh"
+        dataset.save_to_disk(shared_dir)
+        dataset.save_to_disk(fresh_dir)
+
+        def build(dataset_dir, max_length, ld_alpha):
+            args = DPOConfig(
+                output_dir=f"{self.tmp_dir}/output",
+                use_cpu=True,
+                bf16=False,
+                fp16=False,
+                gradient_checkpointing=False,
+                precompute_ref_log_probs=True,
+                max_length=None,
+                truncation_mode="keep_start",
+                ld_alpha=ld_alpha,
+                per_device_train_batch_size=3,
+                precompute_ref_batch_size=3,
+                seed=3,
+                report_to="none",
+                disable_tqdm=True,
+                dataloader_pin_memory=False,
+            )
+            return DPOTrainer(
+                model=model_id,
+                args=args,
+                processing_class=tokenizer,
+                data_collator=DataCollatorForPreference(pad_token_id=tokenizer.pad_token_id, max_length=max_length),
+                train_dataset=Dataset.load_from_disk(dataset_dir),
+            )
+
+        build(shared_dir, max_length=40, ld_alpha=None)  # Populate the cache with a 40-token limit.
+        reused_collator = build(shared_dir, max_length=8, ld_alpha=None)
+        fresh_collator = build(fresh_dir, max_length=8, ld_alpha=None)
+        assert reused_collator.train_dataset["ref_chosen_logps"] == fresh_collator.train_dataset["ref_chosen_logps"]
+        assert (
+            reused_collator.train_dataset["ref_rejected_logps"] == fresh_collator.train_dataset["ref_rejected_logps"]
+        )
+
+        build(shared_dir, max_length=40, ld_alpha=None)  # Populate the cache without longer-completion weighting.
+        reused_ld_alpha = build(shared_dir, max_length=40, ld_alpha=0.5)
+        fresh_ld_alpha = build(fresh_dir, max_length=40, ld_alpha=0.5)
+        assert reused_ld_alpha.train_dataset["ref_chosen_logps"] == fresh_ld_alpha.train_dataset["ref_chosen_logps"]
+        assert (
+            reused_ld_alpha.train_dataset["ref_rejected_logps"] == fresh_ld_alpha.train_dataset["ref_rejected_logps"]
+        )
+
     @require_peft
     def test_peft_lm_head_raises(self):
         # The chunked projection reads `lm_head.weight` directly, so a LoRA adapter on `lm_head` is silently
