@@ -65,7 +65,7 @@ liger = [
     "liger-kernel>=0.8.2"
 ]
 math_verify = [
-    "math-verify>=0.5.2",
+    "math-verify>=0.8.0",  # timeouts can be disabled, which worker threads require
 ]
 openreward = [
     "openreward>=0.1.109",
