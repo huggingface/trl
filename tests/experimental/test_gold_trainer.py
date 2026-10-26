@@ -288,7 +288,7 @@ def gemma4_tokenizer():
 
 @pytest.fixture(scope="session")
 def smolvlm_processor():
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+    processor = AutoProcessor.from_pretrained(_TINY_SMOLVLM)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     return processor
@@ -296,7 +296,7 @@ def smolvlm_processor():
 
 @pytest.fixture(scope="session")
 def qwen3_vl_processor():
-    processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-2B-Instruct")
+    processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     return processor
