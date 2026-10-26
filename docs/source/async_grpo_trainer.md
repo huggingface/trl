@@ -205,6 +205,7 @@ So we split our metrics based on which stage (or _entity_) they are about:
 
 | namespace      | entity it counts                                                                       |
 | -------------- | -------------------------------------------------------------------------------------- |
+| `group/`       | one prompt's `num_generations` rollouts, scored together against one baseline          |
 | `rollout/`     | represents one _full_ conversation: its turns, its forks, how long it took to generate |
 | `completions/` | what the model (vLLM) generated for one prompt                                         |
 | `tools/`       | tool calls metrics                                                                     |
@@ -322,15 +323,37 @@ The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mi
 - queue near full, `rollout/backpressure_s` high → **trainer-bound**. Generation is throttled and its output is aging in the queue, so watch `sample/staleness_mean` climb.
 - both near zero → balanced !
 
+### Groups
+
+A **group** is one prompt generated `num_generations` times. Its completions are scored together and each advantage is taken against the group's mean reward, so when every completion of a group gets the same reward, all of them get a zero advantage and the group adds nothing to the gradient. Groups are counted when the worker scores them, not when their samples are trained on, so these metrics run slightly ahead of training and include groups later dropped for exceeding `max_staleness` (counted by `sample/dropped_stale_total`).
+
+| metric                       | meaning                                                                                                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group/scored_total`         | groups with at least one scored completion                                                                                                                |
+| `group/active_total`         | scored groups whose rewards vary, so their completions get non-zero advantages                                                                            |
+| `group/unscorable_total`     | groups where the reward functions returned `None` for every completion. All their advantages are zero, and the other `group/` metrics leave them out      |
+| `group/active_frac`          | `group/active_total` / `group/scored_total`: the share of groups that produce a gradient. It is one minus `frac_reward_zero_std` in [`GRPOTrainer`]       |
+| `group/inactive_reward_mean` | the reward the inactive groups are stuck at, averaged over them                                                                                           |
+| `group/duplicate_frac`       | completions that repeat an earlier completion of their group token for token. About 0 when generations are independent; it climbs as the policy collapses |
+
+A falling `group/active_frac` means the run is running out of signal, and `group/inactive_reward_mean` says why. Read it against the range of the reward:
+
+- near the top, the inactive groups are solved by every completion. The prompts have become too easy for the policy, which is how a run usually saturates.
+- near the bottom, every completion fails. The prompts are too hard, or something scores every completion the same, such as an answer format the reward function cannot parse.
+
+With 0/1 rewards, `group/inactive_reward_mean` is exactly the share of inactive groups that every completion solves: (1 − `group/active_frac`) × `group/inactive_reward_mean` is the fraction of groups solved by all of their completions, and (1 − `group/active_frac`) × (1 − `group/inactive_reward_mean`) the fraction failed by all. In a healthy run `group/active_frac` drifts down while `group/inactive_reward_mean` rises. If both fall, completions that used to pass now fail together.
+
 ### Completions
 
 A **completion** is what vLLM generated for one prompt, counted across _every turn_ of the rollout.
 
-| metric                                             | meaning                                                                                               |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `completions/mean_length`                          | generated tokens per rollout, averaged over all of its turns                                          |
-| `completions/min_length`, `completions/max_length` | shortest and longest rollout in the window                                                            |
-| `completions/clipped_ratio`                        | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`. |
+| metric                                                                   | meaning                                                                                                                      |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `completions/mean_length`                                                | generated tokens per rollout, averaged over all of its turns                                                                 |
+| `completions/min_length`, `completions/max_length`                       | shortest and longest rollout in the window                                                                                   |
+| `completions/clipped_ratio`                                              | fraction of rollouts whose last turn did not end on EOS, i.e. was cut off by `max_completion_length`.                        |
+| `completions/mean_terminated_length`                                     | like `completions/mean_length`, over the rollouts that ended on EOS only, so a tail of clipped rollouts cannot hide a change |
+| `completions/min_terminated_length`, `completions/max_terminated_length` | shortest and longest of those rollouts in the window                                                                         |
 
 ### Rollouts
 

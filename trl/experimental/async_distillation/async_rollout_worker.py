@@ -475,19 +475,30 @@ class _AsyncRolloutLoop:
             # Keyed the way the trainer names `teacher_jsd/{teacher_id}`, so the per-teacher series group together.
             self._rates[f"teacher_score_s/{teacher_id}"][0] += score_s
             self._rates[f"teacher_score_s/{teacher_id}"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
             # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            if not is_truncated:
+                # Lengths of the completions that finished, which a tail cut off at `max_tokens` would otherwise mask
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         self._push_metrics(
             {
                 "rollout/duration_s": duration_s,
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
