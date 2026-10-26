@@ -1935,6 +1935,8 @@ class TestAddFusedLMHeadLoss:
         [
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
         ],
     )
     def test_forward_matches_reference_with_aux_loss(self, model_id):
