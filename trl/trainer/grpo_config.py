@@ -185,7 +185,7 @@ class GRPOConfig(_BaseConfig):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
             When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the [ScaleRL
-            paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`.
+            paper](https://huggingface.co/papers/2510.13786) and it defaults to the recommended value `5.0`.
         sapo_temperature_neg (`float`, *optional*, defaults to `1.05`):
             Temperature for tokens with non-positive advantage scores used in the `sapo` loss function. This parameter
             is introduced in the [Soft Adaptive Policy Optimization paper](https://huggingface.co/papers/2511.20347).
@@ -707,7 +707,7 @@ class GRPOConfig(_BaseConfig):
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`. "
             "When used with `loss_type='cispo'`, this corresponds to the ε_max param specified in the "
-            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and the recommended value is `5.0`."
+            "[ScaleRL paper](https://huggingface.co/papers/2510.13786) and it defaults to the recommended value `5.0`."
         },
     )
     sapo_temperature_neg: float = field(
@@ -1138,6 +1138,11 @@ class GRPOConfig(_BaseConfig):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
+
+        # CISPO bounds the importance weight itself, not its distance to 1, so falling back to `epsilon` would clip every
+        # weight
+        if self.loss_type == "cispo" and self.epsilon_high is None:
+            self.epsilon_high = 5.0
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
