@@ -140,14 +140,18 @@ class TestCPOTrainer(TrlTestCase):
             }
         )
 
-        training_args = CPOConfig(output_dir=self.tmp_dir, max_length=6, report_to="none")
+        training_args = CPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=6,
+            report_to="none",
+        )
         trainer = CPOTrainer(
-            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
 
         # Only the short-prompt example survives.
         assert len(trainer.train_dataset) == 1
-        assert trainer.train_dataset[0]["prompt_input_ids"] == self.tokenizer("Hi")["input_ids"]
+        assert trainer.train_dataset[0]["prompt_input_ids"] == trainer.processing_class("Hi")["input_ids"]
 
     @pytest.mark.parametrize(
         "eval_dataset_type",
