@@ -73,6 +73,7 @@ The vLLM server and the trainer must run on **separate GPUs**. Use `CUDA_VISIBLE
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
 
@@ -115,6 +116,7 @@ Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, …) can be trained on **tex
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
 
@@ -134,6 +136,7 @@ Top-k and top-p renormalize the sampling distribution over a restricted candidat
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}' \
     --return-sampling-mask \
     --enable-scale-out
@@ -144,6 +147,13 @@ config = AsyncGRPOConfig(top_p=0.95, top_k=512)
 ```
 
 `--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts. An older vLLM cannot return the set, so the trainer keeps normalizing over the whole vocabulary and warns about the biased ratio.
+
+## Score centering
+
+The server's log-probabilities never match the trainer's exactly: different kernels, a different precision, a policy a few steps behind. Importance weights alone do not correct for that, because the score  \\( \nabla_\theta \log \pi_\theta \\) of a sampled token does not average to zero under the sampler, so every update also pulls the policy toward the sampler ([Score centering](https://huggingface.co/papers/2609.20807)). By default the trainer subtracts that expectation at every position (`score_centering=True`), estimated over the sampler's `num_sampler_logprobs` most likely tokens, and drops the tokens whose importance ratio to the sampler falls outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]`. For that the worker requests the top log-probabilities of every generated token from the server, which it serializes per token: a large `num_sampler_logprobs` slows the server down, and its `--max-logprobs` bounds what it accepts. `score_centering=False` trains with the clipped objective alone. `sampling/masked_mean` is the fraction of tokens the bounds dropped and `sampling/sampler_mass` the sampler's probability mass covered by the top tokens.
+
+> [!WARNING]
+> Serializing the top log-probabilities is CPU work in vLLM's API server, and with its default single API server `num_sampler_logprobs=8` halves generation throughput. Start the server with `--api-server-count 8` on vLLM 0.32 or later: measured on one H100 with 1.5B to 7B models, the top-8 log-probabilities then cost under 3% of generation throughput. On vLLM 0.31 the same flag still leaves a 20 to 40% loss, fixed upstream by [vllm-project/vllm#58181](https://github.com/vllm-project/vllm/pull/58181).
 
 ## LoRA
 
@@ -166,6 +176,7 @@ Every weight sync has to get the updated policy to the server. By default the tr
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}' \
     --enable-lora \
     --max-lora-rank 32 \
