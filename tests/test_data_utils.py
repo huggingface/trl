@@ -443,6 +443,7 @@ class TestApplyChatTemplate(TrlTestCase):
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
         "trl-internal-testing/tiny-GptOssForCausalLM",
+        "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
         pytest.param(
             "trl-internal-testing/tiny-Glm4MoeForCausalLM",
             marks=pytest.mark.skipif(
