@@ -1168,3 +1168,10 @@ class GRPOConfig(_BaseConfig):
                 "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
                 "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
             )
+
+        if self.use_vllm and self.vllm_importance_sampling_correction and self.repetition_penalty != 1.0:
+            raise ValueError(
+                "`repetition_penalty != 1.0` needs `vllm_importance_sampling_correction=False`: vLLM applies the "
+                "penalty to the log-probs it returns and the trainer does not, so the importance sampling ratio "
+                "collapses to 0."
+            )

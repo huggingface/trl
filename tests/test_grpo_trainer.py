@@ -2567,6 +2567,7 @@ class TestGRPOTrainer(TrlTestCase):
             top_k=10,
             min_p=0.01,
             repetition_penalty=1.1,
+            vllm_importance_sampling_correction=False,  # vLLM applies `repetition_penalty` to its log-probs
         )
 
         trainer = GRPOTrainer(
