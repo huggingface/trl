@@ -564,3 +564,30 @@ class TestGKDTrainer(TrlTestCase):
         # If the loss covers every valid completion token, the global-count reduction (sum / num_valid) equals the
         # local mean. The old prompt-width slice summed FEWER tokens than num_valid, so loss_global != loss_mean.
         torch.testing.assert_close(loss_global, loss_mean, rtol=1e-4, atol=1e-6)
+
+    def test_num_items_in_batch_counts_generated_tokens(self):
+        # On-policy generation replaces the dataset labels, so the label tokens that normalize the loss must be counted
+        # on the generated completions, not on the dataset ones. See issue #7924.
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            lmbda=1.0,
+            max_new_tokens=4,
+            per_device_train_batch_size=2,
+            report_to="none",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=self.tokenizer,
+        )
+
+        epoch_iterator = iter(trainer.get_train_dataloader())
+        batch_samples, num_items_in_batch = trainer.get_batch_samples(epoch_iterator, 2, trainer.args.device)
+
+        # Every completion is generated, so it has at most `max_new_tokens` label tokens
+        for batch in batch_samples:
+            assert ((batch["labels"] != -100).sum(dim=1) <= 4).all()
+        assert num_items_in_batch == sum((batch["labels"] != -100).sum() for batch in batch_samples)
