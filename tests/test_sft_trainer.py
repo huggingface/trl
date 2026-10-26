@@ -329,6 +329,7 @@ class TestSFTTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
