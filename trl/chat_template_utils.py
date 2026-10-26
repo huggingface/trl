@@ -799,12 +799,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         lfm2_v2_chat_template,
         lfm2_2_5_chat_template,
         lfm2_2_5_v2_chat_template,
-        lfm2_2_5_vl_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, lfm2_2_5_template
-    elif chat_template == lfm2_2_5_v3_chat_template:
+    elif chat_template in [lfm2_2_5_v3_chat_template, lfm2_2_5_vl_chat_template]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, lfm2_2_5_v3_template
