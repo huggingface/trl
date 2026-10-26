@@ -805,7 +805,6 @@ class TestHeadLossNumerics:
     def test_jsd_near_endpoint(self, device, chunk_size, beta):
         from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
 
-        beta = float(torch.tensor(beta, dtype=torch.float32))
         hidden = torch.ones(1, 1, device=device)
         student = torch.tensor([[-40.0], [40.0]], device=device, requires_grad=True)
         teacher = -student.detach()
