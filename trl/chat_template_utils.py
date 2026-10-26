@@ -1382,10 +1382,21 @@ def parse_response(
     >>> tokenizer = add_response_schema(tokenizer)  # temporary until built-in support
     >>> text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
     >>> ids = tokenizer(text)["input_ids"]
-    >>> parse_response(tokenizer, ids)
+    >>> prefix = tokenizer.apply_chat_template(
+    ...     [{"role": "user", "content": "What is 3 * 4?"}], add_generation_prompt=True, return_dict=True
+    ... )["input_ids"]
+    >>> parse_response(tokenizer, ids, prefix=prefix)
     {'role': 'assistant', 'content': '', 'tool_calls': [{'type': 'function', 'function': {'name': 'multiply', 'arguments': {'a': 3, 'b': 4}}}]}
     ```
     """
+    # The new-style parser needs `prefix=` to tell the prompt from the generated response. Without it, transformers
+    # raises a `ValueError`, which the fallback below would swallow, silently returning tool calls as plain content.
+    if _SUPPORTS_RESPONSE_TEMPLATE and getattr(tokenizer, "response_template", None) is not None and prefix is None:
+        raise ValueError(
+            "`parse_response` requires `prefix=` (the token IDs of the chat prompt that came before the generated "
+            "response) when the tokenizer has a new-style `response_template` set (transformers >= 5.13). Pass the "
+            "output of `apply_chat_template(..., add_generation_prompt=True)`."
+        )
     try:
         # `prefix=` is only supported by the new-style parser (transformers >= 5.13, when a `response_template` is set).
         # Older transformers only ship the legacy `response_schema` parser, whose `parse_response` rejects the kwarg, so

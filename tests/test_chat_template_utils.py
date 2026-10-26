@@ -1779,13 +1779,29 @@ class TestParseResponse:
         processing_class = self._load(model_name)
         text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call><|im_end|>'
         assistant_text = processing_class(text)["input_ids"]
-        parsed = parse_response(processing_class, assistant_text)
+        prefix = processing_class.apply_chat_template(
+            [{"role": "user", "content": "What is 3*4?"}], add_generation_prompt=True, tokenize=True, return_dict=True
+        ).input_ids
+        parsed = parse_response(processing_class, assistant_text, prefix=prefix)
         expected = {
             "role": "assistant",
             "content": '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}\n</tool_call>',
         }
 
         assert parsed == expected
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE, reason="Requires the new-style response_template parser (>= 5.13)"
+    )
+    def test_parse_response_missing_prefix_raises(self, model_name):
+        if model_name != "trl-internal-testing/tiny-Qwen3MoeForCausalLM":
+            pytest.skip("For simplicity, we only test the missing prefix case on one tokenizer.")
+        processing_class = self._load(model_name)
+        text = '<tool_call>\n{"name": "multiply", "arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>'
+        assistant_text = processing_class(text)["input_ids"]
+        assert getattr(processing_class, "response_template", None) is not None
+        with pytest.raises(ValueError, match="prefix"):
+            parse_response(processing_class, assistant_text)
 
     def test_parse_response_truncated(self, model_name):
         processing_class = self._load(model_name)
@@ -1813,7 +1829,7 @@ class TestParseResponse:
         tokenizer = processing_class.tokenizer if self.is_vlm else processing_class
         # Truncate the response mid-tool-call and just check that parsing doesn't crash.
         for end in range(1, len(response)):
-            parse_response(tokenizer, response[:end])
+            parse_response(tokenizer, response[:end], prefix=prefix)
 
 
 class TestChatTemplatesDocumentation:
