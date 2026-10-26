@@ -264,7 +264,7 @@ def llama_tokenizer():
 
 @pytest.fixture(scope="session")
 def qwen_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_QWEN2)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
