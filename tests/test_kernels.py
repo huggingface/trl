@@ -661,14 +661,16 @@ class TestHeadLossNumerics:
         weight = torch.full((2053, 3), -9.0, device=device)
         weight[targets, torch.arange(3, device=device)] = 20.0
         weight.requires_grad_()
-        logps, *_ = ChunkedLogProbFunction.apply(hidden, weight, None, targets, 1.0, 2053, None, 1.0, ())
-        (-logps.sum()).backward()
+        *_, score_logps = ChunkedLogProbFunction.apply(
+            hidden, weight, None, targets.roll(1), 1.0, 2053, None, 1.0, (), None, targets.unsqueeze(-1)
+        )
+        (-score_logps.sum()).backward()
         # Even fp64 cross-entropy loses relative precision at this margin; use the analytic loss and gradient.
         tail_mass = 2052 * math.exp(-29.0)
         expected_loss = torch.tensor(3 * math.log1p(tail_mass), device=device, dtype=torch.float64)
         expected_grad = torch.full((2053, 3), math.exp(-29.0) / (1 + tail_mass), device=device, dtype=torch.float64)
         expected_grad[targets, torch.arange(3, device=device)] = -tail_mass / (1 + tail_mass)
-        torch.testing.assert_close(-logps.double().sum(), expected_loss, atol=0, rtol=1e-5)
+        torch.testing.assert_close(-score_logps.double().sum(), expected_loss, atol=0, rtol=1e-5)
         torch.testing.assert_close(weight.grad.double(), expected_grad, atol=0, rtol=1e-5)
 
     @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -685,11 +687,13 @@ class TestHeadLossNumerics:
         )
         targets = torch.arange(3, device=device)
         support = torch.tensor([[0, 1, -1], [1, 2, -1], [0, 2, -1]], device=device) if use_support else None
-        logps, *_ = ChunkedLogProbFunction.apply(
-            hidden, weight, None, targets, 1.0, chunk_size, None, 1.0, (), support
+        score_ids = torch.stack((targets, torch.full_like(targets, -1)), -1)
+        logps, *_, score_logps = ChunkedLogProbFunction.apply(
+            hidden, weight, None, targets, 1.0, chunk_size, None, 1.0, (), support, score_ids
         )
         advantages = torch.tensor([0.5, -1.0, 2.0], device=device)
-        loss = -(logps * advantages).sum()
+        torch.testing.assert_close(score_logps[:, 0], logps, atol=0, rtol=1e-6)
+        loss = -((logps + score_logps[:, 0]) * advantages).sum()
         loss.backward()
         logits = (hidden.detach().double() @ weight.detach().double().t()).requires_grad_()
         if use_support:
@@ -697,7 +701,7 @@ class TestHeadLossNumerics:
             ref_logps = logits.masked_fill(~keep, -torch.inf).log_softmax(-1)
         else:
             ref_logps = logits.log_softmax(-1)
-        ref_loss = -(ref_logps.diagonal() * advantages.double()).sum()
+        ref_loss = -2 * (ref_logps.diagonal() * advantages.double()).sum()
         ref_loss.backward()
         torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-6)
         torch.testing.assert_close(
