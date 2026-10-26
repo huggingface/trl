@@ -218,7 +218,7 @@ pip install trl[vllm]
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
 > [!TIP]
-> By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
+> By default, sequence-level Masked Importance Sampling (`vllm_importance_sampling_mode="sequence_mask"`) is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Masked Importance Sampling](paper_index#masked-importance-sampling) and [Sequence-level Importance Sampling](paper_index#sequence-level-importance-sampling)
 
 #### Option 1: Colocate mode
 
@@ -961,6 +961,7 @@ The returned images are automatically injected into the conversation and passed 
 
 Tested with:
 
+- **Beam** — e.g., `reflection/Beam-1.0-501B-A23B`
 - [**Gemma4**](https://huggingface.co/collections/google/gemma-4) — e.g., `google/gemma-4-E2B-it`
 - **GLM-4-MoE** ([4.5](https://huggingface.co/collections/zai-org/glm-45), [4.6](https://huggingface.co/collections/zai-org/glm-46) or [4.7](https://huggingface.co/collections/zai-org/glm-47)) — e.g., `zai-org/GLM-4.7`
 - [**GPT-OSS**](https://huggingface.co/collections/openai/gpt-oss) — e.g., `openai/gpt-oss-20b`

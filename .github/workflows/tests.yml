@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - ci-*
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
@@ -49,7 +48,7 @@ jobs:
   tests:
     permissions:
       contents: read
-    name: Tests with latest dependencies
+    name: Tests with latest dependencies (CUDA)
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -95,13 +94,13 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests with latest dependencies
+          title: Tests with latest dependencies (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
     permissions:
       contents: read
-    name: Tests with dev dependencies
+    name: Tests with dev dependencies (CUDA)
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -152,13 +151,13 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests with dev dependencies
+          title: Tests with dev dependencies (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
     permissions:
       contents: read
-    name: Tests without optional dependencies
+    name: Tests without optional dependencies (CUDA)
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -204,13 +203,13 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests without optional dependencies
+          title: Tests without optional dependencies (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
     permissions:
       contents: read
-    name: Tests with minimum versions
+    name: Tests with minimum versions (CUDA)
     runs-on:
       group: aws-g6e-4xlarge
     container:
@@ -244,10 +243,22 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
+          # Oldest supported Python, so every pin is exactly the pyproject floor
           uv pip install \
             ".[dev]" \
-            "accelerate==1.10.1" \
+            "accelerate==1.11.0" \
+            "bitsandbytes==0.45.2" \
             "datasets==4.7.0" \
+            "deepspeed==0.18.6" \
+            "huggingface_hub==0.34.0" \
+            "liger-kernel==0.8.2" \
+            "numpy==1.26.0" \
+            "pandas==2.1.1" \
+            "peft==0.17.0" \
+            "psutil==5.9.4" \
+            "pyarrow==21.0.0" \
+            "pyyaml==6.0.1" \
+            "torch==2.6.0" \
             "transformers==4.56.2"
 
       - name: Test with pytest
@@ -260,13 +271,13 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Tests with minimum versions
+          title: Tests with minimum versions (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   distributed:
     permissions:
       contents: read
-    name: Distributed tests
+    name: Distributed tests (CUDA)
     runs-on:
       group: aws-g5-12xlarge-cache
     container:
@@ -314,5 +325,147 @@ jobs:
         uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Distributed tests
+          title: Distributed tests (CUDA)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  tests_amd:
+    permissions:
+      contents: read
+    name: Tests with latest dependencies (AMD)
+    runs-on:
+      group: hfc-amd-mi300-1gpu
+    container:
+      image: rocm/dev-ubuntu-24.04:7.2.4
+      # The runner assigns the GPUs through HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES in its env file
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    env:
+      # The pod sees 160 CPUs but its quota is 19 (`cpu.max`): one worker per CPU of the quota, one thread per worker
+      PYTEST_XDIST_AUTO_NUM_WORKERS: 19
+      OMP_NUM_THREADS: 1
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+          uv pip install ".[dev]"
+
+      - name: Check the ROCm build of torch
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          import torch
+
+          assert torch.version.hip, "CUDA torch got installed"
+          # ROCm may report zero devices before HIP is initialized
+          torch.cuda.init()
+          assert torch.cuda.device_count() == 1, "Unexpected GPU isolation"
+          # A dependency requiring `triton` installs the CUDA build over ROCm's `pytorch-triton-rocm`
+          x = torch.arange(16, device="cuda", dtype=torch.float32)
+          torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
+          PY
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests with latest dependencies (AMD)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  distributed_amd:
+    permissions:
+      contents: read
+    name: Distributed tests (AMD)
+    runs-on:
+      group: hfc-amd-mi300-2gpu
+    container:
+      image: rocm/dev-ubuntu-24.04:7.2.4
+      # The runner assigns the GPUs through HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES in its env file
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+          uv pip install ".[dev]"
+
+      - name: Check the ROCm build of torch
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          import torch
+
+          assert torch.version.hip, "CUDA torch got installed"
+          # ROCm may report zero devices before HIP is initialized
+          torch.cuda.init()
+          assert torch.cuda.device_count() == 2, "Unexpected GPU isolation"
+          # A dependency requiring `triton` installs the CUDA build over ROCm's `pytorch-triton-rocm`
+          x = torch.arange(16, device="cuda", dtype=torch.float32)
+          torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
+          PY
+
+      - name: Run distributed tests
+        run: |
+          source .venv/bin/activate
+          pytest -v tests/distributed/test_distributed.py
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Distributed tests (AMD)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

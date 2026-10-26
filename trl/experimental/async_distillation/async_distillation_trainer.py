@@ -1236,12 +1236,15 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # candidate token ids per position (the teacher's top-k + tail), not just the realized token's logprob, which
         # is all that head supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
         # a different mechanism that does support multiple candidate ids per position.
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
-            **model_init_kwargs,
-        )
+        # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
+        if torch.version.hip:
+            attn_implementation = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            attn_implementation = "kernels-community/flash-attn4"
+        else:
+            attn_implementation = "kernels-community/flash-attn3"
+        model_init_kwargs.setdefault("attn_implementation", attn_implementation)
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=None, **model_init_kwargs)
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -1933,7 +1936,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model = self.accelerator.unwrap_model(self.model)
 
         logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.weight_transfer:
+        if self.accelerator.is_main_process:
             self.weight_transfer.pause()
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
@@ -1947,7 +1950,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         if is_peft_model(model):
             model.merge_adapter()
         try:
-            if self.accelerator.is_main_process and self.weight_transfer:
+            if self.accelerator.is_main_process:
                 self.weight_transfer.send_weights(self._streaming_iter())
             else:
                 # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
@@ -1962,8 +1965,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
-            if self.weight_transfer:
-                self.weight_transfer.resume()
+            self.weight_transfer.resume()
             self.model_version += 1
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
@@ -2038,7 +2040,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
-            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
 
@@ -2064,7 +2066,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 elif not isinstance(self.train_dataset, Dataset):
                     logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
                 else:
-                    with open(rollout_state_file) as f:
+                    with open(rollout_state_file, encoding="utf-8") as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
                     self._prompts_before_resume = rollout_state["prompt_index"]

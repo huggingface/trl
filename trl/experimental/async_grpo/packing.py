@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from functools import cache
+from itertools import chain
 from typing import Any
 
+import numpy as np
 import torch
 from transformers import AttentionInterface
 from transformers.integrations.flash_attention import get_target_dtype
@@ -64,6 +67,17 @@ class TreeRow:
         novel = len(input_ids) - shared
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
+    def cost(self, sample: dict[str, Any]) -> int:
+        """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
+        input_ids = sample["input_ids"].tolist()
+        children, shared = self.roots, 0
+        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
+            if key not in children:
+                break
+            children = self.children[children[key]]
+            shared += 1
+        return sum(depth + 1 for depth in range(shared, len(input_ids)))
+
     def add(self, sample: dict[str, Any]) -> None:
         input_ids = sample["input_ids"].tolist()
         children = self.roots
@@ -94,6 +108,11 @@ class TreeRow:
                 - `input_ids` (`N`): the unique tokens.
                 - `position_ids` (`N`): each token's position in its samples, which is its depth in the trie.
                 - `shift_labels` (`N`): next token each position predicts, `-100` where it is not trained.
+                - `sampling_mask` (`T`), `sampling_mask_counts` (`N`): candidate sets the sampler drew the next tokens
+                  from, laid end to end in position order, and the size of each position's set; `T` is `0` without
+                  top-k/top-p truncation. Ragged, because the sets average a few tokens but can reach the top-k cap.
+                - `sampler_ids` (`N`, `K`), `sampler_log_probs` (`N`, `K`): the sampler's most likely next tokens at
+                  the position and their log-probs, padded with `-1` and `-inf`; `K` is `0` unless requested.
                 - `tree_kv_index` (`K`): packed position of every K/V row [`tree_attention`] gathers, the
                   root-to-segment paths of all segments laid end to end.
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
@@ -126,20 +145,35 @@ class TreeRow:
             stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
 
         shift_labels = [-100] * len(input_ids)
+        sampling_mask = [[] for _ in input_ids]
+        num_logprobs = max(sample["sampler_ids"].shape[1] for sample in self.samples)
+        sampler_ids = np.full((len(input_ids), num_logprobs), -1, dtype=np.int64)
+        sampler_log_probs = np.full((len(input_ids), num_logprobs), -math.inf, dtype=np.float32)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
             ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
+            first = len(token_index)
             for p in range(1, len(nodes)):
                 if mask[p]:
                     shift_labels[packed[nodes[p - 1]]] = ids[p]
+                    sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
                     token_index.append(packed[nodes[p - 1]])
                     old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
+            trained = np.flatnonzero(sample["completion_mask"][1:]) + 1
+            sampler_ids[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
+            sampler_log_probs[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][
+                trained
+            ]
         return {
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
             "shift_labels": torch.tensor(shift_labels),
+            "sampling_mask": torch.tensor(list(chain.from_iterable(sampling_mask)), dtype=torch.long),
+            "sampling_mask_counts": torch.tensor(list(map(len, sampling_mask))),
+            "sampler_ids": torch.from_numpy(sampler_ids),
+            "sampler_log_probs": torch.from_numpy(sampler_log_probs),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
             "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
             "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
@@ -157,9 +191,14 @@ TREE_ATTENTION = "tree_fa3"
 
 
 @cache
-def _flash_attn3():
+def _flash_attn():
     from kernels import get_kernel
 
+    if torch.version.hip:
+        return get_kernel("kernels-community/aiter-flash-attn", version=2)
+    # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+        return get_kernel("kernels-community/flash-attn4", version=0)
     return get_kernel("kernels-community/flash-attn3", version=1)
 
 
@@ -182,7 +221,7 @@ def tree_attention(
 ):
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn3().flash_attn_varlen_func(
+    out = _flash_attn().flash_attn_varlen_func(
         query,
         key.index_select(0, tree_kv_index),
         value.index_select(0, tree_kv_index),
@@ -193,7 +232,7 @@ def tree_attention(
         softmax_scale=scaling,
         causal=True,
         window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),
-        softcap=softcap or 0.0,
+        **({"softcap": softcap} if softcap else {}),
     )
     out = out[0] if isinstance(out, tuple) else out
     return out.unsqueeze(0), None
