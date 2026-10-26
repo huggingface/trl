@@ -646,6 +646,7 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", id="phi3.5"),
             # Renders tool message content as plain text but drops assistant tool_calls
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3", id="llama3"),
+            pytest.param("trl-internal-testing/tiny-GraniteMoeForCausalLM", id="granitemoe"),
             # The earlier LFM2 revision renders `tools` into the system prompt and wraps tool message content in
             # <|tool_response_start|> / <|tool_response_end|>, but never reads `tool_calls`: the model is trained to
             # emit <|tool_call_start|> / <|tool_call_end|> as plain text inside `content`.

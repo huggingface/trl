@@ -181,6 +181,7 @@ class TestDPOTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
