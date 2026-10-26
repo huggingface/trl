@@ -336,10 +336,14 @@ A **group** is one prompt generated `num_generations` times. Its completions are
 | `group/inactive_reward_mean` | the reward the inactive groups are stuck at, averaged over them                                                                                           |
 | `group/duplicate_frac`       | completions that repeat an earlier completion of their group token for token. About 0 when generations are independent; it climbs as the policy collapses |
 
-A falling `group/active_frac` means the run is running out of signal, and `group/inactive_reward_mean` says why. Read it against the range of the reward:
+A falling `group/active_frac` means the run is running out of signal, and `group/inactive_reward_mean`, read against the range of the reward, says why:
 
-- near the top, the inactive groups are solved by every completion. The prompts have become too easy for the policy, which is how a run usually saturates.
-- near the bottom, every completion fails. The prompts are too hard, or something scores every completion the same, such as an answer format the reward function cannot parse.
+| `group/active_frac` | `group/inactive_reward_mean` | meaning                                                                                                                                   | what to do                                                                         |
+| ------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| high                | anything                     | most groups produce a gradient. Few groups are inactive, so their mean reward is noisy and can be ignored                                 | nothing                                                                            |
+| low                 | near the top of the range    | the prompts are too easy: every completion solves them, which is how a run usually saturates                                              | drop the prompts that always pass, add harder ones, or stop the run                |
+| low                 | near the bottom of the range | the prompts are too hard, or something scores every completion the same, such as an answer format the reward function cannot parse        | check that the reward function parses the completions, then move to easier prompts |
+| low                 | in the middle                | with 0/1 rewards, a mix of too-easy and too-hard prompts. With partial-credit rewards, groups can also be stuck on the same partial score | read the rollouts                                                                  |
 
 With 0/1 rewards, `group/inactive_reward_mean` is exactly the share of inactive groups that every completion solves: (1 − `group/active_frac`) × `group/inactive_reward_mean` is the fraction of groups solved by all of their completions, and (1 − `group/active_frac`) × (1 − `group/inactive_reward_mean`) the fraction failed by all. In a healthy run `group/active_frac` drifts down while `group/inactive_reward_mean` rises. If both fall, completions that used to pass now fail together.
 
