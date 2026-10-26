@@ -1691,6 +1691,63 @@ class TestAddFusedLMHead:
 
         torch.testing.assert_close(out["aux_loss"], expected)
 
+    @pytest.mark.parametrize("model_type", ["granitemoe", "phimoe"])
+    def test_aux_loss_num_local_experts(self, model_type):
+        """Configs that name the expert count `num_local_experts` get the same aux loss as their own forward."""
+        config = AutoConfig.for_model(
+            model_type,
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            num_local_experts=4,
+            num_experts_per_tok=2,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        model.eval()  # PhiMoE adds jitter noise to the router in training mode
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+        attention_mask = torch.ones_like(input_ids)
+        attention_mask[1, 8:] = 0
+        expected = model(input_ids=input_ids, attention_mask=attention_mask, output_router_logits=True).aux_loss
+
+        add_fused_lm_head(model)
+        out = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            output_router_logits=True,
+            fused_lm_head=True,
+        )
+
+        torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        config = AutoConfig.for_model(
+            "granitemoehybrid",
+            vocab_size=512,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            num_local_experts=0,
+            shared_intermediate_size=128,
+            layer_types=["mamba", "attention"],
+            mamba_n_heads=8,
+            mamba_d_head=16,
+            router_aux_loss_coef=0.01,
+        )
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
+
     @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
     def test_forward(self, model_id, temperature):
