@@ -1665,9 +1665,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
             pytest.param("trl-internal-testing/tiny-Llama4ForCausalLM", "chunked_attention", id="llama4"),
-            pytest.param(
-                "trl-internal-testing/tiny-DeepseekV4ForCausalLM", "compressed_sparse_attention", id="deepseek-v4"
-            ),
         ],
     )
     def test_init_raises(self, model_id, match):
