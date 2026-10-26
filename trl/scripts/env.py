@@ -18,12 +18,14 @@
 # ]
 # ///
 
+import os
 import platform
 from importlib.metadata import version
 
 
 def print_env():
     import torch
+    from accelerate.commands.config import default_config_file, load_config_from_file
     from transformers import is_bitsandbytes_available
     from transformers.utils import is_peft_available
 
@@ -42,6 +44,18 @@ def print_env():
         # `get_device_name` returns "neuron:<index>"; the properties name the chip (e.g. "trn2")
         devices = [torch.neuron.get_device_properties(i).name for i in range(torch.neuron.device_count())]
 
+    accelerate_config = accelerate_config_str = "not found"
+
+    # Get the default from the config file.
+    if os.path.isfile(default_config_file):
+        accelerate_config = load_config_from_file(default_config_file).to_dict()
+
+    accelerate_config_str = (
+        "\n" + "\n".join([f"  - {prop}: {val}" for prop, val in accelerate_config.items()])
+        if isinstance(accelerate_config, dict)
+        else accelerate_config
+    )
+
     commit_hash = get_git_commit_hash("trl")
 
     info = {
@@ -52,6 +66,7 @@ def print_env():
         "accelerator(s)": ", ".join(devices) if devices is not None else "cpu",
         "Transformers version": version("transformers"),
         "Accelerate version": version("accelerate"),
+        "Accelerate config": accelerate_config_str,
         "Datasets version": version("datasets"),
         "HF Hub version": version("huggingface_hub"),
         "bitsandbytes version": version("bitsandbytes") if is_bitsandbytes_available() else "not installed",

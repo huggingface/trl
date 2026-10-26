@@ -180,6 +180,30 @@ class TestCLI(TrlTestCase):
         assert "--nproc_per_node" not in torchrun_args.training_script_args
         assert "--report_to" in torchrun_args.training_script_args
 
+    @pytest.mark.parametrize(
+        "launch_args, expected_launch_args",
+        [
+            (["--num_processes", "2"], ["--num_processes", "2"]),
+            (["--accelerate_config", "zero2"], ["--config_file"]),
+        ],
+    )
+    def test_sft_accelerate_launch_deprecated(self, launch_args, expected_launch_args):
+        # Arguments only `accelerate launch` knows still go to it, with a deprecation warning, until v2.0.0.
+        from trl.cli import main
+
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
+        with (
+            patch("trl.cli.accelerate_launcher.launch_training_script") as mock_launch,
+            patch("sys.argv", command.split(" ") + launch_args),
+            pytest.warns(FutureWarning, match="removed in v2.0.0"),
+        ):
+            main()
+
+        kwargs = mock_launch.call_args.kwargs
+        assert kwargs["script_name"] == "sft.py"
+        assert kwargs["launch_args"][: len(expected_launch_args)] == expected_launch_args
+        assert "--report_to" in kwargs["training_script_args"]
+
     def test_sft_config_file(self):
         from trl.cli import main
 

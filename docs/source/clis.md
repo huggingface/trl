@@ -513,6 +513,9 @@ trl kto --config kto_config.yaml
 </hfoption>
 </hfoptions>
 
+> [!NOTE]
+> Until TRL v2.0.0, `trl` still launches through `accelerate launch` when it gets arguments that only `accelerate launch` knows, such as `--num_processes` or `--accelerate_config`, or when an `accelerate config` default file exists. This path is deprecated and warns.
+
 ### Using dataset mixtures
 
 You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
@@ -647,6 +650,24 @@ Copy-paste the following information when reporting an issue:
 - accelerator(s): NVIDIA H100 80GB HBM3
 - Transformers version: 4.45.0.dev0
 - Accelerate version: 0.34.2
+- Accelerate config: 
+  - compute_environment: LOCAL_MACHINE
+  - distributed_type: DEEPSPEED
+  - mixed_precision: no
+  - use_cpu: False
+  - debug: False
+  - num_processes: 4
+  - machine_rank: 0
+  - num_machines: 1
+  - rdzv_backend: static
+  - same_network: True
+  - main_training_function: main
+  - enable_cpu_affinity: False
+  - deepspeed_config: {'gradient_accumulation_steps': 4, 'offload_optimizer_device': 'none', 'offload_param_device': 'none', 'zero3_init_flag': False, 'zero_stage': 2}
+  - downcast_bf16: no
+  - tpu_use_cluster: False
+  - tpu_use_sudo: False
+  - tpu_env: []
 - Datasets version: 3.0.0
 - HF Hub version: 0.24.7
 - TRL version: 0.12.0.dev0+acb4d70
