@@ -87,7 +87,7 @@ Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` sin
 
 ### `lfm2_2_5.jinja`
 
-Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` and the other checkpoints in that generation). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
+Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` before [13a5383](https://huggingface.co/LiquidAI/LFM2.5-230M/commit/13a53837c4906b4f7405932532ba85d182bb013b), and still by `LiquidAI/LFM2.5-230M-Base`). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
 
 ### `lfm2_2_5_v2.jinja`
 
