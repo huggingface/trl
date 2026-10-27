@@ -2682,7 +2682,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
+    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, with plausible rewards. The real worker is built here (it spawns nothing until `start()`)
         # to read the `lora_name` the trainer hands it.
@@ -2771,7 +2771,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         assert len(sent) == len(set(sent))
 
     @require_vllm  # the merged path builds the real `WeightTransferClient`, whose constructor requires vLLM
-    def test_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
+    def test_vllm_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
         # `init_weight_transfer`, which is not called.
@@ -2848,7 +2848,7 @@ def _tensors_handed_to_producer(info, stream):
 
 
 @require_vllm  # WeightTransferClient's constructor requires vLLM
-class TestManifestWeightStream:
+class TestVLLMManifestWeightStream:
     def test_send_weights_streams_in_the_manifest_dtype(self):
         model = torch.nn.Sequential(
             torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
