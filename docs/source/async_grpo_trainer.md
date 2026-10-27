@@ -106,9 +106,6 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 > [!WARNING]
 > **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
 
-> [!WARNING]
-> **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
-
 ## Top-k and top-p sampling
 
 Top-k and top-p renormalize the sampling distribution over a restricted candidate set rather than the whole vocabulary. The server's log-probabilities reflect that (`--logprobs-mode processed_logprobs`), so the trainer has to normalize over the same set, otherwise every importance ratio is biased: a token's probability under the whole vocabulary is lower than under the candidate set it was actually drawn from ([DeepSeek-V3.2](https://huggingface.co/papers/2512.02556), section 3.1). With `top_p < 1` or `top_k > 0`, the worker asks the server for the candidate set of each sampled token and the trainer renormalizes its log-probabilities over it. This needs two more server flags, and `top_k` has to be set, since vLLM bounds the size of the candidate set with it:
@@ -305,6 +302,7 @@ A few consequences:
 - **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is. When that row is full, the sample goes to another row if a rank is still empty, or if that does not raise the most loaded row, which sets the micro-batch's time; otherwise the micro-batch closes.
 - **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
+- **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, …): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state (`trl/experimental/async_grpo/tree_gated_delta_rule.py`). This needs `transformers>=5.15.0`, where these layers call the module-level functions that tree packing patches. Models with any other non-attention layer are refused at init.
 
 What it buys: with nothing shared, it runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 
