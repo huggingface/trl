@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import importlib.metadata
 import signal
 import warnings
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from collections.abc import Callable
 import psutil
 import pytest
 import torch
+from packaging.version import Version
 from transformers import is_bitsandbytes_available, is_comet_available, is_wandb_available
 from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
@@ -46,7 +48,12 @@ from trl.import_utils import (
 )
 
 
-require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
+# Loading a 4-bit model on CPU raises or segfaults before bitsandbytes 0.49.0 (#7930)
+require_bitsandbytes = pytest.mark.skipif(
+    not is_bitsandbytes_available()
+    or (torch_device == "cpu" and Version(importlib.metadata.version("bitsandbytes")) < Version("0.49.0")),
+    reason="test requires bitsandbytes (>= 0.49.0 on CPU)",
+)
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_harbor = pytest.mark.skipif(not is_harbor_available(), reason="test requires harbor")
 require_kernels = pytest.mark.skipif(not is_kernels_available(), reason="test requires kernels")
