@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
+import torch
 import transformers
 from jinja2 import TemplateError
 from packaging.version import Version
@@ -685,6 +686,8 @@ llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(enco
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
 
+mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.jinja").read_text(encoding="utf-8")
+
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
 
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
@@ -964,10 +967,11 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
 
-    # VLM processors return batched output (list of lists), unbatch for single conversation
+    # VLM processors return batched output (list of lists, or a tensor for processors that default to
+    # `return_tensors="pt"`, e.g. Pixtral), unbatch for single conversation
     if is_vlm:
-        ids1 = ids1[0]
-        ids2 = ids2[0]
+        ids1 = torch.as_tensor(ids1)[0].tolist()
+        ids2 = torch.as_tensor(ids2)[0].tolist()
 
     return ids2[: len(ids1)] == ids1
 
@@ -1024,9 +1028,11 @@ def is_chat_template_stop_token_trained(
 
     input_ids = output["input_ids"]
     assistant_masks = output["assistant_masks"]
+    # VLM processors return batched output (list of lists, or a tensor for processors that default to
+    # `return_tensors="pt"`, e.g. Pixtral), unbatch for single conversation
     if is_vlm:
-        input_ids = input_ids[0]
-        assistant_masks = assistant_masks[0]
+        input_ids = torch.as_tensor(input_ids)[0].tolist()
+        assistant_masks = torch.as_tensor(assistant_masks)[0].tolist()
 
     # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
     # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
@@ -1072,6 +1078,10 @@ lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja"
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
+
+mistral_medium_3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_training.jinja").read_text(encoding="utf-8")
 
@@ -1243,6 +1253,9 @@ def get_training_chat_template(
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
+
+    if chat_template == mistral_medium_3_5_chat_template:
+        return mistral_medium_3_5_training_chat_template
 
     if chat_template == muse_glimmer_chat_template:
         return muse_glimmer_training_chat_template

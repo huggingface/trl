@@ -1972,10 +1972,11 @@ class GRPOTrainer(_BaseTrainer):
             return_dict=False,
             **self.chat_template_kwargs,
         )
-        # VLM processors return batched output (list of lists), unbatch for single conversation
+        # VLM processors return batched output (list of lists, or a tensor for processors that default to
+        # `return_tensors="pt"`, e.g. Pixtral), unbatch for single conversation
         if self._is_vlm:
-            prefix_ids = prefix_ids[0]
-            full_ids = full_ids[0]
+            prefix_ids = torch.as_tensor(prefix_ids)[0].tolist()
+            full_ids = torch.as_tensor(full_ids)[0].tolist()
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
