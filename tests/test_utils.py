@@ -1870,6 +1870,13 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
             reason="Muse Spark Open was introduced in transformers-5.20.0",
         ),
     ),
+    pytest.param(
+        "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.21.0.dev0"),
+            reason="REDACTED_NAME was introduced in transformers-5.21.0",
+        ),
+    ),
 ]
 
 
