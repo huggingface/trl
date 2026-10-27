@@ -399,7 +399,7 @@ From our run, with one training run per model, on the same 30 words played greed
 | + SFT | 10/30 | 3.2 | 41 |
 | + SFT + GRPO ([model](https://huggingface.co/openenv/Qwen3-1.7B-Wordle-SFT-GRPO)) | 20/30 | 4.1 | 3 |
 
-GRPO mostly removed repeated and made-up words and won more games. Most of the new wins took 4 to 6 guesses, so the guesses per win went up. The 30 words come from the 156 nouns TextArena draws its secrets from, which the models also saw in training, and a new run will land a few wins away (two SFT runs with the same recipe won 10 and 13 games). Watch the three models play in the [Wordle Arena](https://huggingface.co/spaces/openenv/wordle-arena) and see the training curves on [Trackio](https://huggingface.co/spaces/sergiopaniego/openenv-wordle-runs).
+GRPO mostly removed repeated and made-up words and won more games. Most of the new wins took 4 to 6 guesses, so the guesses per win went up. The 30 words come from the 156 nouns TextArena draws its secrets from, which the models also saw in training, and a new run will land a few wins away (two SFT runs with the same recipe won 10 and 13 games). Watch the three models play in the [Wordle Arena](https://huggingface.co/spaces/openenv/wordle-arena) and see the training curves on [Trackio](https://huggingface.co/spaces/openenv/wordle-runs).
 
 ## Multi-environment training
 
