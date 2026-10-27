@@ -47,6 +47,8 @@ REPOS = [
     "HuggingFaceM4/Idefics3-8B-Llama3",
     "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
     "LiquidAI/LFM2-1.2B",
+    "LiquidAI/LFM2.5-1.2B-Instruct",
+    "LiquidAI/LFM2.5-2.6B",
     "LiquidAI/LFM2.5-230M",
     "LiquidAI/LFM2.5-24B-A2B",
     "LiquidAI/LFM2.5-VL-3B",

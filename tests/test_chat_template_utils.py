@@ -40,6 +40,7 @@ from trl.chat_template_utils import (
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
     lfm2_2_5_v2_chat_template,
+    lfm2_2_5_v4_chat_template,
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
@@ -280,6 +281,15 @@ class TestAddResponseSchema:
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 lfm2_2_5_v2_chat_template,
                 id="lfm2-2.5-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_v4_chat_template,
+                id="lfm2-2.5-v4",
                 marks=pytest.mark.skipif(
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
@@ -1283,6 +1293,8 @@ class TestGetTrainingChatTemplate:
 
     def test_behavior_unchanged_generation_prompt_with_enable_thinking_false(self, tokenizer_name):
         tokenizer = self._load(tokenizer_name)
+        if "enable_thinking" not in tokenizer.chat_template:
+            pytest.skip("This chat template doesn't use enable_thinking.")
         messages = [{"role": "user", "content": "What color is the sky?"}]
         if self.is_vlm:
             messages = prepare_multimodal_messages(messages)
@@ -1593,9 +1605,10 @@ class TestParseResponse:
         expected = messages[-1]
         messages = prepare_multimodal_messages(messages) if self.is_vlm else messages
         # enable_thinking=True is required here because the Qwen3.5 NoThink fixture disables thinking by default
-        # for the generation prompt.
+        # for the generation prompt. Only pass it to templates that use it: processors warn otherwise (#7811).
+        template_kwargs = {"enable_thinking": True} if "enable_thinking" in processing_class.chat_template else {}
         prefix = processing_class.apply_chat_template(
-            messages[:1], add_generation_prompt=True, enable_thinking=True, tokenize=True, return_dict=True
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True, **template_kwargs
         ).input_ids
         text = processing_class.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids
         if self.is_vlm:  # VLM processors return batched output
