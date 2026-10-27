@@ -52,6 +52,7 @@ REPOS = [
     "LiquidAI/LFM2.5-230M",
     "LiquidAI/LFM2.5-24B-A2B",
     "LiquidAI/LFM2.5-VL-3B",
+    "LiquidAI/LFM2.5-VL-450M",
     "llava-hf/llava-v1.6-mistral-7b-hf",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",

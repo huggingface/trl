@@ -105,6 +105,10 @@ LFM2.5 chat template shipped by `LiquidAI/LFM2.5-1.2B-Instruct` (since [df58c17]
 
 Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Same rendering as `lfm2_2_5.jinja` — including the `{% generation %}` markers, so no training patch is needed — plus multimodal `content` blocks (each `image` item renders as `<image>`) and more defensive handling of non-string content and flat `tool_calls`. Response parsing reuses `lfm2_2_5_template`.
 
+### `lfm2_2_5_vl_v2.jinja`
+
+LFM2.5-VL chat template shipped by `LiquidAI/LFM2.5-VL-450M`. Same tool-call format as `lfm2_2_5_vl.jinja`, except that string arguments are double-quoted and not escaped, and lists render as Python literals instead of JSON. Only the last assistant turn keeps its reasoning: earlier turns drop their `thinking` and any reasoning left in their content. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing reuses `lfm2_2_5_template`.
+
 ### `llama3.jinja`
 
 Original Llama 3 chat template.
