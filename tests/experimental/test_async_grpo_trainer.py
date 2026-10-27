@@ -34,7 +34,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, TrainerControl
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 
@@ -44,10 +44,8 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
-    RolloutQueueDataset,
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
-    _EpochStopCallback,
     _iter_vllm_named_params,
     _reduce_metric,
     round_lora_rank,
@@ -92,17 +90,27 @@ class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
     def __init__(
-        self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
+        self,
+        tokenizer,
+        dataset,
+        num_generations: int = 8,
+        samples_per_weight_sync: int = 10,
+        fork_k: int = 1,
+        drop_every: int = 0,
     ):
         self.rollout_buffer = queue.Queue()
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
+        self._drop_every = drop_every
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for group_id, row in enumerate(itertools.cycle(dataset)):
+            if self._drop_every and group_id % self._drop_every == 0:
+                yield group_id  # a zero-advantage group: the worker sends only its id
+                continue
             completions = [
                 [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
                 for idx in range(num_generations)
@@ -680,15 +688,6 @@ class TestRolloutStateCheckpoint(TrlTestCase):
 
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             assert json.load(f)["prompt_index"] == 15
-
-    def test_epoch_stop_counts_dropped_groups(self):
-        trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=0)
-        trainer._dropped_groups = {2}
-        control = TrainerControl()
-
-        _EpochStopCallback(trainer, target_groups=5).on_step_end(trainer.args, trainer.state, control)
-
-        assert control.should_training_stop
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
@@ -2058,47 +2057,16 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
                     metrics[key].append(value)
         return items, metrics
 
-    @pytest.mark.parametrize("reward_func", [constant_reward, all_none_reward, one_scored_reward])
-    def test_dropped_group_reaches_the_buffer_as_its_group_id(self, reward_func):
+    @pytest.mark.parametrize(
+        "reward_func, reward",
+        [(constant_reward, (2.0, 2)), (all_none_reward, (0.0, 0)), (one_scored_reward, (1.0, 1))],
+    )
+    def test_dropped_group_reaches_the_buffer_as_its_group_id(self, reward_func, reward):
         items, metrics = self._score(_rollout_loop(), [reward_func, two_reward])
         assert items[0] == 0
         assert [s.group_id for s in items[1:]] == [1, 1]
         assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
-
-    def test_reward_covers_dropped_groups(self):
-        _, metrics = self._score(_rollout_loop(), [constant_reward, two_reward])
-        assert metrics["reward"] == [(2.0, 2), (4.0, 2)]
-
-    def test_trainer_counts_a_dropped_group_as_consumed(self):
-        rollout_queue, dropped_groups, metrics = queue.Queue(), set(), defaultdict(list)
-        rollout_queue.put(7)
-        rollout_queue.put(
-            RolloutSample(
-                prompt=[],
-                completion=[],
-                input_ids=[1, 2],
-                completion_mask=[0, 1],
-                old_log_probs=[0.0, -0.1],
-                sampling_mask=[[], []],
-                advantage=0.5,
-                model_version=0,
-                group_id=8,
-                metrics={},
-            )
-        )
-        dataset = RolloutQueueDataset(
-            rollout_queue=rollout_queue,
-            model_version_fn=lambda: 0,
-            check_health_fn=lambda stale_after_s: None,
-            stale_after_s=1.0,
-            metrics=metrics,
-            dropped_groups=dropped_groups,
-        )
-
-        example = next(iter(dataset))
-
-        assert example["group_id"] == 8
-        assert dropped_groups == {7}
+        assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
 
 
 @pytest.mark.skipif(
@@ -2114,7 +2082,7 @@ class TestEpochStop(TrlTestCase):
     what actually regresses if the wiring breaks.
     """
 
-    def _train(self, fork_k, num_train_epochs=2):
+    def _train(self, fork_k, num_train_epochs=2, drop_every=0):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         args = AsyncGRPOConfig(
@@ -2127,7 +2095,9 @@ class TestEpochStop(TrlTestCase):
             vllm_server_timeout=5.0,
             report_to="none",
         )
-        worker = _StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k)
+        worker = _StubRolloutWorker(
+            AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k, drop_every=drop_every
+        )
         trainer = AsyncGRPOTrainer(
             model=model_id,
             reward_funcs=dummy_reward_func,
@@ -2154,6 +2124,13 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+    def test_epoch_stop_counts_dropped_groups(self):
+        trainer, num_prompts = self._train(fork_k=1, drop_every=2)
+
+        consumed = trainer._trained_groups | trainer._dropped_groups
+        assert 2 * num_prompts <= len(consumed) < 3 * num_prompts
+        assert len(trainer._trained_groups) < 2 * num_prompts
 
     def test_epoch_stop_saves_the_final_step(self):
         trainer, _ = self._train(fork_k=1)
