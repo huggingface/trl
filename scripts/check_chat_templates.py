@@ -42,6 +42,7 @@ REPOS = [
     "google/diffusiongemma-26B-A4B-it",
     "google/gemma-2-2b-it",
     "google/gemma-3-4b-it",
+    "google/gemma-4-31B-it",
     "google/gemma-4-E2B-it",
     "google/gemma-7b-it",
     "HuggingFaceM4/Idefics3-8B-Llama3",
