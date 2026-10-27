@@ -313,7 +313,7 @@ class TestAddResponseSchema:
         tokenizer = add_response_schema(tokenizer)
         tool_calls = [
             {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
-            {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris, France"}}},
+            {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris (FR), France"}}},
         ]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
