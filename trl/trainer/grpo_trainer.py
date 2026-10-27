@@ -1156,7 +1156,6 @@ class GRPOTrainer(_BaseTrainer):
                 self.vllm_importance_sampling_correction
                 and filtered_sampling
                 and self.vllm_mode == "colocate"
-                and self.top_k > 0
                 and self.temperature > 0
                 and is_vllm_available(min_version="0.28.0")
             )
@@ -1164,8 +1163,7 @@ class GRPOTrainer(_BaseTrainer):
                 logger.warning(
                     "With top_k/top_p/min_p, the log-probabilities are normalized over the whole vocabulary and the "
                     "importance ratio is biased. Normalizing them over the candidate set a token was sampled from "
-                    "takes `vllm_mode='colocate'`, `top_k > 0` (e.g. `top_k=1024` to leave `top_p` in charge) and "
-                    "vLLM >= 0.28."
+                    "takes `vllm_mode='colocate'` and vLLM >= 0.28."
                 )
             # Initialize vLLM generation backend
             self.vllm_generation = VLLMGeneration(
