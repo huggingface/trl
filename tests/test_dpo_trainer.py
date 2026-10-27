@@ -247,6 +247,7 @@ class TestDPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
+    @require_torch_accelerator
     def test_train_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
@@ -1019,6 +1020,22 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_peft
+    def test_peft_ref_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
+        ref_model = get_peft_model(ref_model, LoraConfig())
+        with pytest.raises(ValueError, match="`ref_model` cannot be a `PeftModel`"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                ref_model=ref_model,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_peft
     def test_train_peft_prompt_tuning(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(
@@ -1103,8 +1120,8 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_kernels
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -1113,12 +1130,16 @@ class TestDPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             padding_free=True,
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            model_init_kwargs={
+                "attn_implementation": (
+                    "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn2"
+                )
+            },
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
         trainer = DPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

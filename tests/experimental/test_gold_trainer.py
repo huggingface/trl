@@ -15,7 +15,6 @@
 import copy
 import warnings
 from functools import partial
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -29,6 +28,7 @@ from transformers import (
     AutoTokenizer,
     GenerationConfig,
 )
+from transformers.generation import GenerateDecoderOnlyOutput
 
 from trl.data_utils import prepare_multimodal_messages
 from trl.experimental.gold import GOLDConfig
@@ -264,7 +264,7 @@ def llama_tokenizer():
 
 @pytest.fixture(scope="session")
 def qwen_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_QWEN2)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -288,7 +288,7 @@ def gemma4_tokenizer():
 
 @pytest.fixture(scope="session")
 def smolvlm_processor():
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+    processor = AutoProcessor.from_pretrained(_TINY_SMOLVLM)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     return processor
@@ -296,7 +296,7 @@ def smolvlm_processor():
 
 @pytest.fixture(scope="session")
 def qwen3_vl_processor():
-    processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-2B-Instruct")
+    processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     return processor
@@ -1183,7 +1183,7 @@ def test_generate_on_policy_outputs_masks_prompt(tmp_path, llama_tokenizer):
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             assert torch.equal(input_ids, prompt_tensor)
             assert torch.equal(attention_mask, prompt_mask)
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
@@ -1233,7 +1233,7 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(tmp_path, llama_tok
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig(eos_token_id=eos_id)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
@@ -1269,7 +1269,7 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(tmp_pat
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
@@ -1331,7 +1331,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(tmp_path, smollm_tokeniz
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             assert torch.equal(input_ids, batch["prompts"])
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
-            return SimpleNamespace(sequences=batch["input_ids"])
+            return GenerateDecoderOnlyOutput(sequences=batch["input_ids"])
 
     generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
@@ -2294,6 +2294,18 @@ def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     )
     train_output = trainer.train()
     assert torch.isfinite(torch.tensor(train_output.training_loss))
+
+
+def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
+    # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=False),
+        train_dataset=vlm_dataset,
+    )
+
+    assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
 
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
