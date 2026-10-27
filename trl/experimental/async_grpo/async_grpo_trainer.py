@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import contextlib
 import contextvars
 import itertools
 import json
@@ -123,10 +122,12 @@ class RolloutWorkerProtocol(Protocol):
 
     Attributes:
         rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it. The two queue types are
-            structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
-            default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
-            an in-process worker uses `queue.Queue`.
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it, or the bare `int` group id of
+            a group it scored but has nothing to train on (every advantage zero), so the prompt still counts as
+            consumed for epochs and checkpoint resume. The two queue types are structurally identical (`get` /
+            `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default [`AsyncRolloutWorker`]
+            runs its loop in a spawned process and uses `multiprocessing.Queue`, while an in-process worker uses
+            `queue.Queue`.
         metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
             Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
             like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
@@ -251,7 +252,8 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        consumed = self._trainer._groups_before_resume + len(self._trainer._consumed_groups())
+        trainer = self._trainer
+        consumed = trainer._groups_before_resume + len(trainer._trained_groups | trainer._dropped_groups)
         reached = torch.tensor(int(consumed >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
@@ -309,6 +311,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         check_health_fn,
         stale_after_s,
         metrics,
+        dropped_groups,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
@@ -321,6 +324,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # `dispatch_batches=True`), which is also the only process where the queue wait is real, so its metrics need no
         # communication at all — they are appended straight into the sink the trainer reduces in `log()`.
         self.metrics = metrics
+        self.dropped_groups = dropped_groups
         # Blocking-get time, accumulated here and flushed by `training_step` at the optimizer-step boundary — the only
         # place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
@@ -364,6 +368,10 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             self.wait_s += wait_s
             if wait_s > 1.0:
                 logger.info(f"waited {wait_s:.1f}s for sample (qsize={self.queue.qsize()})")
+
+            if isinstance(sample, int):
+                self.dropped_groups.add(sample)
+                continue
 
             version = self.model_version_fn()
             staleness = version - sample.model_version
@@ -1260,7 +1268,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
-        self._filtered_groups: set[int] = set()
+        self._dropped_groups: set[int] = set()
         # Tracks restart to match `num_train_epochs`
         self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
@@ -1445,6 +1453,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 metrics=self._metrics["train"],
+                dropped_groups=self._dropped_groups,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -1882,19 +1891,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
-    def _consumed_groups(self) -> set[int]:
-        if isinstance(self.rollout_worker, AsyncRolloutWorker):
-            with contextlib.suppress(queue.Empty):
-                while True:
-                    self._filtered_groups.add(self.rollout_worker.filtered_groups.get_nowait())
-        return self._trained_groups | self._filtered_groups
-
     def _save_checkpoint(self, model, trial):
         if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            consumed = self._consumed_groups()
+            consumed = self._trained_groups | self._dropped_groups
             first_unconsumed = next(g for g in itertools.count() if g not in consumed)
             prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_unconsumed
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would

@@ -44,6 +44,7 @@ from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
+    RolloutQueueDataset,
     RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _EpochStopCallback,
@@ -635,7 +636,6 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
     # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
-    trainer.rollout_worker.filtered_groups = queue.Queue()
     return trainer
 
 
@@ -671,9 +671,9 @@ class TestRolloutStateCheckpoint(TrlTestCase):
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
 
-    def test_save_checkpoint_skips_filtered_groups(self):
+    def test_save_checkpoint_skips_dropped_groups(self):
         trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=10)
-        trainer.rollout_worker.filtered_groups.put(2)
+        trainer._dropped_groups = {2}
 
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
@@ -681,9 +681,9 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
             assert json.load(f)["prompt_index"] == 15
 
-    def test_epoch_stop_counts_filtered_groups(self):
+    def test_epoch_stop_counts_dropped_groups(self):
         trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=0)
-        trainer.rollout_worker.filtered_groups.put(2)
+        trainer._dropped_groups = {2}
         control = TrainerControl()
 
         _EpochStopCallback(trainer, target_groups=5).on_step_end(trainer.args, trainer.state, control)
@@ -771,7 +771,6 @@ def _rollout_loop(**kwargs):
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
         "metrics_queue": mp.Queue(),
-        "filtered_groups": mp.Queue(),
         **kwargs,
     }
     return _AsyncRolloutLoop(**kwargs)
@@ -2025,13 +2024,21 @@ def constant_reward(completions, **kwargs):
     return [1.0] * len(completions)
 
 
-class TestFilterZeroAdvantageGroups(TrlTestCase):
+def all_none_reward(completions, **kwargs):
+    return [None] * len(completions)
+
+
+def one_scored_reward(completions, **kwargs):
+    return [None, 1.0]
+
+
+class TestDropZeroAdvantageGroups(TrlTestCase):
     @pytest.fixture(autouse=True)
     def _init_accelerate_state(self):
         PartialState()
 
-    def _score(self, loop):
-        for group_id, reward_func in enumerate([constant_reward, two_reward]):
+    def _score(self, loop, reward_funcs):
+        for group_id, reward_func in enumerate(reward_funcs):
             seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
             seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
             group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
@@ -2041,23 +2048,57 @@ class TestFilterZeroAdvantageGroups(TrlTestCase):
             loop._groups_to_score.put_nowait(group)
             loop._groups_to_score.put_nowait(None)
             loop._loop.run_until_complete(loop._score_loop(asyncio.Event()))
-        samples, metrics = [], defaultdict(list)
+        items, metrics = [], defaultdict(list)
         with contextlib.suppress(queue.Empty):
             while True:
-                samples.append(loop.rollout_buffer.get(timeout=1))
+                items.append(loop.rollout_buffer.get(timeout=1))
         with contextlib.suppress(queue.Empty):
             while True:
                 for key, value in loop._metrics_queue.get(timeout=1).items():
                     metrics[key].append(value)
-        return samples, metrics
+        return items, metrics
 
-    def test_constant_reward_group_never_reaches_the_buffer(self):
-        loop = _rollout_loop()
-        samples, metrics = self._score(loop)
-        assert [s.group_id for s in samples] == [1, 1]
-        assert sum(metrics["rollout/zero_advantage_groups_total"]) == 1
-        assert loop._filtered_groups.get(timeout=1) == 0
-        assert metrics["reward"] == [(2.0, 2), (4.0, 2)]  # both groups, the filtered one included
+    @pytest.mark.parametrize("reward_func", [constant_reward, all_none_reward, one_scored_reward])
+    def test_dropped_group_reaches_the_buffer_as_its_group_id(self, reward_func):
+        items, metrics = self._score(_rollout_loop(), [reward_func, two_reward])
+        assert items[0] == 0
+        assert [s.group_id for s in items[1:]] == [1, 1]
+        assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
+
+    def test_reward_covers_dropped_groups(self):
+        _, metrics = self._score(_rollout_loop(), [constant_reward, two_reward])
+        assert metrics["reward"] == [(2.0, 2), (4.0, 2)]
+
+    def test_trainer_counts_a_dropped_group_as_consumed(self):
+        rollout_queue, dropped_groups, metrics = queue.Queue(), set(), defaultdict(list)
+        rollout_queue.put(7)
+        rollout_queue.put(
+            RolloutSample(
+                prompt=[],
+                completion=[],
+                input_ids=[1, 2],
+                completion_mask=[0, 1],
+                old_log_probs=[0.0, -0.1],
+                sampling_mask=[[], []],
+                advantage=0.5,
+                model_version=0,
+                group_id=8,
+                metrics={},
+            )
+        )
+        dataset = RolloutQueueDataset(
+            rollout_queue=rollout_queue,
+            model_version_fn=lambda: 0,
+            check_health_fn=lambda stale_after_s: None,
+            stale_after_s=1.0,
+            metrics=metrics,
+            dropped_groups=dropped_groups,
+        )
+
+        example = next(iter(dataset))
+
+        assert example["group_id"] == 8
+        assert dropped_groups == {7}
 
 
 @pytest.mark.skipif(
