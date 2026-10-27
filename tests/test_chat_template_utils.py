@@ -40,6 +40,7 @@ from trl.chat_template_utils import (
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
     lfm2_2_5_v2_chat_template,
+    lfm2_2_5_v4_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
     parse_response,
@@ -279,6 +280,15 @@ class TestAddResponseSchema:
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 lfm2_2_5_v2_chat_template,
                 id="lfm2-2.5-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_v4_chat_template,
+                id="lfm2-2.5-v4",
                 marks=pytest.mark.skipif(
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
