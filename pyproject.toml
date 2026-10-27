@@ -105,6 +105,8 @@ dev = [
     "transformers[hub-kernels]",  # transformers < 5.1.0
     # liger
     "liger-kernel>=0.8.2",
+    # math_verify
+    "math-verify>=0.8.0",  # timeouts can be disabled, which worker threads require
     # openreward
     "openreward>=0.1.109",
     # peft
