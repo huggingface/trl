@@ -17,8 +17,11 @@ from unittest.mock import patch
 import pytest
 import torch
 import torch.nn.functional as F
+from accelerate import PartialState
 from transformers.testing_utils import torch_device
 from transformers.utils import is_triton_available
+
+from trl.models.activation_offloading import OffloadActivations
 
 from .testing_utils import require_torch_accelerator, require_triton
 
@@ -91,6 +94,31 @@ class TestLogProbEntropy:
         torch.testing.assert_close(logprobs, reference_logprobs, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(entropy, reference_entropy, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(actual_grad, reference_logits.grad, rtol=1e-3, atol=1e-3)
+
+    @pytest.mark.parametrize("use_mask", [False, True])
+    @pytest.mark.parametrize("use_streams", [False, True])
+    def test_backward_with_activation_offloading(self, use_streams, use_mask):
+        PartialState()
+        # The offloader saves the sliced views below as contiguous copies, so backward must not index them with the
+        # strides seen in forward.
+        vocab_size = 2053
+        base_logits = (8 * torch.randn(3, 6, vocab_size, device=torch_device)).requires_grad_()
+        index = torch.randint(vocab_size, (3, 6), device=torch_device)
+        row_mask = torch.rand(3, 6, device=torch_device) > 0.3 if use_mask else None
+
+        def backward():
+            base_logits.grad = None
+            logprobs, entropy = selective_log_softmax_and_entropy(
+                base_logits[:, :-1], index[:, 1:], row_mask=None if row_mask is None else row_mask[:, 1:]
+            )
+            (logprobs + 0.5 * entropy).sum().backward()
+            return base_logits.grad
+
+        expected = backward()
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0):
+            actual = backward()
+
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_torch_compile_fullgraph(self):
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
@@ -184,7 +212,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        _, _, log_sum_sq_probs, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
+        _, _, log_sum_sq_probs, *_ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
         logits = (hidden @ weight.t()) / 0.7
 
         expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
@@ -205,7 +233,7 @@ class TestChunkedLogProbFunction:
         subset = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, None, 1.0, outputs)
         subset[0].sum().backward()
 
-        names = ("log_probs", "entropy", "log_sum_sq_probs", "mean_logits", "is_top1")
+        names = ("log_probs", "entropy", "log_sum_sq_probs", "mean_logits", "is_top1", "score_log_probs")
         for name, x, y in zip(names, full, subset, strict=True):
             if name == "log_probs" or name in outputs:
                 torch.testing.assert_close(y, x)
@@ -220,7 +248,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        _, _, _, mean_logits, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
+        _, _, _, mean_logits, *_ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
 
         torch.testing.assert_close(mean_logits, (hidden @ weight.t()).mean(-1) / 0.7, atol=1e-5, rtol=1e-5)
 
@@ -266,7 +294,7 @@ class TestChunkedLogProbFunction:
         labels = torch.where(torch.arange(self.N, device=torch_device) % 2 == 0, argmax, argmax + self.V // 2)
         labels = labels.clamp(max=self.V - 1)
 
-        *_, is_top1 = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+        *_, is_top1, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
 
         torch.testing.assert_close(is_top1, argmax == labels)
 
@@ -363,6 +391,61 @@ class TestChunkedLogProbFunction:
 
         torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    @pytest.mark.parametrize("with_support", [False, True])
+    @pytest.mark.parametrize(("logit_scale", "final_logit_softcapping"), [(1.0, None), (0.5, 30.0)])
+    def test_score_ids(self, device, with_support, logit_scale, final_logit_softcapping):
+        # The scored tokens' log-probs are normalized like the target's, with the gradient of a weighted sum of them
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True, device=device)
+        weight = torch.randn(self.V, self.H, requires_grad=True, device=device)
+        labels = torch.randint(0, self.V, (self.N,), device=device)
+        support_ids = torch.full((self.N, 8), -1, device=device, dtype=torch.long)
+        for row in range(self.N):
+            others = torch.randperm(self.V, device=device)
+            others = others[others != labels[row]][: row % 7]
+            support_ids[row, : 1 + row % 7] = torch.cat([labels[row : row + 1], others])
+        # Half the rows score the label among their tokens, the other half do not
+        odd = (torch.arange(self.N, device=device) % 2 == 1).unsqueeze(-1)
+        score_ids = torch.where(odd, support_ids[:, 1:5], support_ids[:, :4])
+        coef = torch.randn(self.N, 4, device=device)
+
+        logprobs, entropy, *_, score_log_probs = ChunkedLogProbFunction.apply(
+            hidden,
+            weight,
+            None,
+            labels,
+            0.7,
+            self.CHUNK_SIZE,
+            final_logit_softcapping,
+            logit_scale,
+            ("entropy",),
+            support_ids if with_support else None,
+            score_ids,
+        )
+        (logprobs.sum() + entropy.sum() + (coef * score_log_probs).sum()).backward()
+        grad_hidden, grad_weight = hidden.grad.clone(), weight.grad.clone()
+        hidden.grad = weight.grad = None
+
+        logits = hidden @ weight.t() * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / 0.7
+        full_log_p = logits.log_softmax(-1)
+        entropy_ref = -(full_log_p.exp() * full_log_p).sum(-1)
+        if with_support:
+            keep = F.one_hot(support_ids + 1, self.V + 1)[..., 1:].any(1)
+            logits = logits.masked_fill(~keep, float("-inf"))
+        log_p = logits.log_softmax(-1)
+        logprobs_ref = log_p.gather(-1, labels[:, None]).squeeze(-1)
+        score_log_probs_ref = log_p.gather(-1, score_ids.clamp(min=0)).masked_fill(score_ids < 0, 0.0)
+        (logprobs_ref.sum() + entropy_ref.sum() + (coef * score_log_probs_ref).sum()).backward()
+
+        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(score_log_probs, score_log_probs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-4, rtol=1e-4)
         torch.testing.assert_close(grad_weight, weight.grad, atol=1e-4, rtol=1e-4)
 

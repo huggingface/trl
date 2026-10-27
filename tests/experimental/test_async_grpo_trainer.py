@@ -33,13 +33,14 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
@@ -65,6 +66,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
+from trl.experimental.async_grpo.weight_transfer import WeightTransferClient
 from trl.trainer.base_trainer import _BaseTrainer
 
 from ..testing_utils import (
@@ -89,14 +91,49 @@ class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
     def __init__(
-        self, tokenizer, dataset, num_generations: int = 8, samples_per_weight_sync: int = 10, fork_k: int = 1
+        self,
+        tokenizer,
+        dataset,
+        num_generations: int = 8,
+        samples_per_weight_sync: int = 10,
+        fork_k: int = 1,
+        candidate_sets: bool = False,
     ):
         self.rollout_buffer = queue.Queue()
+        self._candidate_sets = candidate_sets
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
+        self._model = None
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
+
+    def _sample(self, tokenizer, ids, n_prompt):
+        """The sampler is the initial model: per completion token its log-prob, candidate set and top log-probs."""
+        if self._model is None:
+            config = AutoConfig.from_pretrained(tokenizer.name_or_path)
+            loader = AutoModelForImageTextToText if config.get_text_config() is not config else AutoModelForCausalLM
+            self._model = loader.from_pretrained(tokenizer.name_or_path)
+        with torch.no_grad():
+            log_p = self._model(torch.tensor([ids])).logits[0, n_prompt - 1 : -1].float().log_softmax(-1)
+        old_log_probs, sampling_mask, sampler_ids, sampler_log_probs = (
+            [0.0] * n_prompt,
+            [[] for _ in range(n_prompt)],
+            [[-1, -1]] * n_prompt,
+            [[-math.inf, -math.inf]] * n_prompt,
+        )
+        for token, row in zip(ids[n_prompt:], log_p, strict=True):
+            candidates = [token, (token + 1) % len(row), (token + 2) % len(row)] if self._candidate_sets else []
+            if candidates:  # a top-k sampler: the token and the two next ids, renormalized over them
+                row = torch.full_like(row, -math.inf).index_put_(
+                    (torch.tensor(candidates),), row[candidates].log_softmax(-1)
+                )
+            top = row.topk(2)
+            old_log_probs.append(row[token].item())
+            sampling_mask.append(candidates)
+            sampler_ids.append(top.indices.tolist())
+            sampler_log_probs.append(top.values.tolist())
+        return old_log_probs, sampling_mask, np.array(sampler_ids), np.array(sampler_log_probs, dtype=np.float32)
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for group_id, row in enumerate(itertools.cycle(dataset)):
@@ -115,13 +152,18 @@ class _StubRolloutWorker:
             advantages = (rewards - rewards.mean()) / rewards.std()
             for idx in range(num_generations):
                 completion_ids = prompt_completion_ids[idx][len(prompt_ids) :]
+                old_log_probs, sampling_mask, sampler_ids, sampler_log_probs = self._sample(
+                    tokenizer, prompt_ids + completion_ids, len(prompt_ids)
+                )
                 sample = RolloutSample(
                     prompt=row["prompt"],
                     completion=completions[idx],
                     input_ids=np.array(prompt_ids + completion_ids, dtype=np.int64),
                     completion_mask=np.array([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64),
-                    old_log_probs=np.array([0.0] * len(prompt_ids) + [-0.5] * len(completion_ids), dtype=np.float32),
-                    sampling_mask=[[] for _ in prompt_ids + completion_ids],
+                    old_log_probs=np.array(old_log_probs, dtype=np.float32),
+                    sampling_mask=sampling_mask,
+                    sampler_ids=sampler_ids,
+                    sampler_log_probs=sampler_log_probs,
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
@@ -370,6 +412,100 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_train_model(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            dtype="float32",
+            device_map=None,
+            attn_implementation="eager",
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        assert trainer.model is model
+        assert trainer.model.config._attn_implementation == TREE_ATTENTION
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.parametrize(
+        "correction",
+        [{}, {"top_k": 3}, {"score_centering": False}],
+    )
+    def test_train_off_policy_correction(self, correction, peft_config=None):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            report_to="none",
+            **correction,
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(
+                tokenizer, dataset, num_generations=3, candidate_sets=training_args.top_k > 0
+            ),
+            weight_transfer=_StubWeightTransfer(),
+            peft_config=peft_config,
+        )
+        previous_trainable_params = {
+            n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
+        }
+
+        trainer.train()
+
+        logs = trainer.state.log_history
+        assert logs[-1]["train_loss"] is not None
+        steps = [log for log in logs if "sampling/masked_mean" in log]
+        assert steps and all(0 <= log["sampling/masked_mean"] <= 1 for log in steps)
+        if training_args.score_centering:
+            assert all(0 < log["sampling/sampler_mass"] <= 1 for log in steps)
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_peft
+    def test_train_score_centering_with_lora(self):
+        from peft import LoraConfig
+
+        self.test_train_off_policy_correction({}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
+
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
         # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
@@ -499,6 +635,8 @@ def _vision_parameter_names(model) -> set[str]:
     "model_id",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
     ],
 )
 class TestAsyncGRPOTrainerVLM(TrlTestCase):
@@ -836,6 +974,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 completion_mask=[0, 1, 1],
                 old_log_probs=[0.0, -0.1, -0.1],
                 sampling_mask=[[], [], []],
+                sampler_logprobs=[{}, {}, {}],
                 rollout_id="r",
             )
             return [{"role": "assistant", "content": "x"}], [2, 3], [sequence], 0, 0, None
@@ -913,7 +1052,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
 
         async def _generate_one_turn(prompt_ids):
             ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
-            return ids, [-0.1] * len(ids), None
+            return ids, [-0.1] * len(ids), None, None
 
         loop._generate_one_turn = _generate_one_turn
         PartialState()
@@ -975,6 +1114,8 @@ def _rollout_sample(length: int, advantage: float = 0.0, reward: float = 0.0) ->
         "completion_mask": np.array([0] + [1] * (length - 1), dtype=np.int64),
         "old_log_probs": np.zeros(length, dtype=np.float32),
         "sampling_mask": [[] for _ in range(length)],
+        "sampler_ids": np.full((length, 0), -1, dtype=np.int64),
+        "sampler_log_probs": np.full((length, 0), -np.inf, dtype=np.float32),
         "advantage": advantage,
         "group_id": int(input_ids[0]),
         "metrics": {"reward": reward},
@@ -1103,23 +1244,33 @@ class TestPackingAwareBatching(TrlTestCase):
         assert collator.metrics["reward"] == [0.375]  # mean over the whole micro-batch: (0.5 + 0.25) / 2
         assert collator.metrics["batch/packing_ratio"] == [(5, 5)]  # nothing shared, every raw token forwarded
 
-    def test_collator_pads_sampling_masks_to_the_widest(self):
-        # Candidate sets are ragged across tokens and samples: padded with -1 to the widest in the micro-batch. Each
-        # sits at the position that predicts its token, like `shift_labels`.
+    def test_collator_lays_sampling_masks_end_to_end(self):
+        # Candidate sets are ragged across tokens and samples: laid end to end per row with a count per position, each
+        # at the position that predicts its token, like `shift_labels`. Rows are padded to the longest with -1 and 0.
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
         a = _rollout_sample(3)
         a["sampling_mask"] = [[], [1, 5, 7], [2]]
+        a["sampler_ids"] = np.array([[-1, -1], [1, 5], [2, -1]])
+        a["sampler_log_probs"] = np.array([[-np.inf, -np.inf], [-0.1, -0.2], [0.0, -np.inf]], dtype=np.float32)
         b = _rollout_sample(2)
         b["sampling_mask"] = [[], [1, 9]]
+        b["sampler_ids"] = np.array([[-1], [1]])
+        b["sampler_log_probs"] = np.array([[-np.inf], [-0.3]], dtype=np.float32)
 
         batch = collator([[_tree_row([a]), _tree_row([b])]])
 
-        assert batch["sampling_mask"].tolist() == [
-            [[1, 5, 7], [2, -1, -1], [-1, -1, -1]],
-            [[1, 9, -1], [-1, -1, -1], [-1, -1, -1]],
-        ]
+        assert batch["sampler_ids"].tolist() == [[[1, 5], [2, -1], [-1, -1]], [[1, -1], [-1, -1], [-1, -1]]]
+        inf = math.inf
+        torch.testing.assert_close(
+            batch["sampler_log_probs"],
+            torch.tensor([[[-0.1, -0.2], [0.0, -inf], [-inf, -inf]], [[-0.3, -inf], [-inf, -inf], [-inf, -inf]]]),
+        )
+
+        assert batch["sampling_mask"].tolist() == [[1, 5, 7, 2], [1, 9, -1, -1]]
+        assert batch["sampling_mask_counts"].tolist() == [[3, 1, 0], [2, 0, 0]]
         batch = collator([[_tree_row([_rollout_sample(3)]), _tree_row([_rollout_sample(2)])]])
-        assert batch["sampling_mask"].shape == (2, 3, 0)
+        assert batch["sampling_mask"].shape == (2, 0)
+        assert batch["sampling_mask_counts"].tolist() == [[0, 0, 0], [0, 0, 0]]
 
     def test_collator_packs_multiple_samples_per_row(self):
         collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
@@ -1168,6 +1319,8 @@ def _tree_sample(tokens: list[int], n_prompt: int, advantage: float = 0.0, group
         "completion_mask": np.array([0] * n_prompt + [1] * (len(tokens) - n_prompt), dtype=np.int64),
         "old_log_probs": np.array([0.0] * n_prompt + [-0.5] * (len(tokens) - n_prompt), dtype=np.float32),
         "sampling_mask": [[] for _ in tokens],
+        "sampler_ids": np.full((len(tokens), 0), -1, dtype=np.int64),
+        "sampler_log_probs": np.full((len(tokens), 0), -np.inf, dtype=np.float32),
         "advantage": advantage,
         "group_id": group_id,
         "metrics": {"reward": 0.0},
@@ -1228,9 +1381,11 @@ class TestTreePacking(TrlTestCase):
             [101, 102, 103, 201, 202, 0, 0, 0, 0, 0],
         ]
         assert batch["attention_mask"].tolist() == [[1] * 10, [1] * 5 + [0] * 5]
-        assert batch["tree_cu_seqlens_q"].tolist() == [[0, 2, 4, 5, 7, 10], [0, 5, -1, -1, -1, -1]]
-        assert batch["tree_cu_seqlens_k"].tolist() == [[0, 2, 6, 11, 17, 22], [0, 5, -1, -1, -1, -1]]
-        assert batch["tree_max_seqlens"].tolist() == [[3, 6], [5, 5]]
+        assert batch["tree_cu_seqlens_q"].tolist() == [[0, 2, 4, 5, 7, 10], [0, 5, 0, 0, 0, 0]]
+        assert batch["tree_cu_seqlens_k"].tolist() == [[0, 2, 6, 11, 17, 22], [0, 5, 0, 0, 0, 0]]
+        assert batch["tree_segment_parents"][0].tolist() == [-1, 0, 1, 1, 0]
+        assert batch["tree_segment_depths"][0].tolist() == [0, 1, 2, 2, 1]
+        assert batch["tree_sizes"].tolist() == [[3, 6, 22, 5, 1, 2, 2], [5, 5, 5, 1, 1, 0, 0]]
         assert batch["shift_labels"][1].tolist() == [-100, -100, 201, 202] + [-100] * 6
         assert collator.metrics["batch/packing_ratio"] == [(21, 15)]  # 21 raw tokens forwarded as 15
 
@@ -1269,15 +1424,39 @@ class TestTreePacking(TrlTestCase):
 
         assert reads == sum(len(group) for group in micro_batch) + 1
 
-    def test_a_group_stays_in_one_row_so_its_rows_share(self):
-        batcher = TokenBudgetBatcher(self._stream(50), 2, 20, defaultdict(list))
+    def test_a_full_group_spills_into_a_lighter_row_rather_than_close(self):
+        prompt = list(range(6))
+        stream = [_tree_sample(prompt + [100 + i, 200 + i], n_prompt=6) for i in range(3)]
+        stream.insert(2, _tree_sample([50, 51], n_prompt=1, group_id=1))
+        stream.append(_tree_sample(prompt + [103, 203], n_prompt=6))  # its group's row is full, row 1 is light
+        stream.append(_tree_sample(list(range(20, 34)), n_prompt=7, group_id=2))  # fits in neither row: closes
+        batcher = TokenBudgetBatcher(iter(stream), 2, 14, defaultdict(list))
 
-        for micro_batch in itertools.islice(_micro_batches(batcher), 5):
-            rows_by_group = defaultdict(set)
-            for i, group in enumerate(micro_batch):
-                for sample in group:
-                    rows_by_group[sample["group_id"]].add(i)
-            assert all(len(rows) == 1 for rows in rows_by_group.values())
+        micro_batch = next(_micro_batches(batcher))
+
+        assert sum(len(group) for group in micro_batch) == 5
+        assert any(sample is stream[4] for sample in micro_batch[1])
+
+    def test_a_full_group_still_closes_when_spilling_would_lengthen_the_micro_batch(self):
+        prompt = list(range(6))
+        stream = [_tree_sample(prompt + [100 + i, 200 + i], n_prompt=6) for i in range(3)]
+        stream.insert(2, _tree_sample(list(range(50, 55)), n_prompt=1, group_id=1))
+        stream.append(_tree_sample(prompt + [103, 203, 303, 403, 503, 603], n_prompt=6))  # fits row 1, too costly
+        batcher = TokenBudgetBatcher(iter(stream), 2, 20, defaultdict(list))
+
+        micro_batch = next(_micro_batches(batcher))
+
+        assert sum(len(group) for group in micro_batch) == 4
+
+    def test_cost_is_the_load_add_adds(self):
+        row = _tree_row([_tree_sample(list(range(6)) + [100, 200], n_prompt=6)])
+        sample = _tree_sample(list(range(6)) + [101, 201], n_prompt=6)
+        load = row.load
+
+        cost = row.cost(sample)
+        row.add(sample)
+
+        assert cost == row.load - load == 6 + 7 + 8  # the shared prompt is free up to the fork, one token early
 
     def test_rows_of_identical_samples_still_close_a_micro_batch(self):
         source = (_tree_sample(list(range(10)), n_prompt=6) for _ in range(10_000))
@@ -1316,24 +1495,13 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
-    """Main's sequence packing: the samples end to end, `position_ids` restarting at each one, nothing shared."""
-    rows = [_tree_row([sample]).pack() for sample in samples]
-    offsets = list(itertools.accumulate((row["input_ids"].numel() for row in rows), initial=0))
-    batch = {key: torch.cat([row[key] for row in rows])[None] for key in rows[0]}
-    batch["token_index"] = torch.cat(
-        [row["token_index"] + offset for row, offset in zip(rows, offsets, strict=False)]
-    )[None]
-    batch["segment_id"] = torch.cat([row["segment_id"] + i for i, row in enumerate(rows)])[None]
-    batch["tree_kv_index"] = torch.arange(offsets[-1])[None]
-    batch["tree_cu_seqlens_q"] = batch["tree_cu_seqlens_k"] = torch.tensor([offsets], dtype=torch.int32)
-    longest = max(len(sample["input_ids"]) for sample in samples)
-    batch["tree_max_seqlens"] = torch.tensor([[longest, longest]])
-    batch["attention_mask"] = torch.ones_like(batch["input_ids"])
-    batch["global_n_tokens"] = torch.tensor([float(batch["token_index"].numel())])
-    batch["global_n_forward_tokens"] = torch.tensor([float(offsets[-1])])
-    batch["mean_seq_len"] = torch.tensor([offsets[-1] / len(samples)])
-    return batch
+_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
+_FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
+_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
+    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
+    "text config",
+    strict=True,
+)
 
 
 @require_torch_accelerator
@@ -1341,9 +1509,28 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
     ("model_id", "model_init_kwargs"),
     [
         pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            {},
+            id="qwen25-vl",
+            marks=_VLM_TEXT_HEAD_DIM_4,
+        ),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", _FA3_HEAD_DIM, id="llama31"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", _FA3_HEAD_DIM, id="llama32"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", _FA3_HEAD_DIM, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", _FA3_HEAD_DIM, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
             id="gemma2-sliding-window-softcap",
             marks=[
                 pytest.mark.skipif(
@@ -1355,14 +1542,43 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
                 ),
             ],
         ),
-        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
+        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, id="gemma3"),
+        pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, id="gemma4"),
+        pytest.param(
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            {},
+            id="deepseek-v3",
+            marks=pytest.mark.skipif(
+                torch.version.hip is not None
+                or not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9),
+                reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
+            ),
+        ),
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, id="glm4-moe"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, id="cohere"),
+        pytest.param(
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            id="cohere2-interleaved-sliding-window",
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            {**_FA3_ONE_HEAD, "sliding_window": 16},
+            id="olmo3-interleaved-sliding-window",
+        ),
+        pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, id="smolvlm"),
+        pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, id="llava"),
+        pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, id="idefics3"),
+        pytest.param(
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration", {}, id="internvl", marks=_VLM_TEXT_HEAD_DIM_4
+        ),
     ],
 )
 class TestTreePackingParity(TrlTestCase):
-    """A tree-packed micro-batch must give the GRPO loss and gradients of main's sequence packing of the same samples."""
+    """A tree-packed micro-batch must give the GRPO loss and gradients of forwarding each of its samples on its own."""
 
-    def _samples(self):
+    def _samples(self, truncated: bool):
         samples = []
         for group_id in range(2):
             prompt = [1 + 100 * group_id + i for i in range(64)]
@@ -1371,10 +1587,17 @@ class TestTreePackingParity(TrlTestCase):
             for i, completion in enumerate(completions):
                 sample = _tree_sample(prompt + completion, len(prompt), advantage=i - 2.5, group_id=group_id)
                 sample["old_log_probs"] = np.full(len(sample["input_ids"]), -12.0, dtype=np.float32)
+                if truncated:
+                    # Each completion token was drawn from a candidate set of 1 to 4 ids that holds it. The set depends
+                    # only on the token and its position, so samples sharing a prefix agree on it.
+                    for p in range(len(prompt), len(sample["input_ids"])):
+                        sample["sampling_mask"][p] = [int(sample["input_ids"][p]) + k for k in range(1 + p % 4)]
+                        sample["old_log_probs"][p] = -np.log(1 + p % 4)
                 samples.append(sample)
         return samples
 
-    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs):
+    @pytest.mark.parametrize("truncated", [False, True], ids=["full-vocab", "truncated-sampling"])
+    def test_loss_and_grads_match_each_sample_alone(self, model_id, model_init_kwargs, truncated):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         trainer = AsyncGRPOTrainer(
             model=model_id,
@@ -1391,49 +1614,75 @@ class TestTreePackingParity(TrlTestCase):
         )
         trainer.current_gradient_accumulation_steps = 1
         model = trainer.model.to(torch_device)
-        samples = self._samples()
+        for name, param in model.named_parameters():
+            if name.endswith(("A_log", "dt_bias")):
+                param.data.fill_(-4.0)
+        samples = self._samples(truncated)
         collator = DataCollatorForRollout(pad_token_id=0)
-        # The sequence-packing reference uses the kernel that tree attention picks for this device
+        # The per-sample reference uses the kernel that tree attention picks for this device
         if torch.version.hip:
             reference = "kernels-community/aiter-flash-attn@v2"
         elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
             reference = "kernels-community/flash-attn4"
         else:
             reference = "kernels-community/flash-attn3"
-        runs = [(TREE_ATTENTION, collator([[_tree_row(samples)]])), (reference, _sequence_packed_batch(samples))]
+        packed = collator([[_tree_row(samples)]])
+        alone = [DataCollatorForRollout(pad_token_id=0)([[_tree_row([sample])]]) for sample in samples]
+        for batch in alone:
+            batch["global_n_tokens"] = packed["global_n_tokens"]
 
-        losses, grads = [], []
-        for attn_implementation, batch in runs:
-            model.set_attn_implementation(attn_implementation)
+        def run(batches):
             model.zero_grad()
-            loss = trainer.compute_loss(model, {key: value.to(torch_device) for key, value in batch.items()})
+            loss = sum(
+                trainer.compute_loss(model, {key: value.to(torch_device) for key, value in batch.items()})
+                for batch in batches
+            )
             loss.backward()
-            losses.append(loss.detach().float())
-            grads.append({name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None})
+            grads = {name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None}
+            return loss.detach().float(), grads
+
+        model.set_attn_implementation(TREE_ATTENTION)
+        packed_loss, packed_grads = run([packed])
+        model.set_attn_implementation(reference)
+        with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+            alone_loss, alone_grads = run(alone)
 
         assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
-        torch.testing.assert_close(losses[0], losses[1], atol=1e-3, rtol=1e-3)
-        assert grads[0].keys() == grads[1].keys()
-        packed_grads, sequence_grads = (torch.cat([g.flatten() for g in run.values()]) for run in grads)
-        assert (packed_grads - sequence_grads).norm() < 5e-2 * sequence_grads.norm()
+        torch.testing.assert_close(packed_loss, alone_loss, atol=1e-3, rtol=1e-3)
+        assert packed_grads.keys() == alone_grads.keys()
+        packed_grads, alone_grads = (
+            torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
+        )
+        assert (packed_grads - alone_grads).norm() < 2e-2 * alone_grads.norm()
 
 
 class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "match"),
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", "linear_attention", id="qwen35"
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", "linear_attention", id="qwen36-moe"
-            ),
+            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", "conv", id="lfm2"),
+            pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
+            pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
+            pytest.param("trl-internal-testing/tiny-Llama4ForCausalLM", "chunked_attention", id="llama4"),
         ],
     )
     def test_init_raises(self, model_id, match):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with pytest.raises(ValueError, match=match):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+    def test_init_raises_on_gated_deltanet_before_transformers_5_15(self):
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with patch("transformers.__version__", "5.14.0"), pytest.raises(ValueError, match="transformers>=5.15.0"):
             AsyncGRPOTrainer(
                 model=model_id,
                 reward_funcs=dummy_reward_func,
@@ -1708,7 +1957,7 @@ def _run(*, turns, max_iters=None):
 
     async def _generate_one_turn(prompt_ids):
         ids = outputs.pop(0)
-        return ids, [-0.1] * len(ids), None
+        return ids, [-0.1] * len(ids), None, None
 
     loop._generate_one_turn = _generate_one_turn
 
@@ -1730,10 +1979,10 @@ class TestGenerateOneTurn(TrlTestCase):
     def test_full_vocabulary_sampling_uses_the_completions_endpoint(self):
         loop = _rollout_loop()
         response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
-        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        requests, (ids, logprobs, sampling_mask, sampling_log_probs) = self._generate(loop, response)
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["prompt"] == [1, 2, 3]
-        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], None)
+        assert (ids, logprobs, sampling_mask, sampling_log_probs) == ([4, 5], [-0.1, -0.2], None, None)
 
     def test_truncated_sampling_returns_the_candidate_sets(self):
         loop = _rollout_loop(top_p=0.9, top_k=4)
@@ -1748,12 +1997,56 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        requests, (ids, logprobs, sampling_mask, sampling_log_probs) = self._generate(loop, response)
         assert requests[0][0] == "/inference/v1/generate"
         assert requests[0][1]["token_ids"] == [1, 2, 3]
         assert requests[0][1]["sampling_params"]["top_p"] == 0.9
         assert requests[0][1]["sampling_params"]["top_k"] == 4
-        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]])
+        assert requests[0][1]["sampling_params"]["logprobs"] == 0
+        assert (ids, logprobs, sampling_mask, sampling_log_probs) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]], None)
+
+    def test_sampler_logprobs_from_the_completions_endpoint(self):
+        # Each token's top log-probs come back keyed `token_id:<id>`, the sampled token among them
+        loop = _rollout_loop(num_sampler_logprobs=2)
+        response = {
+            "choices": [
+                {
+                    "token_ids": [4, 5],
+                    "logprobs": {
+                        "token_logprobs": [-0.1, -0.2],
+                        "top_logprobs": [{"token_id:7": -0.05, "token_id:4": -0.1}, {"token_id:5": -0.2}],
+                    },
+                }
+            ]
+        }
+        requests, (ids, logprobs, sampling_mask, sampler_logprobs) = self._generate(loop, response)
+        assert requests[0][1]["logprobs"] == 2
+        assert requests[0][1]["return_tokens_as_token_ids"] is True
+        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], None)
+        assert sampler_logprobs == [{7: -0.05, 4: -0.1}, {5: -0.2}]
+
+    def test_sampler_logprobs_from_the_candidate_set_endpoint(self):
+        loop = _rollout_loop(top_p=0.9, top_k=4, num_sampler_logprobs=2)
+        top_4 = [{"token": "token_id:7", "logprob": -0.5}, {"token": "token_id:4", "logprob": -1.0}]
+        top_5 = [{"token": "token_id:5", "logprob": 0.0}, {"token": "token_id:8", "logprob": -9999.0}]
+        response = {
+            "choices": [
+                {
+                    "token_ids": [4, 5],
+                    "logprobs": {
+                        "content": [
+                            {"token": "token_id:4", "logprob": -1.0, "top_logprobs": top_4},
+                            {"token": "token_id:5", "logprob": 0.0, "top_logprobs": top_5},
+                        ]
+                    },
+                    "sampling_mask": [[4, 7, 6], [5]],
+                }
+            ]
+        }
+        requests, (ids, logprobs, sampling_mask, sampler_logprobs) = self._generate(loop, response)
+        assert requests[0][1]["sampling_params"]["logprobs"] == 2
+        assert (ids, logprobs, sampling_mask) == ([4, 5], [-1.0, 0.0], [[4, 7, 6], [5]])
+        assert sampler_logprobs == [{7: -0.5, 4: -1.0}, {5: 0.0, 8: -9999.0}]
 
     def _check(self, loop, model_config, paths, version="0.31.0"):
         class FakeSession:
@@ -1804,7 +2097,7 @@ class TestGenerateOneTurn(TrlTestCase):
             self._check(loop, {}, {"/v1/completions": {}}, version="0.27.1")
         assert "vLLM 0.27.1" in caplog.text
         response = {"choices": [{"token_ids": [4], "logprobs": {"token_logprobs": [-0.1]}}]}
-        requests, (ids, logprobs, sampling_mask) = self._generate(loop, response)
+        requests, (ids, logprobs, sampling_mask, _) = self._generate(loop, response)
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["top_p"] == 0.9
         assert sampling_mask is None
@@ -1881,9 +2174,11 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
     def test_one_advantage_per_conversation_stamped_on_every_row(self):
         # conv 0: one row; conv 1: two rows (a fork).
-        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], [[]] * 5, "c0")
-        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], [[]] * 5, "c1")
-        seq_b2 = TrainingSequence([1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], [[]] * 6, "c1")
+        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], [[]] * 5, [{}] * 5, "c0")
+        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], [[]] * 5, [{}] * 5, "c1")
+        seq_b2 = TrainingSequence(
+            [1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], [[]] * 6, [{}] * 6, "c1"
+        )
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10, 11], [20, 21, 30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
@@ -1910,8 +2205,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert all(s.model_version == 7 for s in samples)
 
     def test_async_callable_class_reward_func_is_awaited(self):
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
-        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
@@ -1923,9 +2218,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[1].advantage == pytest.approx(1.0)
 
     def test_metrics_are_per_conversation_and_independent(self):
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
-        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
-        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], [[]] * 4, "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
+        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], [[]] * 4, [{}] * 4, "c1")
         group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10], [20, 30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
@@ -1942,8 +2237,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         def maybe_none(completions, **kwargs):
             return [None, 2.0]
 
-        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, "c0")
-        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, "c1")
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
         group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
@@ -2508,3 +2803,71 @@ def _any_adapter_merged(model) -> bool:
     from peft.tuners.tuners_utils import BaseTunerLayer
 
     return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+
+
+def _tensors_handed_to_producer(info, stream):
+    """Return the tensors `send_weights` passes to the packed NCCL producer.
+
+    The producer itself is replaced so the test does not open an NCCL group. `model_update_group` is set only so
+    `send_weights` does not return before touching the iterator.
+    """
+    # `send_weights` logs through accelerate, which raises until a state exists, even for a debug record.
+    PartialState()
+
+    class _Server:
+        server_url = "http://127.0.0.1:9"
+
+        def start_weight_update(self, timeout):
+            return None
+
+        def update_weights(self, update_info, timeout):
+            return None
+
+        def finish_weight_update(self, timeout):
+            return None
+
+    client = WeightTransferClient(_Server(), info)
+    client.model_update_group = object()
+    sent = []
+
+    def capture_iterator(*, iterator, trainer_args):
+        sent.extend(iterator)
+
+    def capture_packed(*, iterator, group, src, post_iter_func):
+        sent.extend((name, post_iter_func((name, tensor))) for name, tensor in iterator)
+
+    if weight_transfer_module._HAS_STATEFUL_TRAINER_ENGINE:
+        patcher = patch.object(weight_transfer_module, "packed_nccl_broadcast_producer", capture_packed)
+    else:
+        patcher = patch.object(
+            weight_transfer_module.NCCLWeightTransferEngine, "trainer_send_weights", capture_iterator
+        )
+    with patcher:
+        client.send_weights(iter(stream))
+    return sent
+
+
+@require_vllm  # WeightTransferClient's constructor requires vLLM
+class TestManifestWeightStream:
+    def test_send_weights_streams_in_the_manifest_dtype(self):
+        model = torch.nn.Sequential(
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+        ).to(torch_device)
+        original = [(name, param.detach().clone()) for name, param in _iter_vllm_named_params(model)]
+        info = {
+            "names": [name for name, _ in original],
+            "dtype_names": [str(tensor.dtype).split(".")[-1] for _, tensor in original],
+            "shapes": [list(tensor.shape) for _, tensor in original],
+        }
+        # Accelerate upcasts low-precision FSDP2 parameters to fp32 after the manifest is collected.
+        model.to(dtype=torch.float32)
+        streamed = [(name, param.detach()) for name, param in _iter_vllm_named_params(model)]
+
+        sent = _tensors_handed_to_producer(info, streamed)
+
+        assert [(name, tensor.dtype, list(tensor.shape)) for name, tensor in sent] == [
+            (name, torch.bfloat16, list(tensor.shape)) for name, tensor in original
+        ]
+        for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
+            assert torch.equal(sent_tensor, original_tensor)
