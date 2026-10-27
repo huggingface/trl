@@ -33,6 +33,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
+from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
@@ -72,6 +73,7 @@ from trl.trainer.base_trainer import _BaseTrainer
 from ..testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
+    is_bf16_supported,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -411,6 +413,41 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_checkpoint_saved_in_bf16(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            save_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        trainer.train()
+
+        assert trainer.model.dtype == torch.float32
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"BF16"}
+        with open(os.path.join(checkpoint, "config.json")) as f:
+            assert json.load(f)["dtype"] == "bfloat16"
+        reloaded = AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto")
+        assert reloaded.dtype == torch.bfloat16
 
     def test_train_model(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"

@@ -14,6 +14,7 @@
 
 
 import contextvars
+import copy
 import itertools
 import json
 import math
@@ -1931,6 +1932,22 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
+
+    def _save(self, output_dir=None, state_dict=None):
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        dtype = torch.bfloat16 if self.args.bf16 else torch.float16 if self.args.fp16 else None
+        if dtype is not None:
+            if state_dict is None:
+                state_dict = self.model.state_dict()
+            for name, tensor in state_dict.items():
+                if tensor.is_floating_point():
+                    state_dict[name] = tensor.to(dtype)
+        super()._save(output_dir, state_dict)
+        model = self.accelerator.unwrap_model(self.model)
+        if dtype is not None and not is_peft_model(model):
+            config = copy.deepcopy(model.config)
+            config.dtype = str(dtype).removeprefix("torch.")
+            config.save_pretrained(output_dir)
 
     def _save_checkpoint(self, model, trial):
         if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
