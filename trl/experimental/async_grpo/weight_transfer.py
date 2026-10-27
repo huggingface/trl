@@ -17,13 +17,14 @@ import threading
 import time
 from collections import Counter
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
 from .vllm_client import VLLMClient
 
 
-if is_vllm_available(min_version="0.22.0"):
+if is_vllm_available():
     from vllm.utils.network_utils import get_ip, get_open_port
 
 # vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
@@ -33,7 +34,7 @@ _HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
 if _HAS_STATEFUL_TRAINER_ENGINE:
     from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
     from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
-elif is_vllm_available(min_version="0.22.0"):
+elif is_vllm_available():
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
 
@@ -56,6 +57,9 @@ class WeightTransferClient:
         weight_sync_timeout (`int`, *optional*, defaults to `1800`):
             Seconds allowed for the steps that scale with model size: the NCCL handshake, the transfer itself, and the
             finalisation that follows it. Pause, resume and the reload setup are bounded by `_CONTROL_TIMEOUT` instead.
+        compute_dtype (`str`, *optional*):
+            Dtype the trainer's forward runs in under mixed precision (`"bfloat16"` or `"float16"`). The server's dtype
+            is checked against it rather than against the fp32 master weights.
     """
 
     _CONTROL_TIMEOUT = 300
@@ -65,13 +69,13 @@ class WeightTransferClient:
         vllm_client: VLLMClient,
         weight_update_info: dict,
         weight_sync_timeout: int = 1800,
+        compute_dtype: str | None = None,
     ):
-        if not is_vllm_available(min_version="0.22.0"):
-            raise ImportError(
-                "vLLM >= 0.22.0 is required to use WeightTransferClient. Install it with: pip install 'vllm>=0.22.0'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use WeightTransferClient. Install it with: pip install vllm")
         self.vllm = vllm_client
         self.weight_sync_timeout = weight_sync_timeout
+        self.compute_dtype = compute_dtype
         self._weight_update_info = weight_update_info
         if not _HAS_STATEFUL_TRAINER_ENGINE:
             self._weight_update_info = {**weight_update_info, "packed": True}
@@ -82,12 +86,12 @@ class WeightTransferClient:
         # Trainer and server precisions should agree: the precision gap between the two biases the importance ratio
         # https://huggingface.co/papers/2510.26788
         # https://huggingface.co/spaces/aminediroHF/trainer-generator-bf16-mismatch
-        train_dtype = Counter(self._weight_update_info["dtype_names"]).most_common(1)[0][0]
+        train_dtype = self.compute_dtype or Counter(self._weight_update_info["dtype_names"]).most_common(1)[0][0]
         vllm_dtype = self.vllm.get_dtype().removeprefix("torch.")
         if vllm_dtype != train_dtype:
             logger.warning(
-                f"The vLLM server serves in {vllm_dtype} but the weights sent to it are {train_dtype}. Set `dtype` in "
-                f"`AsyncGRPOConfig` to '{vllm_dtype}', or start the server with `--dtype {train_dtype}`."
+                f"The vLLM server serves in {vllm_dtype} but the trainer computes in {train_dtype}. Set `dtype` (or "
+                f"`bf16`/`fp16`) in `AsyncGRPOConfig` to match, or start the server with `--dtype {train_dtype}`."
             )
         inference_world_size = self.vllm.get_world_size()
         world_size = inference_world_size + 1
@@ -135,6 +139,10 @@ class WeightTransferClient:
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
         self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        # The manifest is collected before FSDP2 upcasts low-precision parameters to fp32, and the server sizes its
+        # receive buffers from it, so each tensor is sent in the dtype the manifest declares.
+        dtypes = [getattr(torch, dtype_name) for dtype_name in self._weight_update_info["dtype_names"]]
+        iterator = ((name, tensor.to(dtype)) for (name, tensor), dtype in zip(iterator, dtypes, strict=True))
 
         error: list[BaseException] = []
 

@@ -46,6 +46,7 @@ TRAIN_TASKS: list[JSONObject] = [
 class EchoTaskSpec(BaseModel):
     id: str
     target: str
+    failure_reward: float = 0.0
 
 
 class EchoParams(BaseModel):
@@ -110,7 +111,7 @@ class EchoEnvironment(Environment):
                     text="match" if correct else f"no match (got {params.text!r})",
                 )
             ],
-            reward=1.0 if correct else 0.0,
+            reward=1.0 if correct else self.config.failure_reward,
             finished=correct,
         )
 
@@ -123,4 +124,7 @@ class EchoEnvironment(Environment):
 if __name__ == "__main__":
     import os
 
-    Server([EchoEnvironment]).run(host="127.0.0.1", port=int(os.environ["PORT"]))
+    import uvicorn
+
+    # Serve on the socket bound by the test fixture
+    uvicorn.run(Server([EchoEnvironment]).app, fd=int(os.environ["FD"]), access_log=False)

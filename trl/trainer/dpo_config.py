@@ -42,10 +42,10 @@ class DPOConfig(_BaseConfig):
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -65,8 +65,9 @@ class DPOConfig(_BaseConfig):
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
             Temporarily unavailable: since the DPO refactor, setting it to `True` warns and falls back to standard
             padding. It is planned to return in a future update.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the sequences will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the sequences will be padded to a multiple of this value. `"auto"` pads to a multiple of 128 on
+            Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute the reference model log probabilities for the entire training dataset before
             training. This allows to save memory during training, as the reference model does not need to be kept in
@@ -173,12 +174,12 @@ class DPOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     disable_dropout: bool = field(
@@ -216,9 +217,12 @@ class DPOConfig(_BaseConfig):
             "standard padding. It is planned to return in a future update."
         },
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the sequences will be padded to a multiple of this value. `'auto'` pads to a multiple of "
+            "128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere."
+        },
     )
     precompute_ref_log_probs: bool = field(
         default=False,
@@ -374,3 +378,11 @@ class DPOConfig(_BaseConfig):
             )
 
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None

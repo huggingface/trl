@@ -19,7 +19,18 @@ from unittest.mock import mock_open, patch
 import pytest
 from datasets import DatasetDict, load_dataset
 
-from trl import DatasetMixtureConfig, DistillationConfig, GRPOConfig, RLOOConfig, SFTConfig, TrlParser, get_dataset
+from trl import (
+    DatasetMixtureConfig,
+    DistillationConfig,
+    DPOConfig,
+    GRPOConfig,
+    KTOConfig,
+    RewardConfig,
+    RLOOConfig,
+    SFTConfig,
+    TrlParser,
+    get_dataset,
+)
 from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
@@ -52,6 +63,18 @@ class TestTrlParser(TrlTestCase):
         parser = TrlParser(dataclass_types=[config_cls])
         (config,) = parser.parse_args_into_dataclasses(["--output_dir", "dummy", f"--{field_name}", value])
         assert getattr(config, field_name) == expected
+
+    @pytest.mark.parametrize(
+        "config_cls", [DistillationConfig, DPOConfig, GRPOConfig, KTOConfig, RewardConfig, RLOOConfig, SFTConfig]
+    )
+    @pytest.mark.parametrize(
+        ("value", "expected"), [("128", 128), ("None", None), ("none", None), ("null", None), ("auto", None)]
+    )
+    def test_pad_to_multiple_of_from_command_line(self, config_cls, value, expected):
+        """`pad_to_multiple_of` arrives as a string on the command line; `"auto"` resolves to `None` off Neuron."""
+        parser = TrlParser(dataclass_types=[config_cls])
+        (config,) = parser.parse_args_into_dataclasses(["--output_dir", "dummy", "--pad_to_multiple_of", value])
+        assert config.pad_to_multiple_of == expected
 
     def test_init_without_config_field(self):
         """Test initialization without 'config' field in the dataclasses."""
@@ -438,7 +461,7 @@ class TestGetDataset:
         """
 
         # Write YAML to a temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", encoding="utf-8") as tmpfile:
             tmpfile.write(yaml_content)
             tmpfile.flush()
             parser = TrlParser((DatasetMixtureConfig,))
@@ -474,7 +497,7 @@ class TestGetDataset:
         """
 
         # Write YAML to a temporary file
-        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml", encoding="utf-8") as tmpfile:
             tmpfile.write(yaml_content)
             tmpfile.flush()
             parser = TrlParser((DatasetMixtureConfig,))

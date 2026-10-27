@@ -16,11 +16,20 @@ import torch
 from transformers import AutoConfig, AutoProcessor, DiffusionGemmaForBlockDiffusion
 from transformers.models.diffusion_gemma.generation_diffusion_gemma import DiffusionGemmaGenerationConfig
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 TRANSFORMERS_VERSION = "5.11.0"  # DiffusionGemma was added in transformers 5.11.0
 check_transformers_version(TRANSFORMERS_VERSION)
+
+set_seed()
 
 MODEL_ID = "google/diffusiongemma-26B-A4B-it"
 

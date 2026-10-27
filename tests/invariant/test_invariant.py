@@ -115,7 +115,7 @@ def run(config: CorrectnessConfig) -> Trajectory:
         state_paths = list(Path(tmpdir).glob("**/trainer_state.json"))
         if not state_paths:
             raise RuntimeError(f"trainer_state.json not produced in {tmpdir}")
-        state = json.loads(state_paths[0].read_text())
+        state = json.loads(state_paths[0].read_text(encoding="utf-8"))
 
     steps = [
         StepRecord(
@@ -136,11 +136,11 @@ def run(config: CorrectnessConfig) -> Trajectory:
 
 def save(trajectory: Trajectory, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(trajectory), indent=2))
+    path.write_text(json.dumps(asdict(trajectory), indent=2), encoding="utf-8")
 
 
 def load(path: Path) -> Trajectory:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     return Trajectory(
         config=data["config"],
         env=data["env"],
@@ -214,7 +214,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         ],
     },
     "sft_fa2": {
-        # loss_type not pinned; this class exercises the current SFTConfig default ("chunked_nll").
+        # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
         # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
         # The grad_norm tol (5.0) is intentionally ~50× looser than the non-FA2 sft class (0.1): it is sized to the
         # FA2 varlen kernel noise observed in practice, not a regression budget. Do not tighten it without re-running
