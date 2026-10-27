@@ -19,8 +19,13 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from transformers.testing_utils import torch_device
 
 from .testing_utils import TrlTestCase
+
+
+# The CLI trains in an `accelerate launch` subprocess, out of reach of `force_use_cpu_without_accelerator` (#7933)
+USE_CPU = torch_device == "cpu"
 
 
 @pytest.mark.parametrize("command", ["distillation", "dpo", "grpo", "kto", "reward", "rloo", "sft"])
@@ -104,21 +109,21 @@ class TestCLI(TrlTestCase):
     def test_distillation(self):
         from trl.cli import main
 
-        command = f"trl distillation --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --teacher_model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --max_completion_length 32 --report_to none"
+        command = f"trl distillation --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --teacher_model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --max_completion_length 32 --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_dpo(self):
         from trl.cli import main
 
-        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none"
+        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_dpo_multiple_loss_types(self):
         from trl.cli import main
 
-        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
+        command = f"trl dpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5 --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
@@ -134,35 +139,35 @@ class TestCLI(TrlTestCase):
     def test_grpo(self):
         from trl.cli import main
 
-        command = f"trl grpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 4 --max_completion_length 32 --report_to none"
+        command = f"trl grpo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 4 --max_completion_length 32 --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_kto(self):
         from trl.cli import main
 
-        command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
+        command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_reward(self):
         from trl.cli import main
 
-        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
+        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_rloo(self):
         from trl.cli import main
 
-        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
+        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
     def test_sft(self):
         from trl.cli import main
 
-        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none"
+        command = f"trl sft --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_language_modeling --report_to none --use_cpu {USE_CPU}"
         with patch("sys.argv", command.split(" ")):
             main()
 
@@ -180,6 +185,7 @@ class TestCLI(TrlTestCase):
             "report_to": "none",
             "output_dir": output_dir,
             "lr_scheduler_type": "cosine_with_restarts",
+            "use_cpu": USE_CPU,
         }
         with open(config_path, "w", encoding="utf-8") as config_file:
             yaml.dump(config_content, config_file)
