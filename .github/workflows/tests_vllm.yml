@@ -107,15 +107,8 @@ jobs:
           if [ "$VLLM_END" != "floor" ]; then
             files="$files tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py"
           fi
-          # One process per file, since colocated vLLM engines keep their GPU memory until the process exits
-          status=0
-          for file in $files; do
-            # test_train_with_vllm_server expects a server that nothing in the test starts
-            timeout 30m pytest -v -rs -k "vllm or adapter_name or manifest_and_streaming" $file \
-              --deselect tests/experimental/test_online_dpo_trainer.py::TestOnlineDPOTrainer::test_train_with_vllm_server \
-              || status=1
-          done
-          exit $status
+          # One process per test, since colocated vLLM engines keep their GPU memory until the process exits
+          pytest --collect-only -q -k "vllm" $files | grep "::" | xargs -d '\n' -I{} timeout 30m pytest -v -rsx {}
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()
