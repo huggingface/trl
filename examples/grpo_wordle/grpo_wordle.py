@@ -53,7 +53,7 @@ CUDA_VISIBLE_DEVICES=1 python examples/grpo_wordle/grpo_wordle.py --vllm-mode se
     --env-url https://<user>-wordle.hf.space
 ```
 
-# Option 3: Hugging Face Jobs (1x A100, about 2.5 hours)
+# Option 3: Hugging Face Jobs (1x A100, about 2 hours 15 minutes)
 ```sh
 hf jobs uv run --flavor a100-large --timeout 4h --secrets HF_TOKEN examples/grpo_wordle/grpo_wordle.py \
     --env-url https://<user>-wordle.hf.space --push-to-hub
