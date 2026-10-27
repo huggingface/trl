@@ -15,7 +15,6 @@
 import copy
 import warnings
 from functools import partial
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -29,6 +28,7 @@ from transformers import (
     AutoTokenizer,
     GenerationConfig,
 )
+from transformers.generation import GenerateDecoderOnlyOutput
 
 from trl.data_utils import prepare_multimodal_messages
 from trl.experimental.gold import GOLDConfig
@@ -1183,7 +1183,7 @@ def test_generate_on_policy_outputs_masks_prompt(tmp_path, llama_tokenizer):
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             assert torch.equal(input_ids, prompt_tensor)
             assert torch.equal(attention_mask, prompt_mask)
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
@@ -1233,7 +1233,7 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(tmp_path, llama_tok
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig(eos_token_id=eos_id)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
@@ -1269,7 +1269,7 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(tmp_pat
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
@@ -1331,7 +1331,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(tmp_path, smollm_tokeniz
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             assert torch.equal(input_ids, batch["prompts"])
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
-            return SimpleNamespace(sequences=batch["input_ids"])
+            return GenerateDecoderOnlyOutput(sequences=batch["input_ids"])
 
     generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
