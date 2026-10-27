@@ -103,7 +103,7 @@ LFM2.5 chat template shipped by `LiquidAI/LFM2.5-1.2B-Instruct` (since [df58c17]
 
 ### `lfm2_2_5_vl.jinja`
 
-Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Same rendering as `lfm2_2_5.jinja` — including the `{% generation %}` markers, so no training patch is needed — plus multimodal `content` blocks (each `image` item renders as `<image>`) and more defensive handling of non-string content and flat `tool_calls`. Response parsing reuses `lfm2_2_5_template`.
+Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Identical to `lfm2_2_5_v3.jinja`, including the escaped string arguments and the multimodal `content` blocks (each `image` item renders as `<image>`), except that the generation prompt does not pre-fill `<think>`. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing reuses `lfm2_2_5_v3_template`.
 
 ### `lfm2_2_5_vl_v2.jinja`
 
