@@ -65,6 +65,10 @@ Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [905e84b](https:/
 
 Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https://huggingface.co/google/gemma-4-E2B-it/commit/899537982545a3e55ce64d34462b2efa5af85232): the current revision. Unlike the earlier ones, it also renders the reasoning of a final assistant turn. Response parsing reuses `gemma4_template`.
 
+### `gemma4_v6.jinja`
+
+Gemma 4 chat template shipped by `google/gemma-4-31B-it` since [68abe48](https://huggingface.co/google/gemma-4-31B-it/commit/68abe48010cbe15293462fa11e901a60639a44e5), and by `google/gemma-4-26B-A4B-it` and `google/gemma-4-12B-it`. Same as `gemma4_v5.jinja`, except that with thinking disabled the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`). Response parsing reuses `gemma4_template`.
+
 ### `glm4moe.jinja`
 
 Original GLM-4-MoE chat template.

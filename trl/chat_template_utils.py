@@ -659,6 +659,8 @@ gemma4_v4_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v4.jinja").read_text(en
 
 gemma4_v5_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5.jinja").read_text(encoding="utf-8")
 
+gemma4_v6_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v6.jinja").read_text(encoding="utf-8")
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
@@ -818,6 +820,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         gemma4_v3_chat_template,
         gemma4_v4_chat_template,
         gemma4_v5_chat_template,
+        gemma4_v6_chat_template,
     ]:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).

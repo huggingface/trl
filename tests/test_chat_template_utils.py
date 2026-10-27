@@ -35,6 +35,7 @@ from trl.chat_template_utils import (
     gemma4_v3_chat_template,
     gemma4_v4_chat_template,
     gemma4_v5_chat_template,
+    gemma4_v6_chat_template,
     get_training_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
@@ -462,6 +463,48 @@ class TestAddResponseSchema:
         text = processor.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids[0]
         parsed = parse_response(processor.tokenizer, text[len(prefix) :], prefix=prefix)
         assert parsed == expected
+
+    @pytest.mark.parametrize(
+        "enable_thinking, completion, expected",
+        [
+            pytest.param(False, "12<turn|>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                False,
+                "<|tool_call>call:multiply{a:3,b:4}<tool_call|><|tool_response>",
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+                    ],
+                },
+                id="tool_calls",
+            ),
+            pytest.param(
+                True,
+                "<|channel>thought\nHmmm.<channel|>12<turn|>",
+                {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+                id="reasoning",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_vision
+    def test_add_response_schema_gemma4_v6(self, enable_thinking, completion, expected):
+        # Without thinking, the generation prompt pre-fills an empty thought channel that rendered history turns lack,
+        # so the completion can't be sliced off a rendered conversation.
+        processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        processor.chat_template = gemma4_v6_chat_template
+        processor = add_response_schema(processor)
+        messages = prepare_multimodal_messages([{"role": "user", "content": "What is 3*4?"}])
+        prefix = processor.apply_chat_template(
+            messages, add_generation_prompt=True, enable_thinking=enable_thinking, tokenize=True, return_dict=True
+        ).input_ids[0]
+        response = processor.tokenizer(completion, add_special_tokens=False).input_ids
+        assert parse_response(processor.tokenizer, response, prefix=prefix) == expected
 
 
 class TestSupportsToolCalling:
