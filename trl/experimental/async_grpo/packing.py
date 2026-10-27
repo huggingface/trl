@@ -119,7 +119,7 @@ class TreeRow:
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
                   boundaries in `tree_kv_index`.
                 - `tree_segment_parents` (`S`), `tree_segment_depths` (`S`): the segment tree, for the recurrent layers
-                  patched by [`patch_tree_gdn`].
+                  patched by [`patch_tree_recurrent`].
                 - `tree_sizes` (`4 + depth`): longest segment, longest path, `K`, 64-token chunks, then the segments
                   per depth. Every length the kernels launch with, so a rank reads them in one go (see [`unpad_tree`]).
                 - `token_index` (`M`): position whose prediction is each trained token. A shared position serves every
@@ -278,20 +278,27 @@ def register_tree_attention() -> None:
 _PATCHED = set()
 
 
-def patch_tree_gdn(model) -> bool:
+def patch_tree_recurrent(model, layer_type: str) -> bool:
     """
-    Make the model's gated DeltaNet layers follow the tree of a tree-packed forward.
+    Make the model's gated DeltaNet or short convolution layers follow the tree of a tree-packed forward.
 
-    Transformers' hybrids (Qwen3.5, Qwen3-Next, OLMo-Hybrid, ...) run these layers through two module-level functions,
-    `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, and pass the forward's keyword arguments down to both. Both
-    are wrapped: given the tree of [`~packing.TreeRow.pack`] they follow it, otherwise they run unchanged.
+    Transformers' gated DeltaNet hybrids (Qwen3.5, Qwen3-Next, OLMo-Hybrid, ...) run their `"linear_attention"` layers
+    through two module-level functions, `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, and LFM2's `"conv"`
+    layers through the first alone. These layers pass the forward's keyword arguments down to them. Each is wrapped:
+    given the tree of [`~packing.TreeRow.pack`] they follow it, otherwise they run unchanged.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to patch.
+        layer_type (`str`):
+            The model's only non-attention layer type, `"linear_attention"` or `"conv"`.
 
     Returns:
-        `bool`: whether the model's modeling module has those functions.
+        `bool`: whether the model's modeling module has the functions its layers run through.
     """
     modeling = sys.modules[type(model).__module__]
     conv, chunk = vars(modeling).get("causal_conv1d_fn"), vars(modeling).get("torch_chunk_gated_delta_rule")
-    if conv is None or chunk is None:
+    if conv is None or (layer_type == "linear_attention" and chunk is None):
         return False
     if modeling in _PATCHED:
         return True
@@ -307,6 +314,8 @@ def patch_tree_gdn(model) -> bool:
             return chunk(query, key, value, g=g, beta=beta, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, **kwargs)
         return tree_chunk_gated_delta_rule(query, key, value, g, beta, kwargs, use_qk_l2norm_in_kernel), None
 
-    modeling.causal_conv1d_fn, modeling.torch_chunk_gated_delta_rule = causal_conv1d_fn, torch_chunk_gated_delta_rule
+    modeling.causal_conv1d_fn = causal_conv1d_fn
+    if chunk is not None:
+        modeling.torch_chunk_gated_delta_rule = torch_chunk_gated_delta_rule
     _PATCHED.add(modeling)
     return True

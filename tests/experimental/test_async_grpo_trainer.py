@@ -1515,6 +1515,9 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, id="qwen35-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, id="qwen38-gdn"),
         pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, id="qwen36-moe-gdn"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", {}, id="lfm2-conv"),
+        pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM-2.5", {}, id="lfm25-conv"),
+        pytest.param("trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5", {}, id="lfm25-moe-conv"),
         pytest.param(
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration", {}, id="qwen2-vl", marks=_VLM_TEXT_HEAD_DIM_4
         ),
@@ -1660,7 +1663,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "match"),
         [
-            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", "conv", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
@@ -1670,6 +1672,19 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     def test_init_raises(self, model_id, match):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with pytest.raises(ValueError, match=match):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+    def test_init_raises_on_short_conv_before_transformers_5_21(self):
+        model_id = "trl-internal-testing/tiny-Lfm2ForCausalLM"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with patch("transformers.__version__", "5.20.0"), pytest.raises(ValueError, match="transformers>=5.21.0"):
             AsyncGRPOTrainer(
                 model=model_id,
                 reward_funcs=dummy_reward_func,
