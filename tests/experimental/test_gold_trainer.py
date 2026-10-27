@@ -2312,7 +2312,7 @@ _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 
 
 @pytest.mark.xfail(
-    condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0.dev0"),
+    condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0"),
     reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
     strict=True,
 )
