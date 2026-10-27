@@ -2234,7 +2234,7 @@ class TestSFTTrainer(TrlTestCase):
             pytest.param(
                 "trl-internal-testing/tiny-REDACTEDForConditionalGeneration",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.21.0.dev0"),
+                    Version(transformers.__version__) < Version("5.21.0"),
                     reason="REDACTED_NAME was introduced in transformers-5.21.0",
                 ),
             ),
