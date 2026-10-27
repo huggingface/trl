@@ -24,6 +24,7 @@ from accelerate.utils.memory import release_memory
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
@@ -43,7 +44,6 @@ from .testing_utils import (
     require_bitsandbytes,
     require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_response_parsing,
     require_torch_accelerator,
     require_vision,
@@ -267,6 +267,13 @@ class TestGRPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
@@ -309,6 +316,7 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_liger_kernel
+    @require_torch_accelerator
     def test_train_with_liger(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1125,7 +1133,7 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.ref_model.dtype == torch.bfloat16
         assert trainer.ref_model.config._attn_implementation == "eager"
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -2585,9 +2593,9 @@ class TestGRPOTrainer(TrlTestCase):
         reason="transformers continuous batching requires transformers>=5.8.0",
     )
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
-        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
+        "newer GPU, XPU, or ROCm (see https://github.com/huggingface/transformers/issues/47926)",
     )
     def test_train_with_transformers_continuous_batching(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2601,6 +2609,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_steps=2,  # continuous batching adds about 1s per step
             report_to="none",
             use_transformers_continuous_batching=True,
+            transformers_continuous_batching_config={"num_blocks": 16},  # reduce the KV cache size, see #7824
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
@@ -3281,6 +3290,71 @@ class TestGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.xfail(
+        condition=Version(transformers.__version__) < Version("5.0.0"),
+        reason="Tool parsing is not supported in transformers versions below 5.0.0",
+        strict=True,
+    )
+    @require_response_parsing
+    def test_train_with_tools_log_completions(self):
+        # The logged completions mix types within a field: the tool returns content blocks while assistant content is
+        # a string, and `query` is a string in one call and a list in the other. The completions table must still be
+        # written (#7674).
+        def lookup_tool(query: str) -> list:
+            """
+            Looks up the items matching a query.
+
+            Args:
+                query: What to look up.
+
+            Returns:
+                The matching items, as text content blocks.
+            """
+            return [{"type": "text", "text": "crate"}]
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            tools=[lookup_tool],
+        )
+        tokenizer = trainer.processing_class
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 3:  # first call: two tool calls, then a text answer
+                texts = [
+                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": "crate"}}\n</tool_call><|im_end|>',
+                    '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": ["crate"]}}\n</tool_call><|im_end|>',
+                    "No tool needed.<|im_end|>",
+                ]
+            else:  # second call, for the two examples with a tool call
+                texts = ["Done!<|im_end|>"] * input_ids.shape[0]
+            rows = [tokenizer(text, add_special_tokens=False).input_ids for text in texts]
+            width = max(len(row) for row in rows)
+            completion_ids = [row + [tokenizer.pad_token_id] * (width - len(row)) for row in rows]
+            return torch.cat([input_ids, torch.tensor(completion_ids, device=input_ids.device)], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        assert completions.num_rows == 3
+        tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
+        assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
 
     @pytest.mark.xfail(
         condition=Version(transformers.__version__) < Version("5.0.0"),
@@ -4770,6 +4844,34 @@ class TestGRPOTrainerVLM(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_vllm
+    @require_torch_accelerator
+    def test_vllm_generation_suppresses_image_token(self):
+        # A sampled image placeholder token would make the forward pass over prompt + completion fail
+        model_id = "HuggingFaceTB/SmolVLM-256M-Instruct"  # tiny models are too small for vLLM
+        image_token_id = AutoConfig.from_pretrained(model_id).image_token_id
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="colocate",
+            max_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            # Leave only the image token and one the model ranks far below it, so an unsuppressed run samples it
+            generation_kwargs={"allowed_token_ids": [image_token_id, 43476]},
+        )
+        trainer = GRPOTrainer(
+            model=model_id,
+            reward_funcs=lambda completions, **kwargs: [float(len(c[0]["content"])) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
 
     @pytest.mark.parametrize(
         "model_id",

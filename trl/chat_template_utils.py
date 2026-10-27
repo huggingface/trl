@@ -511,6 +511,48 @@ lfm2_2_5_template = {
     },
 }
 
+# The later LFM2.5 template escapes `\`, `'`, newlines and carriage returns in string arguments, so a string runs up to
+# the first unescaped `'`. The `json` value parser does not unescape them: a string with `\` or a newline keeps its
+# escapes (`Paris\\nFrance`), and one with `'` also keeps its quotes (`'Saint-Jean-d\'Angély'`).
+_LFM2_2_5_V3_STR = r"'(?:[^'\\]|\\.)*'"
+_LFM2_2_5_V3_ATOM = rf"[^\[\]{{}}'\"]|{_LFM2_2_5_V3_STR}|\"(?:[^\"\\]|\\.)*\""
+_LFM2_2_5_V3_NESTED = _LFM2_2_5_V3_ATOM
+for _ in range(3):
+    _LFM2_2_5_V3_NESTED = rf"{_LFM2_2_5_V3_ATOM}|[\[{{](?:{_LFM2_2_5_V3_NESTED})*[\]}}]"
+_LFM2_2_5_V3_ARG_VALUE = rf"{_LFM2_2_5_V3_STR}|[\[{{](?:{_LFM2_2_5_V3_NESTED})*[\]}}]|[^,)]*"
+
+lfm2_2_5_v3_template = {
+    # Same tool-call format as `lfm2_2_5_template`. The later LFM2.5 template pre-fills the generation prompt with the
+    # `<think>` opener, so the start anchor consumes it, along with an immediate `</think>` when the model skips
+    # reasoning. Rendered history turns carry no pre-fill, hence the optional group. Reasoning content is therefore not
+    # framed by a `<think>` open in the model output; the zero-width lookahead only activates the reasoning field when a
+    # closing `</think>` is actually present, so a turn with no reasoning is parsed entirely as content.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"<\|im_start\|>assistant\n(?:<think>(?:</think>)?)?",
+    "fields": {
+        "thinking": {
+            "open_pattern": r"(?:<think>)?(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": rf"(?P<key>\w+)=(?P<value>{_LFM2_2_5_V3_ARG_VALUE})",
+                "value_parser": {"name": "json", "args": {"string_delims": [["'", "'"]], "allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
 nemotron_3_template = {
     # Nemotron 3 always prefills the assistant turn with the `<think>` opener (and a trailing `\n` when thinking is
     # enabled, or `</think>` when it is not), so the start anchor consumes it. Reasoning content is therefore not framed
@@ -630,6 +672,8 @@ lfm2_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2.jinja").read_text(encodi
 lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(encoding="utf-8")
 
 lfm2_2_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v2.jinja").read_text(encoding="utf-8")
+
+lfm2_2_5_v3_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v3.jinja").read_text(encoding="utf-8")
 
 lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
 
@@ -760,6 +804,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, lfm2_2_5_template
+    elif chat_template == lfm2_2_5_v3_chat_template:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, lfm2_2_5_v3_template
     elif chat_template in [
         gemma4_chat_template,
         gemma4_v2_chat_template,

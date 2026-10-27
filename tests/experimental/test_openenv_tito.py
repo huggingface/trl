@@ -180,6 +180,11 @@ class Session:
         self.closed.set()
 
 
+def test_loop_owning_capture_rejects_truncated_sampling(make_loop):
+    with pytest.raises(ValueError, match="candidate set"):
+        make_loop(top_p=0.95, top_k=512)
+
+
 @pytest.mark.parametrize("temperature", [0.3, 0.8, 1.2])
 def test_worker_supplies_factory_sampling_before_session_start(make_loop, monkeypatch, temperature):
     harness = pytest.importorskip("harbor_env.harness")
@@ -318,7 +323,7 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     loop.tokenizer.apply_chat_template = MagicMock(return_value=[1])
 
     async def generate_one_turn(prompt_ids):
-        return [2, 3], [-0.1, -0.2]
+        return [2, 3], [-0.1, -0.2], None, None
 
     loop._generate_one_turn = generate_one_turn
     result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
