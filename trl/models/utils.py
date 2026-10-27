@@ -19,11 +19,11 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
-import accelerate
 import torch
 import torch.nn as nn
 import transformers
 from accelerate import Accelerator
+from accelerate.utils.fsdp_utils import get_parameters_from_modules
 from packaging.version import Version
 from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
@@ -35,9 +35,6 @@ from ..import_utils import suppress_experimental_warning
 with suppress_experimental_warning():
     from ..experimental.utils import create_reference_model as _create_reference_model
 
-
-if Version(accelerate.__version__) >= Version("1.11.0"):
-    from accelerate.utils.fsdp_utils import get_parameters_from_modules
 
 if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
@@ -310,14 +307,7 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
             mesh = getattr(accelerator, "torch_device_mesh", None)
-            if Version(accelerate.__version__) >= Version("1.11.0"):
-                ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
-            else:
-                warnings.warn(
-                    "FSDP version 2 is being used with accelerate version < 1.11.0, which may lead to incorrect "
-                    "handling of ignored modules. Please upgrade accelerate to v1.11.0 or later for proper support."
-                )
-                ignored_params = None
+            ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
             fsdp2_kwargs = {
                 "reshard_after_forward": fsdp_plugin.reshard_after_forward,
                 "offload_policy": fsdp_plugin.cpu_offload,

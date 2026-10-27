@@ -957,6 +957,22 @@ class TestKTOTrainer(TrlTestCase):
             )
 
     @require_peft
+    def test_peft_ref_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(output_dir=self.tmp_dir, report_to="none")
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
+        ref_model = get_peft_model(ref_model, LoraConfig())
+        with pytest.raises(ValueError, match="`ref_model` cannot be a `PeftModel`"):
+            KTOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                ref_model=ref_model,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_peft
     def test_train_peft_prompt_tuning(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
         training_args = KTOConfig(

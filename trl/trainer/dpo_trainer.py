@@ -441,7 +441,7 @@ class DPOTrainer(_BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
-            - If provided, this model is used directly as the reference policy.
+            - If provided, this model is used directly as the reference policy. It cannot be a [`~peft.PeftModel`].
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before DPO training starts.
         args ([`DPOConfig`], *optional*):
@@ -594,6 +594,11 @@ class DPOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+        if ref_model is not None and is_peft_model(ref_model):
+            raise ValueError(
+                "`ref_model` cannot be a `PeftModel`. To train with PEFT, pass the `PeftModel` as `model` and omit "
+                "`ref_model`."
+            )
 
         # Processing class
         if processing_class is None:
@@ -663,6 +668,27 @@ class DPOTrainer(_BaseTrainer):
                     "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
                     "peft, or load the model with `device_map=None`. See "
                     "https://github.com/huggingface/peft/issues/2821."
+                )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
                 )
             # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
             if (

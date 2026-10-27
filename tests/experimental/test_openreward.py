@@ -41,22 +41,20 @@ _HERE = Path(__file__).parent
 _ECHO_ENV_SCRIPT = _HERE / "_openreward_echo_env.py"
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @pytest.fixture(scope="class")
 def echo_env_url():
     """Spawn the echo env on a free port; tear down on teardown."""
-    port = _free_port()
-    proc = subprocess.Popen(
-        [sys.executable, str(_ECHO_ENV_SCRIPT)],
-        env={**os.environ, "PORT": str(port)},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # Pass the bound socket: rebinding a free port in the subprocess races with other xdist workers (see #7885)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        proc = subprocess.Popen(
+            [sys.executable, str(_ECHO_ENV_SCRIPT)],
+            env={**os.environ, "FD": str(sock.fileno())},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(sock.fileno(),),
+        )
     url = f"http://127.0.0.1:{port}"
     deadline = time.time() + 30.0
     while time.time() < deadline:

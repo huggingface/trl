@@ -2557,9 +2557,9 @@ class TestGRPOTrainer(TrlTestCase):
         reason="transformers continuous batching requires transformers>=5.8.0",
     )
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
-        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
+        "newer GPU, XPU, or ROCm (see https://github.com/huggingface/transformers/issues/47926)",
     )
     def test_train_with_transformers_continuous_batching(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2573,6 +2573,7 @@ class TestGRPOTrainer(TrlTestCase):
             max_steps=2,  # continuous batching adds about 1s per step
             report_to="none",
             use_transformers_continuous_batching=True,
+            transformers_continuous_batching_config={"num_blocks": 16},  # reduce the KV cache size, see #7824
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
