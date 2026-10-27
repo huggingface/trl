@@ -23,6 +23,9 @@ import pytest
 import torch
 from transformers.utils import is_liger_kernel_available, is_peft_available, is_torch_xpu_available
 
+# Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
+import trl  # noqa: F401
+
 
 # ============================================================================
 # Silence transformers "LOAD REPORT" tables
@@ -296,8 +299,13 @@ def undo_liger_kernel_patching(monkeypatch):
     `Trainer.__init__`, so a test that merely builds a trainer leaks, while transformers >= 5.3 applies them in
     `Trainer.train()`. Either way they are never reverted, which is why only the minimum-versions CI job fails: the
     Liger tests that use a Qwen3 model build a trainer but never train.
+
+    On a machine without an accelerator this fixture is a no-op: no test applies Liger's kernels there, and importing
+    Liger can fail (#7867).
     """
-    if not is_liger_kernel_available():
+    from transformers.testing_utils import torch_device
+
+    if not is_liger_kernel_available() or torch_device is None or torch_device == "cpu":
         yield
         return
 

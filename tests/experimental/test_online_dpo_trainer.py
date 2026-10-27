@@ -512,6 +512,9 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):

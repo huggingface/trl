@@ -17,6 +17,7 @@ import threading
 import time
 from collections import Counter
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
@@ -138,6 +139,10 @@ class WeightTransferClient:
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
         self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        # The manifest is collected before FSDP2 upcasts low-precision parameters to fp32, and the server sizes its
+        # receive buffers from it, so each tensor is sent in the dtype the manifest declares.
+        dtypes = [getattr(torch, dtype_name) for dtype_name in self._weight_update_info["dtype_names"]]
+        iterator = ((name, tensor.to(dtype)) for (name, tensor), dtype in zip(iterator, dtypes, strict=True))
 
         error: list[BaseException] = []
 
