@@ -153,6 +153,10 @@ Original Phi-3.5 chat template.
 
 Original Qwen2.5 chat template.
 
+### `qwen2_5_base.jinja`
+
+Qwen2.5 chat template shipped by the base checkpoints (`Qwen/Qwen2.5-0.5B`, `Qwen/Qwen2.5-1.5B`, `Qwen/Qwen2.5-3B`, `Qwen/Qwen2.5-7B`, `Qwen/Qwen2.5-14B`, ...). Same as `qwen2_5.jinja`, except for the default system prompt (`You are a helpful assistant.`).
+
 ### `qwen2_5_vl.jinja`
 
 Original Qwen2.5-VL chat template. Also matches Qwen2-VL, which ships a byte-identical template. Does not support tool calling.
@@ -330,6 +334,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen2_5_base_training.jinja`
+
+Patched Qwen2.5 base template. Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_base.jinja`.
 
 ### `qwen2_5_vl_training.jinja`
 
