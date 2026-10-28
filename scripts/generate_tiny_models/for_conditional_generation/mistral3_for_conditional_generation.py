@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import tempfile
+
 import torch
-from transformers import AutoConfig, AutoProcessor, GenerationConfig, Mistral3ForConditionalGeneration
+from torch import nn
+from transformers import (
+    AutoConfig,
+    AutoProcessor,
+    FineGrainedFP8Config,
+    GenerationConfig,
+    Mistral3ForConditionalGeneration,
+)
+from transformers.integrations.finegrained_fp8 import FP8Linear
 
 from .._common import (
     check_dtype_pattern,
@@ -53,9 +63,37 @@ vision_config = {
 config = AutoConfig.from_pretrained(MODEL_ID)
 config.text_config.update(text_config)
 config.vision_config.update(vision_config)
-# The reference checkpoint is FP8; the tiny model is a plain bfloat16 one
+# FP8 weights, like the reference checkpoint: build the model in bfloat16, then quantize it at load with the
+# reference's quantization config, which computes each weight's scale (needs a GPU with FP8 support)
+quantization_config = FineGrainedFP8Config.from_dict(config.quantization_config)
 del config.quantization_config
 model = Mistral3ForConditionalGeneration(config).to(dtype=torch.bfloat16)
+
+# Its activation scheme is static: calibrate each linear's input scale on a short conversation
+inputs_absmax = {}
+
+
+def record_absmax(name):
+    def hook(module, args):
+        inputs_absmax[name] = max(inputs_absmax.get(name, 0.0), args[0].abs().max().item())
+
+    return hook
+
+
+hooks = [m.register_forward_pre_hook(record_absmax(n)) for n, m in model.named_modules() if isinstance(m, nn.Linear)]
+conversation = [{"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]}]
+model(**processor.apply_chat_template(conversation, tokenize=True, return_dict=True, return_tensors="pt"))
+for hook in hooks:
+    hook.remove()
+
+with tempfile.TemporaryDirectory() as tmp_dir:
+    model.save_pretrained(tmp_dir)
+    model = Mistral3ForConditionalGeneration.from_pretrained(
+        tmp_dir, quantization_config=quantization_config, device_map="cuda"
+    )
+for name, module in model.named_modules():
+    if isinstance(module, FP8Linear):
+        module.activation_scale.data.fill_(inputs_absmax[name] / torch.finfo(torch.float8_e4m3fn).max)
 smoke_test(model, processor)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)
