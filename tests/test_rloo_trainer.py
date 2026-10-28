@@ -30,6 +30,7 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
+from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
@@ -1451,7 +1452,8 @@ class TestRLOOTrainer(TrlTestCase):
     @require_peft
     @require_vllm
     @pytest.mark.xfail(
-        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM raises",
+        condition=is_vllm_available(min_version="0.29.0"),
+        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM>=0.29 raises",
         strict=True,
     )
     def test_train_vllm_and_peft(self):

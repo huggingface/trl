@@ -2389,7 +2389,7 @@ class TestGRPOTrainer(TrlTestCase):
     @require_peft
     @require_vllm
     @pytest.mark.xfail(
-        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM raises",
+        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises",
         strict=True,
     )
     def test_train_vllm_and_peft(self):
@@ -2438,6 +2438,10 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
+    @pytest.mark.xfail(
+        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes",
+        strict=True,
+    )
     def test_train_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
