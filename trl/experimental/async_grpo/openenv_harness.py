@@ -198,6 +198,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         rollout_id = uuid.uuid4().hex
         # Every generation in a group must select the same task.
         seed = group_id
+        if self.lora_name is not None:
+            # The agent sends the factory's model name on every call, and in vLLM's API an adapter is a model name:
+            # point each new session at the policy version published now.
+            self._factory.model = self._request_model
         try:
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
