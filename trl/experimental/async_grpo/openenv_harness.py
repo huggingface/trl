@@ -49,6 +49,10 @@ from .async_rollout_worker import (
 
 logger = get_logger(__name__)
 
+# Unscorable sessions in a row, per in-flight slot, before the worker gives up, and the longest wait between them
+_MAX_SESSION_FAILURES_PER_SLOT = 10
+_MAX_SESSION_BACKOFF_S = 16
+
 Message = dict[str, Any]
 
 
@@ -146,6 +150,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
         self._live_sessions: set = set()
+        self._consecutive_session_failures = 0
 
     async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
         # OpenEnv sessions are synchronous; metrics stay on the event loop.
@@ -166,6 +171,21 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 self._rates[f"tools/{name}/latency_s"][0] += elapsed
                 self._rates[f"tools/{name}/latency_s"][1] += 1
             self._push_rollout_metrics(**metrics)
+        if result is not self._EMPTY_ROLLOUT:
+            self._consecutive_session_failures = 0
+        elif not self._stop_event.is_set():
+            # A persistent failure (harness server down, broken sandbox) would otherwise spin without producing samples
+            self._consecutive_session_failures += 1
+            if self._consecutive_session_failures >= _MAX_SESSION_FAILURES_PER_SLOT * self.max_inflight_tasks:
+                raise RuntimeError(
+                    f"{self._consecutive_session_failures} harness sessions in a row were unscorable; see the "
+                    "warnings above for their errors."
+                )
+            backoff = min(2 ** min(self._consecutive_session_failures - 1, 4), _MAX_SESSION_BACKOFF_S)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
         return result
 
     async def _run_loops(self, stop_event) -> None:

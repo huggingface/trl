@@ -245,6 +245,19 @@ def test_transport_failures_remain_unscorable(make_loop, phase):
         assert session.closed.is_set()
 
 
+def test_persistent_session_failures_stop_the_worker(make_loop, monkeypatch):
+    monkeypatch.setattr(openenv_harness, "_MAX_SESSION_BACKOFF_S", 0)
+
+    def create(*args, **kwargs):
+        raise ConnectionError("harness server unavailable")
+
+    loop = make_loop(SimpleNamespace(create=create))
+    with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
+        loop.run()
+    assert loop._failed_event.is_set()
+    assert loop.rollout_buffer.empty()
+
+
 def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session = Session(captured_entry())
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
