@@ -37,6 +37,14 @@ Original DeepSeek-V3 chat template.
 
 Later DeepSeek-R1 chat template (as shipped by `deepseek-ai/DeepSeek-R1-0528` and `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`). Unlike `deepseekv3.jinja`, it closes each user turn with `<｜Assistant｜>`, so the generation prompt adds nothing after a user message, and it renders `<｜tool▁outputs▁end｜>` at the start of the assistant turn that follows tool outputs. Tool-call arguments are still rendered only as strings.
 
+### `deepseekv3_v3.jinja`
+
+DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-V3`). Same as `deepseek_r1_distill.jinja`, except that it concatenates several system messages, keeps the reasoning in assistant content, and does not pre-fill `<think>` in the generation prompt. Like it, it renders `tool_calls` only when `content` is `None` and never closes a single-call turn, so `supports_tool_calling` rejects it.
+
+### `deepseekv3_v4.jinja`
+
+DeepSeek-V3-0324 chat template (as shipped by `deepseek-ai/DeepSeek-V3-0324` and `deepseek-ai/DeepSeek-Prover-V2-7B`). Same as `deepseekv3_v2.jinja`, except that it keeps the reasoning in assistant content. Tool-call arguments are rendered only as strings.
+
 ### `diffusion_gemma.jinja`
 
 Original DiffusionGemma chat template (as shipped by `google/diffusiongemma-26B-A4B-it`).
@@ -229,6 +237,14 @@ Patched DeepSeek-R1-0528 template. Diff vs `deepseekv3_v2.jinja`:
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict`, as in `deepseekv3_training.jinja`.
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
 - Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs stays outside the markers, since the prompt already ends with it.
+
+### `deepseekv3_v3_training.jinja`
+
+Patched DeepSeek-V3 template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja` (which has no `'</think>'` split to remove): `{% generation %}` / `{% endgeneration %}` markers around assistant message output for SFT assistant-only loss.
+
+### `deepseekv3_v4_training.jinja`
+
+Patched DeepSeek-V3-0324 template. Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v4.jinja` (which has no `'</think>'` split to remove): `| tojson` on tool-call arguments, and `{% generation %}` / `{% endgeneration %}` markers around the assistant output, with the `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs left outside them.
 
 ### `diffusion_gemma_training.jinja`
 
