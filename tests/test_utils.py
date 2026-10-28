@@ -1965,7 +1965,20 @@ class TestAddFusedLMHeadLoss:
                     chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
                 )
 
-    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            *_FUSED_LM_HEAD_VLM_MODEL_IDS,
+            # Forward only: its weights are FP8, and FP8 layers have no backward yet (huggingface/transformers#50031)
+            pytest.param(
+                "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.22.0"),
+                    reason="Mistral Large 4 was introduced in transformers-5.22.0",
+                ),
+            ),
+        ],
+    )
     def test_forward_matches_reference_vlm(self, model_id):
         ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
 
