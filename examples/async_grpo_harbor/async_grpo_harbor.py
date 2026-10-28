@@ -207,6 +207,7 @@ def main() -> None:
     print(f"output    {output_dir}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    eos_token_ids = [tokenizer.eos_token_id]
 
     config = AsyncGRPOConfig(
         output_dir=output_dir,
@@ -256,6 +257,7 @@ def main() -> None:
         top_k=-1,
         log_completions=True,
         num_completions_to_print=2,
+        eos_token_ids=eos_token_ids,
     )
 
     trainer = AsyncGRPOTrainer(
