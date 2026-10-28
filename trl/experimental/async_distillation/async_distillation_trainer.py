@@ -31,13 +31,21 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 import torch.nn.functional as F
+import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
@@ -1152,12 +1160,17 @@ class AsyncDistillationTrainer(_BaseTrainer):
     ```
 
     Args:
-        model (`str`):
-            Student model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a
-            model repo on huggingface.co, or a path to a *directory* containing model weights saved using
-            [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
-            [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the student
-            model on its vLLM server.
+        model (`str` or [`~transformers.PreTrainedModel`]):
+            Student model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
+              [`~transformers.AutoModelForCausalLM.from_pretrained`].
+            - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
+              FlashAttention backend for padding-free training.
+
+            The model name from the config is used to identify the student model on its vLLM server.
         args ([`experimental.async_distillation.AsyncDistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -1207,7 +1220,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: str,
+        model: "str | PreTrainedModel",
         args: AsyncDistillationConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
@@ -1218,17 +1231,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
         weight_transfer: WeightTransferProtocol | None = None,
     ):
         if args is None:
-            args = AsyncDistillationConfig(f"{model.split('/')[-1]}-AsyncDistillation")
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = AsyncDistillationConfig(f"{model_name}-AsyncDistillation")
 
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
-        model_name = model
-        model_init_kwargs = args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-        model_init_kwargs.setdefault("dtype", args.dtype)
-        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT given a fused head (via `add_fused_lm_head`), a chunked
@@ -1243,16 +1253,41 @@ class AsyncDistillationTrainer(_BaseTrainer):
             attn_implementation = "kernels-community/flash-attn4"
         else:
             attn_implementation = "kernels-community/flash-attn3"
-        model_init_kwargs.setdefault("attn_implementation", attn_implementation)
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map=None, **model_init_kwargs)
+        if isinstance(model, str):
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_init_kwargs.setdefault("dtype", args.dtype)
+            model_init_kwargs.setdefault("attn_implementation", attn_implementation)
+            model_revision = model_init_kwargs.get("revision")
+            model = AutoModelForCausalLM.from_pretrained(model, device_map=None, **model_init_kwargs)
+        else:
+            model_revision = None
+            model.set_attn_implementation(attn_implementation)
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `AsyncDistillationConfig`, but your model is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
+        text_config = model.config.get_text_config()
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_name, revision=model_revision, trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
@@ -1469,6 +1504,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
+                if self._lora_sync:
+                    # The worker was built before the server was probed, so it does not know the adapter name yet.
+                    # Without it, its requests name the base model and keep sampling the base policy.
+                    self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=get_config_model_id(model.config),
@@ -1661,10 +1700,16 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # (a no-op if bf16/fp16 aren't enabled) — otherwise FlashAttention (which requires fp16/bf16 inputs) sees
         # fp32 hidden states and errors. Under PEFT, `base_model` is the `LoraModel` tuner, whose forward runs the full
         # causal LM, so the backbone is reached through `get_base_model()`; its layers carry the adapters in place.
-        backbone = (unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model).base_model
+        causal_lm = unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model
+        backbone = causal_lm.base_model
         forward_start = time.time()
+        # MoE models: request router logits so the load-balancing loss can be computed below
+        router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
         with self.accelerator.autocast():
-            hidden_states = backbone(input_ids=input_ids, position_ids=position_ids, use_cache=False).last_hidden_state
+            backbone_outputs = backbone(
+                input_ids=input_ids, position_ids=position_ids, use_cache=False, **router_kwargs
+            )
+        hidden_states = backbone_outputs.last_hidden_state
         self._last_forward_time_s = time.time() - forward_start
         hidden_states = hidden_states[:, :-1, :][0]  # (seq_len - 1, H), drop the unused last-position prediction
 
@@ -1741,6 +1786,27 @@ class AsyncDistillationTrainer(_BaseTrainer):
         loss = loss / tokens_per_rank.to(torch.float32)
         loss = loss / self.current_gradient_accumulation_steps
 
+        # The divergence loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        if self.aux_loss_enabled:
+            # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            if Version(transformers.__version__) < Version("5.0.0"):
+                num_experts = causal_lm.num_experts
+                num_experts_per_tok = causal_lm.num_experts_per_tok
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if config.model_type == "gpt_oss" and Version("5.0.0") <= Version(transformers.__version__) < Version(
+                    "5.6.0"
+                ):
+                    num_experts = causal_lm.num_experts
+                else:
+                    num_experts = config.num_experts
+                num_experts_per_tok = config.num_experts_per_tok
+            # Padding-free packs all real tokens into a single row, so there is no attention mask and every token counts.
+            aux_loss = load_balancing_loss_func(backbone_outputs.router_logits, num_experts, num_experts_per_tok, None)
+            loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
+
         with torch.no_grad():
             local_count = token_mask_1d.sum().float()
             stats = torch.stack([local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_count])
@@ -1786,6 +1852,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     else:
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append(float("nan"))
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(float("nan"))
+
+            if self.aux_loss_enabled:
+                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
         # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
         # `_log_step_metrics`. The counts are batch-wide (the collator broadcasts one value per rank), so they are read
