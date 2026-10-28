@@ -12,13 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from unittest.mock import patch
 
 import pytest
 import torch
 import torch.nn.functional as F
+from accelerate import PartialState
 from transformers.testing_utils import torch_device
 from transformers.utils import is_triton_available
+
+from trl.models.activation_offloading import OffloadActivations
 
 from .testing_utils import require_torch_accelerator, require_triton
 
@@ -91,6 +95,31 @@ class TestLogProbEntropy:
         torch.testing.assert_close(logprobs, reference_logprobs, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(entropy, reference_entropy, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(actual_grad, reference_logits.grad, rtol=1e-3, atol=1e-3)
+
+    @pytest.mark.parametrize("use_mask", [False, True])
+    @pytest.mark.parametrize("use_streams", [False, True])
+    def test_backward_with_activation_offloading(self, use_streams, use_mask):
+        PartialState()
+        # The offloader saves the sliced views below as contiguous copies, so backward must not index them with the
+        # strides seen in forward.
+        vocab_size = 2053
+        base_logits = (8 * torch.randn(3, 6, vocab_size, device=torch_device)).requires_grad_()
+        index = torch.randint(vocab_size, (3, 6), device=torch_device)
+        row_mask = torch.rand(3, 6, device=torch_device) > 0.3 if use_mask else None
+
+        def backward():
+            base_logits.grad = None
+            logprobs, entropy = selective_log_softmax_and_entropy(
+                base_logits[:, :-1], index[:, 1:], row_mask=None if row_mask is None else row_mask[:, 1:]
+            )
+            (logprobs + 0.5 * entropy).sum().backward()
+            return base_logits.grad
+
+        expected = backward()
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0):
+            actual = backward()
+
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_torch_compile_fullgraph(self):
         logits = torch.randn(2, 3, 257, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
@@ -184,7 +213,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        _, _, log_sum_sq_probs, _, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
+        _, _, log_sum_sq_probs, *_ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
         logits = (hidden @ weight.t()) / 0.7
 
         expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
@@ -205,7 +234,7 @@ class TestChunkedLogProbFunction:
         subset = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE, None, 1.0, outputs)
         subset[0].sum().backward()
 
-        names = ("log_probs", "entropy", "log_sum_sq_probs", "mean_logits", "is_top1")
+        names = ("log_probs", "entropy", "log_sum_sq_probs", "mean_logits", "is_top1", "score_log_probs")
         for name, x, y in zip(names, full, subset, strict=True):
             if name == "log_probs" or name in outputs:
                 torch.testing.assert_close(y, x)
@@ -220,7 +249,7 @@ class TestChunkedLogProbFunction:
         weight = torch.randn(self.V, self.H, device=torch_device)
         labels = torch.randint(0, self.V, (self.N,), device=torch_device)
 
-        _, _, _, mean_logits, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
+        _, _, _, mean_logits, *_ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 0.7, self.CHUNK_SIZE)
 
         torch.testing.assert_close(mean_logits, (hidden @ weight.t()).mean(-1) / 0.7, atol=1e-5, rtol=1e-5)
 
@@ -266,7 +295,7 @@ class TestChunkedLogProbFunction:
         labels = torch.where(torch.arange(self.N, device=torch_device) % 2 == 0, argmax, argmax + self.V // 2)
         labels = labels.clamp(max=self.V - 1)
 
-        *_, is_top1 = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
+        *_, is_top1, _ = ChunkedLogProbFunction.apply(hidden, weight, None, labels, 1.0, self.CHUNK_SIZE)
 
         torch.testing.assert_close(is_top1, argmax == labels)
 
@@ -363,6 +392,61 @@ class TestChunkedLogProbFunction:
 
         torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(entropy, entropy_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grad_weight, weight.grad, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    @pytest.mark.parametrize("with_support", [False, True])
+    @pytest.mark.parametrize(("logit_scale", "final_logit_softcapping"), [(1.0, None), (0.5, 30.0)])
+    def test_score_ids(self, device, with_support, logit_scale, final_logit_softcapping):
+        # The scored tokens' log-probs are normalized like the target's, with the gradient of a weighted sum of them
+        torch.manual_seed(42)
+        hidden = torch.randn(self.N, self.H, requires_grad=True, device=device)
+        weight = torch.randn(self.V, self.H, requires_grad=True, device=device)
+        labels = torch.randint(0, self.V, (self.N,), device=device)
+        support_ids = torch.full((self.N, 8), -1, device=device, dtype=torch.long)
+        for row in range(self.N):
+            others = torch.randperm(self.V, device=device)
+            others = others[others != labels[row]][: row % 7]
+            support_ids[row, : 1 + row % 7] = torch.cat([labels[row : row + 1], others])
+        # Half the rows score the label among their tokens, the other half do not
+        odd = (torch.arange(self.N, device=device) % 2 == 1).unsqueeze(-1)
+        score_ids = torch.where(odd, support_ids[:, 1:5], support_ids[:, :4])
+        coef = torch.randn(self.N, 4, device=device)
+
+        logprobs, entropy, *_, score_log_probs = ChunkedLogProbFunction.apply(
+            hidden,
+            weight,
+            None,
+            labels,
+            0.7,
+            self.CHUNK_SIZE,
+            final_logit_softcapping,
+            logit_scale,
+            ("entropy",),
+            support_ids if with_support else None,
+            score_ids,
+        )
+        (logprobs.sum() + entropy.sum() + (coef * score_log_probs).sum()).backward()
+        grad_hidden, grad_weight = hidden.grad.clone(), weight.grad.clone()
+        hidden.grad = weight.grad = None
+
+        logits = hidden @ weight.t() * logit_scale
+        if final_logit_softcapping is not None:
+            logits = torch.tanh(logits / final_logit_softcapping) * final_logit_softcapping
+        logits = logits / 0.7
+        full_log_p = logits.log_softmax(-1)
+        entropy_ref = -(full_log_p.exp() * full_log_p).sum(-1)
+        if with_support:
+            keep = F.one_hot(support_ids + 1, self.V + 1)[..., 1:].any(1)
+            logits = logits.masked_fill(~keep, float("-inf"))
+        log_p = logits.log_softmax(-1)
+        logprobs_ref = log_p.gather(-1, labels[:, None]).squeeze(-1)
+        score_log_probs_ref = log_p.gather(-1, score_ids.clamp(min=0)).masked_fill(score_ids < 0, 0.0)
+        (logprobs_ref.sum() + entropy_ref.sum() + (coef * score_log_probs_ref).sum()).backward()
+
+        torch.testing.assert_close(logprobs, logprobs_ref, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(score_log_probs, score_log_probs_ref, atol=1e-5, rtol=1e-5)
         torch.testing.assert_close(grad_hidden, hidden.grad, atol=1e-4, rtol=1e-4)
         torch.testing.assert_close(grad_weight, weight.grad, atol=1e-4, rtol=1e-4)
 
@@ -593,3 +677,168 @@ class TestChunkedDivergenceFunction:
         torch.compile(loss)(student_hidden).backward()
 
         torch.testing.assert_close(student_hidden.grad, expected_grad)
+
+
+class TestHeadLossNumerics:
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    def test_confident_target_across_triton_blocks(self, device):
+        from trl.kernels.chunked_logprob import ChunkedLogProbFunction
+
+        targets = torch.tensor([0, 1024, 2052], device=device)
+        hidden = torch.eye(3, device=device, requires_grad=True)
+        weight = torch.full((2053, 3), -9.0, device=device)
+        weight[targets, torch.arange(3, device=device)] = 20.0
+        weight.requires_grad_()
+        *_, score_logps = ChunkedLogProbFunction.apply(
+            hidden, weight, None, targets.roll(1), 1.0, 2053, None, 1.0, (), None, targets.unsqueeze(-1)
+        )
+        (-score_logps.sum()).backward()
+        # Even fp64 cross-entropy loses relative precision at this margin; use the analytic loss and gradient.
+        tail_mass = 2052 * math.exp(-29.0)
+        expected_loss = torch.tensor(3 * math.log1p(tail_mass), device=device, dtype=torch.float64)
+        expected_grad = torch.full((2053, 3), math.exp(-29.0) / (1 + tail_mass), device=device, dtype=torch.float64)
+        expected_grad[targets, torch.arange(3, device=device)] = -tail_mass / (1 + tail_mass)
+        torch.testing.assert_close(-score_logps.double().sum(), expected_loss, atol=0, rtol=1e-5)
+        torch.testing.assert_close(weight.grad.double(), expected_grad, atol=0, rtol=1e-5)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("chunk_size", [2, 4])
+    @pytest.mark.parametrize("use_support", [False, True])
+    def test_confident_target(self, device, chunk_size, use_support, dtype):
+        # The target can occur before or after the other logits in the streaming reduction.
+        from trl.kernels.chunked_logprob import ChunkedLogProbFunction
+
+        hidden = torch.eye(3, device=device, dtype=dtype, requires_grad=True)
+        weight = torch.tensor(
+            [[9.0, -9.0, -9.0], [-9.0, 9.0, -9.0], [-9.0, -9.0, 9.0]], device=device, dtype=dtype, requires_grad=True
+        )
+        targets = torch.arange(3, device=device)
+        support = torch.tensor([[0, 1, -1], [1, 2, -1], [0, 2, -1]], device=device) if use_support else None
+        score_ids = torch.stack((targets, torch.full_like(targets, -1)), -1)
+        logps, *_, score_logps = ChunkedLogProbFunction.apply(
+            hidden, weight, None, targets, 1.0, chunk_size, None, 1.0, (), support, score_ids
+        )
+        advantages = torch.tensor([0.5, -1.0, 2.0], device=device)
+        torch.testing.assert_close(score_logps[:, 0], logps, atol=0, rtol=1e-5)
+        loss = -((logps + score_logps[:, 0]) * advantages).sum()
+        loss.backward()
+        logits = (hidden.detach().double() @ weight.detach().double().t()).requires_grad_()
+        if use_support:
+            keep = F.one_hot(support + 1, 4)[..., 1:].any(1)
+            ref_logps = logits.masked_fill(~keep, -torch.inf).log_softmax(-1)
+        else:
+            ref_logps = logits.log_softmax(-1)
+        ref_loss = -2 * (ref_logps.diagonal() * advantages.double()).sum()
+        ref_loss.backward()
+        torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-6)
+        torch.testing.assert_close(
+            weight.grad.double(), logits.grad.t(), atol=0, rtol=1e-2 if dtype == torch.bfloat16 else 1e-6
+        )
+
+    @pytest.mark.parametrize("chunk_size", [2, 4])
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
+    @pytest.mark.parametrize("perturbation", [0.0, 1e-7])
+    def test_near_teacher(self, device, beta, perturbation, chunk_size):
+        from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+
+        hidden = torch.eye(2, device=device, requires_grad=True)
+        teacher = torch.tensor([[2.0, 1.0, 0.0], [2.0, 0.01, 0.0]], device=device).t()
+        delta = torch.tensor([[-perturbation, perturbation, 0.0], [0.0, perturbation / 10, 0.0]], device=device).t()
+        student = (teacher + delta).requires_grad_()
+        with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
+            divergence, _ = ChunkedDivergenceFunction.apply(
+                hidden, student, None, hidden.detach(), teacher, None, beta
+            )
+            divergence.sum().backward()
+        logits = student.detach().double().t().requires_grad_()
+        log_q = logits.log_softmax(-1)
+        log_p = teacher.double().t().log_softmax(-1)
+        if beta == 0:
+            ref = (log_p.exp() * (log_p - log_q)).sum()
+        elif beta == 1:
+            ref = (log_q.exp() * (log_q - log_p)).sum()
+        else:
+            log_m = torch.logaddexp(log_q + math.log(1 - beta), log_p + math.log(beta))
+            ref = ((1 - beta) * log_q.exp() * (log_q - log_m) + beta * log_p.exp() * (log_p - log_m)).sum()
+        ref.backward()
+        if perturbation == 0:
+            assert torch.count_nonzero(student.grad) == 0
+        else:
+            torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=1e-15, rtol=1e-5)
+
+    @pytest.mark.parametrize("chunk_size", [2, 4])
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
+    def test_concentrated_teacher(self, device, beta, chunk_size):
+        from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+
+        hidden = torch.eye(3, device=device)
+        student = (
+            torch.tensor([[9.0, -9.0, -9.0], [9.0, -9.0, -9.0], [20.0, -20.0, -20.0]], device=device)
+            .t()
+            .requires_grad_()
+        )
+        teacher = torch.tensor([[40.0, -40.0, -40.0], [-9.0, 9.0, -9.0], [-20.0, 20.0, -20.0]], device=device).t()
+        with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
+            divergence, _ = ChunkedDivergenceFunction.apply(hidden, student, None, hidden, teacher, None, beta)
+            divergence.sum().backward()
+        # Use the paper's normalization even for the float64 reference.
+        logits = student.detach().double().t().requires_grad_()
+        is_max = torch.arange(3, device=device) == logits.argmax(-1, keepdim=True)
+        shifted = (logits - logits.max(-1, keepdim=True).values).masked_fill(is_max, 0.0)
+        log_q = shifted - F.softplus(shifted.masked_fill(is_max, -torch.inf).logsumexp(-1, keepdim=True))
+        log_p = teacher.double().t().log_softmax(-1)
+        if beta == 0:
+            ref = (log_p.exp() * (log_p - log_q)).sum()
+        elif beta == 1:
+            ref = (log_q.exp() * (log_q - log_p)).sum()
+        else:
+            log_m = torch.logaddexp(log_q + math.log(1 - beta), log_p + math.log(beta))
+            ref = ((1 - beta) * log_q.exp() * (log_q - log_m) + beta * log_p.exp() * (log_p - log_m)).sum()
+        ref.backward()
+        torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=1e-22, rtol=1e-5)
+        torch.testing.assert_close(divergence.double().sum(), ref, atol=0, rtol=1e-5)
+
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("chunk_size", [2, 4])
+    @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
+    def test_independent_logit_shifts(self, device, chunk_size, beta):
+        from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+
+        epsilon = 2**-20
+        hidden = torch.eye(2, device=device)
+        student = torch.tensor([[32.0, -epsilon], [32.0, 0.0], [32.0, epsilon]], device=device, requires_grad=True)
+        teacher = torch.tensor([[-epsilon, 32.0], [0.0, 32.0], [epsilon, 32.0]], device=device)
+        with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
+            loss, _ = ChunkedDivergenceFunction.apply(hidden, student, None, hidden, teacher, None, beta)
+            loss.sum().backward()
+        logits = student.detach().double().t().requires_grad_()
+        log_q = logits.log_softmax(-1)
+        log_p = teacher.double().t().log_softmax(-1)
+        if beta == 0:
+            reference = (log_p.exp() * (log_p - log_q)).sum()
+        elif beta == 1:
+            reference = (log_q.exp() * (log_q - log_p)).sum()
+        else:
+            log_m = torch.logaddexp(log_q + math.log1p(-beta), log_p + math.log(beta))
+            reference = ((1 - beta) * log_q.exp() * (log_q - log_m) + beta * log_p.exp() * (log_p - log_m)).sum()
+        reference.backward()
+        torch.testing.assert_close(student.grad.double().t(), logits.grad, atol=1e-13, rtol=1e-5)
+
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("chunk_size", [1, 2])
+    @pytest.mark.parametrize("beta", [1e-6, 1 - 1e-6])
+    def test_jsd_near_endpoint(self, device, chunk_size, beta):
+        from trl.kernels.chunked_divergence import ChunkedDivergenceFunction
+
+        hidden = torch.ones(1, 1, device=device)
+        student = torch.tensor([[-40.0], [40.0]], device=device, requires_grad=True)
+        teacher = -student.detach()
+        with patch("trl.kernels.chunked_divergence.VOCAB_CHUNK_SIZE", chunk_size):
+            loss, _ = ChunkedDivergenceFunction.apply(hidden, student, None, hidden, teacher, None, beta)
+            loss.sum().backward()
+        # Disjoint distributions approach the binary entropy of the mixture weight.
+        expected = torch.tensor(-beta * math.log(beta) - (1 - beta) * math.log1p(-beta), device=device)
+        torch.testing.assert_close(loss.sum(), expected, atol=0, rtol=1e-5)

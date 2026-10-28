@@ -446,6 +446,18 @@ training_args = GRPOConfig(
 )
 ```
 
+In the [`experimental.async_grpo.AsyncGRPOTrainer`], the old log-probabilities are the sampler's, so the ratio is taken directly between the trained policy and the sampler, and tokens outside  \\( [C_{\min}, C_{\max}] \\) are dropped from the loss. It is on by default:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    vllm_importance_sampling_clip_min=0.5,  # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=5.0,  # hyper-parameter C_max
+)
+```
+
 ### Sequence-level Importance Sampling
 
 **📰 Blog**: https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
@@ -604,7 +616,7 @@ $$
 \log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
 $$
 
-Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0` or `top_k > 0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0`, `top_k > 0` or `min_p > 0.0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
 
 ```python
 from trl.experimental.async_grpo import AsyncGRPOConfig
@@ -697,6 +709,32 @@ training_args = GRPOConfig(
     vespo_lambda_pos=3.0,  # decay factor (c2 in paper Section 3.4) for positive advantages
     vespo_k_neg=3.0,  # power exponent (c1 in paper Section 3.4) for negative advantages
     vespo_lambda_neg=2.0,  # decay factor (c2 in paper Section 3.4) for negative advantages
+)
+```
+
+### Score Centering Stabilizes Off-policy Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2609.20807
+
+Under a training-inference mismatch, the score  \\( \nabla_\theta \log \pi_\theta \\) does not average to zero under the sampler  \\( \mu \\), so every update drifts the policy toward the sampler, by an amount that grows with the advantage. Score centering subtracts that expectation at every position, so a constant advantage no longer moves the policy:
+
+$$
+\nabla_\theta \mathcal{L} = - \mathbb{E}_{o \sim \mu} \left[ \hat{A} \left( f(r_t) \nabla_\theta \log \pi_\theta(o_t) - \mathbb{E}_{v \sim \mu} \left[ f(r_v) \nabla_\theta \log \pi_\theta(v) \right] \right) \right], \quad r_v = \frac{\pi_\theta(v)}{\mu(v)},
+$$
+
+with  \\( f \\) the importance weight of [Masked Importance Sampling](#masked-importance-sampling):  \\( f(r) = r \\) inside  \\( [C_{\min}, C_{\max}] \\) and  \\( 0 \\) outside. The inner expectation is taken over the sampler's most likely tokens at each position, whose log-probabilities it reports; on the rest of the vocabulary the sampler is taken as the trained policy rescaled to the remaining mass.
+
+It is the default objective of the [`experimental.async_grpo.AsyncGRPOTrainer`], whose rollout worker requests the top log-probabilities of every generated token from vLLM:
+
+```python
+from trl.experimental.async_grpo import AsyncGRPOConfig
+
+training_args = AsyncGRPOConfig(
+    ...,
+    score_centering=True,  # default; `False` trains with the clipped objective instead
+    vllm_importance_sampling_clip_min=0.5,  # hyper-parameter C_min
+    vllm_importance_sampling_clip_max=5.0,  # hyper-parameter C_max
+    num_sampler_logprobs=8,  # tokens per position the expectation is taken over
 )
 ```
 
@@ -1825,6 +1863,43 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
 TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
+
+### A Fix for Softmax and Cross-Entropy
+
+**📜 Paper**: https://huggingface.co/papers/2610.31642
+
+Identifies softmax collapse at high-confidence predictions and cancellation when student and teacher logits nearly
+agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
+probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
+KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+
+Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
+identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
+TRL's kernels preserve these gradients using stable FP32 formulas.
+
+The separate FSDP2 output-casting issue discussed in Appendix B.1 is addressed by
+[Accelerate #4403](https://github.com/huggingface/accelerate/pull/4403). Older Accelerate versions need a mixed
+precision policy with `output_dtype=None` to retain FP32 kernel outputs.
+
+The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
+student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
+paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be
+handled when constructing the models, independently of the config. Other trainer defaults remain unchanged.
+
+```python
+from trl import DistillationConfig
+
+training_args = DistillationConfig(
+    beta=0.0,  # Forward KL has the same student gradient as soft-target cross-entropy.
+    temperature=4.0,  # "distillation temperature T=4"
+    learning_rate=2e-3,  # "eta=2 x 10^-3"
+    lr_scheduler_type="constant",
+    optim="adamw_torch",  # AdamW with zero weight decay has the same updates as Adam.
+    weight_decay=0.0,  # "lambda=0"
+    adam_epsilon=1e-8,  # "epsilon=10^-8"
+    max_steps=2000,  # "2,000 steps of Adam"
+)
+```
 
 ## Distributed Training
 

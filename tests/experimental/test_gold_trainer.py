@@ -15,7 +15,6 @@
 import copy
 import warnings
 from functools import partial
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -29,6 +28,7 @@ from transformers import (
     AutoTokenizer,
     GenerationConfig,
 )
+from transformers.generation import GenerateDecoderOnlyOutput
 
 from trl.data_utils import prepare_multimodal_messages
 from trl.experimental.gold import GOLDConfig
@@ -264,7 +264,7 @@ def llama_tokenizer():
 
 @pytest.fixture(scope="session")
 def qwen_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_QWEN2)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -272,7 +272,7 @@ def qwen_tokenizer():
 
 @pytest.fixture(scope="session")
 def smollm_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_SMOLLM3)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
@@ -288,7 +288,7 @@ def gemma4_tokenizer():
 
 @pytest.fixture(scope="session")
 def smolvlm_processor():
-    processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-256M-Instruct")
+    processor = AutoProcessor.from_pretrained(_TINY_SMOLVLM)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     return processor
@@ -296,7 +296,7 @@ def smolvlm_processor():
 
 @pytest.fixture(scope="session")
 def qwen3_vl_processor():
-    processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-2B-Instruct")
+    processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     return processor
@@ -907,9 +907,8 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, smollm
     decode-then-re-encode round-trip). For ByteLevel BPE — the family of every cross-tokenizer pair GOLD targets
     (SmolLM, Qwen, Llama 3+, …) — those per-token spans match what `encode_with_byte_offsets` produces on the same
     text, so student and teacher offsets share one byte coordinate system."""
-    # There is no tiny SmolLM3 model; tiny Llama 3.2 shares SmolLM3's 128k vocabulary, so it pairs with its tokenizer
     trainer = GOLDTrainer(
-        model=_TINY_LLAMA,
+        model=_TINY_SMOLLM3,
         teacher_model=_TINY_QWEN2,
         args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True, use_extended_uld=True),
         train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
@@ -1183,7 +1182,7 @@ def test_generate_on_policy_outputs_masks_prompt(tmp_path, llama_tokenizer):
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             assert torch.equal(input_ids, prompt_tensor)
             assert torch.equal(attention_mask, prompt_mask)
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
@@ -1233,7 +1232,7 @@ def test_generate_on_policy_outputs_pad_equals_eos_keeps_eos(tmp_path, llama_tok
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig(eos_token_id=eos_id)
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
@@ -1269,7 +1268,7 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(tmp_pat
 
     class DummyModel:
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-            return SimpleNamespace(sequences=generated_sequence)
+            return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
     generation_config = GenerationConfig()
     inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
@@ -1320,8 +1319,13 @@ def test_decode_completion_texts_from_labels_keeps_eos_when_pad_equals_eos(tmp_p
 
 
 def test_generate_on_policy_outputs_masks_prompt_smollm(tmp_path, smollm_tokenizer, openr1_examples):
-    # There is no tiny SmolLM3 model; tiny Llama 3.2 shares SmolLM3's 128k vocabulary, so it pairs with its tokenizer
-    trainer = _llama_trainer(tmp_path, smollm_tokenizer)
+    trainer = GOLDTrainer(
+        model=_TINY_SMOLLM3,
+        teacher_model=_TINY_SMOLLM3,
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none"),
+        train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
+        processing_class=smollm_tokenizer,
+    )
 
     collator = DataCollatorForChatML(tokenizer=smollm_tokenizer)
     batch = collator([openr1_examples[0]])
@@ -1331,7 +1335,7 @@ def test_generate_on_policy_outputs_masks_prompt_smollm(tmp_path, smollm_tokeniz
         def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
             assert torch.equal(input_ids, batch["prompts"])
             assert torch.equal(attention_mask, batch["prompt_attention_mask"])
-            return SimpleNamespace(sequences=batch["input_ids"])
+            return GenerateDecoderOnlyOutput(sequences=batch["input_ids"])
 
     generation_config = GenerationConfig()
     new_ids, new_mask, new_labels, prompt_texts, completion_texts = trainer.generate_on_policy_outputs(
@@ -2309,10 +2313,11 @@ def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
 
 
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+_TINY_SMOLLM3 = "trl-internal-testing/tiny-SmolLM3ForCausalLM"
 
 
 @pytest.mark.xfail(
-    condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0.dev0"),
+    condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0"),
     reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
     strict=True,
 )

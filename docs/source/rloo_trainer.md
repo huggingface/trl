@@ -23,7 +23,7 @@ This example demonstrates how to train a model using the RLOO method. We train a
   height="560px"
 ></iframe>
 
-Below is the script to train the model.
+Below is the script to train the model. `accuracy_reward` needs math-verify, which you can install with `pip install trl[math_verify]`.
 
 ```python
 # train_rloo.py
