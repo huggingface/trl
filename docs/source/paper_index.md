@@ -616,7 +616,7 @@ $$
 \log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
 $$
 
-Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0` or `top_k > 0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0`, `top_k > 0` or `min_p > 0.0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
 
 ```python
 from trl.experimental.async_grpo import AsyncGRPOConfig
@@ -1863,6 +1863,43 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
 TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
+
+### A Fix for Softmax and Cross-Entropy
+
+**📜 Paper**: https://huggingface.co/papers/2610.31642
+
+Identifies softmax collapse at high-confidence predictions and cancellation when student and teacher logits nearly
+agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
+probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
+KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+
+Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
+identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
+TRL's kernels preserve these gradients using stable FP32 formulas.
+
+The separate FSDP2 output-casting issue discussed in Appendix B.1 is addressed by
+[Accelerate #4403](https://github.com/huggingface/accelerate/pull/4403). Older Accelerate versions need a mixed
+precision policy with `output_dtype=None` to retain FP32 kernel outputs.
+
+The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
+student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
+paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be
+handled when constructing the models, independently of the config. Other trainer defaults remain unchanged.
+
+```python
+from trl import DistillationConfig
+
+training_args = DistillationConfig(
+    beta=0.0,  # Forward KL has the same student gradient as soft-target cross-entropy.
+    temperature=4.0,  # "distillation temperature T=4"
+    learning_rate=2e-3,  # "eta=2 x 10^-3"
+    lr_scheduler_type="constant",
+    optim="adamw_torch",  # AdamW with zero weight decay has the same updates as Adam.
+    weight_decay=0.0,  # "lambda=0"
+    adam_epsilon=1e-8,  # "epsilon=10^-8"
+    max_steps=2000,  # "2,000 steps of Adam"
+)
+```
 
 ## Distributed Training
 
