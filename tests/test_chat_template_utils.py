@@ -372,6 +372,46 @@ class TestAddResponseSchema:
         assert parsed == expected
 
     @pytest.mark.parametrize(
+        "completion, expected",
+        [
+            pytest.param("12<｜end▁of▁sentence｜>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                "Hmmm.</think>\n\n12<｜end▁of▁sentence｜>",
+                {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+                id="reasoning",
+            ),
+            pytest.param(
+                "Hmmm.</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n"
+                '```json\n{"city": "Paris"}\n```<｜tool▁call▁end｜>\n<｜tool▁call▁begin｜>function<｜tool▁sep｜>'
+                'get_weather\n```json\n{"city": "Lyon"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>',
+                {
+                    "role": "assistant",
+                    "reasoning_content": "Hmmm.",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}},
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Lyon"}}},
+                    ],
+                },
+                id="tool_calls",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    def test_add_response_schema_deepseekv3(self, completion, expected):
+        # The template only renders string tool-call arguments, so the completion can't be sliced off a rendered
+        # conversation with the dict arguments the parser returns.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        tokenizer = add_response_schema(tokenizer)
+        messages = [{"role": "user", "content": "What is the weather in Paris and Lyon?"}]
+        prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        response = tokenizer(completion, add_special_tokens=False).input_ids
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
+
+    @pytest.mark.parametrize(
         "processor_name",
         [
             pytest.param(

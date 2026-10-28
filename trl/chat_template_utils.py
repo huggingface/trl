@@ -613,6 +613,31 @@ gemma4_template = {
     },
 }
 
+deepseekv3_template = {
+    # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
+    # `<｜Assistant｜>`, so the start anchor accepts either opener.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<｜tool▁calls▁begin｜>)?<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n",
+            "close_pattern": r"\n```<｜tool▁call▁end｜>\s*(?:<｜tool▁calls▁end｜>)?",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<｜end▁of▁sentence｜>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
 deepseek_r1_distill_template = {
     # DeepSeek-R1-Distill prefills the assistant turn with the `<think>` opener, so the start anchor consumes it.
     # Reasoning content is therefore not framed by a `<think>` open in the model output; the zero-width `open_pattern`
@@ -772,7 +797,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template == glm4moe_chat_template:
+    if chat_template == deepseekv3_chat_template:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, deepseekv3_template
+    elif chat_template == glm4moe_chat_template:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template == gptoss_chat_template:
         schema, template = gptoss_schema, gptoss_template
