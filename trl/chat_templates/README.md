@@ -167,7 +167,7 @@ Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruc
 
 ### `qwen3_thinking_2507.jinja`
 
-Original Qwen3-Thinking-2507 chat template (as shipped by `Qwen/Qwen3-4B-Thinking-2507`, `Qwen/Qwen3-30B-A3B-Thinking-2507` and `Qwen/Qwen3-235B-A22B-Thinking-2507`). Same as `qwen3.jinja`, except that the generation prompt always pre-fills `<think>\n` (there is no `enable_thinking` flag).
+Original Qwen3-Thinking-2507 chat template (as shipped by `Qwen/Qwen3-4B-Thinking-2507`, `Qwen/Qwen3-30B-A3B-Thinking-2507` and `Qwen/Qwen3-235B-A22B-Thinking-2507`). Same as `qwen3.jinja`, except that the generation prompt always pre-fills `<think>\n` (there is no `enable_thinking` flag). Response parsing reuses `qwen3_template` (new-style only: the legacy `qwen3_schema` does not handle the pre-fill).
 
 ### `qwen3_vl.jinja`
 

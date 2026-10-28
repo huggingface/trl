@@ -787,6 +787,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_vl_chat_template,
     ]:
         schema, template = qwen3_schema, qwen3_template
+    elif chat_template == qwen3_thinking_2507_chat_template:
+        # Only the new-style template: the legacy `qwen3_schema` does not handle the `<think>` pre-fill
+        schema, template = None, qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
         qwen3_5_think_chat_template,
