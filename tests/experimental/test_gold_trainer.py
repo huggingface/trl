@@ -17,7 +17,6 @@ import sys
 import warnings
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -39,8 +38,8 @@ from transformers import (
     LlamaConfig,
     PreTrainedTokenizerFast,
 )
-from transformers.testing_utils import torch_device
 from transformers.generation import GenerateDecoderOnlyOutput
+from transformers.testing_utils import torch_device
 
 from trl.data_utils import prepare_multimodal_messages
 from trl.experimental.gold import GOLDConfig
