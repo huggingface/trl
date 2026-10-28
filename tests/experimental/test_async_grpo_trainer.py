@@ -770,6 +770,8 @@ def _vision_parameter_names(model) -> set[str]:
     "model_id",
     [
         pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", id="qwen3_vl"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", id="qwen35"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", id="qwen36-moe"),
     ],
 )
 class TestAsyncGRPOTrainerVLM(TrlTestCase):
@@ -1526,9 +1528,11 @@ class TestTreePacking(TrlTestCase):
             [101, 102, 103, 201, 202, 0, 0, 0, 0, 0],
         ]
         assert batch["attention_mask"].tolist() == [[1] * 10, [1] * 5 + [0] * 5]
-        assert batch["tree_cu_seqlens_q"].tolist() == [[0, 2, 4, 5, 7, 10], [0, 5, -1, -1, -1, -1]]
-        assert batch["tree_cu_seqlens_k"].tolist() == [[0, 2, 6, 11, 17, 22], [0, 5, -1, -1, -1, -1]]
-        assert batch["tree_max_seqlens"].tolist() == [[3, 6], [5, 5]]
+        assert batch["tree_cu_seqlens_q"].tolist() == [[0, 2, 4, 5, 7, 10], [0, 5, 0, 0, 0, 0]]
+        assert batch["tree_cu_seqlens_k"].tolist() == [[0, 2, 6, 11, 17, 22], [0, 5, 0, 0, 0, 0]]
+        assert batch["tree_segment_parents"][0].tolist() == [-1, 0, 1, 1, 0]
+        assert batch["tree_segment_depths"][0].tolist() == [0, 1, 2, 2, 1]
+        assert batch["tree_sizes"].tolist() == [[3, 6, 22, 5, 1, 2, 2], [5, 5, 5, 1, 1, 0, 0]]
         assert batch["shift_labels"][1].tolist() == [-100, -100, 201, 202] + [-100] * 6
         assert collator.metrics["batch/packing_ratio"] == [(21, 15)]  # 21 raw tokens forwarded as 15
 
@@ -1638,45 +1642,51 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
-def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
-    """Main's sequence packing: the samples end to end, `position_ids` restarting at each one, nothing shared."""
-    rows = [_tree_row([sample]).pack() for sample in samples]
-    offsets = list(itertools.accumulate((row["input_ids"].numel() for row in rows), initial=0))
-    batch = {key: torch.cat([row[key] for row in rows])[None] for key in rows[0]}
-    batch["token_index"] = torch.cat(
-        [row["token_index"] + offset for row, offset in zip(rows, offsets, strict=False)]
-    )[None]
-    batch["segment_id"] = torch.cat([row["segment_id"] + i for i, row in enumerate(rows)])[None]
-    batch["tree_kv_index"] = torch.arange(offsets[-1])[None]
-    batch["tree_cu_seqlens_q"] = batch["tree_cu_seqlens_k"] = torch.tensor([offsets], dtype=torch.int32)
-    longest = max(len(sample["input_ids"]) for sample in samples)
-    batch["tree_max_seqlens"] = torch.tensor([[longest, longest]])
-    batch["attention_mask"] = torch.ones_like(batch["input_ids"])
-    batch["global_n_tokens"] = torch.tensor([float(batch["token_index"].numel())])
-    batch["global_n_forward_tokens"] = torch.tensor([float(offsets[-1])])
-    batch["mean_seq_len"] = torch.tensor([offsets[-1] / len(samples)])
-    return batch
+_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
+_FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
+_VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
+    reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
+    "text config",
+    strict=True,
+)
+_FA2_AVAILABLE = pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed")
 
 
 @require_torch_accelerator
 @pytest.mark.parametrize(
-    "attn_implementation",
+    ("model_id", "model_init_kwargs", "attn_implementation"),
     [
-        None,
+        pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, None, id="qwen2"),
+        pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM", {}, None, id="qwen3"),
+        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, None, id="qwen3-moe"),
+        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, None, id="qwen3-vl"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", {}, None, id="qwen35-gdn"),
+        pytest.param("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", {}, None, id="qwen38-gdn"),
         pytest.param(
-            "flash_attention_2",
-            marks=pytest.mark.skipif(not is_flash_attn_2_available(), reason="Flash Attention 2 is not installed"),
+            "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", {}, None, id="qwen36-moe-gdn"
         ),
-    ],
-    ids=["default", "fa2"],
-)
-@pytest.mark.parametrize(
-    ("model_id", "model_init_kwargs"),
-    [
-        pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}, id="qwen2"),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            {},
+            None,
+            id="qwen2-vl",
+            marks=_VLM_TEXT_HEAD_DIM_4,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            {},
+            None,
+            id="qwen25-vl",
+            marks=_VLM_TEXT_HEAD_DIM_4,
+        ),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", _FA3_HEAD_DIM, None, id="llama31"),
+        pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", _FA3_HEAD_DIM, None, id="llama32"),
+        pytest.param("trl-internal-testing/tiny-MistralForCausalLM-0.2", _FA3_HEAD_DIM, None, id="mistral"),
+        pytest.param("trl-internal-testing/tiny-GemmaForCausalLM", _FA3_HEAD_DIM, None, id="gemma"),
         pytest.param(
             "trl-internal-testing/tiny-Gemma2ForCausalLM",
-            {"head_dim": 32, "sliding_window": 16, "ignore_mismatched_sizes": True},
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            None,
             id="gemma2-sliding-window-softcap",
             marks=[
                 pytest.mark.skipif(
@@ -1688,12 +1698,83 @@ def _sequence_packed_batch(samples: list[dict]) -> dict[str, torch.Tensor]:
                 ),
             ],
         ),
-        pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}, id="qwen3-moe"),
-        pytest.param("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration", {}, id="qwen3-vl"),
+        pytest.param("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", {}, None, id="gemma3"),
+        pytest.param("trl-internal-testing/tiny-Gemma4ForConditionalGeneration", {}, None, id="gemma4"),
+        pytest.param(
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            {},
+            None,
+            id="deepseek-v3",
+            marks=pytest.mark.skipif(
+                torch.version.hip is not None
+                or not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9),
+                reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
+            ),
+        ),
+        pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, None, id="glm4-moe"),
+        pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, None, id="phi35"),
+        pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, None, id="cohere"),
+        pytest.param(
+            "trl-internal-testing/tiny-Cohere2ForCausalLM",
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            None,
+            id="cohere2-interleaved-sliding-window",
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Olmo3ForCausalLM",
+            {**_FA3_ONE_HEAD, "sliding_window": 16},
+            None,
+            id="olmo3-interleaved-sliding-window",
+        ),
+        pytest.param("trl-internal-testing/tiny-SmolVLMForConditionalGeneration", {}, None, id="smolvlm"),
+        pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", {}, None, id="llava"),
+        pytest.param("trl-internal-testing/tiny-Idefics3ForConditionalGeneration", {}, None, id="idefics3"),
+        pytest.param(
+            "trl-internal-testing/tiny-InternVLForConditionalGeneration",
+            {},
+            None,
+            id="internvl",
+            marks=_VLM_TEXT_HEAD_DIM_4,
+        ),
+        pytest.param(
+            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            {},
+            "flash_attention_2",
+            id="qwen2-fa2",
+            marks=_FA2_AVAILABLE,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Gemma2ForCausalLM",
+            {**_FA3_HEAD_DIM, "sliding_window": 16},
+            "flash_attention_2",
+            id="gemma2-sliding-window-softcap-fa2",
+            marks=_FA2_AVAILABLE,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            {},
+            "flash_attention_2",
+            id="qwen3-moe-fa2",
+            marks=_FA2_AVAILABLE,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            {},
+            "flash_attention_2",
+            id="qwen3-vl-fa2",
+            marks=_FA2_AVAILABLE,
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+            {},
+            "flash_attention_2",
+            id="qwen35-gdn-fa2",
+            marks=_FA2_AVAILABLE,
+        ),
     ],
 )
 class TestTreePackingParity(TrlTestCase):
-    """A tree-packed micro-batch must give the GRPO loss and gradients of main's sequence packing of the same samples."""
+    """A tree-packed micro-batch must give the GRPO loss and gradients of forwarding each of its samples on its own."""
 
     def _samples(self, truncated: bool):
         samples = []
@@ -1714,7 +1795,7 @@ class TestTreePackingParity(TrlTestCase):
         return samples
 
     @pytest.mark.parametrize("truncated", [False, True], ids=["full-vocab", "truncated-sampling"])
-    def test_loss_and_grads_match_sequence_packing(self, model_id, model_init_kwargs, attn_implementation, truncated):
+    def test_loss_and_grads_match_each_sample_alone(self, model_id, model_init_kwargs, attn_implementation, truncated):
         model_init_kwargs = {"dtype": torch.bfloat16, **model_init_kwargs}
         if attn_implementation is not None:
             model_init_kwargs["attn_implementation"] = attn_implementation
@@ -1734,45 +1815,71 @@ class TestTreePackingParity(TrlTestCase):
         )
         trainer.current_gradient_accumulation_steps = 1
         model = trainer.model.to(torch_device)
+        for name, param in model.named_parameters():
+            if name.endswith(("A_log", "dt_bias")):
+                param.data.fill_(-4.0)
         samples = self._samples(truncated)
         collator = DataCollatorForRollout(pad_token_id=0)
-        # The sequence-packing reference uses the same backend as the tree adapter.
+        # The per-sample reference uses the same backend as the tree adapter.
         reference = attn_implementation or _DEFAULT_ATTN_IMPLEMENTATION
         assert trainer.attn_implementation == reference
-        runs = [(TREE_ATTENTION, collator([[_tree_row(samples)]])), (reference, _sequence_packed_batch(samples))]
+        packed = collator([[_tree_row(samples)]])
+        alone = [DataCollatorForRollout(pad_token_id=0)([[_tree_row([sample])]]) for sample in samples]
+        for batch in alone:
+            batch["global_n_tokens"] = packed["global_n_tokens"]
 
-        losses, grads = [], []
-        for attn_implementation, batch in runs:
-            model.set_attn_implementation(attn_implementation)
+        def run(batches):
             model.zero_grad()
-            loss = trainer.compute_loss(model, {key: value.to(torch_device) for key, value in batch.items()})
+            loss = sum(
+                trainer.compute_loss(model, {key: value.to(torch_device) for key, value in batch.items()})
+                for batch in batches
+            )
             loss.backward()
-            losses.append(loss.detach().float())
-            grads.append({name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None})
+            grads = {name: p.grad.float() for name, p in model.named_parameters() if p.grad is not None}
+            return loss.detach().float(), grads
+
+        model.set_attn_implementation(TREE_ATTENTION)
+        packed_loss, packed_grads = run([packed])
+        model.set_attn_implementation(reference)
+        with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+            alone_loss, alone_grads = run(alone)
 
         assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
-        torch.testing.assert_close(losses[0], losses[1], atol=1e-3, rtol=1e-3)
-        assert grads[0].keys() == grads[1].keys()
-        packed_grads, sequence_grads = (torch.cat([g.flatten() for g in run.values()]) for run in grads)
-        assert (packed_grads - sequence_grads).norm() < 5e-2 * sequence_grads.norm()
+        torch.testing.assert_close(packed_loss, alone_loss, atol=1e-3, rtol=1e-3)
+        assert packed_grads.keys() == alone_grads.keys()
+        packed_grads, alone_grads = (
+            torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
+        )
+        assert (packed_grads - alone_grads).norm() < 2e-2 * alone_grads.norm()
 
 
 class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "match"),
         [
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", "linear_attention", id="qwen35"
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", "linear_attention", id="qwen36-moe"
-            ),
+            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", "conv", id="lfm2"),
+            pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
+            pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),
+            pytest.param("trl-internal-testing/tiny-Llama4ForCausalLM", "chunked_attention", id="llama4"),
         ],
     )
     def test_init_raises(self, model_id, match):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         with pytest.raises(ValueError, match=match):
+            AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+    def test_init_raises_on_gated_deltanet_before_transformers_5_15(self):
+        model_id = "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with patch("transformers.__version__", "5.14.0"), pytest.raises(ValueError, match="transformers>=5.15.0"):
             AsyncGRPOTrainer(
                 model=model_id,
                 reward_funcs=dummy_reward_func,
