@@ -714,6 +714,8 @@ qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text(encoding="
 
 qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text(encoding="utf-8")
 
+qwen3_thinking_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507.jinja").read_text(encoding="utf-8")
+
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text(encoding="utf-8")
 
 qwen3_5_nothink_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink.jinja").read_text(encoding="utf-8")
@@ -1109,6 +1111,10 @@ qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instr
     encoding="utf-8"
 )
 
+qwen3_thinking_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 qwen3_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl_training.jinja").read_text(encoding="utf-8")
 
 qwen3_5_nothink_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink_training.jinja").read_text(
@@ -1280,6 +1286,9 @@ def get_training_chat_template(
 
     if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
+
+    if chat_template == qwen3_thinking_2507_chat_template:
+        return qwen3_thinking_2507_training_chat_template
 
     if chat_template == qwen3_vl_chat_template:
         return qwen3_vl_training_chat_template
