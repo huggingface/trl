@@ -36,6 +36,7 @@ from trl.chat_template_utils import (
     gemma4_v4_chat_template,
     gemma4_v5_chat_template,
     get_training_chat_template,
+    glm4_7_chat_template,
     glm5_3_chat_template,
     glm5_3_flash_chat_template,
     glm5_chat_template,
@@ -383,6 +384,7 @@ class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "chat_template",
         [
+            pytest.param(glm4_7_chat_template, id="glm4.7"),
             pytest.param(glm5_chat_template, id="glm5"),
             pytest.param(glm5_3_chat_template, id="glm5.3"),
             pytest.param(glm5_3_flash_chat_template, id="glm5.3-flash"),

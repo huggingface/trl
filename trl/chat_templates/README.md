@@ -65,6 +65,10 @@ Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [905e84b](https:/
 
 Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https://huggingface.co/google/gemma-4-E2B-it/commit/899537982545a3e55ce64d34462b2efa5af85232): the current revision. Unlike the earlier ones, it also renders the reasoning of a final assistant turn. Response parsing reuses `gemma4_template`.
 
+### `glm4_7.jinja`
+
+Original GLM-4.7 chat template (as shipped by `zai-org/GLM-4.7` and `zai-org/GLM-4.7-Flash`). Same as `glm5.jinja`, except for the whitespace control around the message loop. Response parsing uses `glm4moe_template`.
+
 ### `glm4moe.jinja`
 
 Original GLM-4-MoE chat template.

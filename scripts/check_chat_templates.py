@@ -78,6 +78,8 @@ REPOS = [
     "Qwen/Qwen3.6-35B-A3B",
     "Qwen/Qwen3.8-27B",
     "zai-org/GLM-4.5",
+    "zai-org/GLM-4.7",
+    "zai-org/GLM-4.7-Flash",
     "zai-org/GLM-5",
     "zai-org/GLM-5.3",
     "zai-org/GLM-5.3-Flash",
