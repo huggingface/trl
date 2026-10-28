@@ -45,6 +45,8 @@ from trl.chat_template_utils import (
     lfm2_chat_template,
     lfm2_v2_chat_template,
     parse_response,
+    qwen3_coder_chat_template,
+    qwen3_coder_next_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -326,6 +328,33 @@ class TestAddResponseSchema:
         response = text.input_ids[len(prefix.input_ids) :]
         parsed = parse_response(tokenizer, response, prefix=prefix.input_ids)
         assert parsed == messages[-1]
+
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(qwen3_coder_chat_template, id="qwen3-coder"),
+            pytest.param(qwen3_coder_next_chat_template, id="qwen3-coder-next"),
+        ],
+    )
+    def test_add_response_schema_qwen3_coder(self, chat_template):
+        # Without the tools' schema, XML argument values parse back as strings, so the arguments here are strings
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        tool_calls = [
+            {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris, France"}}},
+            {"type": "function", "function": {"name": "get_time", "arguments": {"city": "Lyon", "zone": "CET"}}},
+        ]
+        messages = [
+            {"role": "user", "content": "What is the weather in Paris and the time in Lyon?"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+        prefix = tokenizer.apply_chat_template(
+            messages[:1], add_generation_prompt=True, tokenize=True, return_dict=True
+        )
+        text = tokenizer.apply_chat_template(messages, tokenize=True, return_dict=True)
+        response = text.input_ids[len(prefix.input_ids) :]
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids) == messages[-1]
 
     @pytest.mark.parametrize(
         "completion, expected",
