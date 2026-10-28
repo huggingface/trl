@@ -695,6 +695,8 @@ glm5_chat_template = (_CHAT_TEMPLATES_DIR / "glm5.jinja").read_text(encoding="ut
 
 glm5_1_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_1.jinja").read_text(encoding="utf-8")
 
+glm5_2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2.jinja").read_text(encoding="utf-8")
+
 glm5_3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3.jinja").read_text(encoding="utf-8")
 
 glm5_3_flash_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash.jinja").read_text(encoding="utf-8")
@@ -824,6 +826,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         glm4_7_chat_template,
         glm5_chat_template,
         glm5_1_chat_template,
+        glm5_2_chat_template,
         glm5_3_chat_template,
         glm5_3_flash_chat_template,
     ]:
