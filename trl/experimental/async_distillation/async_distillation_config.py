@@ -166,7 +166,7 @@ class AsyncDistillationConfig(_BaseConfig):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the student's vLLM server.
-        heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
+        rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
             Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung and aborts.
 
         > Parameters that control the logging
@@ -391,7 +391,7 @@ class AsyncDistillationConfig(_BaseConfig):
         default=1,
         metadata={"help": "Number of training steps between weight synchronizations to the student's vLLM server."},
     )
-    heartbeat_stale_after_s: float = field(
+    rollout_worker_timeout: float = field(
         default=300.0,
         metadata={
             "help": "Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung "

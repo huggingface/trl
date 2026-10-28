@@ -1471,7 +1471,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
                 check_health_fn=self.rollout_worker.check_health,
-                stale_after_s=self.args.heartbeat_stale_after_s,
+                stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
                 dropped_groups=self._dropped_groups,
                 max_staleness=self.args.max_staleness,
