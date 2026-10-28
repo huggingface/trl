@@ -42,11 +42,11 @@ class AsyncGRPOConfig(_BaseConfig):
             trainer's own precision. This only sets the dtype the weights are loaded in. Under FSDP with `bf16` or
             `fp16` (the default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master
             weights and the optimizer state are fp32 whatever `dtype` says, and only the forward and backward run in
-            the mixed-precision dtype. Checkpoints are written in that mixed-precision dtype, not in the master dtype.
-            Without FSDP (DDP or a single process) nothing upcasts, and `dtype="bfloat16"` with `bf16=True` keeps bf16
-            weights and optimizer states, which is pure bf16 training. Closing that gap end to end also requires
-            serving the vLLM server in the same dtype (`vllm serve --dtype`); a mismatch is logged as a warning at
-            train start. A `dtype` in `model_init_kwargs` takes precedence.
+            the mixed-precision dtype, and checkpoints are written in that mixed-precision dtype, not in the master
+            dtype. Without FSDP (DDP or a single process) nothing upcasts, and `dtype="bfloat16"` with `bf16=True`
+            keeps bf16 weights and optimizer states, which is pure bf16 training. Closing that gap end to end also
+            requires serving the vLLM server in the same dtype (`vllm serve --dtype`); a mismatch is logged as a
+            warning at train start. A `dtype` in `model_init_kwargs` takes precedence.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].

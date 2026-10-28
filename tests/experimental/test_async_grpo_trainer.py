@@ -415,7 +415,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    def test_checkpoint_saved_in_bf16(self):
+    def test_checkpoint_keeps_master_dtype_without_fsdp(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -443,11 +443,12 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert trainer.model.dtype == torch.float32
         checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
         with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
-            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"BF16"}
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
         with open(os.path.join(checkpoint, "config.json")) as f:
-            assert json.load(f)["dtype"] == "bfloat16"
+            assert json.load(f)["dtype"] == "float32"
         reloaded = AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto")
-        assert reloaded.dtype == torch.bfloat16
+        for name, param in trainer.model.named_parameters():
+            assert torch.equal(reloaded.get_parameter(name).to(param.device), param)
 
     def test_train_model(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"

@@ -1934,9 +1934,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
         return t_pause, t_barrier, t_transfer
 
     def _save(self, output_dir=None, state_dict=None):
+        if not self.is_fsdp_enabled:
+            return super()._save(output_dir, state_dict)
         output_dir = output_dir if output_dir is not None else self.args.output_dir
-        if state_dict is None:
-            state_dict = self.model.state_dict()
         dtype = getattr(torch, self.compute_dtype)
         for name, tensor in state_dict.items():
             if tensor.is_floating_point():
