@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
     --default-chat-template-kwargs '{"enable_thinking": false}' \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \
-    --weight-transfer-config '{"backend":"nccl"}'
+    --weight-transfer-config '{"backend":"nccl"}' \
 # add the following if you train with lora
     --enable-lora
 
