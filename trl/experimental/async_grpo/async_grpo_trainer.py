@@ -1083,7 +1083,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
-        register_tree_attention()
+        register_tree_attention(args.tree_attn_kernel_kwargs)
 
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
