@@ -1208,8 +1208,13 @@ class DistillationTrainer(_BaseTrainer):
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
+        # In vLLM server mode, generation gathers the prompts of all processes, so every process stays in the loop until
+        # no process has tool calls left. A process with no tool calls left generates from an empty list.
+        sync_processes = self.use_vllm and self.vllm_mode == "server"
 
-        while idxs_with_tool and iteration_num < self.max_tool_calling_iterations:
+        while iteration_num < self.max_tool_calling_iterations:
+            if not idxs_with_tool and not sync_processes:
+                break
             prompt_completion_tools = [prompts[i] for i in idxs_with_tool]  # select only prompts that need tool calls
             # Snapshot state so we can rollback tool results that would exceed max_completion_length
             completions_len_before = [len(completions[i]) for i in idxs_with_tool]
@@ -1298,7 +1303,11 @@ class DistillationTrainer(_BaseTrainer):
             prompt_completion_tool_ids = [
                 pct for pct, o in zip(prompt_completion_tool_ids, overlong, strict=True) if not o
             ]
-            if not idxs_with_tool:
+            # Checked after dropping the overlong tool results, so processes never generate from empty lists only
+            if sync_processes:
+                if not any(gather_object([bool(idxs_with_tool)])):
+                    break  # no process has tool calls left
+            elif not idxs_with_tool:
                 break  # all overlong, exit tool loop
 
             # Filter images and multimodal fields to match the current subset (index into full batch).
@@ -1320,7 +1329,7 @@ class DistillationTrainer(_BaseTrainer):
                     loop_multimodal_fields = dict(image_inputs)
                 else:
                     loop_multimodal_fields = {}
-            elif multimodal_fields:
+            elif multimodal_fields and idxs_with_tool:
                 if "num_images" not in multimodal_fields and images is not None:
                     multimodal_fields = {
                         **multimodal_fields,
