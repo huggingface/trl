@@ -182,6 +182,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-inflight", type=int, default=8)
     p.add_argument("--max-completion-length", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=20)
+    p.add_argument("--save-steps", type=int, default=50)
+    p.add_argument("--save-total-limit", type=int, default=3, help="checkpoints kept; 0 keeps every one")
     p.add_argument("--learning-rate", type=float, default=1e-6)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--max-staleness", type=int, default=4)
@@ -190,10 +192,12 @@ def parse_args() -> argparse.Namespace:
     # Bound model calls; rewritten histories can still produce multiple training rows.
     p.add_argument("--agent-step-limit", type=int, default=12)
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
+    # Each micro-batch is filled up to the token budget, so this sets how many groups an optimizer step averages over.
     p.add_argument("--gradient-accumulation-steps", type=int, default=1)
     # 0 trains every weight. With LoRA, start vLLM with `--enable-lora` so syncs publish only the adapter.
     p.add_argument("--lora-r", type=int, default=0)
     p.add_argument("--lora-alpha", type=int, default=None, help="defaults to 2 * --lora-r")
+    p.add_argument("--lora-target-modules", default="all-linear", help="`all-linear`, or comma-separated names")
     p.add_argument("--output-dir", default=None)
     p.add_argument("--project", default="async-grpo-harbor")
     p.add_argument("--trackio-space-id", default=None, help="host the trackio dashboard on a HF Space")
@@ -242,8 +246,8 @@ def main() -> None:
     config = AsyncGRPOConfig(
         output_dir=output_dir,
         save_strategy="steps",
-        save_steps=50,
-        save_total_limit=3,
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit or None,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_generations=args.num_generations,
@@ -293,8 +297,12 @@ def main() -> None:
 
     peft_config = None
     if args.lora_r:
+        # PEFT reads `all-linear` only as a string, and anything else as module names
+        target_modules = args.lora_target_modules
+        if target_modules != "all-linear":
+            target_modules = target_modules.split(",")
         peft_config = LoraConfig(
-            r=args.lora_r, lora_alpha=args.lora_alpha or 2 * args.lora_r, target_modules="all-linear"
+            r=args.lora_r, lora_alpha=args.lora_alpha or 2 * args.lora_r, target_modules=target_modules
         )
 
     trainer = AsyncGRPOTrainer(
