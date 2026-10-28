@@ -20,6 +20,7 @@
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
+#     "kernels",
 #     "transformers>=5.2",
 #     "huggingface_hub>=1.22",
 # ]
