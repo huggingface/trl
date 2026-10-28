@@ -57,8 +57,6 @@ _TELEMETRY_TRAINERS = {
     "SDFTTrainer",
     "SDPOTrainer",
     "ServerDistillationTrainer",
-    "SSDTrainer",
-    "TPOTrainer",
 }
 
 
@@ -102,6 +100,8 @@ class _BaseTrainer(Trainer):
             gpu = torch.npu.get_device_name(0)
         elif device == "mlu":
             gpu = torch.mlu.get_device_name(0)
+        elif device == "neuron":
+            gpu = torch.neuron.get_device_properties(0).name
         else:
             gpu = "other"
         # Bucketed to avoid fingerprinting individual deployments by their exact cluster size.

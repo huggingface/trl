@@ -1044,6 +1044,9 @@ class GOLDTrainer(SFTTrainer):
             "top_k": args.top_k,
             "pad_token_id": self.pad_token_id,
         }
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features
+            generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
@@ -1246,7 +1249,10 @@ class GOLDTrainer(SFTTrainer):
         }
 
         with unwrap_model_for_generation(
-            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             (
                 new_input_ids,
@@ -1622,6 +1628,7 @@ class GOLDTrainer(SFTTrainer):
             self.model,
             self.accelerator,
             generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             max_completion_length = self.generation_config.max_new_tokens
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None

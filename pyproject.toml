@@ -28,10 +28,17 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "accelerate>=1.4.0",
+    "accelerate>=1.11.0",
     "datasets>=4.7.0",  # Support Json type and on_mixed_types="use_json"
+    "huggingface_hub>=0.34.0",
     "jinja2",
+    "numpy>=1.26.0",
     "packaging>20.0",
+    "pandas>=2.1.1",
+    "psutil>=5.9.4",
+    "pyarrow>=21.0.0",
+    "pyyaml>=6.0.1",
+    "torch>=2.6.0",  # torch.accelerator, and the public FSDP2 API
     "transformers>=4.56.2",
 ]
 dynamic = ["version"]
@@ -54,24 +61,24 @@ kernels = [  # transformers renamed the "hub-kernels" extra to "kernels" in 5.1.
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
 ]
-liger = [
+liger = [  # removed in v2.0.0, together with `use_liger_kernel`
     "liger-kernel>=0.8.2"
 ]
 math_verify = [
-    "math-verify>=0.5.2",
+    "math-verify>=0.8.0",  # timeouts can be disabled, which worker threads require
 ]
 openreward = [
     "openreward>=0.1.109",
 ]
 peft = [
-    "peft>=0.13.0"
+    "peft>=0.17.0"
 ]
 quality = [
     "pre-commit",
     "hf-doc-builder"
 ]
 quantization = [
-    "bitsandbytes"
+    "bitsandbytes>=0.45.2"  # older versions fail to import without a GPU on torch 2.6/2.7 (Triton 3.2/3.3), see #7863
 ]
 test = [
     "pytest-cov",
@@ -81,7 +88,7 @@ test = [
     "pytest",
 ]
 vllm = [
-    "vllm>=0.21.0,<=0.31.0",
+    "vllm>=0.22.0,<0.33.0",
     "aiohttp>=3.13.3",
     "requests",
 ]
@@ -96,17 +103,15 @@ dev = [
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
-    # liger
-    "liger-kernel>=0.8.2",
     # openreward
     "openreward>=0.1.109",
     # peft
-    "peft>=0.13.0",
+    "peft>=0.17.0",
     # quality
     "pre-commit",
     "hf-doc-builder",
     # quantization
-    "bitsandbytes",
+    "bitsandbytes>=0.45.2",  # older versions fail to import without a GPU on torch 2.6/2.7 (Triton 3.2/3.3), see #7863
     # test
     "pytest-cov",
     "pytest-datadir>=1.7.0",  # lazy datadirs
@@ -226,7 +231,7 @@ filterwarnings = [
 
     # torch inductor advises enabling TF32 on every compile when the float32 matmul precision is left at its default
     # (upstream, not actionable in TRL: the precision is a process-wide numerics setting only the user should change)
-    # Triggered by the DPO and KTO Liger tests, the only ones that compile, since the GPU CI moved from T4 to L40S:
+    # Triggered by the `torch.compile` tests in `tests/test_kernels.py`, since the GPU CI moved from T4 to L40S:
     # the advisory is guarded on compute capability >= (8, 0), unreachable on T4
     # Tracking issue: https://github.com/huggingface/trl/issues/6849
     # Upstream issue: https://github.com/pytorch/pytorch/issues/175484

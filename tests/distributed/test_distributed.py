@@ -41,7 +41,7 @@ from trl import (
 )
 from trl.trainer.utils import add_fused_lm_head
 
-from ..testing_utils import TrlTestCase, require_liger_kernel, require_peft, require_torch_multi_accelerator
+from ..testing_utils import TrlTestCase, require_peft, require_torch_multi_accelerator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -269,80 +269,6 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "config",
-        [
-            "ddp",
-            pytest.param(
-                "zero2",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) == Version("5.1.0"),
-                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
-                ),
-            ),
-            pytest.param(
-                "zero3",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) == Version("5.1.0"),
-                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
-                ),
-            ),
-            "fsdp2",
-        ],
-    )
-    def test_dpo_liger(self, config, get_config_path):
-        # fmt: off
-        run_command(
-            [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/dpo.py",
-                "--output_dir", self.tmp_dir,
-                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                "--dataset_name", "trl-internal-testing/zen",
-                "--dataset_config", "standard_preference",
-                "--use_liger_kernel",
-            ],
-            os.environ.copy(),
-        )
-        # fmt: on
-
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "config",
-        [
-            "ddp",
-            pytest.param(
-                "zero2",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) == Version("5.1.0"),
-                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
-                ),
-            ),
-            pytest.param(
-                "zero3",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) == Version("5.1.0"),
-                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
-                ),
-            ),
-            "fsdp2",
-        ],
-    )
-    def test_kto_liger(self, config, get_config_path):
-        # fmt: off
-        run_command(
-            [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/kto.py",
-                "--output_dir", self.tmp_dir,
-                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                "--dataset_name", "trl-internal-testing/zen",
-                "--dataset_config", "standard_unpaired_preference",
-                "--use_liger_kernel",
-            ],
-            os.environ.copy(),
-        )
-        # fmt: on
-
     @pytest.mark.parametrize(
         "config",
         [
@@ -533,45 +459,6 @@ class TestDistributed(TrlTestCase):
         )
         # fmt: on
 
-    @require_liger_kernel
-    @pytest.mark.parametrize(
-        "config",
-        [
-            "ddp",
-            pytest.param(
-                "zero2",
-                marks=pytest.mark.xfail(
-                    Version(transformers.__version__) == Version("5.1.0"),
-                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
-                ),
-            ),
-            pytest.param(
-                "zero3",
-                marks=pytest.mark.xfail(
-                    Version("5.0.0") <= Version(transformers.__version__) < Version("5.5.4"),
-                    reason="ZeRO-3 fails with transformers >= 5.0.0 and < 5.5.4 (fixed in transformers#45414), see #4899",
-                    strict=True,
-                ),
-            ),
-            "fsdp2",
-        ],
-    )
-    def test_grpo_liger(self, config, get_config_path):
-        # fmt: off
-        run_command(
-            [
-                "accelerate", "launch", "--config_file", get_config_path(config), "trl/scripts/grpo.py",
-                "--output_dir", self.tmp_dir,
-                "--model_name_or_path", "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                "--dataset_name", "trl-internal-testing/zen",
-                "--dataset_config", "conversational_prompt_only",
-                "--reward_model_name_or_path", "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                "--use_liger_kernel",
-            ],
-            os.environ.copy(),
-        )
-        # fmt: on
-
 
 @require_torch_multi_accelerator
 class TestModelParallel:
@@ -671,6 +558,39 @@ class TestModelParallel:
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_distillation_heads_on_different_devices(self, tmp_path):
+        """The chunked divergence loss needs the student and teacher heads on the same device, so training refuses."""
+        # The layout documented for naive pipeline parallelism: layers split across devices, `lm_head` on device 0
+        device_map = {
+            "model.embed_tokens": 0,
+            "model.layers.0": 0,
+            "model.layers.1": 1,
+            "model.norm": 1,
+            "model.rotary_emb": 1,
+            "lm_head": 0,
+        }
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map=device_map
+        )
+        # An untied teacher, so its head can sit on another device than its embeddings
+        teacher_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype="float32", device_map={"model": 0, "lm_head": 1}
+        )
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = DistillationConfig(
+            output_dir=str(tmp_path),
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model=model, teacher_model=teacher_model, args=training_args, train_dataset=dataset
+        )
+
+        with pytest.raises(ValueError, match="Place both on the same device"):
+            trainer.train()
 
     def test_train_dpo(self, tmp_path):
         """A model split across two devices trains, since `Trainer` doesn't wrap it in `nn.DataParallel`."""

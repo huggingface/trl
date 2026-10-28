@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import subprocess
 from types import SimpleNamespace
@@ -21,7 +22,12 @@ import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import backend_device_count, torch_device
 
-from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
+from trl.generation.vllm_client import (
+    _DEFAULT_GENERATION_CONCURRENCY,
+    VLLMClient,
+    parse_generate_logprobs,
+    parse_logprobs,
+)
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_requests_available, is_vllm_available
 
@@ -97,6 +103,56 @@ class TestResetPrefixCache(TrlTestCase):
             client.reset_prefix_cache()
 
 
+@require_requests
+class TestMissingServerSettings(TrlTestCase):
+    @staticmethod
+    def make_client():
+        with (
+            patch("trl.generation.vllm_client.is_vllm_available", return_value=True),
+            patch.object(VLLMClient, "check_server"),
+            patch.object(VLLMClient, "_get", return_value={"data": [{"id": "test-model"}]}),
+        ):
+            return VLLMClient(host="127.0.0.1")
+
+    @staticmethod
+    def make_response(status_code, body=None):
+        response = requests.Response()
+        response.status_code = status_code
+        response._content = json.dumps(body).encode() if body is not None else b""
+        return response
+
+    def server_info(self, weight_transfer_config):
+        return self.make_response(200, {"vllm_config": {"weight_transfer_config": weight_transfer_config}})
+
+    def test_get_server_info(self):
+        client = self.make_client()
+        response = self.server_info(weight_transfer_config={"backend": "nccl"})
+        with patch.object(client.session, "get", return_value=response):
+            assert client.get_server_info() == {"weight_transfer_config": {"backend": "nccl"}}
+
+    def test_init_communicator_without_dev_mode(self):
+        client = self.make_client()
+        with patch.object(client.session, "get", return_value=self.make_response(404)):
+            with pytest.raises(RuntimeError, match="VLLM_SERVER_DEV_MODE=1"):
+                client.init_communicator()
+
+    def test_init_communicator_without_weight_transfer_config(self):
+        client = self.make_client()
+        response = self.server_info(weight_transfer_config=None)
+        with patch.object(client.session, "get", return_value=response):
+            with pytest.raises(RuntimeError, match="--weight-transfer-config"):
+                client.init_communicator()
+
+    @require_vision
+    def test_image_features_without_scale_out(self):
+        from PIL import Image
+
+        client = self.make_client()
+        with patch.object(client.session, "post", return_value=self.make_response(404)):
+            with pytest.raises(RuntimeError, match="--enable-scale-out"):
+                client.image_features([[Image.new("RGB", (8, 8))]])
+
+
 class TestParseLogprobs(TrlTestCase):
     def test_completion_logprobs_sorted_by_probability(self):
         logprobs = {
@@ -131,6 +187,31 @@ class TestParseLogprobs(TrlTestCase):
 
     def test_returns_none_when_logprobs_missing(self):
         assert parse_logprobs([None]) == (None, None)
+
+
+class TestParseGenerateLogprobs(TrlTestCase):
+    def test_generate_logprobs_sorted_by_probability(self):
+        logprobs = {
+            "content": [
+                {
+                    "token_id": 7,
+                    "logprob": -0.5,
+                    "rank": 2,
+                    "top_logprobs": [
+                        {"token_id": 7, "logprob": -0.5, "rank": 2},
+                        {"token_id": 3, "logprob": -0.4, "rank": 1},
+                    ],
+                }
+            ]
+        }
+
+        all_logprobs, all_token_ids = parse_generate_logprobs([logprobs])
+
+        assert all_token_ids == [[[3, 7]]]
+        assert all_logprobs == [[[-0.4, -0.5]]]
+
+    def test_returns_none_when_logprobs_missing(self):
+        assert parse_generate_logprobs([None]) == (None, None)
 
 
 class TestExtractLogprobs(TrlTestCase):

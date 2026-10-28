@@ -23,15 +23,18 @@ from collections import OrderedDict, defaultdict
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
 
+import numpy as np
 import pytest
 import requests
 import torch
+from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
 from transformers import AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
+from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
 from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
@@ -52,6 +55,7 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
 )
+from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
 from trl.experimental.server_distillation.server_distillation_trainer import (
     _jsd_divergence as _reference_jsd_divergence,
 )
@@ -114,13 +118,17 @@ class _StubRolloutWorker:
             teacher_topk_ids, teacher_topk_logprobs = _make_teacher_topk(
                 self._vocab_size, completion_ids, TEACHER_TOP_K, seed=idx
             )
+            full_teacher_ids = np.full((len(prompt_ids) + len(completion_ids), TEACHER_TOP_K + 1), -1, dtype=np.int64)
+            full_teacher_ids[len(prompt_ids) :, :TEACHER_TOP_K] = teacher_topk_ids
+            full_teacher_logprobs = np.full(full_teacher_ids.shape, -np.inf, dtype=np.float32)
+            full_teacher_logprobs[len(prompt_ids) :, :TEACHER_TOP_K] = teacher_topk_logprobs
             yield RolloutSample(
                 prompt=row["prompt"],
                 completion=completion,
-                input_ids=prompt_ids + completion_ids,
-                completion_mask=[0] * len(prompt_ids) + [1] * len(completion_ids),
-                teacher_topk_ids=[[] for _ in prompt_ids] + teacher_topk_ids,
-                teacher_topk_logprobs=[[] for _ in prompt_ids] + teacher_topk_logprobs,
+                input_ids=np.array(prompt_ids + completion_ids, dtype=np.int64),
+                completion_mask=np.array([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64),
+                teacher_topk_ids=full_teacher_ids,
+                teacher_topk_logprobs=full_teacher_logprobs,
                 model_version=self._model_version,
                 teacher_id="default",
                 prompt_id=idx,  # `itertools.cycle` keeps counting across epochs, like the real `_repeat_iterator`
@@ -315,11 +323,13 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
 
 def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
     # First token is a prompt token (completion_mask 0, empty teacher candidates); the rest are completion tokens.
-    teacher_topk_ids = [[]] + [list(range(top_k))] * (length - 1)
-    teacher_topk_logprobs = [[]] + [[-float(i) - 0.1 for i in range(top_k)]] * (length - 1)
+    teacher_topk_ids = np.full((length, top_k + 1), -1, dtype=np.int64)
+    teacher_topk_ids[1:, :top_k] = np.arange(top_k)
+    teacher_topk_logprobs = np.full((length, top_k + 1), -np.inf, dtype=np.float32)
+    teacher_topk_logprobs[1:, :top_k] = -np.arange(top_k) - 0.1
     return {
-        "input_ids": list(range(length)),
-        "completion_mask": [0] + [1] * (length - 1),
+        "input_ids": np.arange(length, dtype=np.int64),
+        "completion_mask": np.array([0] + [1] * (length - 1), dtype=np.int64),
         "teacher_topk_ids": teacher_topk_ids,
         "teacher_topk_logprobs": teacher_topk_logprobs,
         "teacher_id": teacher_id,
@@ -362,7 +372,7 @@ class TestPackingAwareBatching:
         assert loads[0] == loads[1]
 
     def test_collator_pads_teacher_candidates_and_masks_prompt_positions(self):
-        collator = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1)
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1)
         a = _rollout_sample(3)  # input_ids [0, 1, 2]; position 0 is prompt (no candidates)
         batch = collator([[[a]]])
 
@@ -379,7 +389,7 @@ class TestPackingAwareBatching:
         assert batch["teacher_topk_ids"][0, 1, TEACHER_TOP_K] == -1
 
     def test_collator_pads_unequal_rows(self):
-        collator = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=2)
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=2)
         a = _rollout_sample(3, prompt_id=7)  # input_ids [0, 1, 2]
         b = _rollout_sample(2, prompt_id=8)  # input_ids [0, 1]
 
@@ -408,14 +418,12 @@ class TestPackingAwareBatching:
     def test_collator_packs_teacher_id_per_token_for_mopd(self):
         # Packing concatenates samples from different teachers into one row, so compute_loss can only attribute a
         # token's jsd/teacher_entropy to a teacher if the id is broadcast across that sample's own tokens here.
-        collator = DataCollatorForRollout(
-            pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1, teacher_id_to_idx={"math": 0, "code": 1}
-        )
+        collator = DataCollatorForRollout(pad_token_id=0, num_processes=1, teacher_id_to_idx={"math": 0, "code": 1})
         batch = collator([[[_rollout_sample(3, teacher_id="math"), _rollout_sample(2, teacher_id="code")]]])
 
         assert batch["teacher_id_idx"].tolist() == [[0, 0, 0, 1, 1]]
 
-        single = DataCollatorForRollout(pad_token_id=0, teacher_top_k=TEACHER_TOP_K, num_processes=1)
+        single = DataCollatorForRollout(pad_token_id=0, num_processes=1)
         assert "teacher_id_idx" not in single([[[_rollout_sample(3)]]])
 
 
@@ -618,11 +626,12 @@ class TestMultiTeacherRouting:
 
     def test_scores_only_the_completion_region(self):
         (sample,), ((_, payload),) = self._run(ONE_TEACHER, None)
-        n_prompt = len(sample.input_ids) - sum(sample.completion_mask)
-        assert payload["prompt"] == sample.input_ids
+        n_prompt = len(sample.input_ids) - int(sample.completion_mask.sum())
+        assert payload["prompt"] == sample.input_ids.tolist()
         assert payload["prompt_logprobs"] == TEACHER_TOP_K
-        assert sample.teacher_topk_ids[:n_prompt] == [[]] * n_prompt
-        assert sample.teacher_topk_ids[n_prompt:] == [[7]] * sum(sample.completion_mask)
+        assert (sample.teacher_topk_ids[:n_prompt] == -1).all()
+        assert (sample.teacher_topk_ids[n_prompt:, 0] == 7).all()
+        assert (sample.teacher_topk_ids[n_prompt:, 1:] == -1).all()
 
     @pytest.mark.parametrize(("teacher_id", "match"), [(None, "teacher_id=None"), ("unknown", "teacher_id='unknown'")])
     def test_multi_teacher_raises_on_unroutable_row(self, teacher_id, match):
@@ -922,8 +931,8 @@ class TestPerTeacherStats:
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
@@ -1064,8 +1073,8 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestEpochStop(TrlTestCase):
     """`num_train_epochs` stops after N full passes over the PROMPTS, counted as distinct prompt ids.
@@ -1090,9 +1099,10 @@ class TestEpochStop(TrlTestCase):
         trainer._prompts_before_resume = before_resume
         control = TrainerControl()
 
-        _EpochStopCallback(trainer, target_prompts=4).on_step_end(None, None, control)
+        _EpochStopCallback(trainer, target_prompts=4).on_step_end(trainer.args, None, control)
 
         assert control.should_training_stop is should_stop
+        assert control.should_save is should_stop  # the final step is saved, as when training reaches `max_steps`
 
 
 class TestRolloutStartIndex(TrlTestCase):
@@ -1105,8 +1115,8 @@ class TestRolloutStartIndex(TrlTestCase):
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestRolloutStateCheckpoint(TrlTestCase):
     """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
@@ -1132,7 +1142,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with patch.object(_BaseTrainer, "_save_checkpoint"):
             trainer._save_checkpoint(trainer.model, None)
 
-        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"), encoding="utf-8") as f:
             assert json.load(f)["prompt_index"] == expected
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
@@ -1155,7 +1165,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
     def test_inner_training_loop_sets_dataset_start_index_from_file(self):
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 77, "model_version": 42}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -1180,7 +1190,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
         checkpoint_dir = os.path.join(self.tmp_dir, "checkpoint-10")
         os.makedirs(checkpoint_dir)
-        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+        with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
             json.dump({"prompt_index": 5}, f)
 
         trainer = _checkpoint_trainer(self.tmp_dir)
@@ -1213,8 +1223,8 @@ SERVER_LORA_CONFIG = {"max_lora_rank": 32, "max_loras": 3}
 
 
 @pytest.mark.skipif(
-    not is_ampere_or_newer() and torch_device != "xpu",
-    reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 @require_peft
 class TestAsyncDistillationTrainerPeft(TrlTestCase):
@@ -1442,3 +1452,71 @@ def _any_adapter_merged(model) -> bool:
     from peft.tuners.tuners_utils import BaseTunerLayer
 
     return any(isinstance(module, BaseTunerLayer) and module.merged for module in model.modules())
+
+
+def _tensors_handed_to_producer(info, stream):
+    """Return the tensors `send_weights` passes to the packed NCCL producer.
+
+    The producer itself is replaced so the test does not open an NCCL group. `model_update_group` is set only so
+    `send_weights` does not return before touching the iterator.
+    """
+    # `send_weights` logs through accelerate, which raises until a state exists, even for a debug record.
+    PartialState()
+
+    class _Server:
+        server_url = "http://127.0.0.1:9"
+
+        def start_weight_update(self, timeout):
+            return None
+
+        def update_weights(self, update_info, timeout):
+            return None
+
+        def finish_weight_update(self, timeout):
+            return None
+
+    client = WeightTransferClient(_Server(), info)
+    client.model_update_group = object()
+    sent = []
+
+    def capture_iterator(*, iterator, trainer_args):
+        sent.extend(iterator)
+
+    def capture_packed(*, iterator, group, src, post_iter_func):
+        sent.extend((name, post_iter_func((name, tensor))) for name, tensor in iterator)
+
+    if weight_transfer_module._HAS_STATEFUL_TRAINER_ENGINE:
+        patcher = patch.object(weight_transfer_module, "packed_nccl_broadcast_producer", capture_packed)
+    else:
+        patcher = patch.object(
+            weight_transfer_module.NCCLWeightTransferEngine, "trainer_send_weights", capture_iterator
+        )
+    with patcher:
+        client.send_weights(iter(stream))
+    return sent
+
+
+@require_vllm  # WeightTransferClient's constructor requires vLLM
+class TestManifestWeightStream:
+    def test_send_weights_streams_in_the_manifest_dtype(self):
+        model = torch.nn.Sequential(
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+            torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
+        ).to(torch_device)
+        original = [(name, param.detach().clone()) for name, param in _iter_vllm_named_params(model)]
+        info = {
+            "names": [name for name, _ in original],
+            "dtype_names": [str(tensor.dtype).split(".")[-1] for _, tensor in original],
+            "shapes": [list(tensor.shape) for _, tensor in original],
+        }
+        # Accelerate upcasts low-precision FSDP2 parameters to fp32 after the manifest is collected.
+        model.to(dtype=torch.float32)
+        streamed = [(name, param.detach()) for name, param in _iter_vllm_named_params(model)]
+
+        sent = _tensors_handed_to_producer(info, streamed)
+
+        assert [(name, tensor.dtype, list(tensor.shape)) for name, tensor in sent] == [
+            (name, torch.bfloat16, list(tensor.shape)) for name, tensor in original
+        ]
+        for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
+            assert torch.equal(sent_tensor, original_tensor)
