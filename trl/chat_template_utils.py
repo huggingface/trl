@@ -971,11 +971,15 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
 
-    # VLM processors return batched output (list of lists, or a tensor for processors that default to
-    # `return_tensors="pt"`, e.g. Pixtral), unbatch for single conversation
+    # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:
-        ids1 = torch.as_tensor(ids1)[0].tolist()
-        ids2 = torch.as_tensor(ids2)[0].tolist()
+        ids1 = ids1[0]
+        ids2 = ids2[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(ids1, torch.Tensor):
+            ids1 = ids1.tolist()
+            ids2 = ids2.tolist()
 
     return ids2[: len(ids1)] == ids1
 
@@ -1032,11 +1036,13 @@ def is_chat_template_stop_token_trained(
 
     input_ids = output["input_ids"]
     assistant_masks = output["assistant_masks"]
-    # VLM processors return batched output (list of lists, or a tensor for processors that default to
-    # `return_tensors="pt"`, e.g. Pixtral), unbatch for single conversation
     if is_vlm:
-        input_ids = torch.as_tensor(input_ids)[0].tolist()
-        assistant_masks = torch.as_tensor(assistant_masks)[0].tolist()
+        input_ids = input_ids[0]
+        assistant_masks = assistant_masks[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.tolist()
 
     # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
     # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
