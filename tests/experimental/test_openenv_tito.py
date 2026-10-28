@@ -30,7 +30,7 @@ from accelerate import PartialState
 
 pytest.importorskip("openenv.core.harness.training")
 
-from openenv.core.harness import HarnessRolloutResult, ToolResult, ToolTraceEntry, TrainingTrace
+from openenv.core.harness import HarnessRolloutResult, ToolResult, ToolTraceEntry, TrainingTrace, VerifyResult
 
 from trl.experimental.async_grpo import openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
@@ -174,7 +174,7 @@ class Session:
         return TrainingTrace.from_entries([row])
 
     def verify(self, completion):
-        return SimpleNamespace(env_reward=0.25)
+        return VerifyResult(env_reward=0.25)
 
     def close(self):
         self.closed.set()
@@ -362,7 +362,7 @@ def test_harness_worker_produces_scored_training_samples(make_loop):
     def create(*args, **kwargs):
         reward = float(next(indices) % 2)
         session = Session(captured_entry())
-        session.verify = lambda completion: SimpleNamespace(env_reward=reward)
+        session.verify = lambda completion: VerifyResult(env_reward=reward)
         return session
 
     loop = make_loop(SimpleNamespace(create=create))
