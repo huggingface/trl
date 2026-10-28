@@ -736,6 +736,29 @@ class TestHeadLossNumerics:
             weight.grad.double(), logits.grad.t(), atol=0, rtol=1e-2 if dtype == torch.bfloat16 else 1e-6
         )
 
+    @pytest.mark.parametrize("device", ["cpu", torch_device])
+    @pytest.mark.parametrize("chunk_size", [2, 4])
+    @pytest.mark.parametrize("use_score", [False, True])
+    def test_support_far_below_max(self, device, chunk_size, use_score):
+        # Token 0 is ~200 above every support, so sums relative to the row maximum would underflow to 0.
+        from trl.kernels.chunked_logprob import ChunkedLogProbFunction
+
+        hidden = torch.eye(4, device=device, requires_grad=True)
+        weight = torch.diag(torch.tensor([200.0, 1.0, 3.0, 2.0], device=device)).requires_grad_()
+        targets = torch.tensor([1, 2, 3, 3], device=device)
+        support = torch.tensor([[1, 2], [1, 2], [3, -1], [1, 3]], device=device)
+        score_ids = torch.stack((targets, torch.full_like(targets, -1)), -1) if use_score else None
+        logps, *_, score_logps = ChunkedLogProbFunction.apply(
+            hidden, weight, None, targets, 1.0, chunk_size, None, 1.0, (), support, score_ids
+        )
+        (logps.sum() + (score_logps[:, 0].sum() if use_score else 0)).backward()
+        logits = (hidden.detach().double() @ weight.detach().double().t()).requires_grad_()
+        keep = F.one_hot(support + 1, 5)[..., 1:].any(1)
+        ref_logps = logits.masked_fill(~keep, -torch.inf).log_softmax(-1).gather(1, targets.unsqueeze(1)).squeeze(1)
+        ((2 if use_score else 1) * ref_logps.sum()).backward()
+        torch.testing.assert_close(logps.double(), ref_logps)
+        torch.testing.assert_close(weight.grad.double(), logits.grad.t())
+
     @pytest.mark.parametrize("chunk_size", [2, 4])
     @pytest.mark.parametrize("device", ["cpu", torch_device])
     @pytest.mark.parametrize("beta", [0.0, 0.7, 1.0])
