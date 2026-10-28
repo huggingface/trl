@@ -918,6 +918,7 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill", id="r1_distill"),
         pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM", id="deepseekv3"),
+        pytest.param("trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528", id="deepseekv3-0528"),
         pytest.param(
             "trl-internal-testing/tiny-DiffusionGemmaForBlockDiffusion",
             id="diffusion_gemma",
@@ -1198,9 +1199,12 @@ class TestGetTrainingChatTemplate:
             # by the following message's role marker. The training template appends that terminator to the final
             # assistant turn so the stop token is trained — here the `<|user|>` that would open the next turn.
             assert after == before + "<|user|>"
-        elif tokenizer_name == "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill":
-            # DeepSeek-R1-Distill's native template drops everything up to and including `</think>` when re-rendering
-            # an assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
+        elif tokenizer_name in (
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        ):
+            # These DeepSeek native templates drop everything up to and including `</think>` when re-rendering an
+            # assistant turn. The training template keeps the reasoning, so it stays in the SFT target.
             reasoning = "<think>\nThe sky scatters shorter wavelengths.\n</think>"
             assert after == before.replace("<｜Assistant｜>", "<｜Assistant｜>" + reasoning)
         else:
@@ -1217,7 +1221,10 @@ class TestGetTrainingChatTemplate:
             messages = prepare_multimodal_messages(messages)
 
         messages_before = copy.deepcopy(messages)
-        if tokenizer_name == "trl-internal-testing/tiny-DeepseekV3ForCausalLM":
+        if tokenizer_name in (
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
+        ):
             # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
             # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
             messages_before[1]["tool_calls"][0]["function"]["arguments"] = '{"a": 3, "b": 4}'

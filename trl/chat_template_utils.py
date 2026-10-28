@@ -643,6 +643,8 @@ deepseek_r1_distill_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill.
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
 
+deepseekv3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2.jinja").read_text(encoding="utf-8")
+
 diffusion_gemma_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma.jinja").read_text(encoding="utf-8")
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
@@ -1055,6 +1057,10 @@ deepseek_r1_distill_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
+deepseekv3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1217,6 +1223,9 @@ def get_training_chat_template(
 
     if chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
+
+    if chat_template == deepseekv3_v2_chat_template:
+        return deepseekv3_v2_training_chat_template
 
     if chat_template == diffusion_gemma_chat_template:
         return diffusion_gemma_training_chat_template
