@@ -1122,7 +1122,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "before it, these layers call the functions they stored at init rather than the module-level "
                     "ones tree packing patches, so they would scan across samples."
                 )
-            if layer_types == {"conv"} and Version(transformers.__version__) < Version("5.22.0.dev0"):
+            if layer_types == {"conv"} and Version(transformers.__version__) <= Version("5.21.0.dev0"):
                 raise ValueError(
                     f"Tree packing of {type(model).__name__}'s short convolution layers requires transformers>=5.22.0: "
                     "before it, these layers do not pass the forward's keyword arguments down to the module-level "
