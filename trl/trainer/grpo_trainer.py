@@ -3046,9 +3046,14 @@ class GRPOTrainer(_BaseTrainer):
 
         # Apply token-level TIS or MIS correction (in log space)
         if importance_sampling_ratio is not None:
-            log_is_ratio = torch.clamp(torch.log(importance_sampling_ratio), lower_clamp, 20.0)
+            # Tokens zeroed by token_mask have importance_sampling_ratio == 0; taking log(0)
+            # produces -inf which clamps to lower_clamp (~-18.4) and poisons the entire
+            # sequence weight.  Exclude those tokens by masking them out of the sum.
+            is_valid = importance_sampling_ratio > 0
+            safe_ratio = importance_sampling_ratio.clamp(min=1e-30)
+            log_is_ratio = torch.clamp(torch.log(safe_ratio), lower_clamp, 20.0)
             # log(w) = log(π_θ/π_old) + log(π_old/π_sampler)
-            seq_log_ratio += torch.sum(log_is_ratio, dim=-1, keepdim=True)
+            seq_log_ratio += torch.sum(log_is_ratio * is_valid * mask, dim=-1, keepdim=True)
 
         log_w_seq = torch.clamp(seq_log_ratio, lower_clamp, 20.0)
         w_seq = torch.exp(log_w_seq)

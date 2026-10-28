@@ -148,6 +148,44 @@ class TestGetHighEntropyMask(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
+class TestGetGammaWeights:
+    def test_zeroed_is_ratio_does_not_veto_sequence(self):
+        # Regression: when token_mask zeroes a single importance_sampling_ratio entry, log(0) clamped to
+        # ~-18.4 was summed into the sequence weight, collapsing φ(w) to ~0 for the whole sequence.
+        B, T = 2, 4
+        advantages = torch.tensor([[1.0], [1.0]])
+        log_ratio = torch.zeros(B, T)
+        mask = torch.ones(B, T)
+        is_ratio = torch.ones(B, T)
+        is_ratio[0, 2] = 0.0  # one masked token
+
+        phi = GRPOTrainer.get_gamma_weights(advantages, log_ratio, mask, is_ratio)
+        assert phi.shape == (B, 1)
+        # On-policy (ratio=1 everywhere valid), φ(1) should be 1.0
+        assert phi[0].item() == pytest.approx(1.0, abs=0.05), f"φ(w) collapsed to {phi[0].item()}"
+        assert phi[1].item() == pytest.approx(1.0, abs=0.05)
+
+    def test_no_is_ratio_unchanged(self):
+        # Without importance_sampling_ratio, get_gamma_weights should still work.
+        advantages = torch.tensor([[1.0]])
+        log_ratio = torch.zeros(1, 4)
+        mask = torch.ones(1, 4)
+        phi = GRPOTrainer.get_gamma_weights(advantages, log_ratio, mask, None)
+        assert phi.item() == pytest.approx(1.0, abs=0.05)
+
+    def test_all_valid_is_ratios_match_original(self):
+        # When all IS ratios are valid (no zeros), the result should be the same as before the fix.
+        advantages = torch.tensor([[1.0], [-1.0]])
+        log_ratio = torch.zeros(2, 4)
+        mask = torch.ones(2, 4)
+        is_ratio = torch.ones(2, 4) * 0.9  # slightly off-policy
+        phi = GRPOTrainer.get_gamma_weights(advantages, log_ratio, mask, is_ratio)
+        assert phi.shape == (2, 1)
+        # With all valid ratios, should produce non-trivial weights
+        assert phi[0].item() > 0
+        assert phi[1].item() > 0
+
+
 class TestGRPORolloutDispatch(TrlTestCase):
     def _make_rollout_func(self, **output):
         # A plain callable, as a user passes, recording the calls it gets
