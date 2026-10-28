@@ -385,8 +385,8 @@ def test_harness_worker_produces_scored_training_samples(make_loop):
     loop._loop.run_until_complete(run())
     rows = [loop.rollout_buffer.get_nowait() for _ in range(8)]
     assert {row.group_id for row in rows} == {0}
-    assert all(row.input_ids == [1, 2, 3] and row.completion_mask == [0, 1, 0] for row in rows)
-    assert all(row.old_log_probs == [0.0, -0.1, -0.2] for row in rows)
+    assert all(row.input_ids.tolist() == [1, 2, 3] and row.completion_mask.tolist() == [0, 1, 0] for row in rows)
+    assert all(row.old_log_probs.tolist() == pytest.approx([0.0, -0.1, -0.2]) for row in rows)
     assert min(row.advantage for row in rows) < 0 < max(row.advantage for row in rows)
 
 
