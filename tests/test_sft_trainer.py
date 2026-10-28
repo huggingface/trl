@@ -39,7 +39,6 @@ from .testing_utils import (
     is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
-    require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_vision,
@@ -786,6 +785,77 @@ class TestSFTTrainer(TrlTestCase):
         )
         assert any("layers.0.mlp." in n for n in changed), f"No dense layer weight has changed, only {changed}."
 
+    @require_peft
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0")
+        or not is_peft_available()
+        or Version(peft.__version__) >= Version("0.19.0"),
+        reason="Only transformers v5 with peft<0.19 skips the routed experts (#7765)",
+    )
+    @pytest.mark.parametrize(
+        "target_modules, target_parameters, expect_error",
+        [
+            (["gate_proj", "up_proj", "down_proj"], None, True),
+            ("all-linear", None, True),
+            (r".*\.(q_proj|v_proj)", None, False),
+            (["gate_proj", "up_proj", "down_proj"], ["mlp.experts.gate_up_proj", "mlp.experts.down_proj"], False),
+        ],
+    )
+    def test_moe_lora_raises_when_peft_skips_routed_experts(self, target_modules, target_parameters, expect_error):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        peft_config = LoraConfig(target_modules=target_modules, target_parameters=target_parameters)
+
+        if expect_error:
+            with pytest.raises(ValueError, match=r"peft>=0\.19\.0"):
+                SFTTrainer(
+                    model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                    args=training_args,
+                    train_dataset=dataset,
+                    peft_config=peft_config,
+                )
+        else:
+            SFTTrainer(
+                model="trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=peft_config,
+            )
+
+    @require_peft
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0")
+        or not is_peft_available()
+        or not Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0"),
+        reason="Only transformers v5 with peft 0.19 to 0.21.2 skips the dense and shared expert layers (#7767)",
+    )
+    # peft 0.21.0 to 0.21.2 emit a false-positive pattern-key warning for v4 MoE target names (#7587)
+    @pytest.mark.filterwarnings("ignore:The following (rank|alpha)_pattern keys did not match:RuntimeWarning")
+    @pytest.mark.parametrize(
+        "model_id, target_modules, expect_warning",
+        [
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], True),
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", ["q_proj", "v_proj"], False),
+            # no dense or shared expert layers to skip
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", ["gate_proj", "up_proj", "down_proj"], False),
+        ],
+    )
+    def test_moe_lora_warns_when_peft_skips_dense_and_shared_layers(
+        self, model_id, target_modules, expect_warning, caplog
+    ):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+
+        with caplog.at_level("WARNING", logger="trl.trainer.sft_trainer"):
+            SFTTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules=target_modules),
+            )
+
+        assert ("https://github.com/huggingface/trl/issues/7767" in caplog.text) == expect_warning
+
     @pytest.mark.parametrize(
         "model_id, expect_coef, expect_aux_loss",
         [
@@ -964,29 +1034,6 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_liger_kernel
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
-        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
-        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
@@ -1090,8 +1137,8 @@ class TestSFTTrainer(TrlTestCase):
 
     @require_kernels
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1100,12 +1147,16 @@ class TestSFTTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             padding_free=True,
             max_length=None,  # padding-free without packing doesn't enforce max_length
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            model_init_kwargs={
+                "attn_implementation": (
+                    "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn2"
+                )
+            },
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

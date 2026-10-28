@@ -22,7 +22,12 @@ import pytest
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from transformers.testing_utils import backend_device_count, torch_device
 
-from trl.generation.vllm_client import _DEFAULT_GENERATION_CONCURRENCY, VLLMClient, parse_logprobs
+from trl.generation.vllm_client import (
+    _DEFAULT_GENERATION_CONCURRENCY,
+    VLLMClient,
+    parse_generate_logprobs,
+    parse_logprobs,
+)
 from trl.generation.vllm_generation import extract_logprobs
 from trl.import_utils import is_requests_available, is_vllm_available
 
@@ -182,6 +187,31 @@ class TestParseLogprobs(TrlTestCase):
 
     def test_returns_none_when_logprobs_missing(self):
         assert parse_logprobs([None]) == (None, None)
+
+
+class TestParseGenerateLogprobs(TrlTestCase):
+    def test_generate_logprobs_sorted_by_probability(self):
+        logprobs = {
+            "content": [
+                {
+                    "token_id": 7,
+                    "logprob": -0.5,
+                    "rank": 2,
+                    "top_logprobs": [
+                        {"token_id": 7, "logprob": -0.5, "rank": 2},
+                        {"token_id": 3, "logprob": -0.4, "rank": 1},
+                    ],
+                }
+            ]
+        }
+
+        all_logprobs, all_token_ids = parse_generate_logprobs([logprobs])
+
+        assert all_token_ids == [[[3, 7]]]
+        assert all_logprobs == [[[-0.4, -0.5]]]
+
+    def test_returns_none_when_logprobs_missing(self):
+        assert parse_generate_logprobs([None]) == (None, None)
 
 
 class TestExtractLogprobs(TrlTestCase):

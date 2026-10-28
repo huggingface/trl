@@ -1516,6 +1516,9 @@ class GOLDTrainer(SFTTrainer):
             "top_k": args.top_k,
             "pad_token_id": self.pad_token_id,
         }
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features
+            generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
