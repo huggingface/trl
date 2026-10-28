@@ -615,12 +615,12 @@ gemma4_template = {
 
 deepseekv3_template = {
     # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
-    # `<｜Assistant｜>`, so the start anchor accepts either opener.
+    # `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and the reasoning field the tag.
     "defaults": {"role": "assistant"},
     "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
     "fields": {
         "reasoning_content": {
-            "open_pattern": r"(?=[\s\S]*?</think>)",
+            "open_pattern": r"(?:<think>\n?)?(?=[\s\S]*?</think>)",
             "close_pattern": r"</think>\s*",
             "content": "text",
         },
