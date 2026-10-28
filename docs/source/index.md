@@ -12,7 +12,13 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-**📜 Training beyond 1M tokens:** A new [long context guide](long_context_training) walks through the four things that break as sequences grow — the loss, the positions, the activations and the memory of a single GPU — and ends on an example that trains Qwen3-8B on million-token sequences on one 8-GPU node.
+**🚀 Training on AMD GPUs:** TRL's trainers now run on [AMD Instinct GPUs](amd_gpus) through PyTorch's ROCm build.
+
+**🔥 Beam:** Fine-tune [Beam](https://huggingface.co/reflection/Beam-1.0-501B-A23B) with [`SFTTrainer`] on a single node of 8 B300s. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_beam).
+
+**🔥 Muse Spark Open:** Fine-tune [Muse Spark Open](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B) with [`SFTTrainer`], sharded across your GPUs at load time. See the [8-node LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_muse_spark_open).
+
+**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Taxonomy
 
@@ -66,7 +72,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [BEMA for Reference Model](bema_for_reference_model)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
-- [`TPOTrainer`](tpo_trainer)
 
 #### Knowledge distillation
 
@@ -76,7 +81,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [`IWOPDTrainer`](iw_opd_trainer)
 - [`SDFTTrainer`](sdft_trainer)
 - [`SDPOTrainer`](sdpo_trainer)
-- [`SSDTrainer`](ssd_trainer)
 
 </div>
 </div>
@@ -94,7 +98,7 @@ The documentation is organized into the following sections:
 - **Getting Started**: installation and quickstart guide.
 - **Conceptual Guides**: dataset formats, training FAQ, and understanding logs.
 - **How-to Guides**: reducing memory usage, speeding up training, distributing training, etc.
-- **Integrations**: DeepSpeed, Liger Kernel, PEFT, etc.
+- **Integrations**: DeepSpeed, PEFT, etc.
 - **Examples**: example overview, community tutorials, etc.
 - **API**: trainers, utils, etc.
 

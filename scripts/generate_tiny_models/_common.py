@@ -53,7 +53,7 @@ api = HfApi()
 def _transformers_floor_from_pyproject():
     """Read the `transformers>=X.Y.Z` floor from the repo's pyproject.toml."""
     pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
-    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text())
+    match = re.search(r'"transformers>=([^"]+)"', pyproject.read_text(encoding="utf-8"))
     if match is None:
         raise RuntimeError(f"Could not find a `transformers>=` bound in {pyproject}")
     return match.group(1)

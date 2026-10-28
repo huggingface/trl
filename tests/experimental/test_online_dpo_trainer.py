@@ -94,6 +94,27 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         assert "train_loss" in trainer.state.log_history[-1]
 
+    def test_generation_stops_on_every_eos_token_id(self):
+        # Phi-3.5 ends a turn with `<|end|>` (32007), which only its generation config declares as eos, not its
+        # tokenizer: generation must stop on it too, and not only on the tokenizer's `<|endoftext|>` (32000)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        model_id = "trl-internal-testing/tiny-Phi3ForCausalLM-3.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        trainer = OnlineDPOTrainer(
+            model=model_id,
+            reward_funcs=self.reward_model,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
+        )
+
+        assert trainer.eos_token_ids == [32007, 32001, 32000]
+        assert trainer.generation_config.eos_token_id == trainer.eos_token_ids
+
     @pytest.mark.parametrize("eval_dataset_type", ["dataset", "dataset_dict", "dict_of_dataset", "none"])
     def test_init_with_eval_dataset(self, eval_dataset_type):
         # Streaming datasets are not yet supported in OnlineDPO
@@ -491,21 +512,24 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         [
             "trl-internal-testing/tiny-Idefics2ForConditionalGeneration",
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
         ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
         dataset_dict = {
             "prompt": [
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image."}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What do you see?"}]}],
+                [{"role": "user", "content": "Describe the image."}],
+                [{"role": "user", "content": "What do you see?"}],
             ],
-            "images": [
-                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+            "image": [
+                Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)),
+                Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8)),
             ],
         }
         dataset = Dataset.from_dict(dataset_dict)
-        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+        dataset = dataset.cast_column("image", features.Image())
 
         model = AutoModelForImageTextToText.from_pretrained(model_id, dtype="float32")
         reward_model = AutoModelForSequenceClassification.from_pretrained(
@@ -535,3 +559,25 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    def test_generation_suppresses_image_token(self):
+        # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
+        )
+        reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
+
+        training_args = OnlineDPOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = OnlineDPOTrainer(
+            model=AutoModelForImageTextToText.from_pretrained(model_id),
+            reward_funcs=reward_model,
+            args=training_args,
+            processing_class=AutoProcessor.from_pretrained(model_id),
+            train_dataset=dataset,
+            reward_processing_classes=reward_tokenizer,
+        )
+
+        assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]

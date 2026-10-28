@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import os
-from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn.functional as F
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+from transformers.generation import GenerateDecoderOnlyOutput
 
 from trl.experimental.gkd import GKDConfig, GKDTrainer
 
@@ -165,7 +165,7 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
 
         class DummyModel:
             def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-                return SimpleNamespace(sequences=generated_sequence)
+                return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
         inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
         _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
@@ -197,9 +197,9 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
 
         class DummyModel:
             def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-                return SimpleNamespace(sequences=generated_sequence)
+                return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
-        generation_config = SimpleNamespace(eos_token_id=None)
+        generation_config = GenerationConfig()
         inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
         _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
             DummyModel(), inputs, generation_config
@@ -221,9 +221,9 @@ class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
 
         class DummyModel:
             def generate(self, input_ids, attention_mask, generation_config, return_dict_in_generate):
-                return SimpleNamespace(sequences=generated_sequence)
+                return GenerateDecoderOnlyOutput(sequences=generated_sequence)
 
-        generation_config = SimpleNamespace(eos_token_id=[7, 9])
+        generation_config = GenerationConfig(eos_token_id=[7, 9])
         inputs = {"prompts": prompts, "prompt_attention_mask": prompt_mask}
         _, new_attention_mask, new_labels = GKDTrainer.generate_on_policy_outputs(
             DummyModel(), inputs, generation_config

@@ -86,8 +86,6 @@ class TestCLI(TrlTestCase):
             "2",
             "--gradient_accumulation_steps",
             "1",
-            "--use_cpu",
-            "true",
             "--bf16",
             "false",
             "--loss_type",
@@ -183,7 +181,7 @@ class TestCLI(TrlTestCase):
             "output_dir": output_dir,
             "lr_scheduler_type": "cosine_with_restarts",
         }
-        with open(config_path, "w") as config_file:
+        with open(config_path, "w", encoding="utf-8") as config_file:
             yaml.dump(config_content, config_file)
 
         # Test the CLI with config file
@@ -202,7 +200,7 @@ class TestCLI(TrlTestCase):
         from trl.cli import main
 
         config_path = os.path.join(self.tmp_dir, "config.yaml")
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump({"model": "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"}, f)
 
         # Patch the actual function that `VllmServeCommand.run` imports as `vllm_serve_main`
@@ -273,8 +271,6 @@ class TestCLIModelInitKwargs(TrlTestCase):
             "2",
             "--gradient_accumulation_steps",
             "1",
-            "--use_cpu",
-            "true",
             "--bf16",
             "false",
             "--loss_type",

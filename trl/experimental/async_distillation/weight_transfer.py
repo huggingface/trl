@@ -16,13 +16,14 @@ import contextlib
 import threading
 import time
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
 from .vllm_client import VLLMClient
 
 
-if is_vllm_available(min_version="0.22.0"):
+if is_vllm_available():
     from vllm.utils.network_utils import get_ip, get_open_port
 
 # vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
@@ -32,7 +33,7 @@ _HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
 if _HAS_STATEFUL_TRAINER_ENGINE:
     from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
     from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
-elif is_vllm_available(min_version="0.22.0"):
+elif is_vllm_available():
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
 
@@ -68,10 +69,8 @@ class WeightTransferClient:
         weight_update_info: dict,
         weight_sync_timeout: int = 1800,
     ):
-        if not is_vllm_available(min_version="0.22.0"):
-            raise ImportError(
-                "vLLM >= 0.22.0 is required to use WeightTransferClient. Install it with: pip install 'vllm>=0.22.0'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use WeightTransferClient. Install it with: pip install vllm")
         self.vllm = vllm_client
         self.weight_sync_timeout = weight_sync_timeout
         self._weight_update_info = weight_update_info
@@ -127,6 +126,10 @@ class WeightTransferClient:
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
         self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        # The manifest is collected before FSDP2 upcasts low-precision parameters to fp32, and the server sizes its
+        # receive buffers from it, so each tensor is sent in the dtype the manifest declares.
+        dtypes = [getattr(torch, dtype_name) for dtype_name in self._weight_update_info["dtype_names"]]
+        iterator = ((name, tensor.to(dtype)) for (name, tensor), dtype in zip(iterator, dtypes, strict=True))
 
         error: list[BaseException] = []
 

@@ -45,6 +45,7 @@ from trl.trainer.utils import (
     get_peft_config,
     hash_module,
     is_async_callable,
+    model_accepts_images,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -62,6 +63,7 @@ from .testing_utils import TrlTestCase, require_peft, require_rich, require_torc
 
 
 if is_peft_available():
+    import peft
     from peft import (
         AutoPeftModelForCausalLM,
         LoraConfig,
@@ -288,6 +290,38 @@ class TestCreateModelFromPath(TrlTestCase):
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
 
+class TestModelAcceptsImages(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id, architecture, expected",
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", AutoModelForImageTextToText, True),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForImageTextToText,
+                True,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForCausalLM,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_model_accepts_images(self, model_id, architecture, expected):
+        model = architecture.from_pretrained(model_id)
+        assert model_accepts_images(model) is expected
+
+
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
@@ -320,6 +354,18 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+    @pytest.mark.parametrize(
+        "lora_target_modules",
+        [["q_proj"], "q_proj", ["self_attn.q_proj"], [r".*\.q_proj"], ["q_proj", "v_proj"], ["all-linear"]],
+    )
+    def test_lora_target_modules(self, lora_target_modules):
+        # A single value from the CLI or a config file is a module name, a regex or "all-linear" (#7795)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_args = ModelConfig(use_peft=True, lora_target_modules=lora_target_modules)
+        model = get_peft_model(model, get_peft_config(model_args))
+        targeted = {name.split(".lora_A")[0] for name, _ in model.named_parameters() if ".lora_A." in name}
+        assert any(name.endswith(".q_proj") for name in targeted)
 
 
 class TestGetCallableName(TrlTestCase):
@@ -908,8 +954,22 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             [{"role": "user", "content": "What is the weather in London?"}],
         ]
         completions = [
-            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
-            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_temperature", "arguments": {"location": "Paris"}}}],
+                },
+                {"role": "tool", "content": "22 degrees"},
+                {"role": "assistant", "content": "The temperature in Paris is 22 degrees."},
+            ],
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "get_weather", "arguments": {"location": "London"}}}],
+                },
+                {"role": "tool", "content": "Cloudy"},
+                {"role": "assistant", "content": "The weather in London is cloudy."},
+            ],
         ]
         rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
         advantages = [0.987, 0.654]
@@ -925,15 +985,26 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
         │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
         │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
-        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ USER              │ ASSISTANT         │        0.12 │   0.79 │      0.99 │ │
         │ │ What is the       │ get_temperature(… │             │        │           │ │
-        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
-        │ │ Paris?            │                   │             │        │           │ │
+        │ │ temperature in    │                   │             │        │           │ │
+        │ │ Paris?            │ TOOL              │             │        │           │ │
+        │ │                   │ 22 degrees        │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The temperature   │             │        │           │ │
+        │ │                   │ in Paris is 22    │             │        │           │ │
+        │ │                   │ degrees.          │             │        │           │ │
         │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
-        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
-        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
-        │ │ weather in        │ 'London'})        │             │        │           │ │
-        │ │ London?           │                   │             │        │           │ │
+        │ │ USER              │ ASSISTANT         │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather(loca… │             │        │           │ │
+        │ │ weather in        │                   │             │        │           │ │
+        │ │ London?           │ TOOL              │             │        │           │ │
+        │ │                   │ Cloudy            │             │        │           │ │
+        │ │                   │                   │             │        │           │ │
+        │ │                   │ ASSISTANT         │             │        │           │ │
+        │ │                   │ The weather in    │             │        │           │ │
+        │ │                   │ London is cloudy. │             │        │           │ │
         │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────────────────╯
         """)
@@ -1351,6 +1422,13 @@ class TestUnsplitPixelValuesByGrid(TrlTestCase):
 
 
 _FUSED_LM_HEAD_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-BeamForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="Beam was introduced in transformers-5.20.1",
+        ),
+    ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
     pytest.param(
@@ -1378,6 +1456,13 @@ _FUSED_LM_HEAD_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2-MoE requires transformers>=5.0.0",
         ),
     ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
@@ -1409,12 +1494,14 @@ _FUSED_LM_HEAD_MODEL_IDS = [
 
 @require_torch_accelerator
 class TestAddFusedLMHead:
-    def test_masked_labels(self):
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_masked_labels(self, device):
         """Positions labelled `-100` are zero and the others match an unmasked run."""
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        add_fused_lm_head(model)
-        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=torch_device)
-        labels = input_ids.masked_fill(torch.arange(16, device=torch_device) < 8, -100)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
+        input_ids = torch.randint(0, model.config.vocab_size, (4, 16), device=device)
+        labels = input_ids.masked_fill(torch.arange(16, device=device) < 8, -100)
 
         out_full = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
         out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
@@ -1425,10 +1512,45 @@ class TestAddFusedLMHead:
         assert (out["log_probs"][~mask] == 0).all()
         assert (out["entropy"][~mask] == 0).all()
 
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_support_ids_masked_labels(self, device):
+        """With `support_ids`, valid positions are normalized over their support, and masked ones stay zero."""
+        torch.manual_seed(0)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
+        add_fused_lm_head(model)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=device)
+        labels = input_ids.masked_fill(torch.arange(16, device=device) < 8, -100)
+        support_ids = torch.randint(0, model.config.vocab_size, (2, 16, 4), device=device)
+        support_ids[..., 0] = input_ids
+        support_ids[..., 3] = -1
+
+        out = model(input_ids=input_ids, labels=labels, support_ids=support_ids, fused_lm_head=True)
+        out["log_probs"].sum().backward()
+
+        logits = model(input_ids=input_ids).logits[:, :-1].float()
+        keep = F.one_hot(support_ids[:, 1:] + 1, model.config.vocab_size + 1)[..., 1:].any(-2)
+        ref = logits.masked_fill(~keep, float("-inf")).log_softmax(-1).gather(-1, input_ids[:, 1:, None]).squeeze(-1)
+        mask = labels[:, 1:] != -100
+        torch.testing.assert_close(out["log_probs"][mask], ref[mask], atol=1e-4, rtol=1e-4)
+        assert (out["log_probs"][~mask] == 0).all()
+        assert torch.isfinite(model.lm_head.weight.grad).all()
+
+    def test_outputs(self):
+        """Only the requested per-token fields are computed; the others are `None`."""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+        add_fused_lm_head(model, outputs=("log_probs", "is_top1"))
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert out.log_probs is not None and out.is_top1 is not None
+        assert out.entropy is None and out.log_sum_sq_probs is None and out.mean_logits is None
+
     def test_shift_labels(self):
         """Pre-shifted `shift_labels` score the same tokens as `labels`, without shifting."""
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
-        add_fused_lm_head(model)
+        add_fused_lm_head(model, outputs=("log_probs", "entropy"))
         input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
         shift_labels = F.pad(input_ids[:, 1:], (0, 1), value=-100)
 
@@ -1439,10 +1561,12 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out_shifted["entropy"][:, :-1], out["entropy"])
         assert (out_shifted["log_probs"][:, -1] == 0).all()
 
-    def test_all_masked_labels_backward(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(torch_device)
+    # CPU tensors stand in for an accelerator without Triton (e.g. Trainium): TRL does not target CPU training
+    @pytest.mark.parametrize("device", [torch_device, "cpu"])
+    def test_all_masked_labels_backward(self, device):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM").to(device)
         add_fused_lm_head(model)
-        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 8), device=device)
 
         out = model(input_ids=input_ids, labels=torch.full_like(input_ids, -100), fused_lm_head=True)
         out["log_probs"].sum().backward()
@@ -1459,6 +1583,19 @@ class TestAddFusedLMHead:
         add_fused_lm_head(model)
 
         torch.testing.assert_close(model.generate(input_ids, max_new_tokens=8, do_sample=False), expected)
+
+    def test_log_sum_sq_probs(self):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
+        model = model.to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 16), device=torch_device)
+        logits = model(input_ids=input_ids).logits[:, :-1]
+        expected = torch.logsumexp(2 * logits, dim=-1) - 2 * torch.logsumexp(logits, dim=-1)
+
+        add_fused_lm_head(model, outputs=("log_probs", "log_sum_sq_probs"))
+        out = model(input_ids=input_ids, labels=input_ids, fused_lm_head=True)
+
+        assert not out["log_sum_sq_probs"].requires_grad
+        torch.testing.assert_close(out["log_sum_sq_probs"], expected, rtol=1e-5, atol=1e-5)
 
     def test_output_multiplier(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.float32)
@@ -1575,7 +1712,7 @@ class TestAddFusedLMHead:
         ref_entropy = -(ref_p * ref_log_p).sum(dim=-1)
 
         # Chunked forward
-        add_fused_lm_head(model, temperature)
+        add_fused_lm_head(model, temperature, outputs=("log_probs", "entropy"))
         with torch.no_grad():
             out = model(input_ids=input_ids, labels=labels, fused_lm_head=True)
 
@@ -1617,6 +1754,13 @@ class TestAddFusedLMHead:
 
 
 _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
+    pytest.param(
+        "trl-internal-testing/tiny-BeamForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.1"),
+            reason="Beam was introduced in transformers-5.20.1",
+        ),
+    ),
     "trl-internal-testing/tiny-CohereForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
@@ -1642,6 +1786,13 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.0.0"),
             reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.0.0"),
+            reason="LFM2-MoE requires transformers>=5.0.0",
         ),
     ),
     "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
@@ -1710,6 +1861,13 @@ _FUSED_LM_HEAD_VLM_MODEL_IDS = [
         marks=pytest.mark.skipif(
             Version(transformers.__version__) < Version("5.2.0"),
             reason="Qwen3.5 models were introduced in transformers-5.2.0",
+        ),
+    ),
+    pytest.param(
+        "trl-internal-testing/tiny-MuseSparkForConditionalGeneration",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.20.0"),
+            reason="Muse Spark Open was introduced in transformers-5.20.0",
         ),
     ),
 ]
@@ -1910,7 +2068,14 @@ class TestAddFusedLMHeadLoss:
                 lambda: PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prompt_encoder"
             ),
             pytest.param(
-                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4), id="prefix_tuning"
+                lambda: PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),
+                id="prefix_tuning",
+                marks=pytest.mark.xfail(
+                    condition=is_peft_available() and Version(peft.__version__) <= Version("0.17.1"),
+                    reason="Prefix tuning with device_map='auto' is broken in peft 0.17.1 and below. See "
+                    "https://github.com/huggingface/peft/issues/2821",
+                    strict=True,
+                ),
             ),
         ],
     )
