@@ -60,9 +60,7 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
     --default-chat-template-kwargs '{"enable_thinking": false}' \
     --logprobs-mode processed_logprobs \
     --return-tokens-as-token-ids \
-    --weight-transfer-config '{"backend":"nccl"}' \
-# add the following if you train with lora
-    --enable-lora
+    --weight-transfer-config '{"backend":"nccl"}'
 
 # Terminal 2 - train.
 CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_harbor/async_grpo_harbor.py \
@@ -70,6 +68,30 @@ CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_harbor/async_grpo_harbor.py \
     --vllm-url http://localhost:8000 \
     --model Qwen/Qwen3.5-2B \
     --split <hf-dataset> \
+    --max-steps 20
+```
+
+To train a LoRA adapter instead, start the server with `--enable-lora` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1`, so each
+weight sync publishes only the adapter. `--max-lora-rank` must be at least `--lora-r`, and `--max-loras` must hold the
+`--max-staleness + 1` adapter versions requests may still name, plus the one being loaded (6 for the default of 4):
+
+```sh
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3.5-2B \
+    --host 0.0.0.0 --port 8000 \
+    --enable-auto-tool-choice --tool-call-parser qwen3_xml \
+    --reasoning-parser qwen3 \
+    --default-chat-template-kwargs '{"enable_thinking": false}' \
+    --logprobs-mode processed_logprobs \
+    --return-tokens-as-token-ids \
+    --weight-transfer-config '{"backend":"nccl"}' \
+    --enable-lora --max-lora-rank 32 --max-loras 6
+
+CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_harbor/async_grpo_harbor.py \
+    --server http://localhost:8200 \
+    --vllm-url http://localhost:8000 \
+    --model Qwen/Qwen3.5-2B \
+    --split <hf-dataset> \
+    --lora-r 32 --learning-rate 1e-5 \
     --max-steps 20
 ```
 """
