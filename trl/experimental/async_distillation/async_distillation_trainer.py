@@ -1504,7 +1504,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
-                if self._lora_sync:
+                if self._lora_sync and isinstance(self.rollout_worker, AsyncRolloutWorker):
                     # The worker was built before the server was probed, so it does not know the adapter name yet.
                     # Without it, its requests name the base model and keep sampling the base policy.
                     self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name

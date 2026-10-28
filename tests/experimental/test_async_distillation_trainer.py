@@ -99,8 +99,6 @@ class _StubRolloutWorker:
 
     def __init__(self, tokenizer, dataset, vocab_size: int, samples_per_weight_sync: int = 10):
         self.rollout_buffer = queue.Queue()
-        # What a real worker forwards to its child; the trainer writes the adapter name here under adapter sync
-        self._loop_kwargs = {}
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
