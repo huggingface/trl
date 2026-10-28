@@ -69,6 +69,10 @@ Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https:/
 
 Original GLM-4-MoE chat template.
 
+### `glm5.jinja`
+
+Original GLM-5 chat template (as shipped by `zai-org/GLM-5`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`. Response parsing uses `glm4moe_template`.
+
 ### `glm5_3.jinja`
 
 Original GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3`). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.

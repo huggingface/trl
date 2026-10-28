@@ -38,6 +38,7 @@ from trl.chat_template_utils import (
     get_training_chat_template,
     glm5_3_chat_template,
     glm5_3_flash_chat_template,
+    glm5_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
@@ -382,6 +383,7 @@ class TestAddResponseSchema:
     @pytest.mark.parametrize(
         "chat_template",
         [
+            pytest.param(glm5_chat_template, id="glm5"),
             pytest.param(glm5_3_chat_template, id="glm5.3"),
             pytest.param(glm5_3_flash_chat_template, id="glm5.3-flash"),
         ],
