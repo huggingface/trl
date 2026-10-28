@@ -375,7 +375,7 @@ class _AsyncRolloutLoop:
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
         num_generations: int = 8,
-        max_inflight_tasks: int = 128,
+        max_concurrent_rollouts: int = 128,
         queue_maxsize: int = 0,
         score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
@@ -434,7 +434,7 @@ class _AsyncRolloutLoop:
         self._pushed_at = time.monotonic()
 
         self.num_generations = num_generations
-        self.max_inflight_tasks = max_inflight_tasks
+        self.max_concurrent_rollouts = max_concurrent_rollouts
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -515,9 +515,11 @@ class _AsyncRolloutLoop:
             )
 
         # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
-        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_inflight_tasks), thread_name_prefix="grpo-tool")
+        self._tool_pool = ThreadPoolExecutor(
+            max_workers=max(1, max_concurrent_rollouts), thread_name_prefix="grpo-tool"
+        )
 
-        self._inflight_cap = max_inflight_tasks
+        self._inflight_cap = max_concurrent_rollouts
         self._total_rollouts = 0
         self._metrics_poll_s = 5.0
 
@@ -603,14 +605,14 @@ class _AsyncRolloutLoop:
             )
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        connector = aiohttp.TCPConnector(limit=self.max_inflight_tasks + 1)
+        connector = aiohttp.TCPConnector(limit=self.max_concurrent_rollouts + 1)
         async with aiohttp.ClientSession(connector=connector) as session:
             self.session = session
             await self._check_sampling_replay()
             await self._init_inflight_cap()
             logger.info(
                 f"vllm worker started: num_generations={self.num_generations}, "
-                f"max_inflight_tasks={self.max_inflight_tasks}, inflight_cap={self._inflight_cap}, "
+                f"max_concurrent_rollouts={self.max_concurrent_rollouts}, inflight_cap={self._inflight_cap}, "
                 f"temperature={self.temperature}, top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
                 f"repetition_penalty={self.repetition_penalty}"
             )
@@ -630,15 +632,15 @@ class _AsyncRolloutLoop:
                 response.raise_for_status()
                 models = await response.json()
         except Exception as e:
-            logger.warning(f"Could not read the vLLM server's KV capacity, starting at max_inflight_tasks: {e!r}")
+            logger.warning(f"Could not read the vLLM server's KV capacity, starting at max_concurrent_rollouts: {e!r}")
             return
         kv_matches = re.findall(r'^vllm:cache_config_info\{.*kv_cache_size_tokens="(\d+)"', text, re.M)
         if not kv_matches:
-            logger.warning("`/metrics` has no `kv_cache_size_tokens`, starting at max_inflight_tasks")
+            logger.warning("`/metrics` has no `kv_cache_size_tokens`, starting at max_concurrent_rollouts")
             return
         kv_tokens = sum(map(int, kv_matches))
         max_model_len = max(model["max_model_len"] for model in models["data"] if model["max_model_len"])
-        self._inflight_cap = max(1, min(self.max_inflight_tasks, kv_tokens // max_model_len))
+        self._inflight_cap = max(1, min(self.max_concurrent_rollouts, kv_tokens // max_model_len))
 
     async def _control_loop(self, stop_event: asyncio.Event) -> None:
         """Size the in-flight cap from the vLLM server's load, polled from `/metrics`.
@@ -681,11 +683,11 @@ class _AsyncRolloutLoop:
                 rollouts_at_change = self._total_rollouts
                 logger.info(f"[control] cut in-flight cap to {self._inflight_cap} (kv cache usage {usage:.2f})")
             elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
-                self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_inflight_tasks)
+                self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_concurrent_rollouts)
                 rollouts_at_change = self._total_rollouts
             self._push_metrics(
                 {
-                    "rollout/inflight_cap": float(self._inflight_cap),
+                    "rollout/concurrency_cap": float(self._inflight_cap),
                     "rollout/kv_cache_usage": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
@@ -909,7 +911,7 @@ class _AsyncRolloutLoop:
                     "rollout/score_s": scoring_time,
                     "rollout/score_wait_s": wait_scoring,
                     "rollout/score_queue_size": float(self._groups_to_score.qsize()),
-                    "rollout/inflight": float(self._inflight),
+                    "rollout/concurrency": float(self._inflight),
                     # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
                     "rollout/generated_tok_s": (
                         float(self._total_completion_tokens - self._pushed_completion_tokens),

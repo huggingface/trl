@@ -283,7 +283,7 @@ def main() -> None:
         processing_class=tokenizer,
         chat_template_kwargs={"enable_thinking": False},
         num_generations=args.num_generations,
-        max_inflight_tasks=args.max_inflight,
+        max_concurrent_rollouts=args.max_inflight,
         vllm_server_url=args.vllm_url,
         max_tokens=args.max_completion_length,
         temperature=args.temperature,

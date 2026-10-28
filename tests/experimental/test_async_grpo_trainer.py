@@ -935,7 +935,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         if dataset is None:
             dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         return _rollout_loop(
-            dataset=dataset, environment_factory=environment_factory, num_generations=2, max_inflight_tasks=4
+            dataset=dataset, environment_factory=environment_factory, num_generations=2, max_concurrent_rollouts=4
         )
 
     def test_multiple_environments_expose_only_their_own_tools(self):
@@ -1038,7 +1038,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         app = web.Application()
         app.router.add_get("/metrics", metrics)
         app.router.add_get("/v1/models", models)
-        loop = _rollout_loop(num_generations=2, max_inflight_tasks=8, score_queue_maxsize=1000)
+        loop = _rollout_loop(num_generations=2, max_concurrent_rollouts=8, score_queue_maxsize=1000)
         loop._metrics_poll_s = 0.02
         inflight = {"now": 0, "peak": 0}
 
@@ -1853,7 +1853,7 @@ class TestToolExecution(TrlTestCase):
         async def failing_tool(value: int) -> str:
             raise RuntimeError(f"boom:{value}")
 
-        loop = _rollout_loop(max_inflight_tasks=4)
+        loop = _rollout_loop(max_concurrent_rollouts=4)
         tool_dict = {
             "sync_tool": sync_tool,
             "async_tool": async_tool,
@@ -1883,7 +1883,7 @@ class TestToolExecution(TrlTestCase):
             time.sleep(0.5)
             return "done"
 
-        loop = _rollout_loop(max_inflight_tasks=4)
+        loop = _rollout_loop(max_concurrent_rollouts=4)
 
         async def scenario():
             ticks = 0

@@ -1307,14 +1307,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"max_steps={self.args.max_steps} is a safety ceiling."
             )
 
-        # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
+        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
         # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
         # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
+        if self.args.max_concurrent_rollouts is None:
+            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
-                f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
+                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
@@ -1421,7 +1421,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     tools=tools,
                     environment_factory=environment_factory,
                     num_generations=self.args.num_generations,
-                    max_inflight_tasks=self.args.max_inflight_tasks,
+                    max_concurrent_rollouts=self.args.max_concurrent_rollouts,
                     queue_maxsize=self.args.queue_maxsize,
                     vllm_server_url=self.args.vllm_server_base_url,
                     max_tokens=self.args.max_completion_length,

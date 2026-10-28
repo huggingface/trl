@@ -185,7 +185,7 @@ class _AsyncRolloutLoop:
     on-policy sample) and the reward scoring step replaced by a teacher-scoring HTTP call. Because there is no
     grouping, generation and scoring happen in a single task per sample (`_generate_and_score_one`) rather than two
     loops connected by an internal queue, concurrency across in-flight samples still comes from running up to
-    `max_inflight_tasks` such tasks at once, exactly as in the GRPO worker.
+    `max_concurrent_rollouts` such tasks at once, exactly as in the GRPO worker.
 
     Every server it talks to is a plain `vllm serve`, reached through the same OpenAI-compatible `/v1/completions`
     endpoint, in two different modes: the student's server samples a real completion (`_generate_one_turn`), and one or
@@ -209,7 +209,7 @@ class _AsyncRolloutLoop:
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
         metrics_queue: MPQueue,
-        max_inflight_tasks: int = 128,
+        max_concurrent_rollouts: int = 128,
         queue_maxsize: int = 0,
         vllm_server_url: str = "http://localhost:8000",
         lora_name: str | None = None,
@@ -251,7 +251,7 @@ class _AsyncRolloutLoop:
         self._pushed_completion_tokens = 0
         self._pushed_at = time.monotonic()
 
-        self.max_inflight_tasks = max_inflight_tasks
+        self.max_concurrent_rollouts = max_concurrent_rollouts
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -314,10 +314,12 @@ class _AsyncRolloutLoop:
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=2 * self.max_inflight_tasks)) as session:
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=2 * self.max_concurrent_rollouts)
+        ) as session:
             self.session = session
             logger.info(
-                f"vllm worker started: max_inflight_tasks={self.max_inflight_tasks}, temperature={self.temperature}, "
+                f"vllm worker started: max_concurrent_rollouts={self.max_concurrent_rollouts}, temperature={self.temperature}, "
                 f"top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
                 f"repetition_penalty={self.repetition_penalty}"
             )
@@ -346,7 +348,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         inflight_tasks: dict[asyncio.Task, int] = {}
-        free_slots = set(range(self.max_inflight_tasks))
+        free_slots = set(range(self.max_concurrent_rollouts))
         work_iter = self._repeat_iterator()
 
         try:
@@ -379,7 +381,7 @@ class _AsyncRolloutLoop:
                     now = time.monotonic()
                     self._push_metrics(
                         {
-                            "rollout/inflight": float(len(inflight_tasks)),
+                            "rollout/concurrency": float(len(inflight_tasks)),
                             # Windowed, not cumulative. A cumulative average cannot show a generation stall.
                             "rollout/generated_tok_s": (
                                 float(self._total_completion_tokens - self._pushed_completion_tokens),

@@ -541,10 +541,10 @@ class TestWorkerMetrics:
         loop._counters["rollout/vllm_retry_total"] += 2
         loop._rates["rollout/score_s"][0] += 3.0
         loop._rates["rollout/score_s"][1] += 2
-        loop._push_metrics({"rollout/inflight": 4.0})
+        loop._push_metrics({"rollout/concurrency": 4.0})
 
         assert loop._metrics_queue.get(timeout=5) == {
-            "rollout/inflight": 4.0,
+            "rollout/concurrency": 4.0,
             "rollout/vllm_retry_total": 2.0,
             "rollout/score_s": (3.0, 2.0),
         }
@@ -555,7 +555,7 @@ class TestWorkerMetrics:
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
         loop = self._loop(maxsize=1)
         for _ in range(50):
-            loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
+            loop._push_metrics({"rollout/concurrency": 1.0})  # drops rather than stalling generation
 
     @pytest.mark.parametrize(
         ("teacher_server_urls", "ends_on_eos", "clipped", "per_teacher"),

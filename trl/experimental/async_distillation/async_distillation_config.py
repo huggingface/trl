@@ -155,9 +155,9 @@ class AsyncDistillationConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_inflight_tasks (`int`, *optional*, defaults to `-1`):
-            Maximum number of concurrent generation+scoring tasks in flight against the two vLLM servers. Defaults to
-            `-1` (auto), which sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps *
+        max_concurrent_rollouts (`int`, *optional*):
+            Maximum number of rollouts in flight against the two vLLM servers at once, generating or being scored. If
+            `None`, it is set to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps *
             num_processes`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
@@ -368,11 +368,12 @@ class AsyncDistillationConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_inflight_tasks: int = field(
-        default=-1,
+    max_concurrent_rollouts: int | None = field(
+        default=None,
         metadata={
-            "help": "Maximum number of concurrent generation+scoring tasks in flight. Defaults to -1 (auto), which "
-            "sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`."
+            "help": "Maximum number of rollouts in flight against the two vLLM servers at once, generating or being "
+            "scored. If `None`, it is set to `max_staleness * per_device_train_batch_size * "
+            "gradient_accumulation_steps * num_processes`."
         },
     )
     max_staleness: int = field(

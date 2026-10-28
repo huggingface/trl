@@ -143,11 +143,11 @@ class AsyncGRPOConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_inflight_tasks (`int`, *optional*, defaults to `-1`):
-            Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which sets
-            it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`. If using
-            tool-use environments, you may want to set this manually based on how many parallel environments you can
-            run.
+        max_concurrent_rollouts (`int`, *optional*):
+            Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to `max_staleness *
+            per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
+            this is wasteful, since they are discarded as stale before the trainer can consume them. If using tool-use
+            environments, you may want to set this manually based on how many parallel environments you can run.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
             being discarded.
@@ -400,14 +400,14 @@ class AsyncGRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_inflight_tasks: int = field(
-        default=-1,
+    max_concurrent_rollouts: int | None = field(
+        default=None,
         metadata={
-            "help": "Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to -1 (auto), "
-            "which sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * "
-            "num_processes`. Generating more samples than this is wasteful since they will be discarded as stale "
-            "before the trainer can consume them. If using tool-use environments, you may want to set this manually "
-            "based on how many parallel environments you can run."
+            "help": "Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to "
+            "`max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating "
+            "more samples than this is wasteful, since they are discarded as stale before the trainer can consume "
+            "them. If using tool-use environments, you may want to set this manually based on how many parallel "
+            "environments you can run."
         },
     )
     max_staleness: int = field(
