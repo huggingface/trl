@@ -66,6 +66,7 @@ REPOS = [
     "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
     "openai/gpt-oss-20b",
     "Qwen/Qwen2-VL-2B-Instruct",
+    "Qwen/Qwen2.5-0.5B",
     "Qwen/Qwen2.5-32B-Instruct",
     "Qwen/Qwen2.5-VL-3B-Instruct",
     "Qwen/Qwen3-4B-Instruct-2507",
