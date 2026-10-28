@@ -468,6 +468,12 @@ class AsyncGRPOConfig(_BaseConfig):
                 "sampled token with `top_k` (e.g. `top_k=512`)."
             )
 
+        if self.num_generations < 2:
+            raise ValueError(
+                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                f"{self.num_generations}, which is less than the minimum required."
+            )
+
         if self.parallelism_config is not None and (
             self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
         ):
