@@ -100,6 +100,8 @@ class _StubRolloutWorker:
         candidate_sets: bool = False,
     ):
         self.rollout_buffer = queue.Queue()
+        # What a real worker forwards to its child; the trainer writes the adapter name here under adapter sync
+        self._loop_kwargs = {}
         self._candidate_sets = candidate_sets
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
@@ -2688,6 +2690,15 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # to read the `lora_name` the trainer hands it.
         trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=None)
         assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
+
+    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
+    @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
+    def test_an_injected_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
+        # A worker the caller builds, like the harness worker of examples/async_grpo_harbor, exists before the trainer
+        # probes the server, so it cannot have been given the adapter name at construction.
+        worker = AsyncRolloutWorker(model_name=self.model_id)
+        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=worker)
+        assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 
     # --- adapter sync, as the server sees it -----------------------------------------------------------------------
 
