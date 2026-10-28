@@ -257,6 +257,33 @@ class TestA2POTrainer(TrlTestCase):
             assert reference_param.dtype == policy_param.dtype
             torch.testing.assert_close(reference_param, policy_param, rtol=0, atol=0)
 
+    @pytest.mark.parametrize(
+        "model_init_kwargs, expected_attn_implementation",
+        [
+            (None, "eager"),
+            ({}, "eager"),
+            ({"attn_implementation": "eager"}, "eager"),
+            ({"attn_implementation": "sdpa"}, "sdpa"),
+        ],
+    )
+    def test_reference_model_attention_implementation(self, model_init_kwargs, expected_attn_implementation):
+        """Preserve the initial policy's attention backend unless explicitly overridden."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", attn_implementation="eager"
+        )
+        expected_model_init_kwargs = None if model_init_kwargs is None else dict(model_init_kwargs)
+        training_args = A2POConfig(output_dir=self.tmp_dir, model_init_kwargs=model_init_kwargs, report_to="none")
+        trainer = A2POTrainer(
+            model=model,
+            reward_funcs=completion_parity_reward,
+            args=training_args,
+            train_dataset=Dataset.from_dict({"prompt": ["The capital of France is"]}),
+        )
+
+        assert trainer.model.config._attn_implementation == "eager"
+        assert trainer.ref_model.config._attn_implementation == expected_attn_implementation
+        assert training_args.model_init_kwargs == expected_model_init_kwargs
+
     def test_reference_model_from_local_checkpoint(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32)
