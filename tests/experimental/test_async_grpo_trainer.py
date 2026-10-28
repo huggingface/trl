@@ -2104,9 +2104,10 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][1]["top_p"] == 0.9
         assert sampling_mask is None
 
-    def test_top_p_requires_top_k(self):
+    @pytest.mark.parametrize("sampling_kwargs", [{"top_p": 0.9}, {"min_p": 0.05}])
+    def test_top_p_and_min_p_require_top_k(self, sampling_kwargs):
         with pytest.raises(ValueError, match="top_k"):
-            AsyncGRPOConfig(top_p=0.9)
+            AsyncGRPOConfig(**sampling_kwargs)
 
 
 @require_response_parsing
