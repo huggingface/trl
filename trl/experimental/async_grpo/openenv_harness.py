@@ -192,7 +192,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     def _run_session(self, prompt, group_id=0):
         """Return a rollout and its metrics from a pool thread.
 
-        Session failures are unscorable. Invalid training captures stop the worker.
+        Session failures and rejected captures of failed agents are unscorable. Other invalid training captures stop
+        the worker.
         """
         t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
