@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import itertools
 import warnings
 from collections.abc import Callable
@@ -304,7 +305,9 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             }
             model = FSDP(model, **kwargs)
         elif fsdp_plugin.fsdp_version == 2:
-            from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+            from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
+
+            from accelerate.utils.fsdp_utils import fsdp2_load_full_state_dict, get_non_persistent_buffers
 
             mesh = getattr(accelerator, "torch_device_mesh", None)
             ignored_params = get_parameters_from_modules(fsdp_plugin.ignored_modules, model, accelerator.device)
@@ -318,7 +321,38 @@ def prepare_fsdp(model, accelerator: Accelerator) -> FSDP | FSDPModule:
             # `ignored_params` is only supported in torch >= 2.7.0
             if Version(torch.__version__) >= Version("2.7.0"):
                 fsdp2_kwargs["ignored_params"] = ignored_params
+
+            cpu_ram_efficient = getattr(fsdp_plugin, "cpu_ram_efficient_loading", False)
+            if cpu_ram_efficient:
+                original_sd = model.state_dict()
+                non_persistent_fqns = get_non_persistent_buffers(model, recurse=True, fqns=True)
+                original_non_persistent_buffers = copy.deepcopy(
+                    {k: v for k, v in model.named_buffers() if k in non_persistent_fqns}
+                )
+                model = model.to(torch.device("meta"))
+                if hasattr(model, "tie_weights"):
+                    model.tie_weights()
+
             fully_shard(model, **fsdp2_kwargs)
+
+            if cpu_ram_efficient:
+                fsdp2_load_full_state_dict(
+                    accelerator,
+                    model,
+                    original_sd,
+                    cpu_offload=isinstance(fsdp_plugin.cpu_offload, CPUOffloadPolicy),
+                )
+                for fqn, buffer_tensor in original_non_persistent_buffers.items():
+                    buffer_tensor = buffer_tensor.to(accelerator.device)
+                    if "." in fqn:
+                        parent_fqn, local_name = fqn.rsplit(".", 1)
+                        parent_module = model.get_submodule(parent_fqn)
+                    else:
+                        local_name = fqn
+                        parent_module = model
+                    parent_module.register_buffer(local_name, buffer_tensor, persistent=False)
+                if hasattr(model, "tie_weights"):
+                    model.tie_weights()
         else:
             raise ValueError(f"FSDP version {fsdp_plugin.fsdp_version} is not supported.")
     model.eval()
