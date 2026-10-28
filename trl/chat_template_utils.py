@@ -958,15 +958,8 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
     except TypeError:
-        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
-        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
-        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
-        messages1[1]["tool_calls"] = dummy_tool_calls
-        messages2[1]["tool_calls"] = dummy_tool_calls
-        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
-        ids2 = processing_class.apply_chat_template(
-            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
-        )
+        # The template rejects dict arguments (transformers#45419), so trainers must swap in the training template
+        return False
 
     # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:

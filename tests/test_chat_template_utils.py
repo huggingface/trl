@@ -782,6 +782,11 @@ class TestIsChatTemplatePrefixPreserving:
         {%- endif %}""")
         assert is_chat_template_prefix_preserving(tokenizer) is False
 
+    def test_template_rejecting_dict_arguments(self):
+        # DeepSeek-V3 concatenates tool-call arguments as strings, so the dict arguments trainers pass raise TypeError
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        assert is_chat_template_prefix_preserving(tokenizer) is False
+
     @require_vision
     def test_prefix_preserving_template_processor(self):
         processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-Qwen3VLForConditionalGeneration")
