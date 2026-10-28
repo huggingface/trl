@@ -1263,12 +1263,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
         )
 
         precision = self.accelerator.mixed_precision
-        dtype = {
+        self.compute_dtype = {
             "bf16": "bfloat16",
             "fp16": "float16",
             "no": str(self.model.dtype).removeprefix("torch."),
         }.get(precision, precision)
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
@@ -1935,18 +1935,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
     def _save(self, output_dir=None, state_dict=None):
         output_dir = output_dir if output_dir is not None else self.args.output_dir
-        dtype = torch.bfloat16 if self.args.bf16 else torch.float16 if self.args.fp16 else None
-        if dtype is not None:
-            if state_dict is None:
-                state_dict = self.model.state_dict()
-            for name, tensor in state_dict.items():
-                if tensor.is_floating_point():
-                    state_dict[name] = tensor.to(dtype)
+        if state_dict is None:
+            state_dict = self.model.state_dict()
+        dtype = getattr(torch, self.compute_dtype)
+        for name, tensor in state_dict.items():
+            if tensor.is_floating_point():
+                state_dict[name] = tensor.to(dtype)
         super()._save(output_dir, state_dict)
         model = self.accelerator.unwrap_model(self.model)
-        if dtype is not None and not is_peft_model(model):
+        if not is_peft_model(model):
             config = copy.deepcopy(model.config)
-            config.dtype = str(dtype).removeprefix("torch.")
+            config.dtype = self.compute_dtype
             config.save_pretrained(output_dir)
 
     def _save_checkpoint(self, model, trial):
