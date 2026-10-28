@@ -102,12 +102,6 @@ def _transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP: tl.constexpr):
 
 
 @_jit
-def _rescale(old_max, new_max):
-    # exp(old_max - new_max), the factor an online sum takes when its maximum moves; 1 while both are still -inf
-    return tl.where(old_max == new_max, 1.0, tl.exp(old_max - new_max))
-
-
-@_jit
 def _forward_kernel(
     mm_ptr,
     mm_stride,
@@ -183,7 +177,7 @@ def _forward_kernel(
             in_support = tl.load(support_mask_ptr + row * support_mask_stride + offsets, mask=mask, other=0) > 0
             # Relative to the support's own maximum, so a support far below the row maximum does not underflow.
             new_spm = tl.maximum(spm, tl.max(tl.where(in_support, z, -float("inf")), axis=0))
-            rescale_support = _rescale(spm, new_spm)
+            rescale_support = tl.where(spm == new_spm, 1.0, tl.exp(spm - new_spm))
             support_e = tl.where(in_support, tl.exp(z - new_spm), 0.0)
             ss = ss * rescale_support + tl.sum(support_e, axis=0)
             sos = sos * rescale_support + tl.sum(tl.where(offsets != local, support_e, 0.0), axis=0)
@@ -196,7 +190,7 @@ def _forward_kernel(
             tile_max = tl.max(tl.where(score_mask, z, -float("inf")), 0)
             tile_argmax = tl.min(tl.where(score_mask & (z == tile_max), offsets, 2147483647), 0)
             new_sm = tl.maximum(sm, tile_max)
-            rescale_score = _rescale(sm, new_sm)
+            rescale_score = tl.where(sm == new_sm, 1.0, tl.exp(sm - new_sm))
             se = tl.where(score_mask, tl.exp(z - new_sm), 0.0)
             so = so * rescale_score + tl.where(sm < tile_max, rescale_score, 0.0)
             so += tl.sum(tl.where((sm < tile_max) & (offsets == tile_argmax), 0.0, se), 0)
@@ -321,11 +315,6 @@ def _torch_transform(z, logit_scale, softcap, inv_t, HAS_SOFTCAP):
     return z * inv_t
 
 
-def _torch_rescale(old_max, new_max):
-    # `_rescale` in torch
-    return torch.where(old_max == new_max, 1.0, torch.exp(old_max - new_max))
-
-
 def _forward_tile(
     tile,
     tile_stride,
@@ -380,7 +369,7 @@ def _forward_tile(
         # Relative to the support's own maximum, so a support far below the row maximum does not underflow.
         in_support = support_mask > 0
         new_spm = torch.maximum(support_max, z.masked_fill(~in_support, -math.inf).amax(-1))
-        rescale_support = _torch_rescale(support_max, new_spm)
+        rescale_support = torch.where(support_max == new_spm, 1.0, torch.exp(support_max - new_spm))
         support_e = torch.where(in_support, torch.exp(z - new_spm.unsqueeze(-1)), 0.0)
         support_sum_exp.mul_(rescale_support).add_(support_e.sum(-1))
         support_other_sum_exp.mul_(rescale_support).add_(support_e.masked_fill(is_target, 0.0).sum(-1))
@@ -390,7 +379,7 @@ def _forward_tile(
         score_z = z.masked_fill(support_mask <= 0, -math.inf) if HAS_SUPPORT else z
         tile_max, tile_argmax = score_z.max(-1)
         new_sm = torch.maximum(score_max, tile_max)
-        rescale_score = _torch_rescale(score_max, new_sm)
+        rescale_score = torch.where(score_max == new_sm, 1.0, torch.exp(score_max - new_sm))
         se = torch.exp(z - new_sm.unsqueeze(-1))
         if HAS_SUPPORT:
             se.masked_fill_(support_mask <= 0, 0.0)
