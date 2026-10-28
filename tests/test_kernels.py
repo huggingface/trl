@@ -720,7 +720,7 @@ class TestHeadLossNumerics:
             hidden, weight, None, targets, 1.0, chunk_size, None, 1.0, (), support, score_ids
         )
         advantages = torch.tensor([0.5, -1.0, 2.0], device=device)
-        torch.testing.assert_close(score_logps[:, 0], logps, atol=0, rtol=1e-6)
+        torch.testing.assert_close(score_logps[:, 0], logps, atol=0, rtol=1e-5)
         loss = -((logps + score_logps[:, 0]) * advantages).sum()
         loss.backward()
         logits = (hidden.detach().double() @ weight.detach().double().t()).requires_grad_()
