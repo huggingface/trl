@@ -394,27 +394,29 @@ qwen3_5_template = {
 }
 
 glm4moe_template = {
+    # Later GLM templates pre-fill `<think>`: the anchor consumes it, and reasoning opens only if a `</think>` follows
     "defaults": {"role": "assistant"},
-    "start_anchor": "<|assistant|>",
+    "start_anchor_pattern": r"<\|assistant\|>(?:<think>(?:</think>)?)?",
     "fields": {
         "reasoning_content": {
-            "open": "<think>",
+            "open_pattern": r"\s*(?:<think>)?(?=[\s\S]*?</think>)",
             "close_pattern": r"</think>\s*",
             "content": "text",
         },
         "tool_calls": {
-            "open_pattern": r"<tool_call>(?P<name>\S+)\n?",
+            # GLM-4.5 puts a newline after the name and between key and value; later GLM templates put none
+            "open_pattern": r"<tool_call>(?P<name>[^<\s]+)\s*",
             "close_pattern": r"</tool_call>\s*",
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
-                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*<arg_value>(?P<value>.*?)</arg_value>",
                 "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
-            "close_pattern": r"<\|user\|>\s*|$",
+            "close_pattern": r"(?:<\|user\|>|<\|observation\|>)\s*|$",
             "content": "text",
         },
     },
@@ -687,6 +689,8 @@ gemma4_v5_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v5.jinja").read_text(en
 
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
 
+glm5_3_flash_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash.jinja").read_text(encoding="utf-8")
+
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
 
 idefics3_chat_template = (_CHAT_TEMPLATES_DIR / "idefics3.jinja").read_text(encoding="utf-8")
@@ -808,6 +812,10 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = None, deepseekv3_template
     elif chat_template == glm4moe_chat_template:
         schema, template = glm4moe_schema, glm4moe_template
+    elif chat_template == glm5_3_flash_chat_template:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, glm4moe_template
     elif chat_template == gptoss_chat_template:
         schema, template = gptoss_schema, gptoss_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
