@@ -135,11 +135,11 @@ class AsyncGRPOConfig(_BaseConfig):
             warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
             num_processes` samples per micro-batch, balanced across the rows.
         tree_attn_kernel_kwargs (`dict[str, Any]` or `str`, *optional*):
-            Keyword arguments for `kernels.get_kernel`, used to load the FlashAttention kernel tree packing runs on, e.g.
-            `{"revision": "<commit>"}` to pick a build other than the default. The kernel itself is chosen by device:
-            `kernels-community/aiter-flash-attn` on ROCm, `kernels-community/flash-attn4` on Blackwell GPUs (compute
-            capability 10 and above), `kernels-community/flash-attn3` otherwise. If `None`, each is loaded at the
-            version tree packing is tested with.
+            Keyword arguments for `kernels.get_kernel`, used to load the FlashAttention kernel tree packing runs on,
+            e.g. `{"revision": "<commit>"}` to pick a build other than the default. The kernel itself is chosen by
+            device: `kernels-community/aiter-flash-attn` on ROCm, `kernels-community/flash-attn4` on Blackwell GPUs
+            (compute capability 10 and above), `kernels-community/flash-attn3` otherwise. If `None`, each is loaded at
+            the version tree packing is tested with.
 
         > Parameters that control the async rollout pipeline
 

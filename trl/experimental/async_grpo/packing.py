@@ -224,7 +224,8 @@ TREE_ATTENTION = "tree_fa3"
 
 @cache
 def _flash_attn(kernel_kwargs: tuple[tuple[str, Any], ...] | None = None):
-    """The device's FlashAttention kernel, loaded with `kernel_kwargs` (as items, to be cacheable) or at its tested version."""
+    """The device's FlashAttention kernel, loaded with `kernel_kwargs` (as items, to be cacheable) or at its tested
+    version."""
     from kernels import get_kernel
 
     if torch.version.hip:
