@@ -693,6 +693,8 @@ glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encodi
 
 glm5_chat_template = (_CHAT_TEMPLATES_DIR / "glm5.jinja").read_text(encoding="utf-8")
 
+glm5_1_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_1.jinja").read_text(encoding="utf-8")
+
 glm5_3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3.jinja").read_text(encoding="utf-8")
 
 glm5_3_flash_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash.jinja").read_text(encoding="utf-8")
@@ -818,7 +820,13 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         schema, template = None, deepseekv3_template
     elif chat_template == glm4moe_chat_template:
         schema, template = glm4moe_schema, glm4moe_template
-    elif chat_template in [glm4_7_chat_template, glm5_chat_template, glm5_3_chat_template, glm5_3_flash_chat_template]:
+    elif chat_template in [
+        glm4_7_chat_template,
+        glm5_chat_template,
+        glm5_1_chat_template,
+        glm5_3_chat_template,
+        glm5_3_flash_chat_template,
+    ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, glm4moe_template

@@ -77,6 +77,10 @@ Original GLM-4-MoE chat template.
 
 Original GLM-5 chat template (as shipped by `zai-org/GLM-5`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`. Response parsing uses `glm4moe_template`.
 
+### `glm5_1.jinja`
+
+Original GLM-5.1 chat template (as shipped by `zai-org/GLM-5.1`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`; with thinking disabled, the generation prompt pre-fills `</think>` alone. Response parsing uses `glm4moe_template`.
+
 ### `glm5_3.jinja`
 
 Original GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3`). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.
