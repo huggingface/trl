@@ -99,13 +99,10 @@ class AsyncGRPOConfig(_BaseConfig):
 
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
             Base URL of the vLLM server used for generation (e.g., `"http://localhost:8000"`).
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Total timeout duration in seconds to wait for the vLLM server to be ready.
-        request_timeout (`int`, *optional*, defaults to `600`):
-            Timeout in seconds for individual HTTP requests to the vLLM server.
-        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete within this
-            time raises instead of hanging the run.
+        vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
+            Timeout in seconds for every call to the vLLM server: waiting for it to be ready at startup, one generation
+            request, and one weight-sync call. A call that does not complete within this time raises instead of hanging
+            the run.
 
         > Parameters that control the training
 
@@ -329,21 +326,11 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={"help": "Base URL of the vLLM server used for generation (e.g., 'http://localhost:8000')."},
     )
     vllm_server_timeout: float = field(
-        default=240.0,
+        default=1800.0,
         metadata={
-            "help": "Total timeout duration in seconds to wait for the vLLM server to be ready. If the server is not "
-            "up after the timeout, a `TimeoutError` is raised."
-        },
-    )
-    request_timeout: int = field(
-        default=600,
-        metadata={"help": "Timeout in seconds for individual HTTP requests to the vLLM server."},
-    )
-    weight_sync_timeout: int = field(
-        default=1800,
-        metadata={
-            "help": "Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete "
-            "within this time raises instead of hanging the run."
+            "help": "Timeout in seconds for every call to the vLLM server: waiting for it to be ready at startup, one "
+            "generation request, and one weight-sync call. A call that does not complete within this time raises "
+            "instead of hanging the run."
         },
     )
 

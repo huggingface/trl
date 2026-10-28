@@ -1399,7 +1399,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                             "dtype_names": weight_dtype_names,
                             "shapes": weight_shapes,
                         },
-                        weight_sync_timeout=self.args.weight_sync_timeout,
                         compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                     )
 
@@ -1431,7 +1430,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     num_sampler_logprobs=self.args.num_sampler_logprobs if self.args.score_centering else 0,
                     min_p=self.args.min_p,
                     repetition_penalty=self.args.repetition_penalty,
-                    request_timeout=self.args.request_timeout,
+                    vllm_server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     max_tool_calling_iterations=self.args.max_tool_calling_iterations,
                     log_completions=self.args.log_completions,

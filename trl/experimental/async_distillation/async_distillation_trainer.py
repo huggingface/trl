@@ -1500,7 +1500,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                             "dtype_names": weight_dtype_names,
                             "shapes": weight_shapes,
                         },
-                        weight_sync_timeout=self.args.weight_sync_timeout,
                     )
 
             if rollout_worker is not None:
@@ -1529,7 +1528,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     top_k=self.args.top_k,
                     min_p=self.args.min_p,
                     repetition_penalty=self.args.repetition_penalty,
-                    request_timeout=self.args.request_timeout,
+                    vllm_server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     log_completions=self.args.log_completions,
                     log_completions_steps=self.args.log_completions_steps,

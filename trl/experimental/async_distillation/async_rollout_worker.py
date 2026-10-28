@@ -222,7 +222,7 @@ class _AsyncRolloutLoop:
         top_k: int = 0,
         min_p: float | None = None,
         repetition_penalty: float = 1.0,
-        request_timeout: int = 120,
+        vllm_server_timeout: float = 1800.0,
         chat_template_kwargs: dict[str, Any] | None = None,
         log_completions: bool = False,
         log_completions_steps: int = 100,
@@ -259,7 +259,7 @@ class _AsyncRolloutLoop:
         self.top_k = top_k
         self.min_p = min_p
         self.repetition_penalty = repetition_penalty
-        self.request_timeout = request_timeout
+        self.vllm_server_timeout = vllm_server_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.log_completions = log_completions
         self.log_completions_steps = log_completions_steps
@@ -336,7 +336,7 @@ class _AsyncRolloutLoop:
         """
         for teacher_id, url in self.teacher_server_urls.items():
             models = await self._retry(
-                lambda url=url: self._get(url, "/v1/models", self.request_timeout),
+                lambda url=url: self._get(url, "/v1/models", self.vllm_server_timeout),
                 max_attempts=30,
                 label=f"teacher {teacher_id} /v1/models",
             )
@@ -602,7 +602,7 @@ class _AsyncRolloutLoop:
         if self.min_p is not None:
             payload["min_p"] = self.min_p
         output = await self._retry(
-            lambda: self._post(self.vllm_server_url, "/v1/completions", payload, self.request_timeout),
+            lambda: self._post(self.vllm_server_url, "/v1/completions", payload, self.vllm_server_timeout),
             max_attempts=30,
             label="student vllm /v1/completions",
         )
@@ -633,7 +633,7 @@ class _AsyncRolloutLoop:
             "prompt_logprobs": self.teacher_top_k,
         }
         output = await self._retry(
-            lambda: self._post(teacher_server_url, "/v1/completions", payload, self.request_timeout),
+            lambda: self._post(teacher_server_url, "/v1/completions", payload, self.vllm_server_timeout),
             max_attempts=30,
             label="teacher /v1/completions",
         )

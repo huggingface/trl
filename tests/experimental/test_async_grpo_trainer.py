@@ -2965,13 +2965,13 @@ def _tensors_handed_to_producer(info, stream):
     class _Server:
         server_url = "http://127.0.0.1:9"
 
-        def start_weight_update(self, timeout):
+        def start_weight_update(self):
             return None
 
-        def update_weights(self, update_info, timeout):
+        def update_weights(self, update_info):
             return None
 
-        def finish_weight_update(self, timeout):
+        def finish_weight_update(self):
             return None
 
     client = WeightTransferClient(_Server(), info)

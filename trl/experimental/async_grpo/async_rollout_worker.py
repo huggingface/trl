@@ -387,7 +387,7 @@ class _AsyncRolloutLoop:
         num_sampler_logprobs: int = 0,
         min_p: float | None = None,
         repetition_penalty: float = 1.0,
-        request_timeout: int = 120,
+        vllm_server_timeout: float = 1800.0,
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
@@ -444,7 +444,7 @@ class _AsyncRolloutLoop:
         self.num_sampler_logprobs = num_sampler_logprobs
         self.min_p = min_p
         self.repetition_penalty = repetition_penalty
-        self.request_timeout = request_timeout
+        self.vllm_server_timeout = vllm_server_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.max_tool_calling_iterations = max_tool_calling_iterations
         self.log_completions = log_completions
@@ -1196,7 +1196,7 @@ class _AsyncRolloutLoop:
                 **sampling_params,
             }
             output = await self._retry(
-                lambda: self._post("/v1/completions", payload, self.request_timeout),
+                lambda: self._post("/v1/completions", payload, self.vllm_server_timeout),
                 max_attempts=30,
                 label="vllm /v1/completions",
             )
@@ -1205,7 +1205,7 @@ class _AsyncRolloutLoop:
             return choice["token_ids"], choice["logprobs"]["token_logprobs"], None, sampler_logprobs
         payload = {"model": self._request_model, "token_ids": prompt_ids, "sampling_params": sampling_params}
         output = await self._retry(
-            lambda: self._post("/inference/v1/generate", payload, self.request_timeout),
+            lambda: self._post("/inference/v1/generate", payload, self.vllm_server_timeout),
             max_attempts=30,
             label="vllm /inference/v1/generate",
         )

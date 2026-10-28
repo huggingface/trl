@@ -518,7 +518,7 @@ def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
         processing_class=tokenizer,
         teacher_server_urls=teacher_server_urls,
         teacher_top_k=TEACHER_TOP_K,
-        request_timeout=30,
+        vllm_server_timeout=30,
     )
     # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
@@ -1564,13 +1564,13 @@ def _tensors_handed_to_producer(info, stream):
     class _Server:
         server_url = "http://127.0.0.1:9"
 
-        def start_weight_update(self, timeout):
+        def start_weight_update(self):
             return None
 
-        def update_weights(self, update_info, timeout):
+        def update_weights(self, update_info):
             return None
 
-        def finish_weight_update(self, timeout):
+        def finish_weight_update(self):
             return None
 
     client = WeightTransferClient(_Server(), info)

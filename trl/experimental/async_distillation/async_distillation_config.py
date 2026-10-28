@@ -82,8 +82,10 @@ class AsyncDistillationConfig(_BaseConfig):
 
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
             Base URL of the student's vLLM server, used both for generation and for streaming weight updates.
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Total timeout duration in seconds to wait for the student's vLLM server to be ready.
+        vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
+            Timeout in seconds for every call to a vLLM server, the student's or a teacher's: waiting for it to be
+            ready at startup, one generation or scoring request, and one weight-sync call. A call that does not
+            complete within this time raises instead of hanging the run.
         teacher_server_urls (`dict[str, str]`, *optional*, defaults to `{"default": "http://localhost:8001"}`):
             Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
             --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so a
@@ -101,11 +103,6 @@ class AsyncDistillationConfig(_BaseConfig):
             see [MOPD](https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects
             which entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
             `teacher_id` of `"math"` or `"code"` per row.
-        request_timeout (`int`, *optional*, defaults to `600`):
-            Timeout in seconds for individual HTTP requests to any vLLM server.
-        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not complete
-            within this time raises instead of hanging the run.
 
         > Parameters that control the distillation loss
 
@@ -297,8 +294,12 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={"help": "Base URL of the student's vLLM server (e.g., 'http://localhost:8000')."},
     )
     vllm_server_timeout: float = field(
-        default=240.0,
-        metadata={"help": "Total timeout duration in seconds to wait for the student's vLLM server to be ready."},
+        default=1800.0,
+        metadata={
+            "help": "Timeout in seconds for every call to a vLLM server, the student's or a teacher's: waiting for it "
+            "to be ready at startup, one generation or scoring request, and one weight-sync call. A call that does "
+            "not complete within this time raises instead of hanging the run."
+        },
     )
     teacher_server_urls: dict[str, str] | str | None = field(
         default=None,
@@ -308,17 +309,6 @@ class AsyncDistillationConfig(_BaseConfig):
             "them. Defaults to a single teacher at 'http://localhost:8001'. A single entry scores every sample "
             "(plain single-teacher on-policy distillation). Multiple entries enable MOPD: each row's `teacher_id` "
             "column selects which entry scores it."
-        },
-    )
-    request_timeout: int = field(
-        default=600,
-        metadata={"help": "Timeout in seconds for individual HTTP requests to any vLLM server."},
-    )
-    weight_sync_timeout: int = field(
-        default=1800,
-        metadata={
-            "help": "Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not "
-            "complete within this time raises instead of hanging the run."
         },
     )
 
