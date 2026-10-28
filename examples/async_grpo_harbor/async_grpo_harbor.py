@@ -192,7 +192,6 @@ def parse_args() -> argparse.Namespace:
     # Bound model calls; rewritten histories can still produce multiple training rows.
     p.add_argument("--agent-step-limit", type=int, default=12)
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
-    # Each micro-batch is filled up to the token budget, so this sets how many groups an optimizer step averages over.
     p.add_argument("--gradient-accumulation-steps", type=int, default=1)
     # 0 trains every weight. With LoRA, start vLLM with `--enable-lora` so syncs publish only the adapter.
     p.add_argument("--lora-r", type=int, default=0)
