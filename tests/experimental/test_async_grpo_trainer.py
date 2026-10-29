@@ -1769,10 +1769,10 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     @pytest.mark.parametrize(
         ("config", "match"),
         [
-            pytest.param(RwkvConfig(vocab_size=128, hidden_size=16, num_hidden_layers=2), "FlashAttention", id="rwkv"),
+            pytest.param(RwkvConfig(vocab_size=128, hidden_size=16, num_hidden_layers=2), "recurrent", id="rwkv"),
             pytest.param(
                 xLSTMConfig(vocab_size=128, hidden_size=16, num_hidden_layers=2, num_heads=2),
-                "FlashAttention",
+                "recurrent",
                 id="xlstm",
             ),
             pytest.param(
