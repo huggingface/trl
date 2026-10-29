@@ -2732,45 +2732,6 @@ class TestXTokenLoss(TrlTestCase):
         torch.testing.assert_close(mapping["uncommon_student"], torch.tensor([2, 3]))
         torch.testing.assert_close(mapping["uncommon_teacher"], torch.tensor([2]))
 
-    def test_h_kl_normalizes_common_probability_mass(self):
-        projection_path = Path(self.tmp_dir) / "hybrid.pt"
-        torch.save(
-            {
-                "indices": torch.tensor([[0], [1], [2]]),
-                "likelihoods": torch.tensor([[1.0], [1.0], [0.5]]),
-            },
-            projection_path,
-        )
-        config = self._config(projection_path, loss_type="h_kl")
-        config.xtoken_uncommon_topk = 1
-        loss_fn = XTokenLoss(config, student_vocab_size=3, teacher_vocab_size=3)
-        student_logits = torch.tensor([[0.8, 0.1, 0.1]]).log().requires_grad_()
-        teacher_logits = torch.tensor([[0.4, 0.3, 0.3]]).log()
-
-        loss = loss_fn._compute_h_kl(
-            student_logits,
-            teacher_logits,
-            paired=[([0], [0])],
-            device=torch.device("cpu"),
-            T=1.0,
-        )
-
-        student_common = torch.tensor([0.8, 0.1])
-        teacher_common = torch.tensor([0.4, 0.3])
-        expected_kl = F.kl_div(
-            student_common.log().log_softmax(-1),
-            teacher_common.log().log_softmax(-1),
-            reduction="sum",
-            log_target=True,
-        )
-        expected_l1 = torch.tensor(0.2)
-        torch.testing.assert_close(loss, expected_kl + expected_l1)
-        assert loss > 0
-
-        loss.backward()
-        assert student_logits.grad is not None
-        assert student_logits.grad.abs().sum() > 0
-
     @pytest.mark.parametrize("dynamic_scaling", [False, True])
     def test_h_kl_negative_partial_kl_keeps_distillation_gradients(self, dynamic_scaling):
         projection_path = Path(self.tmp_dir) / "hybrid.pt"
@@ -2781,25 +2742,26 @@ class TestXTokenLoss(TrlTestCase):
         config = self._config(projection_path, "h_kl", dynamic_scaling)
         loss_fn = XTokenLoss(config, student_vocab_size=3, teacher_vocab_size=7)
         student = torch.tensor([[[0.8, 0.1, 0.1]] * 3]).log().requires_grad_()
-        teacher = torch.tensor([[[0.4, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]] * 3]).log()
+        teacher = torch.tensor([[[0.4, 0.1, 0.3, 0.05, 0.05, 0.05, 0.05]] * 3]).log()
         labels = torch.tensor([[-100, 1, 2]])
         offsets = torch.tensor([[[0, 0], [0, 1], [1, 2]]])
         loss = loss_fn(student, teacher, labels, labels, offsets, offsets)
-        kd = F.kl_div(
-            torch.tensor([0.8, 0.1]).log().log_softmax(-1),
-            torch.tensor([0.4, 0.1]).log().log_softmax(-1),
-            reduction="sum",
-            log_target=True,
+        # Common set {0, 1} is sliced from the full-vocab log-probs without renormalizing; L1 on the top uncommon
+        # probabilities is |0.1 - 0.3|
+        kl_common = F.kl_div(
+            torch.tensor([0.8, 0.1]).log(), torch.tensor([0.4, 0.1]).log(), reduction="sum", log_target=True
         )
+        kd = kl_common + 0.2
         ce = F.cross_entropy(student[:, :2].reshape(-1, 3), labels[:, 1:].reshape(-1))
         torch.testing.assert_close(loss_fn.last_kl_loss, kd)
-        torch.testing.assert_close(loss, 2 * ce if dynamic_scaling else ce + kd)
+        # With dynamic scaling, sg(ce / |kd|) * kd cancels ce when the partial KL is negative
+        torch.testing.assert_close(loss, torch.zeros(()) if dynamic_scaling else ce + kd)
         kd_grad = torch.autograd.grad(loss - ce, student)[0]
-        assert kd > 0
+        assert kd < 0
         assert torch.isfinite(kd_grad).all()
         assert kd_grad.abs().sum() > 0
 
-    def test_p_kl_normalizes_multitoken_teacher_span(self):
+    def test_p_kl_averages_teacher_log_probs_over_multitoken_span(self):
         projection_path = Path(self.tmp_dir) / "identity.pt"
         torch.save({"indices": torch.arange(2).unsqueeze(1), "likelihoods": torch.ones(2, 1)}, projection_path)
         loss_fn = XTokenLoss(self._config(projection_path), student_vocab_size=2, teacher_vocab_size=2)
@@ -2808,9 +2770,10 @@ class TestXTokenLoss(TrlTestCase):
         kd, _, _ = loss_fn._compute_p_kl(
             student, teacher, paired=[([0], [0, 1])], device=torch.device("cpu"), T=1.0, top_idx=torch.arange(2)
         )
-        expected = F.kl_div(student.log_softmax(-1), torch.full((1, 2), 0.5), reduction="sum")
+        # Mean of the teacher log-probs, log(0.3) for both tokens, kept unnormalized
+        teacher_chunk = teacher.mean(0, keepdim=True)
+        expected = F.kl_div(student.log_softmax(-1), teacher_chunk, reduction="sum", log_target=True)
         torch.testing.assert_close(kd, expected)
-        assert kd > 0
         torch.testing.assert_close(torch.autograd.grad(kd, student)[0], torch.autograd.grad(expected, student)[0])
 
     @pytest.mark.parametrize("loss_type", ["p_kl", "h_kl"])
@@ -2832,8 +2795,8 @@ class TestXTokenLoss(TrlTestCase):
         teacher_offsets = torch.tensor([[[0, 0], [0, 2], [2, 3]]] * 2)
         full = loss_fn(student, teacher, student_labels, teacher_labels, student_offsets, teacher_offsets)
         full_grad = torch.autograd.grad(full, student)[0]
-        # Independent counts after shifting, EOS removal, and byte-span alignment.
-        counts = torch.tensor([4, 2] if skip_eos else [5, 3])
+        # Independent counts after shifting, EOS removal (KD only), and byte-span alignment.
+        counts = torch.tensor([5, 2] if skip_eos else [5, 3])
         accumulated = sum(
             loss_fn(
                 student[i : i + 1],
@@ -2901,12 +2864,7 @@ class TestXTokenLoss(TrlTestCase):
             t_log = (t_logits[:, :2] / 2).log_softmax(-1)
             common_s, common_t = [0, 1, 3], [0, 1, 4]
             common = (
-                F.kl_div(
-                    s_chunks[:, :, common_s].log_softmax(-1),
-                    t_log[:, :, common_t].log_softmax(-1),
-                    reduction="none",
-                    log_target=True,
-                )
+                F.kl_div(s_chunks[:, :, common_s], t_log[:, :, common_t], reduction="none", log_target=True)
                 .sum(-1)[valid_chunks]
                 .mean()
             )
@@ -2948,7 +2906,7 @@ class TestXTokenLoss(TrlTestCase):
         assert student.grad[:, :2].abs().sum() > 0
         assert torch.count_nonzero(student.grad[:, -1]) == 0
 
-    def test_ce_is_kept_without_teacher_span_and_only_actual_eos_is_skipped(self):
+    def test_ce_is_kept_without_teacher_span_and_trains_eos(self):
         projection_path = Path(self.tmp_dir) / "identity.pt"
         torch.save(
             {"indices": torch.arange(4).unsqueeze(1), "likelihoods": torch.ones(4, 1)},
@@ -2962,7 +2920,7 @@ class TestXTokenLoss(TrlTestCase):
             teacher_eos_token_id=3,
         )
         student_logits = torch.randn(1, 3, 4)
-        student_labels = torch.tensor([[-100, 1, 2]])
+        student_labels = torch.tensor([[-100, 1, 3]])
         teacher_labels = torch.full((1, 3), -100)
         byte_offsets = torch.tensor([[[0, 0], [0, 1], [1, 2]]])
 
@@ -2975,7 +2933,7 @@ class TestXTokenLoss(TrlTestCase):
             byte_offsets,
         )
 
-        expected = torch.nn.functional.cross_entropy(student_logits[:, :2].flatten(0, 1), torch.tensor([1, 2]))
+        expected = torch.nn.functional.cross_entropy(student_logits[:, :2].flatten(0, 1), torch.tensor([1, 3]))
         torch.testing.assert_close(loss, expected)
 
 

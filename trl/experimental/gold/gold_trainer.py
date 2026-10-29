@@ -1029,37 +1029,22 @@ class XTokenLoss(nn.Module):
         acc_num = acc_den = valid_pairs_total = proj_acc_num = proj_acc_den = 0
 
         for i, (s0, ss, t0, ts, paired) in enumerate(alignment):
-            if ss <= 0:
-                zero = student_logits[i].sum() * 0.0
-                kd_terms.append(zero)
-                ce_terms.append(zero)
-                continue
-
-            # CE: logit at s0-1 predicts token at s0; shift back by 1.
-            ce_i = F.cross_entropy(
-                student_logits[i, s0 - 1 : s0 + ss - 1].float(),
-                student_labels[i, s0 : s0 + ss],
-                ignore_index=self.ignore_index,
-            )
-            ce_terms.append(ce_i * ss)
+            # CE covers every completion label, EOS included; only the KD span skips EOS.
+            ce_mask = student_labels[i, 1:] != self.ignore_index
+            ce_logits_i = student_logits[i, :-1][ce_mask]
+            ce_labels_i = student_labels[i, 1:][ce_mask]
+            ce_terms.append(F.cross_entropy(ce_logits_i.float(), ce_labels_i, reduction="sum"))
             with torch.no_grad():
-                labels_i = student_labels[i, s0 : s0 + ss]
-                preds_i = student_logits[i, s0 - 1 : s0 + ss - 1].argmax(dim=-1)
-                valid = labels_i != self.ignore_index
-                acc_num += int((preds_i == labels_i)[valid].sum().item())
-                acc_den += int(valid.sum().item())
+                acc_num += int((ce_logits_i.argmax(dim=-1) == ce_labels_i).sum().item())
+                acc_den += int(ce_mask.sum().item())
+
+            if ss <= 0 or ts <= 0 or not paired:
+                kd_terms.append(student_logits[i].sum() * 0.0)
+                continue
 
             # Alignment offsets describe the labels, one position after their prediction logits.
-            if ts <= 0:
-                kd_terms.append(student_logits[i].sum() * 0.0)
-                continue
-
             s_logits_i = student_logits[i, s0 - 1 : s0 + ss - 1]
             t_logits_i = teacher_logits[i, t0 - 1 : t0 + ts - 1]
-            if not paired:
-                kd_terms.append(student_logits[i].sum() * 0.0)
-                continue
-
             valid_pairs_total += len(paired)
             if self.loss_type == "p_kl":
                 kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, device, T, top_idx)
@@ -1157,9 +1142,9 @@ class XTokenLoss(nn.Module):
         s_proj_topk = s_proj_topk / (s_proj_topk.sum(dim=-1, keepdim=True) + eps)
         s_log_proj = (s_proj_topk + eps).log()
 
+        # Average of log-softmaxes, not renormalized, as in the reference implementation
         t_log = F.log_softmax(t_logits[:, top_idx].float() / T, dim=-1)
         t_log_topk = self._chunk_average(t_log, t_groups)
-        t_log_topk = F.log_softmax(t_log_topk, dim=-1)
 
         with torch.no_grad():
             proj_top1 = s_proj_topk.argmax(dim=-1)
@@ -1189,8 +1174,9 @@ class XTokenLoss(nn.Module):
         t_chunks = self._chunk_average(t_log, t_groups)
 
         if common_s.numel() > 0:
-            s_common = F.log_softmax(s_chunks[:, common_s], dim=-1)
-            t_common = F.log_softmax(t_chunks[:, common_t], dim=-1)
+            # Full-vocab log-probs sliced to the common set, not renormalized, as in the reference implementation
+            s_common = s_chunks[:, common_s]
+            t_common = t_chunks[:, common_t]
             kl_per_chunk = F.kl_div(s_common, t_common, reduction="none", log_target=True).sum(dim=-1)
             kl_common = kl_per_chunk.mean()
         else:
@@ -1684,7 +1670,7 @@ class GOLDTrainer(SFTTrainer):
                     inputs["labels"], teacher_labels, inputs["byte_offsets"], teacher_offsets
                 )
                 counts += counts.new_tensor(
-                    [sum(ss for _, ss, _, _, _ in alignment), sum(len(p) for *_, p in alignment)]
+                    [int((inputs["labels"][:, 1:] != -100).sum()), sum(len(p) for *_, p in alignment)]
                 )
             self._xtoken_loss_counts = self.accelerator.reduce(counts, reduction="sum")
             num_items_in_batch = self._xtoken_loss_counts[0].clamp_min(1)
