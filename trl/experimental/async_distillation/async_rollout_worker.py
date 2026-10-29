@@ -314,7 +314,11 @@ class _AsyncRolloutLoop:
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=2 * self.max_inflight_tasks)) as session:
+        # vLLM closes idle HTTP connections after 5 s (`VLLM_HTTP_TIMEOUT_KEEP_ALIVE`), while aiohttp keeps them for
+        # 15 s by default, so a connection idle in between gets reused after the server closed it and fails with
+        # `ServerDisconnectedError` or a connection reset. Drop idle connections before vLLM does.
+        connector = aiohttp.TCPConnector(limit=2 * self.max_inflight_tasks, keepalive_timeout=4)
+        async with aiohttp.ClientSession(connector=connector) as session:
             self.session = session
             logger.info(
                 f"vllm worker started: max_inflight_tasks={self.max_inflight_tasks}, temperature={self.temperature}, "
