@@ -110,6 +110,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
         lossless_capture: bool = True,
+        max_session_failures_per_slot: int = 10,
+        max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
         # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
@@ -146,6 +148,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
         self._live_sessions: set = set()
+        self._max_session_failures_per_slot = max_session_failures_per_slot
+        self._max_session_backoff_s = max_session_backoff_s
+        self._consecutive_session_failures = 0
 
     async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
         # OpenEnv sessions are synchronous; metrics stay on the event loop.
@@ -166,6 +171,21 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 self._rates[f"tools/{name}/latency_s"][0] += elapsed
                 self._rates[f"tools/{name}/latency_s"][1] += 1
             self._push_rollout_metrics(**metrics)
+        if result is not self._EMPTY_ROLLOUT:
+            self._consecutive_session_failures = 0
+        elif not self._stop_event.is_set():
+            # A persistent failure (harness server down, broken sandbox) would otherwise spin without producing samples
+            self._consecutive_session_failures += 1
+            if self._consecutive_session_failures >= self._max_session_failures_per_slot * self.max_inflight_tasks:
+                raise RuntimeError(
+                    f"{self._consecutive_session_failures} harness sessions in a row were unscorable; see the "
+                    "warnings above for their errors."
+                )
+            backoff = min(2 ** (self._consecutive_session_failures - 1), self._max_session_backoff_s)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
         return result
 
     async def _run_loops(self, stop_event) -> None:
@@ -192,7 +212,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     def _run_session(self, prompt, group_id=0):
         """Return a rollout and its metrics from a pool thread.
 
-        Session failures are unscorable. Invalid training captures stop the worker.
+        Session failures and rejected captures of failed agents are unscorable. Other invalid training captures stop
+        the worker.
         """
         t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
@@ -405,6 +426,10 @@ class HarnessRolloutWorker(AsyncRolloutWorker):
     `functools.partial(HarborSessionFactory, server_url, ...)`. In loop-owning mode, the worker calls it with
     `sampling=` from its training policy. With `harness_adapter`, it calls it without arguments and samples turns
     itself. Inject the worker via `AsyncGRPOTrainer(rollout_worker=...)`.
+
+    A failed session is unscorable, and the worker waits before the next one, doubling the wait up to
+    `max_session_backoff_s` seconds (defaults to `16`). After `max_session_failures_per_slot` (defaults to `10`)
+    unscorable sessions in a row per in-flight slot, the worker stops with an error.
     """
 
     _loop_cls = _HarnessRolloutLoop
