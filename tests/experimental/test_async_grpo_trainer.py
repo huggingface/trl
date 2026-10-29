@@ -68,6 +68,7 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     _SampleBuilder,
 )
 from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
+from trl.experimental.async_grpo.tree_sparse_attention import sparse_attention
 from trl.experimental.async_grpo.weight_transfer import WeightTransferClient
 from trl.trainer.base_trainer import _BaseTrainer
 
@@ -1632,6 +1633,7 @@ _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
                 reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
             ),
         ),
+        pytest.param("/fsx/amine_dirhoussi/tiny-models/tiny-DeepseekV32ForCausalLM", {}, id="deepseek-v32-dsa"),
         pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", _FA3_HEAD_DIM, id="glm4-moe"),
         pytest.param("trl-internal-testing/tiny-Phi3ForCausalLM-3.5", _FA3_ONE_HEAD, id="phi35"),
         pytest.param("trl-internal-testing/tiny-CohereForCausalLM", _FA3_ONE_HEAD, id="cohere"),
@@ -1698,7 +1700,9 @@ class TestTreePackingParity(TrlTestCase):
         samples = self._samples(truncated)
         collator = DataCollatorForRollout(pad_token_id=0)
         # The per-sample reference uses the kernel that tree attention picks for this device
-        if torch.version.hip:
+        if not model._supports_flash_attn:
+            reference = TREE_ATTENTION
+        elif torch.version.hip:
             reference = "kernels-community/aiter-flash-attn@v2"
         elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
             reference = "kernels-community/flash-attn4"
@@ -1722,8 +1726,11 @@ class TestTreePackingParity(TrlTestCase):
         model.set_attn_implementation(TREE_ATTENTION)
         packed_loss, packed_grads = run([packed])
         model.set_attn_implementation(reference)
-        with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+        if reference == TREE_ATTENTION:
             alone_loss, alone_grads = run(alone)
+        else:
+            with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+                alone_loss, alone_grads = run(alone)
 
         assert collator.metrics["batch/packing_ratio"] == [(1056, 378)]
         torch.testing.assert_close(packed_loss, alone_loss, atol=1e-3, rtol=1e-3)
@@ -1732,6 +1739,95 @@ class TestTreePackingParity(TrlTestCase):
             torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
         )
         assert (packed_grads - alone_grads).norm() < 2e-2 * alone_grads.norm()
+
+
+@require_torch_accelerator
+class TestSparseAttentionKernel:
+    """The gather-attention kernel behind DeepSeek sparse attention must match a per-query softmax in torch."""
+
+    @pytest.mark.parametrize(
+        ("n", "hq", "dk", "dv", "topk"),
+        [
+            pytest.param(37, 4, 24, 16, 16, id="tiny-odd-dims"),
+            pytest.param(100, 128, 576, 512, 64, id="deepseek-latent-dims"),
+        ],
+    )
+    def test_matches_torch_reference(self, n, hq, dk, dv, topk):
+        torch.manual_seed(0)
+        q = torch.randn(n, hq, dk, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
+        k = torch.randn(n, dk, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
+        v = torch.randn(n, dv, device=torch_device, dtype=torch.bfloat16, requires_grad=True)
+        idx = torch.full((n, topk), -1, dtype=torch.int32, device=torch_device)
+        for t in range(n):
+            chosen = torch.randperm(t + 1, device=torch_device)[:topk]
+            idx[t, : len(chosen)] = chosen.to(torch.int32)
+        scale = dk**-0.5
+        do = torch.randn(n, hq, dv, device=torch_device, dtype=torch.bfloat16)
+
+        out = sparse_attention(q, k, v, idx, scale)
+        out.backward(do)
+        grads = [x.grad.clone() for x in (q, k, v)]
+        for x in (q, k, v):
+            x.grad = None
+
+        valid = idx >= 0
+        kk = k.float()[idx.clamp(min=0)]  # [N, TOPK, DK]
+        vv = v.float()[idx.clamp(min=0)]
+        scores = torch.einsum("nhd,nsd->nhs", q.float(), kk) * scale
+        scores = scores.masked_fill(~valid[:, None, :], float("-inf"))
+        ref = torch.einsum("nhs,nsd->nhd", scores.softmax(-1), vv)
+        ref.backward(do.float())
+
+        torch.testing.assert_close(out.float(), ref, atol=2e-2, rtol=2e-2)
+        for got, want in zip(grads, (q.grad, k.grad, v.grad), strict=True):
+            assert (got.float() - want).norm() < 2e-2 * want.norm()
+
+
+@require_torch_accelerator
+class TestTreeSparseAttentionMatchesEager(TrlTestCase):
+    """
+    DeepSeek sparse attention over a one-segment tree must give transformers' eager forward: the indexer's selection,
+    the attention in MLA's latent space and its backward. In fp32, so that only the kernel's own rounding remains.
+    """
+
+    def test_loss_and_grads_match_eager(self):
+        model_id = "/fsx/amine_dirhoussi/tiny-models/tiny-DeepseekV32ForCausalLM"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=AsyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                model_init_kwargs={"dtype": torch.float32},
+                router_aux_loss_coef=0.0,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        trainer.current_gradient_accumulation_steps = 1
+        model = trainer.model.to(torch_device)
+        sample = _tree_sample(list(range(1, 65)) + list(range(1000, 1024)), n_prompt=64, advantage=1.0)
+        sample["old_log_probs"] = np.full(len(sample["input_ids"]), -12.0, dtype=np.float32)
+        batch = DataCollatorForRollout(pad_token_id=0)([[_tree_row([sample])]])
+        batch = {key: value.to(torch_device) for key, value in batch.items()}
+
+        def run():
+            model.zero_grad()
+            loss = trainer.compute_loss(model, batch)
+            loss.backward()
+            return loss.detach(), {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}
+
+        tree_loss, tree_grads = run()
+        model.set_attn_implementation("eager")
+        with patch("trl.experimental.async_grpo.async_grpo_trainer.unpad_tree", lambda inputs: {}):
+            eager_loss, eager_grads = run()
+
+        torch.testing.assert_close(tree_loss, eager_loss, atol=1e-3, rtol=1e-3)
+        assert tree_grads.keys() == eager_grads.keys()
+        tree_grads, eager_grads = (torch.cat([g.flatten() for g in run.values()]) for run in (tree_grads, eager_grads))
+        assert (tree_grads - eager_grads).norm() < 1e-2 * eager_grads.norm()
 
 
 class TestTreePackingRefusesUnsupportedModels(TrlTestCase):

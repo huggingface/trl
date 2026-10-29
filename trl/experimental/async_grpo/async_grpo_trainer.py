@@ -60,6 +60,7 @@ from ...trainer.utils import (
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
 from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
+from .tree_sparse_attention import patch_tree_dsa
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -1132,11 +1133,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "before it, these layers call the functions they stored at init rather than the module-level "
                     "ones tree packing patches, so they would scan across samples."
                 )
-            if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
+            if layer_types == {"linear_attention"}:
+                patched = patch_tree_gdn(model)
+            elif layer_types == {"deepseek_sparse_attention"}:
+                patched = patch_tree_dsa(model)
+            else:
+                patched = False
+            if not patched:
                 raise ValueError(
-                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
-                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
-                    "convolutional layer would scan across samples."
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
+                    "transformers' gated DeltaNet layers and DeepSeek sparse attention along each sample's own path; "
+                    "any other recurrent or convolutional layer would scan across samples."
                 )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
