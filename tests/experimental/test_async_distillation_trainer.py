@@ -30,6 +30,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
+from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
@@ -61,7 +62,7 @@ from trl.experimental.server_distillation.server_distillation_trainer import (
 )
 from trl.trainer.base_trainer import _BaseTrainer
 
-from ..testing_utils import TrlTestCase, is_ampere_or_newer, require_peft, require_vllm
+from ..testing_utils import TrlTestCase, is_ampere_or_newer, is_bf16_supported, require_peft, require_vllm
 
 
 TEACHER_TOP_K = 4
@@ -947,6 +948,49 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             weight_transfer=_StubWeightTransfer(),
         )
+
+    def _train_one_step_and_save(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = AsyncDistillationConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            save_steps=1,
+            per_device_train_batch_size=3,
+            teacher_top_k=TEACHER_TOP_K,
+            max_completion_length=8,
+            vllm_server_timeout=5.0,
+            token_budget=-1,
+            report_to="none",
+        )
+        trainer = AsyncDistillationTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
+            weight_transfer=_StubWeightTransfer(),
+        )
+        trainer.train()
+        return trainer
+
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_checkpoint_keeps_master_dtype_without_fsdp(self):
+        trainer = self._train_one_step_and_save()
+
+        assert trainer.model.dtype == torch.float32
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
+        with open(os.path.join(checkpoint, "config.json")) as f:
+            assert json.load(f)["dtype"] == "float32"
+
+    @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_fsdp_checkpoint_body(self):
+        self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
+        trainer = self._train_one_step_and_save()
+        assert trainer.is_fsdp_enabled
 
     @pytest.mark.parametrize(
         ("model_id", "instantiated"),
