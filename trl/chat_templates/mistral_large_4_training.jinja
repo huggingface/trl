@@ -8,7 +8,7 @@
 {#- Handle system prompt if it exists. #}
 {%- set loop_messages = messages %}
 {%- if messages[0]['role'] != 'system' and default_system_message != '' %}
-    {{- '[SYSTEM_PROMPT]' + default_system_message + '[/SYSTEM_PROMPT]' }}
+    {{- '[SYSTEM_PROMPT]' ~ default_system_message ~ '[/SYSTEM_PROMPT]' }}
 {%- endif %}
 
 
@@ -17,38 +17,38 @@
 {%- set has_tools = false %}
 {%- if tools is defined and tools is not none and tools|length > 0 %}
     {%- set has_tools = true %}
-    {%- set available_tools = '[AVAILABLE_TOOLS]' + (tools| tojson) + '[/AVAILABLE_TOOLS]' %}
+    {%- set available_tools = '[AVAILABLE_TOOLS]' ~ (tools| tojson) ~ '[/AVAILABLE_TOOLS]' %}
 {%- endif %}
 {%- set json_schema = none %}
 {%- if response_format is defined and response_format is not none %}
-    {%- if response_format['type'] == 'json_schema' %}
-        {%- if 'json_schema' in response_format and response_format['json_schema'] is not none %}
-            {%- if 'schema' in response_format['json_schema'] %}
-                {%- if response_format['json_schema']['schema'] is not none %}
-                    {%- set json_schema = response_format['json_schema']['schema'] %}
-                {%- else %}
-                    {{- raise_exception('Response format `json_schema` must define the schema') }}
-                {%- endif %}
-            {%- else %}
-                {{- raise_exception('Response format `json_schema` must define the schema') }}
-            {%- endif %}
-        {%- else %}
+    {%- set response_format_type = response_format.get('type', 'text') %}
+    {%- set response_json_schema = response_format.get('json_schema') %}
+    {%- if response_format_type not in ['text', 'json_object', 'json_schema'] %}
+        {{- raise_exception('Response format type must be one of text, json_object or json_schema, got ' ~ response_format_type ~ '.') }}
+    {%- elif response_format_type == 'json_schema' %}
+        {%- if response_json_schema is none or response_json_schema.get('schema') is none %}
             {{- raise_exception('Response format `json_schema` must define the schema') }}
+        {%- else %}
+            {%- set json_schema = response_json_schema['schema'] %}
         {%- endif %}
-    {%- elif response_format['type'] == 'json_object' %}
+    {%- elif response_format_type == 'json_object' %}
         {%- set json_schema = {'anyOf': [{'type': 'object'}, {'type': 'array'}]} %}
     {%- endif %}
 {%- endif %}
 {%- if reasoning_effort is not defined or reasoning_effort is none %}
-    {%- set reasoning_effort = 'none' %}
+    {%- set reasoning_effort = 'high' %}
 {%- endif %}
-{%- if reasoning_effort not in ['none', 'high'] %}
-    {{- raise_exception('reasoning_effort must be either "none" or "high"') }}
+{%- if reasoning_effort not in ['low', 'medium', 'high'] %}
+    {{- raise_exception('reasoning_effort must be one of "low", "medium", "high"') }}
 {%- endif %}
+{%- set model_settings_parts = [] %}
 {%- if json_schema is not none %}
-    {%- set model_settings = '[MODEL_SETTINGS]{"json_schema": ' + (json_schema|tojson) + ', "reasoning_effort": "' + reasoning_effort + '"}[/MODEL_SETTINGS]' %}
-{%- else %}
-    {%- set model_settings = '[MODEL_SETTINGS]{"reasoning_effort": "' + reasoning_effort + '"}[/MODEL_SETTINGS]' %}
+    {%- set model_settings_parts = model_settings_parts + ['"json_schema": ' ~ (json_schema|tojson)] %}
+{%- endif %}
+{%- set model_settings_parts = model_settings_parts + ['"reasoning_effort": "' ~ reasoning_effort ~ '"'] %}
+{%- set model_settings = '' %}
+{%- if model_settings_parts %}
+    {%- set model_settings = '[MODEL_SETTINGS]{' ~ model_settings_parts|join(', ') ~ '}[/MODEL_SETTINGS]' %}
 {%- endif %}
 
 {#- Macros #}
@@ -60,16 +60,16 @@
             {%- if block['type'] == 'text' -%}
                 {{- block['text'] -}}
             {%- elif support_thinking and block['type'] == 'thinking' -%}
-                {{- '[THINK]' + block['thinking'] -}}
+                {{- '[THINK]' ~ block['thinking'] -}}
                 {%- if block.get('closed', true) -%}{{- '[/THINK]' -}}{%- endif -%}
             {%- elif support_images and block['type'] in ['image', 'image_url'] -%}
                 {{- '[IMG]' -}}
             {%- else -%}
-                {{- raise_exception('Only ' + supported_types_desc + ' chunks are supported in ' + context_name + '.') -}}
+                {{- raise_exception('Only ' ~ supported_types_desc ~ ' chunks are supported in ' ~ context_name ~ '.') -}}
             {%- endif -%}
         {%- endfor -%}
     {%- else -%}
-        {{- raise_exception(context_name + ' must have non-empty content.') -}}
+        {{- raise_exception(context_name ~ ' must have non-empty content.') -}}
     {%- endif -%}
 {%- endmacro -%}
 
@@ -162,7 +162,7 @@
 {#- Validates message ordering. #}
 {%- set ns = namespace(available_tools_and_settings_emitted=false) %}
 {%- if loop_messages | length > 0 and loop_messages[0]['role'] not in ['user', 'system'] %}
-    {{- raise_exception('Conversation must start with a user or system message, got ' + loop_messages[0]['role'] + '.') }}
+    {{- raise_exception('Conversation must start with a user or system message, got ' ~ loop_messages[0]['role'] ~ '.') }}
 {%- endif %}
 {%- set ns_order = namespace(previous_role=none) %}
 {%- for message in loop_messages %}
@@ -170,19 +170,19 @@
     {%- if ns_order.previous_role is not none %}
         {%- if ns_order.previous_role == 'system' %}
             {%- if current_role not in ['user', 'assistant', 'system'] %}
-                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+                {{- raise_exception('Unexpected role \'' ~ current_role ~ '\' after role \'' ~ ns_order.previous_role ~ '\'') }}
             {%- endif %}
         {%- elif ns_order.previous_role == 'user' %}
             {%- if current_role not in ['assistant', 'system', 'user'] %}
-                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+                {{- raise_exception('Unexpected role \'' ~ current_role ~ '\' after role \'' ~ ns_order.previous_role ~ '\'') }}
             {%- endif %}
         {%- elif ns_order.previous_role == 'assistant' %}
             {%- if current_role not in ['assistant', 'user', 'tool'] %}
-                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+                {{- raise_exception('Unexpected role \'' ~ current_role ~ '\' after role \'' ~ ns_order.previous_role ~ '\'') }}
             {%- endif %}
         {%- elif ns_order.previous_role == 'tool' %}
             {%- if current_role not in ['assistant', 'tool', 'user'] %}
-                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+                {{- raise_exception('Unexpected role \'' ~ current_role ~ '\' after role \'' ~ ns_order.previous_role ~ '\'') }}
             {%- endif %}
         {%- endif %}
     {%- endif %}
@@ -234,7 +234,7 @@
                 {%- elif arguments == '' %}
                     {%- set arguments = '{}' %}
                 {%- endif %}
-                {{- name + '[ARGS]' + arguments }}
+                {{- name ~ '[ARGS]' ~ arguments }}
             {%- endfor %}
         {%- endif %}
 
@@ -255,6 +255,6 @@
 
     {#- Raise exception for unsupported roles. #}
     {%- else %}
-        {{- raise_exception('Only user, assistant, system and tool roles are supported, got ' + message['role'] + '.') }}
+        {{- raise_exception('Only user, assistant, system and tool roles are supported, got ' ~ message['role'] ~ '.') }}
     {%- endif %}
 {%- endfor %}
