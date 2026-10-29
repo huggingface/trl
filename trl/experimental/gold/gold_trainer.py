@@ -77,6 +77,7 @@ from ..utils import (
     DataCollatorForVisionLanguageChatML,
     empty_cache,
     encode_with_byte_offsets,
+    is_byte_level_tokenizer,
     pad_byte_offsets,
     piece_byte_len,
 )
@@ -1467,6 +1468,7 @@ class GOLDTrainer(SFTTrainer):
 
         # convert_ids_to_tokens is a tokenizer method; VLM processors expose it via `.tokenizer`.
         tokenizer = self._tokenizer
+        byte_level = is_byte_level_tokenizer(tokenizer.backend_tokenizer)
 
         rows: list[list[tuple[int, int]]] = []
         for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
@@ -1475,7 +1477,7 @@ class GOLDTrainer(SFTTrainer):
             for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
                 if label == -100:
                     continue
-                nb = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0])
+                nb = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0], byte_level)
                 offs[pos] = (cumulative, cumulative + nb)
                 cumulative += nb
             rows.append(offs)
