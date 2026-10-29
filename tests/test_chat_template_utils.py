@@ -305,6 +305,9 @@ class TestAddResponseSchema:
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template, id="qwen2.5-base"
+            ),
         ],
     )
     def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
