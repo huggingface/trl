@@ -25,6 +25,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available, is_
 
 # Apply TRL's compatibility patches before test modules import transformers' Trainer, which imports peft (#7871)
 import trl  # noqa: F401
+from trl.import_utils import is_vllm_available
 
 
 # ============================================================================
@@ -270,7 +271,7 @@ def cleanup_vllm_dist_env():
         name: os.environ.get(name) for name in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT")
     }
     yield
-    if torch.distributed.is_initialized():
+    if torch.distributed.is_initialized() and is_vllm_available():
         from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
         cleanup_dist_env_and_memory()
