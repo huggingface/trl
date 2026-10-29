@@ -512,7 +512,7 @@ def _rollout_loop(**kwargs):
     return _AsyncRolloutLoop(**kwargs)
 
 
-def _scoring_loop(tokenizer, teacher_server_urls):
+def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_len=32768):
     loop = _rollout_loop(
         processing_class=tokenizer,
         teacher_server_urls=teacher_server_urls,
@@ -521,6 +521,7 @@ def _scoring_loop(tokenizer, teacher_server_urls):
     )
     # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
+    loop.teacher_max_model_lens = dict.fromkeys(teacher_server_urls, teacher_max_model_len)
     return loop
 
 
@@ -588,10 +589,10 @@ class TestMultiTeacherRouting:
     its own.
     """
 
-    def _run(self, teacher_server_urls, *teacher_ids):
+    def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_len=32768):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-        loop = _scoring_loop(tokenizer, teacher_server_urls)
+        loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_len)
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
@@ -639,6 +640,14 @@ class TestMultiTeacherRouting:
     def test_multi_teacher_raises_on_unroutable_row(self, teacher_id, match):
         with pytest.raises(ValueError, match=match):
             self._run(TWO_TEACHERS, teacher_id)
+
+    def test_raises_when_the_teacher_has_no_room_to_score_the_sequence(self):
+        (sample,), _ = self._run(ONE_TEACHER, None)
+        sequence_length = len(sample.input_ids)
+        # Scoring asks for one throwaway token past the sequence, so a teacher needs one more position than its length
+        self._run(ONE_TEACHER, None, teacher_max_model_len=sequence_length + 1)
+        with pytest.raises(ValueError, match="--max-model-len"):
+            self._run(ONE_TEACHER, None, teacher_max_model_len=sequence_length)
 
 
 class TestBetaRange:

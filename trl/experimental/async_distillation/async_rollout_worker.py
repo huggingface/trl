@@ -273,6 +273,7 @@ class _AsyncRolloutLoop:
         # Served model id per teacher, resolved from each teacher server's `/v1/models` in `_run_loops`, since
         # `/v1/completions` names the model it is addressing and a teacher serves a different one than the student.
         self.teacher_model_names: dict[str, str] = {}
+        self.teacher_max_model_lens: dict[str, int] = {}
 
         self._total_completion_tokens = 0
         self._total_samples_scored = 0
@@ -329,7 +330,8 @@ class _AsyncRolloutLoop:
 
         Doubles as the readiness wait for the teachers: the retry budget is the same generous one the generation and
         scoring calls use, so a teacher still loading its weights when the worker starts is waited out rather than
-        failing the run.
+        failing the run. Also records each teacher's `max_model_len`, which `_generate_and_score_one` checks every
+        sequence against before scoring it.
         """
         for teacher_id, url in self.teacher_server_urls.items():
             models = await self._retry(
@@ -338,6 +340,7 @@ class _AsyncRolloutLoop:
                 label=f"teacher {teacher_id} /v1/models",
             )
             self.teacher_model_names[teacher_id] = models["data"][0]["id"]
+            self.teacher_max_model_lens[teacher_id] = models["data"][0]["max_model_len"]
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
@@ -535,6 +538,16 @@ class _AsyncRolloutLoop:
         completion = [{"role": "assistant", "content": completion_text}]
 
         teacher_id, teacher_server_url = self._resolve_teacher_server_url(row)
+        # Scoring sends the whole sequence and asks for one throwaway token. A teacher without room for that rejects
+        # the request with a 400 that `_retry` would keep retrying, so training would stall instead of failing.
+        sequence_length = len(prompt_ids) + len(completion_ids)
+        if sequence_length >= self.teacher_max_model_lens[teacher_id]:
+            raise ValueError(
+                f"Teacher {teacher_id!r} at {teacher_server_url} has max_model_len="
+                f"{self.teacher_max_model_lens[teacher_id]}, too short to score a {sequence_length}-token sequence "
+                "(scoring needs one position past it). Serve every teacher with a `--max-model-len` larger than the "
+                "student's."
+            )
         t_score = time.monotonic()
         teacher_topk_ids, teacher_topk_logprobs = await self._score_with_teacher(
             prompt_ids, completion_ids, teacher_server_url, self.teacher_model_names[teacher_id]
