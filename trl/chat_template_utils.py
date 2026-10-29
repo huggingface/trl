@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
+import torch
 import transformers
 from jinja2 import TemplateError
 from packaging.version import Version
@@ -689,6 +690,8 @@ llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(enco
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
 
+mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.jinja").read_text(encoding="utf-8")
+
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
 
 nemotron_3_nano_chat_template = (_CHAT_TEMPLATES_DIR / "nemotron_3_nano.jinja").read_text(encoding="utf-8")
@@ -972,6 +975,11 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
     if is_vlm:
         ids1 = ids1[0]
         ids2 = ids2[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(ids1, torch.Tensor):
+            ids1 = ids1.tolist()
+            ids2 = ids2.tolist()
 
     return ids2[: len(ids1)] == ids1
 
@@ -1031,6 +1039,10 @@ def is_chat_template_stop_token_trained(
     if is_vlm:
         input_ids = input_ids[0]
         assistant_masks = assistant_masks[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.tolist()
 
     # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
     # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
@@ -1076,6 +1088,10 @@ lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja"
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
+
+mistral_medium_3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_training.jinja").read_text(encoding="utf-8")
 
@@ -1247,6 +1263,9 @@ def get_training_chat_template(
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
+
+    if chat_template == mistral_medium_3_5_chat_template:
+        return mistral_medium_3_5_training_chat_template
 
     if chat_template == muse_glimmer_chat_template:
         return muse_glimmer_training_chat_template

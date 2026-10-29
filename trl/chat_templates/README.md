@@ -121,6 +121,10 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 
 Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
 
+### `mistral_medium_3_5.jinja`
+
+Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B`). Renders the Mistral `[INST] ... [/INST]` format with reasoning in `[THINK] ... [/THINK]`, tools in `[AVAILABLE_TOOLS]`, tool calls as `[TOOL_CALLS]name[ARGS]{...}` and tool results in `[TOOL_RESULTS]`, and writes the `reasoning_effort` into a `[MODEL_SETTINGS]` block before the first user turn.
+
 ### `muse_glimmer.jinja`
 
 Original Muse Glimmer chat template (as shipped by `meta-models/Muse-Glimmer-30B`). Renders the ATEM protocol: one `<|start|>assistant to=<recipient><|message|>...` block per channel, where the recipient is `self` for reasoning, a tool name for tool calls (`<atem:function_calls>` / `<atem:invoke>` / `<atem:parameter>` XML), and `user` for content. The checkpoint ships its own `response_template`, so `add_response_schema` leaves it alone.
@@ -282,6 +286,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `mistral_medium_3_5_training.jinja`
+
+Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the original is already prefix-preserving, so the only change is wrapping the assistant turn (content, tool calls and the end-of-turn token) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `muse_glimmer_training.jinja`
 

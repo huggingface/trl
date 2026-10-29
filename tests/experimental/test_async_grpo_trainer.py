@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import contextlib
 import itertools
 import json
 import math
@@ -98,6 +99,7 @@ class _StubRolloutWorker:
         samples_per_weight_sync: int = 10,
         fork_k: int = 1,
         candidate_sets: bool = False,
+        drop_every: int = 0,
     ):
         self.rollout_buffer = queue.Queue()
         # What a real worker forwards to its child; the trainer writes the adapter name here under adapter sync
@@ -107,6 +109,7 @@ class _StubRolloutWorker:
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
+        self._drop_every = drop_every
         self._model = None
         self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
 
@@ -139,6 +142,9 @@ class _StubRolloutWorker:
 
     def _make_sample_iter(self, tokenizer, dataset, num_generations):
         for group_id, row in enumerate(itertools.cycle(dataset)):
+            if self._drop_every and group_id % self._drop_every == 0:
+                yield group_id  # a zero-advantage group: the worker sends only its id
+                continue
             completions = [
                 [{"role": "assistant", "content": f"{row['completion'][0]['content']} {idx}"}]
                 for idx in range(num_generations)
@@ -765,6 +771,16 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json"), encoding="utf-8") as f:
             data = json.load(f)
         assert data["prompt_index"] == 15  # dataset_start_index(10) + first_untrained(5)
+
+    def test_save_checkpoint_skips_dropped_groups(self):
+        trainer = self._trainer_at_step_5({0, 1, 3, 4}, dataset_start_index=10)
+        trainer._dropped_groups = {2}
+
+        with patch.object(_BaseTrainer, "_save_checkpoint"):
+            trainer._save_checkpoint(trainer.model, None)
+
+        with open(os.path.join(self.tmp_dir, "checkpoint-5", "rollout_state.json")) as f:
+            assert json.load(f)["prompt_index"] == 15
 
     def test_save_checkpoint_writes_rollout_state_before_the_hub_push(self):
         # `super()._save_checkpoint` is what uploads the checkpoint folder under `hub_strategy="checkpoint"`, so the
@@ -2104,9 +2120,10 @@ class TestGenerateOneTurn(TrlTestCase):
         assert requests[0][1]["top_p"] == 0.9
         assert sampling_mask is None
 
-    def test_top_p_requires_top_k(self):
+    @pytest.mark.parametrize("sampling_kwargs", [{"top_p": 0.9}, {"min_p": 0.05}])
+    def test_top_p_and_min_p_require_top_k(self, sampling_kwargs):
         with pytest.raises(ValueError, match="top_k"):
-            AsyncGRPOConfig(top_p=0.9)
+            AsyncGRPOConfig(**sampling_kwargs)
 
 
 @require_response_parsing
@@ -2227,8 +2244,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
 
-        assert samples[0].metrics["reward"] == 1.0
-        assert samples[1].metrics["reward"] == 3.0 and samples[2].metrics["reward"] == 3.0
+        assert samples[0].metrics["reward_kept"] == 1.0
+        assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
         assert samples[0].metrics["reward_std"] == pytest.approx(1.0)
         assert samples[1].metrics["rewards/two_reward"] == 3.0
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
@@ -2237,19 +2254,70 @@ class TestScoreGroupOptionThree(TrlTestCase):
     def test_all_none_reward_conversation_is_unscorable(self):
         # A conversation for which every reward func returns None gets advantage 0 and NaN reward.
         def maybe_none(completions, **kwargs):
-            return [None, 2.0]
+            return [None, 2.0, 4.0]
 
         seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
         seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
-        group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+        seq_c = TrainingSequence([1, 2, 30], [0, 0, 1], [0, 0, -0.3], [[]] * 3, [{}] * 3, "c2")
+        group = _group([[seq_a], [seq_b], [seq_c]], completions_ids=[[10], [20], [30]])
 
         samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
 
-        assert len(samples) == 2
+        assert len(samples) == 3
         assert samples[0].advantage == 0.0  # unscorable -> advantage 0
-        assert math.isnan(samples[0].metrics["reward"])
-        assert samples[1].advantage == 0.0  # only one scorable row -> zero-centered
-        assert samples[1].metrics["reward"] == 2.0
+        assert math.isnan(samples[0].metrics["reward_kept"])
+        assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
+        assert samples[1].metrics["reward_kept"] == 2.0
+
+
+def constant_reward(completions, **kwargs):
+    return [1.0] * len(completions)
+
+
+def all_none_reward(completions, **kwargs):
+    return [None] * len(completions)
+
+
+def one_scored_reward(completions, **kwargs):
+    return [None, 1.0]
+
+
+class TestDropZeroAdvantageGroups(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
+    def _score(self, loop, reward_funcs):
+        for group_id, reward_func in enumerate(reward_funcs):
+            seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+            seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
+            group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+            group.group_id = group_id
+            group.queued_at = time.monotonic()
+            loop.reward_funcs = [reward_func]
+            loop._groups_to_score.put_nowait(group)
+            loop._groups_to_score.put_nowait(None)
+            loop._loop.run_until_complete(loop._score_loop(asyncio.Event()))
+        items, metrics = [], defaultdict(list)
+        with contextlib.suppress(queue.Empty):
+            while True:
+                items.append(loop.rollout_buffer.get(timeout=1))
+        with contextlib.suppress(queue.Empty):
+            while True:
+                for key, value in loop._metrics_queue.get(timeout=1).items():
+                    metrics[key].append(value)
+        return items, metrics
+
+    @pytest.mark.parametrize(
+        "reward_func, reward",
+        [(constant_reward, (2.0, 2)), (all_none_reward, (0.0, 0)), (one_scored_reward, (1.0, 1))],
+    )
+    def test_dropped_group_reaches_the_buffer_as_its_group_id(self, reward_func, reward):
+        items, metrics = self._score(_rollout_loop(), [reward_func, two_reward])
+        assert items[0] == 0
+        assert [s.group_id for s in items[1:]] == [1, 1]
+        assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
+        assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
 
 
 @pytest.mark.skipif(
@@ -2265,7 +2333,7 @@ class TestEpochStop(TrlTestCase):
     what actually regresses if the wiring breaks.
     """
 
-    def _train(self, fork_k, num_train_epochs=2):
+    def _train(self, fork_k, num_train_epochs=2, drop_every=0):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         args = AsyncGRPOConfig(
@@ -2278,7 +2346,9 @@ class TestEpochStop(TrlTestCase):
             vllm_server_timeout=5.0,
             report_to="none",
         )
-        worker = _StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k)
+        worker = _StubRolloutWorker(
+            AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k, drop_every=drop_every
+        )
         trainer = AsyncGRPOTrainer(
             model=model_id,
             reward_funcs=dummy_reward_func,
@@ -2305,6 +2375,13 @@ class TestEpochStop(TrlTestCase):
         # steps for the same 2 epochs. If forks leaked into the epoch count, the forked run would instead
         # stop in FEWER prompt-passes (the pre-fix bug).
         assert forked.state.global_step > no_fork.state.global_step
+
+    def test_epoch_stop_counts_dropped_groups(self):
+        trainer, num_prompts = self._train(fork_k=1, drop_every=2)
+
+        consumed = trainer._trained_groups | trainer._dropped_groups
+        assert 2 * num_prompts <= len(consumed) < 3 * num_prompts
+        assert len(trainer._trained_groups) < 2 * num_prompts
 
     def test_epoch_stop_saves_the_final_step(self):
         trainer, _ = self._train(fork_k=1)

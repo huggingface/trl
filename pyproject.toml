@@ -103,6 +103,8 @@ dev = [
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
+    # math_verify
+    "math-verify>=0.8.0",  # timeouts can be disabled, which worker threads require
     # openreward
     "openreward>=0.1.109",
     # peft

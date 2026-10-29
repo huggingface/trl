@@ -118,6 +118,7 @@ def _forward_kernel(
     support_mask_ptr,
     support_mask_stride,
     support_sum_exp_ptr,
+    support_max_ptr,
     score_max_ptr,
     score_sum_ptr,
     score_argmax_ptr,
@@ -148,6 +149,7 @@ def _forward_kernel(
     sq = tl.load(sq_sum_exp_ptr + row)
     zs = tl.load(z_sum_ptr + row)
     ss = tl.load(support_sum_exp_ptr + row)
+    spm = tl.load(support_max_ptr + row)
     if HAS_SCORE:
         sm = tl.load(score_max_ptr + row)
         so = tl.load(score_sum_ptr + row)
@@ -173,8 +175,13 @@ def _forward_kernel(
         os = os * rescale + tl.sum(other_e, axis=0)
         if HAS_SUPPORT:
             in_support = tl.load(support_mask_ptr + row * support_mask_stride + offsets, mask=mask, other=0) > 0
-            ss = ss * rescale + tl.sum(tl.where(in_support, e, 0.0), axis=0)
-            sos = sos * rescale + tl.sum(tl.where(in_support, other_e, 0.0), axis=0)
+            # Relative to the support's own maximum, so a support far below the row maximum does not underflow.
+            new_spm = tl.maximum(spm, tl.max(tl.where(in_support, z, -float("inf")), axis=0))
+            rescale_support = tl.where(spm == new_spm, 1.0, tl.exp(spm - new_spm))
+            support_e = tl.where(in_support, tl.exp(z - new_spm), 0.0)
+            ss = ss * rescale_support + tl.sum(support_e, axis=0)
+            sos = sos * rescale_support + tl.sum(tl.where(offsets != local, support_e, 0.0), axis=0)
+            spm = new_spm
         if HAS_SCORE:
             # Keep one maximum's unit mass out of the sum until log1p.
             score_mask = mask
@@ -204,6 +211,7 @@ def _forward_kernel(
         tl.store(score_argmax_ptr + row, si)
     if HAS_SUPPORT:
         tl.store(support_sum_exp_ptr + row, ss)
+        tl.store(support_max_ptr + row, spm)
     if HAS_ENTROPY:
         tl.store(x_sum_exp_ptr + row, xs)
     if HAS_LOG_SUM_SQ_PROBS:
@@ -323,6 +331,7 @@ def _forward_tile(
     support_mask,
     support_mask_stride,
     support_sum_exp,
+    support_max,
     score_max,
     score_sum,
     score_argmax,
@@ -353,11 +362,18 @@ def _forward_tile(
     rescale = torch.exp(running_max - new_m)
     e = torch.exp(z - new_m.unsqueeze(-1))
     sum_exp.mul_(rescale).add_(e.sum(-1))
-    other_e = e.masked_fill(torch.arange(n_cols, device=z.device) == local.unsqueeze(-1), 0.0)
+    is_target = torch.arange(n_cols, device=z.device) == local.unsqueeze(-1)
+    other_e = e.masked_fill(is_target, 0.0)
     other_sum_exp.mul_(rescale).add_(other_e.sum(-1))
     if HAS_SUPPORT:
-        support_sum_exp.mul_(rescale).add_((e * (support_mask > 0)).sum(-1))
-        support_other_sum_exp.mul_(rescale).add_((other_e * (support_mask > 0)).sum(-1))
+        # Relative to the support's own maximum, so a support far below the row maximum does not underflow.
+        in_support = support_mask > 0
+        new_spm = torch.maximum(support_max, z.masked_fill(~in_support, -math.inf).amax(-1))
+        rescale_support = torch.where(support_max == new_spm, 1.0, torch.exp(support_max - new_spm))
+        support_e = torch.where(in_support, torch.exp(z - new_spm.unsqueeze(-1)), 0.0)
+        support_sum_exp.mul_(rescale_support).add_(support_e.sum(-1))
+        support_other_sum_exp.mul_(rescale_support).add_(support_e.masked_fill(is_target, 0.0).sum(-1))
+        support_max.copy_(new_spm)
     if HAS_SCORE:
         # Keep one maximum's unit mass out of the sum until log1p.
         score_z = z.masked_fill(support_mask <= 0, -math.inf) if HAS_SUPPORT else z
@@ -429,13 +445,13 @@ def _backward_tile(
     if HAS_LOGPROB_GRAD:
         # d(log p_target) / dz_j = 1[j = target] - p_j, with p the softmax over the support when one is given
         is_target = torch.arange(vocab_start, vocab_start + n_cols, device=z.device) == targets.unsqueeze(-1)
-        q = torch.exp(z - support_log_z.unsqueeze(-1)) * (support_mask > 0) if HAS_SUPPORT else p
+        q = torch.where(support_mask > 0, torch.exp(z - support_log_z.unsqueeze(-1)), 0.0) if HAS_SUPPORT else p
         target_grad = -torch.expm1(logprobs.unsqueeze(-1))
         grad += grad_logprobs.unsqueeze(-1) * torch.where(is_target, target_grad, -q)
     if HAS_SCORE_GRAD:
         q = torch.exp((z - score_max.unsqueeze(-1)) - score_log_z.unsqueeze(-1))
         if HAS_SUPPORT:
-            q = q * (support_mask > 0)
+            q = torch.where(support_mask > 0, q, 0.0)
         is_max = torch.arange(vocab_start, vocab_start + n_cols, device=z.device) == score_argmax.unsqueeze(-1)
         # Compute the maximum's gradient from the other coefficients and probability mass.
         max_grad = -grad_score_other - grad_score_sum * torch.expm1(-score_log_z)
@@ -508,6 +524,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
         other_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         support_other_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         support_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
+        support_max = torch.full((N,), float("-inf"), device=device, dtype=torch.float32)
         x_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         sq_sum_exp = torch.zeros((N,), device=device, dtype=torch.float32)
         z_sum = torch.zeros((N,), device=device, dtype=torch.float32)
@@ -560,6 +577,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                     support_mask,
                     support_mask.stride(0),
                     support_sum_exp[token_start:token_end],
+                    support_max[token_start:token_end],
                     score_max[token_start:token_end],
                     score_sum[token_start:token_end],
                     score_argmax[token_start:token_end],
@@ -572,10 +590,11 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                 )
 
         log_z = running_max + torch.log(sum_exp)
-        support_log_z = log_z if support_ids is None else running_max + torch.log(support_sum_exp)
+        support_log_z = log_z if support_ids is None else support_max + torch.log(support_sum_exp)
         # Exclude the target before summing: log1p preserves its loss even when its probability rounds to one.
         others = other_sum_exp if support_ids is None else support_other_sum_exp
-        logprobs = -torch.nn.functional.softplus((running_max - target_logit) + torch.log(others))
+        others_max = running_max if support_ids is None else support_max
+        logprobs = -torch.nn.functional.softplus((others_max - target_logit) + torch.log(others))
         entropy = log_z - x_sum_exp / sum_exp if "entropy" in outputs else None
         log_sum_sq_probs = torch.log(sq_sum_exp) - 2 * torch.log(sum_exp) if "log_sum_sq_probs" in outputs else None
         mean_logits = z_sum / vocab if "mean_logits" in outputs else None
