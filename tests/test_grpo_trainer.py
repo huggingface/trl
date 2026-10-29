@@ -2416,7 +2416,8 @@ class TestGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        # Over the full vocabulary, the tiny model's log-probs would be ~log(vocab_size / top_k) ≈ 9.6 lower
+        # The tiny model is near uniform, so over the full vocabulary its log-probs would be
+        # ~log(vocab_size / top_k) ≈ 9.6 lower
         for log in trainer.state.log_history[:-1]:
             assert log["sampling/sampling_logp_difference/mean"] < 0.1
 
