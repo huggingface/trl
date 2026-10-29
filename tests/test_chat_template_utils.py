@@ -45,6 +45,7 @@ from trl.chat_template_utils import (
     lfm2_chat_template,
     lfm2_v2_chat_template,
     parse_response,
+    qwen3_training_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -303,6 +304,11 @@ class TestAddResponseSchema:
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                qwen3_training_chat_template,
+                id="qwen3-training",
             ),
         ],
     )
@@ -1470,6 +1476,10 @@ class TestNamedChatTemplateVariants:
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param(
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_training_chat_template),
+            id="qwen3-training",
+        ),
+        pytest.param(
             # Same model as `qwen3`, but shipping the response template itself instead of relying on
             # `add_response_schema` to supply it — so `_load` must leave it alone.
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate",
@@ -1527,6 +1537,8 @@ class TestNamedChatTemplateVariants:
 @require_response_parsing
 class TestParseResponse:
     def _load(self, model_name):
+        # A (model, chat template) pair stands for the same tiny model with another form of its chat template
+        model_name, chat_template = model_name if isinstance(model_name, tuple) else (model_name, None)
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
@@ -1535,6 +1547,9 @@ class TestParseResponse:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
             tokenizer = processing_class.tokenizer
+
+        if chat_template is not None:
+            processing_class.chat_template = chat_template
 
         # Nothing to add for models that already ship a new-style `response_template` or a legacy
         # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.
