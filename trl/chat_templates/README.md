@@ -165,6 +165,10 @@ Original Qwen3 chat template.
 
 Original Qwen3-Instruct-2507 chat template (as shipped by `Qwen/Qwen3-4B-Instruct-2507`). A simpler Qwen3 variant: unlike `qwen3.jinja`, it has no `reasoning_content` / `<think>` handling, no `multi_step_tool` tracking and no `enable_thinking` flag. Response parsing uses `qwen3_template`.
 
+### `qwen3_thinking_2507.jinja`
+
+Original Qwen3-Thinking-2507 chat template (as shipped by `Qwen/Qwen3-4B-Thinking-2507`, `Qwen/Qwen3-30B-A3B-Thinking-2507` and `Qwen/Qwen3-235B-A22B-Thinking-2507`). Same as `qwen3.jinja`, except that the generation prompt always pre-fills `<think>\n` (there is no `enable_thinking` flag).
+
 ### `qwen3_vl.jinja`
 
 Original Qwen3-VL chat template. Unlike text-only Qwen3, this template is already prefix-preserving (no conditional thinking blocks), so no training patch is needed.
@@ -370,6 +374,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Qwen3-Instruct-2507 template. Diff vs `qwen3_instruct_2507.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_thinking_2507_training.jinja`
+
+Patched Qwen3-Thinking-2507 template. Same diff as `qwen3_training.jinja` (always include the thinking block for prefix-preservation, and `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss), applied to `qwen3_thinking_2507.jinja`.
 
 ### `qwen3_vl_training.jinja`
 

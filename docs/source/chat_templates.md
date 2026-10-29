@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Muse Glimmer, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolVLM (including SmolVLM2).
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Muse Glimmer, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolVLM (including SmolVLM2).
 
 ## Training templates
 
@@ -201,6 +201,10 @@ Split the assistant message into its own branch so the `&#123;% generation %&#12
 Patched Qwen3-Instruct-2507 template (used by models like `Qwen3-4B-Instruct-2507`, which ship a simpler Qwen3 variant without `reasoning_content` / `<think>` parsing, `multi_step_tool` tracking, or the `enable_thinking` flag). Diff vs `qwen3_instruct_2507.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_thinking_2507_training.jinja`
+
+Patched Qwen3-Thinking-2507 template (used by models like `Qwen3-4B-Thinking-2507`, which pre-fill `<think>\n` in the generation prompt). Diff vs `qwen3_thinking_2507.jinja`: same set of changes as `qwen3_training.jinja`, which drops the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation) and wraps assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
 
 ### `qwen3_5_think_training.jinja` / `qwen3_5_nothink_training.jinja`
 
