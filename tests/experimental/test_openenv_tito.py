@@ -16,6 +16,7 @@
 
 import asyncio
 import itertools
+import multiprocessing as mp
 import queue
 import threading
 import time
@@ -26,6 +27,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from accelerate import PartialState
+from transformers import AutoTokenizer
 
 
 pytest.importorskip("openenv.core.harness.training")
@@ -125,7 +127,7 @@ def make_loop():
 
     def make(factory=None, *, factory_builder=None, **kwargs):
         kwargs.setdefault("temperature", 0.8)
-        tokenizer = MagicMock(eos_token_id=0, pad_token_id=0)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         loop = openenv_harness._HarnessRolloutLoop(
             harness_session_factory=factory_builder or (lambda **kwargs: factory),
             model_name="test",
@@ -134,8 +136,8 @@ def make_loop():
             processing_class=tokenizer,
             eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
-            model_version_value=SimpleNamespace(value=0),
-            heartbeat_value=SimpleNamespace(value=0.0),
+            model_version_value=mp.Value("i", 0),
+            heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
             metrics_queue=queue.Queue(),
@@ -331,7 +333,6 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     loop = make_loop(
         SimpleNamespace(create=lambda *args, **kwargs: Session(captured_entry())), harness_adapter=Adapter()
     )
-    loop.tokenizer.apply_chat_template = MagicMock(return_value=[1])
 
     async def generate_one_turn(prompt_ids):
         return [2, 3], [-0.1, -0.2], None, None
