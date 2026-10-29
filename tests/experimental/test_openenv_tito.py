@@ -245,13 +245,11 @@ def test_transport_failures_remain_unscorable(make_loop, phase):
         assert session.closed.is_set()
 
 
-def test_persistent_session_failures_stop_the_worker(make_loop, monkeypatch):
-    monkeypatch.setattr(openenv_harness, "_MAX_SESSION_BACKOFF_S", 0)
-
+def test_persistent_session_failures_stop_the_worker(make_loop):
     def create(*args, **kwargs):
         raise ConnectionError("harness server unavailable")
 
-    loop = make_loop(SimpleNamespace(create=create))
+    loop = make_loop(SimpleNamespace(create=create), max_session_backoff_s=0)
     with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
         loop.run()
     assert loop._failed_event.is_set()
