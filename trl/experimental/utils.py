@@ -628,7 +628,8 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         # via per-token piece byte length (the same primitive the on-policy / teacher path uses), so it is
         # layout-agnostic after flush_left/truncation and shares the teacher's byte coordinate system.
         tokenizer = self.processor.tokenizer
-        byte_level = is_byte_level_tokenizer(tokenizer.backend_tokenizer)
+        # Slow tokenizers have no backend; their offsets are unused since extended ULD needs a fast tokenizer
+        byte_level = not tokenizer.is_fast or is_byte_level_tokenizer(tokenizer.backend_tokenizer)
         piece_len_cache: dict[int, int] = {}
         byte_offset_rows: list[list[tuple[int, int]]] = []
         for row_ids, row_labels in zip(input_ids.tolist(), labels.tolist(), strict=True):
