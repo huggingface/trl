@@ -525,6 +525,17 @@ class TestSupportsToolCalling:
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
             pytest.param(
+                "trl-internal-testing/tiny-Mistral3ForConditionalGeneration",
+                id="mistral3",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
+                    ),
+                ],
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
                 id="muse_glimmer",
                 marks=[
@@ -951,6 +962,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Mistral3ForConditionalGeneration",
+            id="mistral3",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
         ),
         pytest.param(
             "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
