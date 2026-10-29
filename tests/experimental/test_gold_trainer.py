@@ -2768,7 +2768,12 @@ class TestXTokenLoss(TrlTestCase):
         student = torch.tensor([[0.8, 0.2]]).log().requires_grad_()
         teacher = torch.tensor([[0.9, 0.1], [0.1, 0.9]]).log()
         kd, _, _ = loss_fn._compute_p_kl(
-            student, teacher, paired=[([0], [0, 1])], device=torch.device("cpu"), T=1.0, top_idx=torch.arange(2)
+            student,
+            teacher,
+            paired=[([0], [0, 1])],
+            T=1.0,
+            top_idx=torch.arange(2),
+            projection=loss_fn._proj_matrix(torch.device("cpu")),
         )
         # Mean of the teacher log-probs, log(0.3) for both tokens, kept unnormalized
         teacher_chunk = teacher.mean(0, keepdim=True)

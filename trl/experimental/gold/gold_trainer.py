@@ -813,7 +813,7 @@ def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Projection matrix not found: {path}")
-    data = torch.load(path, map_location="cpu", weights_only=False)
+    data = torch.load(path, map_location="cpu", weights_only=True)
 
     normalize_rows = False
     if isinstance(data, dict) and "indices" in data and "likelihoods" in data:
@@ -870,7 +870,7 @@ def _load_exact_token_map(path, device, *, student_vocab_size, teacher_vocab_siz
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Projection matrix not found: {path}")
-    data = torch.load(path, map_location="cpu", weights_only=False)
+    data = torch.load(path, map_location="cpu", weights_only=True)
     if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
         raise ValueError(f"H-KL requires the dense top-k projection format ('indices'/'likelihoods'). Got: {path}")
 
@@ -1018,11 +1018,23 @@ class XTokenLoss(nn.Module):
 
         alignment = self._get_alignment(student_labels, teacher_labels, student_byte_offsets, teacher_byte_offsets)
 
-        top_idx = None
-        if self.loss_type == "p_kl":
+        top_idx = projection = None
+        if self.loss_type == "p_kl" and any(paired for *_, paired in alignment):
             vocab = teacher_logits.shape[-1]
             topk = min(self.vocab_topk, vocab) if self.vocab_topk > 0 else vocab
             top_idx = teacher_logits.amax(dim=(0, 1)).topk(topk).indices.sort().values
+            projection = self._proj_matrix(device)
+            if top_idx.numel() < projection.size(1):
+                # Restrict the sparse projection before matmul to avoid a full teacher-vocabulary output.
+                indices = projection.indices()
+                columns = torch.searchsorted(top_idx, indices[1])
+                keep = (columns < top_idx.numel()) & (top_idx[columns.clamp_max(top_idx.numel() - 1)] == indices[1])
+                projection = torch.sparse_coo_tensor(
+                    torch.stack([indices[0, keep], columns[keep]]),
+                    projection.values()[keep],
+                    (self.student_vocab_size, top_idx.numel()),
+                    device=device,
+                ).coalesce()
 
         kd_terms = []
         ce_terms = []
@@ -1047,7 +1059,7 @@ class XTokenLoss(nn.Module):
             t_logits_i = teacher_logits[i, t0 - 1 : t0 + ts - 1]
             valid_pairs_total += len(paired)
             if self.loss_type == "p_kl":
-                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, device, T, top_idx)
+                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, T, top_idx, projection)
                 proj_acc_num += p_num
                 proj_acc_den += p_den
             else:
@@ -1115,7 +1127,7 @@ class XTokenLoss(nn.Module):
     def _chunk_average(values, groups):
         return torch.stack([values[group].mean(dim=0) for group in groups])
 
-    def _compute_p_kl(self, s_logits, t_logits, paired, device, T, top_idx):
+    def _compute_p_kl(self, s_logits, t_logits, paired, T, top_idx, projection):
         """P-KL: project student to teacher vocab, global top-k, forward KL with T² scaling.
 
         Implements Eq. (4) from https://huggingface.co/papers/2605.21699.
@@ -1126,18 +1138,6 @@ class XTokenLoss(nn.Module):
 
         s_probs = self._chunk_average(F.softmax(s_logits.float() / T, dim=-1), s_groups)
 
-        projection = self._proj_matrix(device)
-        if top_idx.numel() < projection.size(1):
-            # Restrict the sparse projection before matmul to avoid a full teacher-vocabulary output.
-            indices = projection.indices()
-            columns = torch.searchsorted(top_idx, indices[1])
-            keep = (columns < top_idx.numel()) & (top_idx[columns.clamp_max(top_idx.numel() - 1)] == indices[1])
-            projection = torch.sparse_coo_tensor(
-                torch.stack([indices[0, keep], columns[keep]]),
-                projection.values()[keep],
-                (self.student_vocab_size, top_idx.numel()),
-                device=device,
-            ).coalesce()
         s_proj_topk = _Fp32SparseMM.apply(projection, s_probs.t()).t()
         s_proj_topk = s_proj_topk / (s_proj_topk.sum(dim=-1, keepdim=True) + eps)
         s_log_proj = (s_proj_topk + eps).log()
@@ -1934,18 +1934,16 @@ class GOLDTrainer(SFTTrainer):
         }
 
     def _maybe_add_completion_byte_offsets(self, updated_slice: dict[str, torch.Tensor | Any]) -> None:
-        """Attach completion-relative byte offsets to on-policy cross-tokenizer batches.
+        """Attach completion-relative byte offsets to on-policy ULD batches.
 
-        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip). Required by extended ULD
-        and by all X-Token variants.
+        Derived from the sampled ids via ``piece_byte_len`` (no decode→re-encode round-trip).
         """
-        _needs_offsets = (
+        if not (
             self.use_uld_loss
             and self.teacher_tokenizer is not None
             and self.uld_loss_fn is not None
             and self.uld_loss_fn.use_extended_uld
-        ) or (self.xtoken_loss_fn is not None and self.teacher_tokenizer is not None)
-        if not _needs_offsets:
+        ):
             return
 
         new_input_ids = updated_slice["input_ids"]
