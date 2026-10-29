@@ -35,7 +35,16 @@ from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    PreTrainedModel,
+    RecurrentGemmaConfig,
+    RwkvConfig,
+    xLSTMConfig,
+)
 from transformers.testing_utils import torch_device
 
 
@@ -1754,6 +1763,46 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+                weight_transfer=_StubWeightTransfer(),
+            )
+
+    @pytest.mark.parametrize(
+        ("config", "match"),
+        [
+            pytest.param(RwkvConfig(vocab_size=128, hidden_size=16, num_hidden_layers=2), "FlashAttention", id="rwkv"),
+            pytest.param(
+                xLSTMConfig(vocab_size=128, hidden_size=16, num_hidden_layers=2, num_heads=2),
+                "FlashAttention",
+                id="xlstm",
+            ),
+            pytest.param(
+                RecurrentGemmaConfig(
+                    vocab_size=128,
+                    hidden_size=16,
+                    lru_width=16,
+                    intermediate_size=32,
+                    num_hidden_layers=3,
+                    num_attention_heads=2,
+                    num_key_value_heads=1,
+                    head_dim=8,
+                ),
+                "recurrent",
+                id="recurrent-gemma",
+            ),
+        ],
+    )
+    def test_init_raises_on_recurrent_models_without_layer_types(self, config, match):
+        model_path = f"{self.tmp_dir}/model"
+        AutoModelForCausalLM.from_config(config).save_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        with pytest.raises(ValueError, match=match):
+            AsyncGRPOTrainer(
+                model=model_path,
+                reward_funcs=dummy_reward_func,
+                args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
                 weight_transfer=_StubWeightTransfer(),
             )
 
