@@ -72,6 +72,18 @@ class TestThinkFormatReward(TrlTestCase):
         rewards = think_format_reward(completions)
         assert rewards == expected_rewards
 
+    def test_standard_format(self):
+        # With the standard dataset format, the trainers pass the completions as plain text
+        completions = [
+            "<think>This is my reasoning.</think>This is my answer.",  # Valid
+            "<think>\nThis is my reasoning.\n</think>\nThis is my answer.",  # Valid
+            "<think>This is my reasoning.\nThis is my answer.",  # Invalid
+            "This is my reasoning. This is my answer.",  # Invalid
+        ]
+        expected_rewards = [1.0, 1.0, 0.0, 0.0]
+        rewards = think_format_reward(completions)
+        assert rewards == expected_rewards
+
 
 class TestSoftOverlongPunishmentReward:
     def test_soft_overlong_punishment_short_completion(self):
@@ -219,6 +231,15 @@ class TestAccuracyReward:
         assert rewards[1] is None
 
     @require_math_latex
+    def test_accuracy_reward_standard_format(self):
+        """Test accuracy_reward with the standard dataset format, where completions are plain text."""
+        completions = [r"My answer is \boxed{\frac{63}{400}}", r"My answer is \boxed{\frac{64}{400}}"]
+        solution = [r"\frac{63}{400}", r"\frac{63}{400}"]
+        rewards = accuracy_reward(completions, solution)
+        assert rewards[0] == 1.0
+        assert rewards[1] == 0.0
+
+    @require_math_latex
     def test_accuracy_reward_in_worker_thread(self):
         """Test that accuracy_reward works when called from a non-main thread."""
         completions = [[{"content": r"\boxed{\frac{1}{3}}"}]]
@@ -290,6 +311,18 @@ class TestReasoningAccuracyReward:
         solutions = [r"\frac{63}{400}", r"\frac{63}{400}"]
         rewards = reasoning_accuracy_reward(completions, solutions)
         assert rewards[0] == 0.0
+        assert rewards[1] == 0.0
+
+    @require_math_latex
+    def test_standard_format(self):
+        """Test reasoning_accuracy_reward with the standard dataset format, where completions are plain text."""
+        completions = [
+            r"<think> Reasoning content </think> \boxed{\frac{63}{400}}",
+            r"<think> Reasoning content </think> \boxed{\frac{64}{400}}",
+        ]
+        solutions = [r"\frac{63}{400}", r"\frac{63}{400}"]
+        rewards = reasoning_accuracy_reward(completions, solutions)
+        assert rewards[0] == 1.0
         assert rewards[1] == 0.0
 
     @require_math_latex
@@ -367,6 +400,16 @@ class TestCosineScaledReward:
         rewards = reward_fn(completions, solution, completion_ids)
         # correct -> min_value_correct (0.5), wrong -> max_value_wrong (-0.5); same as at exactly max_len
         assert rewards == [pytest.approx(0.5), pytest.approx(-0.5)]
+
+    @require_math_latex
+    def test_standard_format(self):
+        """Test the cosine scaled reward with the standard dataset format, where completions are plain text."""
+        reward_fn = get_cosine_scaled_reward(max_len=100)
+        completions = [r"\boxed{\frac{1}{3}}", r"\boxed{\frac{1}{2}}"]
+        solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+        completion_ids = [[1] * 50, [1] * 50]
+        rewards = reward_fn(completions, solution, completion_ids)
+        assert rewards == [pytest.approx(0.75), pytest.approx(-0.75)]
 
     @require_math_latex
     def test_unparsable_gold_yields_none(self):

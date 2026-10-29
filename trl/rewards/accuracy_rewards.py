@@ -26,7 +26,7 @@ if is_math_verify_available():
 
 
 def accuracy_reward(
-    completions: list[list[dict[str, str]]],
+    completions: list[list[dict[str, str]]] | list[str],
     solution: list[str],
     log_extra: Callable[[str, list], None] | None = None,
     **kwargs,
@@ -37,9 +37,10 @@ def accuracy_reward(
         - If gold is not parseable → return `None` to skip the example.
 
     Args:
-        completions (`list[list[dict[str, str]]]`):
-            List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
-            containing the key `"content"` with the value being the text of the completion.
+        completions (`list[list[dict[str, str]]]` or `list[str]`):
+            List of completions to be evaluated. In the conversational format, each completion is a list of one
+            message, i.e. a dictionary containing the key `"content"` with the value being the text of the completion.
+            In the standard format, each completion is the text of the completion.
         solution (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         log_extra (`callable`, *optional*):
@@ -64,7 +65,7 @@ def accuracy_reward(
     if not is_math_verify_available():
         raise ImportError("Please install the `math_verify` package to use accuracy_reward")
 
-    contents = [completion[0]["content"] for completion in completions]
+    contents = [completion if isinstance(completion, str) else completion[0]["content"] for completion in completions]
     rewards = []
     gold_parsed_strs = []
     answer_parsed_strs = []
@@ -195,7 +196,7 @@ class _CosineScaledReward:
 
     def __call__(
         self,
-        completions: list[list[dict[str, str]]],
+        completions: list[list[dict[str, str]]] | list[str],
         solution: list[str],
         completion_ids: list[list[int]],
         **kwargs,
@@ -221,7 +222,7 @@ class _CosineScaledReward:
 
 
 def reasoning_accuracy_reward(
-    completions: list[list[dict[str, str]]],
+    completions: list[list[dict[str, str]]] | list[str],
     solution: list[str],
     reasoning_delimiters: list[str] | None = None,
     log_extra: Callable[[str, list], None] | None = None,
@@ -233,9 +234,10 @@ def reasoning_accuracy_reward(
         - If gold is not parseable → return `None` to skip the example.
 
     Args:
-        completions (`list[list[dict[str, str]]]`):
-            List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
-            containing the key `"content"` with the value being the text of the completion.
+        completions (`list[list[dict[str, str]]]` or `list[str]`):
+            List of completions to be evaluated. In the conversational format, each completion is a list of one
+            message, i.e. a dictionary containing the key `"content"` with the value being the text of the completion.
+            In the standard format, each completion is the text of the completion.
         solution (`list[str]`):
             List of the raw-text solutions to the questions/problems/prompts.
         reasoning_delimiters (`list[str]]`, *optional*):
@@ -285,7 +287,7 @@ def reasoning_accuracy_reward(
         reasoning_delimiters = ["</think>"]
 
     rewards = []
-    contents = [completion[0]["content"] for completion in completions]
+    contents = [completion if isinstance(completion, str) else completion[0]["content"] for completion in completions]
     gold_parsed_strs = []
     answer_parsed_strs = []
 
