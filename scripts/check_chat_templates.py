@@ -60,6 +60,7 @@ REPOS = [
     "meta-models/Muse-Glimmer-30B",
     "microsoft/Phi-3-mini-4k-instruct",
     "microsoft/Phi-3.5-mini-instruct",
+    "mistralai/Mistral-Large-4-1T-A52B",
     "mistralai/Mistral-Medium-3.5-128B",
     "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
     "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
