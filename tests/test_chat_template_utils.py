@@ -40,9 +40,12 @@ from trl.chat_template_utils import (
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
     lfm2_2_5_v2_chat_template,
+    lfm2_2_5_v4_chat_template,
+    lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
     parse_response,
+    qwen3_training_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -284,6 +287,29 @@ class TestAddResponseSchema:
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
+                lfm2_2_5_v4_chat_template,
+                id="lfm2-2.5-v4",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5",
+                lfm2_2_5_vl_v2_chat_template,
+                id="lfm2-2.5-vl-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                qwen3_training_chat_template,
+                id="qwen3-training",
+            ),
         ],
     )
     def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
@@ -291,7 +317,10 @@ class TestAddResponseSchema:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         tokenizer.chat_template = chat_template
         tokenizer = add_response_schema(tokenizer)
-        tool_calls = [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}]
+        tool_calls = [
+            {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}},
+            {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris, France"}}},
+        ]
         messages = [
             {"role": "user", "content": "What is 3*4?"},
             {"role": "assistant", "content": "", "tool_calls": tool_calls},
@@ -501,6 +530,17 @@ class TestSupportsToolCalling:
             ),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.1", id="llama3.1"),
             pytest.param("trl-internal-testing/tiny-LlamaForCausalLM-3.2", id="llama3.2"),
+            pytest.param(
+                "trl-internal-testing/tiny-Mistral3ForConditionalGeneration",
+                id="mistral3",
+                marks=[
+                    require_vision,
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.0.0"),
+                        reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
+                    ),
+                ],
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
                 id="muse_glimmer",
@@ -928,6 +968,17 @@ class TestIsChatTemplateStopTokenTrained:
         pytest.param("trl-internal-testing/tiny-LlavaForConditionalGeneration", id="llava", marks=require_vision),
         pytest.param(
             "trl-internal-testing/tiny-LlavaNextForConditionalGeneration", id="llava_next", marks=require_vision
+        ),
+        pytest.param(
+            "trl-internal-testing/tiny-Mistral3ForConditionalGeneration",
+            id="mistral3",
+            marks=[
+                require_vision,
+                pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ],
         ),
         pytest.param(
             "trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration",
@@ -1447,6 +1498,10 @@ class TestNamedChatTemplateVariants:
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param(
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_training_chat_template),
+            id="qwen3-training",
+        ),
+        pytest.param(
             # Same model as `qwen3`, but shipping the response template itself instead of relying on
             # `add_response_schema` to supply it — so `_load` must leave it alone.
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM-ResponseTemplate",
@@ -1504,6 +1559,8 @@ class TestNamedChatTemplateVariants:
 @require_response_parsing
 class TestParseResponse:
     def _load(self, model_name):
+        # A (model, chat template) pair stands for the same tiny model with another form of its chat template
+        model_name, chat_template = model_name if isinstance(model_name, tuple) else (model_name, None)
         if "ForCausalLM" in model_name:
             self.is_vlm = False
             processing_class = AutoTokenizer.from_pretrained(model_name)
@@ -1512,6 +1569,9 @@ class TestParseResponse:
             self.is_vlm = True
             processing_class = AutoProcessor.from_pretrained(model_name)
             tokenizer = processing_class.tokenizer
+
+        if chat_template is not None:
+            processing_class.chat_template = chat_template
 
         # Nothing to add for models that already ship a new-style `response_template` or a legacy
         # `response_schema`; `add_response_schema` only knows a fixed set of chat templates and raises otherwise.

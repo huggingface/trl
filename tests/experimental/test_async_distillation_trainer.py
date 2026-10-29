@@ -31,7 +31,7 @@ from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
-from transformers import AutoTokenizer, TrainerControl
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
@@ -100,6 +100,8 @@ class _StubRolloutWorker:
 
     def __init__(self, tokenizer, dataset, vocab_size: int, samples_per_weight_sync: int = 10):
         self.rollout_buffer = queue.Queue()
+        # What a real worker forwards to its child; the trainer writes the adapter name here under adapter sync
+        self._loop_kwargs = {}
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
@@ -990,10 +992,22 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         trainer = self._train_one_step_and_save()
         assert trainer.is_fsdp_enabled
 
-    def test_train(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+    @pytest.mark.parametrize(
+        ("model_id", "instantiated"),
+        [
+            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", False),
+            ("trl-internal-testing/small-Qwen2ForCausalLM-2.5", True),  # an already instantiated model
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", False),  # MoE: the load-balancing loss is on
+        ],
+    )
+    def test_train(self, model_id, instantiated):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = model_id
+        if instantiated:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id, dtype="float32", device_map=None, attn_implementation="eager"
+            )
 
         training_args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -1003,25 +1017,46 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             max_completion_length=8,
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
             token_budget=-1,  # disable token budgeting (no real vLLM server to query max_model_len from)
+            logging_steps=1,
             report_to="none",
         )
         trainer = AsyncDistillationTrainer(
-            model=model_id,
+            model=model,
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             weight_transfer=_StubWeightTransfer(),
         )
+        if instantiated:
+            assert trainer.model is model
+            assert trainer.model.config._attn_implementation.startswith("kernels-community/")
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        if "Moe" in model_id:
+            # The MoE config declares a `router_aux_loss_coef`, so the load-balancing loss is on by default
+            aux_losses = [log["aux_loss"] for log in trainer.state.log_history if "aux_loss" in log]
+            assert aux_losses and all(math.isfinite(aux) and aux > 0 for aux in aux_losses)
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_router_aux_loss_coef_on_a_dense_model_raises(self):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
+            AsyncDistillationTrainer(
+                model=model_id,
+                args=AsyncDistillationConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.01, report_to="none"),
+                train_dataset=dataset,
+                rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
+                weight_transfer=_StubWeightTransfer(),
+            )
 
     def test_resume_from_checkpoint(self):
         # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
@@ -1375,13 +1410,16 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
+    @pytest.mark.parametrize("injected", [False, True])
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
+    def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected, injected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, and distilled against the teacher as if it were the student. The real worker is built here
-        # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it.
-        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=None)
-        assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
+        # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it. A worker the caller injects
+        # exists before the trainer probes the server, so it cannot have been given the adapter name at construction.
+        rollout_worker = AsyncRolloutWorker() if injected else None
+        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=rollout_worker)
+        assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 
     # --- adapter sync, as the server sees it -----------------------------------------------------------------------
 

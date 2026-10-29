@@ -87,7 +87,7 @@ Later revision of the LFM2 chat template (as shipped by `LiquidAI/LFM2-1.2B` sin
 
 ### `lfm2_2_5.jinja`
 
-Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` and the other checkpoints in that generation). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
+Original LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M` before [13a5383](https://huggingface.co/LiquidAI/LFM2.5-230M/commit/13a53837c4906b4f7405932532ba85d182bb013b), and still by `LiquidAI/LFM2.5-230M-Base`). Unlike `lfm2.jinja`, it renders assistant `tool_calls` — as a single `<|tool_call_start|>[name(key=value, ...)]<|tool_call_end|>` block holding a comma-separated list of Python-style calls — supports a `<think>` block (read off `message.thinking`), and already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_template`.
 
 ### `lfm2_2_5_v2.jinja`
 
@@ -97,9 +97,17 @@ Later revision of the LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-230M`
 
 Later LFM2.5 chat template (as shipped by `LiquidAI/LFM2.5-24B-A2B` and `LiquidAI/LFM2.5-2.6B`). Same tool-call format as `lfm2_2_5_v2.jinja`, with two rendering differences: the generation prompt pre-fills `<think>`, so the model's output starts inside the reasoning block, and string arguments are escaped (`\\`, `\'`, `\n`, `\r`) while lists render as JSON. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing uses `lfm2_2_5_v3_template`.
 
+### `lfm2_2_5_v4.jinja`
+
+LFM2.5 chat template shipped by `LiquidAI/LFM2.5-1.2B-Instruct` (since [df58c17](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct/commit/df58c174f05ff733f83f8cae10ea9298224c8006)), `LiquidAI/LFM2.5-350M`, `LiquidAI/LFM2.5-1.2B-Thinking` and `LiquidAI/LFM2-24B-A2B`. Differs from `lfm2_2_5_v3.jinja` in two ways: the generation prompt does not pre-fill `<think>`, and only the last assistant turn keeps its reasoning, instead of every turn after the last user message. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing reuses `lfm2_2_5_v3_template`.
+
 ### `lfm2_2_5_vl.jinja`
 
-Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Same rendering as `lfm2_2_5.jinja` — including the `{% generation %}` markers, so no training patch is needed — plus multimodal `content` blocks (each `image` item renders as `<image>`) and more defensive handling of non-string content and flat `tool_calls`. Response parsing reuses `lfm2_2_5_template`.
+Original LFM2.5-VL chat template (as shipped by `LiquidAI/LFM2.5-VL-3B`). Identical to `lfm2_2_5_v3.jinja`, including the escaped string arguments and the multimodal `content` blocks (each `image` item renders as `<image>`), except that the generation prompt does not pre-fill `<think>`. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing reuses `lfm2_2_5_v3_template`.
+
+### `lfm2_2_5_vl_v2.jinja`
+
+LFM2.5-VL chat template shipped by `LiquidAI/LFM2.5-VL-450M`. Same tool-call format as `lfm2_2_5_vl.jinja`, except that string arguments are double-quoted and not escaped, and lists render as Python literals instead of JSON. Only the last assistant turn keeps its reasoning: earlier turns drop their `thinking` and any reasoning left in their content. Already carries `{% generation %}` markers, so no training patch is needed. Response parsing reuses `lfm2_2_5_template`.
 
 ### `llama3.jinja`
 
@@ -112,6 +120,10 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 ### `llava_next.jinja`
 
 Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
+
+### `mistral_medium_3_5.jinja`
+
+Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B`). Renders the Mistral `[INST] ... [/INST]` format with reasoning in `[THINK] ... [/THINK]`, tools in `[AVAILABLE_TOOLS]`, tool calls as `[TOOL_CALLS]name[ARGS]{...}` and tool results in `[TOOL_RESULTS]`, and writes the `reasoning_effort` into a `[MODEL_SETTINGS]` block before the first user turn.
 
 ### `muse_glimmer.jinja`
 
@@ -274,6 +286,10 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `mistral_medium_3_5_training.jinja`
+
+Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the original is already prefix-preserving, so the only change is wrapping the assistant turn (content, tool calls and the end-of-turn token) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `muse_glimmer_training.jinja`
 

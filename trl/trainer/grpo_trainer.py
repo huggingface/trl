@@ -1976,6 +1976,11 @@ class GRPOTrainer(_BaseTrainer):
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
             full_ids = full_ids[0]
+            # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+            # (huggingface/transformers#50094)
+            if isinstance(prefix_ids, torch.Tensor):
+                prefix_ids = prefix_ids.tolist()
+                full_ids = full_ids.tolist()
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
