@@ -873,13 +873,19 @@ def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path
     assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
 
 
-def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
+# 𓀀 is outside the Gemma vocab, so it becomes four <0xXX> byte-fallback tokens
+@pytest.mark.parametrize(
+    "student_model_id",
+    ["trl-internal-testing/tiny-LlamaForCausalLM-3.2", "trl-internal-testing/tiny-Gemma4ForConditionalGeneration"],
+)
+def test_alignment_groups_cover_all_tokens(student_model_id, qwen_tokenizer):
+    student_tokenizer = AutoTokenizer.from_pretrained(student_model_id)
     config = build_config()
-    loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    loss = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-    text = "SmolLM3-3B says hi 😊 to 你好."
+    text = "SmolLM3-3B says hi 😊 to 你好 𓀀."
     [(student_ids, student_offs)] = encode_with_byte_offsets(
-        llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
+        student_tokenizer.backend_tokenizer, [text], add_special_tokens=False
     )
     [(teacher_ids, teacher_offs)] = encode_with_byte_offsets(
         qwen_tokenizer.backend_tokenizer, [text], add_special_tokens=False
@@ -887,6 +893,7 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
 
     student_groups, teacher_groups = loss._align_by_byte_offsets(student_offs, teacher_offs)
 
+    assert student_offs[-1][1] == teacher_offs[-1][1] == len(text.encode("utf-8"))
     assert len(student_groups) == len(teacher_groups)
     assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_ids)))
     assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_ids)))
@@ -902,24 +909,30 @@ def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
         assert student_span == teacher_span
 
 
-def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, smollm_tokenizer):
+@pytest.mark.parametrize(
+    "model_id", ["trl-internal-testing/tiny-SmolLM3ForCausalLM", "trl-internal-testing/tiny-Gemma2ForCausalLM"]
+)
+def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, model_id):
     """On-policy offsets are derived from the generated token ids directly (per-token piece byte length, no
-    decode-then-re-encode round-trip). For ByteLevel BPE — the family of every cross-tokenizer pair GOLD targets
-    (SmolLM, Qwen, Llama 3+, …) — those per-token spans match what `encode_with_byte_offsets` produces on the same
-    text, so student and teacher offsets share one byte coordinate system."""
+    decode-then-re-encode round-trip). For ByteLevel BPE (SmolLM, Qwen, Llama 3+, …) and byte-fallback BPE (Gemma)
+    those per-token spans match what `encode_with_byte_offsets` produces on the same text, so student and teacher
+    offsets share one byte coordinate system."""
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     trainer = GOLDTrainer(
-        model=_TINY_SMOLLM3,
+        model=model_id,
         teacher_model=_TINY_QWEN2,
         args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=True, use_extended_uld=True),
         train_dataset=load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train"),
-        processing_class=smollm_tokenizer,
+        processing_class=tokenizer,
     )
 
-    completion_text = "hello 你好 😊"
+    completion_text = "hello 你好 😊 𓀀"
     [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
-        smollm_tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
+        tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
     )
-    input_ids = [smollm_tokenizer.pad_token_id] + completion_ids
+    input_ids = [tokenizer.pad_token_id] + completion_ids
     labels = [-100] + completion_ids
     updated_slice = {
         "input_ids": torch.tensor([input_ids]),
@@ -929,6 +942,22 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, smollm
     trainer._maybe_add_completion_byte_offsets(updated_slice)
 
     assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
+
+
+def test_encode_with_byte_offsets_drops_batch_padding(gemma4_tokenizer):
+    # Gemma's tokenizer.json enables batch padding, so the shorter text would get pad tokens
+    texts = ["a much longer first text", "short"]
+    encodings = encode_with_byte_offsets(gemma4_tokenizer.backend_tokenizer, texts, add_special_tokens=False)
+
+    for text, (ids, _) in zip(texts, encodings, strict=True):
+        assert ids == gemma4_tokenizer(text, add_special_tokens=False)["input_ids"]
+
+
+def test_encode_with_byte_offsets_rejects_strip_decoder():
+    # Llama 2 style tokenizers strip the leading space when decoding
+    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.2")
+    with pytest.raises(NotImplementedError):
+        encode_with_byte_offsets(tokenizer.backend_tokenizer, ["hello"])
 
 
 def test_merge_probabilities_multiplies_split_tokens_observed():

@@ -25,6 +25,7 @@ import pyarrow.types
 import torch
 from accelerate.utils import is_peft_model
 from pyarrow import compute as pc
+from tokenizers.models import BPE
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
@@ -151,12 +152,25 @@ def is_byte_level_tokenizer(backend) -> bool:
     return "ByteLevel" in repr(backend.pre_tokenizer) or "ByteLevel" in repr(backend.decoder)
 
 
-def piece_byte_len(piece: str) -> int:
-    """UTF-8 byte length of a ByteLevel BPE token piece \u2014 each char maps 1:1 to one source byte.
+def supports_byte_offsets(backend) -> bool:
+    """Whether byte offsets can be derived for ``backend``: ByteLevel BPE, or byte-fallback BPE (Gemma) whose decoder
+    keeps the leading space. ``Strip`` decoders (Llama 2, Mistral v0.1/v0.2) drop it, so the piece bytes of sampled ids
+    would not match the decoded text."""
+    if is_byte_level_tokenizer(backend):
+        return True
+    return isinstance(backend.model, BPE) and backend.model.byte_fallback and "Strip" not in repr(backend.decoder)
 
-    Cross-tokenizer ULD targets ByteLevel BPE pairs (Llama-3, Qwen, SmolLM, Phi, Mistral v0.3+, \u2026); SentencePiece
-    students are out of scope here and would need the loss-level projection from X-Token to align."""
-    return len(piece)
+
+def piece_byte_len(piece: str, byte_level: bool) -> int:
+    """UTF-8 byte length of a token piece.
+
+    ByteLevel pieces map each char 1:1 to one source byte. Byte-fallback pieces are either ``<0xXX>`` (one byte) or
+    UTF-8 text with ``\u2581`` standing for a space."""
+    if byte_level:
+        return len(piece)
+    if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
+        return 1
+    return len(piece.replace("\u2581", " ").encode("utf-8"))
 
 
 def _bytes_to_unicode() -> dict[int, str]:
@@ -186,7 +200,9 @@ def _byte_level_piece_len(piece: str, text_bytes: bytes, start: int) -> int | No
     return len(piece_bytes)
 
 
-def _split_repeated_byte_offsets(byte_offsets: list[tuple[int, int]], tokens: list[str]) -> list[tuple[int, int]]:
+def _split_repeated_byte_offsets(
+    byte_offsets: list[tuple[int, int]], tokens: list[str], byte_level: bool
+) -> list[tuple[int, int]]:
     """Split repeated char-derived spans for byte-fallback or byte-level tokens."""
     normalized = list(byte_offsets)
     i = 0
@@ -197,7 +213,7 @@ def _split_repeated_byte_offsets(byte_offsets: list[tuple[int, int]], tokens: li
 
         if j - i > 1:
             start, end = byte_offsets[i]
-            piece_lengths = [piece_byte_len(token) for token in tokens[i:j]]
+            piece_lengths = [piece_byte_len(token, byte_level) for token in tokens[i:j]]
             if sum(piece_lengths) == end - start:
                 cursor = start
                 for offset_idx, length in enumerate(piece_lengths, start=i):
@@ -209,9 +225,9 @@ def _split_repeated_byte_offsets(byte_offsets: list[tuple[int, int]], tokens: li
 
 
 def _normalize_byte_offsets(
-    byte_offsets: list[tuple[int, int]], tokens: list[str], text_bytes: bytes
+    byte_offsets: list[tuple[int, int]], tokens: list[str], text_bytes: bytes, byte_level: bool
 ) -> list[tuple[int, int]]:
-    byte_offsets = _split_repeated_byte_offsets(byte_offsets, tokens)
+    byte_offsets = _split_repeated_byte_offsets(byte_offsets, tokens, byte_level)
     normalized = []
     cursor = 0
 
@@ -220,7 +236,7 @@ def _normalize_byte_offsets(
             normalized.append((cursor, cursor))
             continue
 
-        piece_len = _byte_level_piece_len(tokens[idx], text_bytes, start)
+        piece_len = _byte_level_piece_len(tokens[idx], text_bytes, start) if byte_level else None
         next_start = byte_offsets[idx + 1][0] if idx + 1 < len(byte_offsets) else None
         has_overlap = start < cursor or (next_start is not None and next_start < end)
 
@@ -248,20 +264,24 @@ def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool
 
     Byte offsets are derived from the fast tokenizer's character offsets via an O(N) char-to-byte cumulative table.
     Overlapping spans from byte-level and byte-fallback tokens are split across their byte pieces."""
-    if not is_byte_level_tokenizer(backend):
+    if not supports_byte_offsets(backend):
         raise NotImplementedError(
-            "Cross-tokenizer ULD currently supports only ByteLevel BPE tokenizers "
-            "(Llama-3, Qwen, SmolLM, Phi, Mistral v0.3+, …). The given tokenizer is not ByteLevel."
+            "Cross-tokenizer ULD currently supports only ByteLevel BPE tokenizers (Llama-3, Qwen, SmolLM, Phi, "
+            "Mistral v0.3+, …) and byte-fallback BPE tokenizers without a `Strip` decoder (Gemma)."
         )
+    byte_level = is_byte_level_tokenizer(backend)
     encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
     out = []
     for text, enc in zip(texts, encs, strict=True):
+        # Some tokenizer.json files enable batch padding (e.g. Gemma), so drop the pad positions.
+        keep = [idx for idx, mask in enumerate(enc.attention_mask) if mask]
+        tokens = [enc.tokens[idx] for idx in keep]
         char_to_byte = [0]
         for ch in text:
             char_to_byte.append(char_to_byte[-1] + len(ch.encode("utf-8")))
-        byte_offsets = [(char_to_byte[s], char_to_byte[e]) for s, e in enc.offsets]
-        byte_offsets = _normalize_byte_offsets(byte_offsets, enc.tokens, text.encode("utf-8"))
-        out.append((list(enc.ids), byte_offsets))
+        byte_offsets = [(char_to_byte[enc.offsets[idx][0]], char_to_byte[enc.offsets[idx][1]]) for idx in keep]
+        byte_offsets = _normalize_byte_offsets(byte_offsets, tokens, text.encode("utf-8"), byte_level)
+        out.append(([enc.ids[idx] for idx in keep], byte_offsets))
     return out
 
 
@@ -305,7 +325,7 @@ class DataCollatorForChatML:
                 formatted_message = self.tokenizer.apply_chat_template(
                     message, add_generation_prompt=False, tokenize=False
                 )
-                if is_byte_level_tokenizer(self.tokenizer.backend_tokenizer):
+                if supports_byte_offsets(self.tokenizer.backend_tokenizer):
                     [(message_input_ids_full, full_offs)] = encode_with_byte_offsets(
                         self.tokenizer.backend_tokenizer, [formatted_message], add_special_tokens=False
                     )
@@ -315,9 +335,9 @@ class DataCollatorForChatML:
                         len(message_input_ids_full),
                     )
                 else:
-                    # Non-ByteLevel tokenizer: byte offsets are unnecessary (cross-tokenizer ULD requires ByteLevel
-                    # anyway). Fall back to plain tokenization so GKD / non-ULD trainers with SentencePiece or
-                    # Unigram tokenizers still work through this collator.
+                    # No byte offsets for this tokenizer (cross-tokenizer ULD can't use it anyway). Fall back to plain
+                    # tokenization so GKD / non-ULD trainers with Strip-decoder SentencePiece or Unigram tokenizers
+                    # still work through this collator.
                     message_input_ids_full = self.tokenizer(
                         formatted_message, add_special_tokens=False, return_tensors=None
                     )["input_ids"]
@@ -608,6 +628,7 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         # via per-token piece byte length (the same primitive the on-policy / teacher path uses), so it is
         # layout-agnostic after flush_left/truncation and shares the teacher's byte coordinate system.
         tokenizer = self.processor.tokenizer
+        byte_level = is_byte_level_tokenizer(tokenizer.backend_tokenizer)
         piece_len_cache: dict[int, int] = {}
         byte_offset_rows: list[list[tuple[int, int]]] = []
         for row_ids, row_labels in zip(input_ids.tolist(), labels.tolist(), strict=True):
@@ -617,7 +638,7 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
                 if label == -100:
                     continue
                 if tid not in piece_len_cache:
-                    piece_len_cache[tid] = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0])
+                    piece_len_cache[tid] = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0], byte_level)
                 nb = piece_len_cache[tid]
                 offs[pos] = (cumulative, cumulative + nb)
                 cumulative += nb
