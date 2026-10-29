@@ -281,7 +281,13 @@ def test_capture_error_closes_other_inflight_sessions(make_loop):
     blocking.wait_for_completion = wait
     broken = Session(captured_entry())
     broken.row["prompt_token_ids"] = []
-    broken.wait_for_completion = lambda: started.wait(3)
+
+    def wait_then_exit_cleanly():
+        started.wait(3)
+        # A capture rejected after a non-zero exit is unscorable, not fatal
+        return 0
+
+    broken.wait_for_completion = wait_then_exit_cleanly
     sessions = iter([blocking, broken])
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: next(sessions)))
     with pytest.raises(openenv_harness.CaptureContractError):
