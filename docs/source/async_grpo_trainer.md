@@ -1,13 +1,14 @@
 # Asynchronous GRPO
 
 > [!IMPORTANT]
-> This trainer requires `vllm` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm`, `transformers>=5.2.0` and `kernels` (training loads FlashAttention from the Hub through it). For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
-> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
+> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first, then force-install transformers, then add `kernels` through TRL's extra, which pins the version transformers accepts:
 >
 > ```bash
 > pip install vllm
 > pip install 'transformers>=5.2.0' --no-deps
+> pip install 'trl[kernels]'
 > ```
 
 ## Overview
