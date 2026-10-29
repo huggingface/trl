@@ -123,7 +123,7 @@ Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b
 
 ### `mistral_large_4.jinja`
 
-Original Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B`). Same format as `mistral_medium_3_5.jinja`, without the default system prompt, and with `response_format` (JSON object or JSON schema) written into the `[MODEL_SETTINGS]` block.
+Original Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B`). Same format as `mistral_medium_3_5.jinja`, without the default system prompt, with `reasoning_effort` set to `low`, `medium` or `high` (defaults to `high`), and with `response_format` (JSON object or JSON schema) written into the `[MODEL_SETTINGS]` block.
 
 ### `mistral_medium_3_5.jinja`
 
