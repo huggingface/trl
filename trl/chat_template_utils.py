@@ -690,6 +690,8 @@ llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(enco
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
 
+mistral_large_4_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4.jinja").read_text(encoding="utf-8")
+
 mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.jinja").read_text(encoding="utf-8")
 
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
@@ -1090,6 +1092,10 @@ llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
 
+mistral_large_4_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 mistral_medium_3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1264,6 +1270,9 @@ def get_training_chat_template(
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
+
+    if chat_template == mistral_large_4_chat_template:
+        return mistral_large_4_training_chat_template
 
     if chat_template == mistral_medium_3_5_chat_template:
         return mistral_medium_3_5_training_chat_template
