@@ -74,6 +74,8 @@ class TestDistributed(TrlTestCase):
                 get_config_path("fsdp2"),
                 "--mixed_precision",
                 "bf16",
+                "--fsdp_state_dict_type",
+                "FULL_STATE_DICT",
                 "-m",
                 "pytest",
                 f"tests/experimental/{test_file}.py",
