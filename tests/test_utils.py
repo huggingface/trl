@@ -1974,6 +1974,7 @@ class TestAddFusedLMHeadLoss:
                 "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
                 marks=[
                     require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                    pytest.mark.xfail(reason="FP8 grouped matmul kernel fails to compile in CI (see #8020)"),
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.22.0"),
                         reason="Mistral Large 4 was introduced in transformers-5.22.0",
