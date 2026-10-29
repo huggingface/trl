@@ -1125,7 +1125,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         text_config = model.config.get_text_config()
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
         # Check tree attention compat
-        if layer_types:
+        if layer_types or model._is_stateful:
             if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
                 raise ValueError(
                     f"Tree packing of {type(model).__name__}'s gated DeltaNet layers requires transformers>=5.15.0: "
@@ -1134,9 +1134,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 )
             if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
                 raise ValueError(
-                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
-                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
-                    "convolutional layer would scan across samples."
+                    f"{type(model).__name__} has {', '.join(sorted(layer_types)) or 'recurrent'} layers. Tree packing "
+                    "routes attention and transformers' gated DeltaNet layers along each sample's own path; any other "
+                    "recurrent or convolutional layer would scan across samples."
                 )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
