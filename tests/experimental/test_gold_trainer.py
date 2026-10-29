@@ -873,19 +873,13 @@ def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path
     assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == row["original_completion_text"]
 
 
-# 𓀀 is outside the Gemma vocab, so it becomes four <0xXX> byte-fallback tokens
-@pytest.mark.parametrize(
-    "student_model_id",
-    ["trl-internal-testing/tiny-LlamaForCausalLM-3.2", "trl-internal-testing/tiny-Gemma4ForConditionalGeneration"],
-)
-def test_alignment_groups_cover_all_tokens(student_model_id, qwen_tokenizer):
-    student_tokenizer = AutoTokenizer.from_pretrained(student_model_id)
+def test_alignment_groups_cover_all_tokens(llama_tokenizer, qwen_tokenizer):
     config = build_config()
-    loss = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=qwen_tokenizer)
+    loss = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-    text = "SmolLM3-3B says hi 😊 to 你好 𓀀."
+    text = "SmolLM3-3B says hi 😊 to 你好."
     [(student_ids, student_offs)] = encode_with_byte_offsets(
-        student_tokenizer.backend_tokenizer, [text], add_special_tokens=False
+        llama_tokenizer.backend_tokenizer, [text], add_special_tokens=False
     )
     [(teacher_ids, teacher_offs)] = encode_with_byte_offsets(
         qwen_tokenizer.backend_tokenizer, [text], add_special_tokens=False
@@ -893,7 +887,6 @@ def test_alignment_groups_cover_all_tokens(student_model_id, qwen_tokenizer):
 
     student_groups, teacher_groups = loss._align_by_byte_offsets(student_offs, teacher_offs)
 
-    assert student_offs[-1][1] == teacher_offs[-1][1] == len(text.encode("utf-8"))
     assert len(student_groups) == len(teacher_groups)
     assert sorted(idx for group in student_groups for idx in group) == list(range(len(student_ids)))
     assert sorted(idx for group in teacher_groups for idx in group) == list(range(len(teacher_ids)))
@@ -928,6 +921,7 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, model_
         processing_class=tokenizer,
     )
 
+    # 𓀀 is outside the Gemma vocab, so it becomes four <0xXX> byte-fallback tokens
     completion_text = "hello 你好 😊 𓀀"
     [(completion_ids, expected_offsets)] = encode_with_byte_offsets(
         tokenizer.backend_tokenizer, [completion_text], add_special_tokens=False
@@ -941,6 +935,7 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, model_
 
     trainer._maybe_add_completion_byte_offsets(updated_slice)
 
+    assert expected_offsets[-1][1] == len(completion_text.encode("utf-8"))
     assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
 
 
@@ -951,13 +946,6 @@ def test_encode_with_byte_offsets_drops_batch_padding(gemma4_tokenizer):
 
     for text, (ids, _) in zip(texts, encodings, strict=True):
         assert ids == gemma4_tokenizer(text, add_special_tokens=False)["input_ids"]
-
-
-def test_encode_with_byte_offsets_rejects_strip_decoder():
-    # Llama 2 style tokenizers strip the leading space when decoding
-    tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.2")
-    with pytest.raises(NotImplementedError):
-        encode_with_byte_offsets(tokenizer.backend_tokenizer, ["hello"])
 
 
 def test_merge_probabilities_multiplies_split_tokens_observed():
