@@ -36,26 +36,26 @@ Start the teachers that share GPU 1 one after the other, since vLLM sizes its ca
 
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT \
     --port 8000 \
-    --max-model-len 17408 \
+    --max-model-len 18432 \
     --weight-transfer-config '{"backend":"nccl"}'
 
 CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math \
     --port 8001 \
-    --max-model-len 17472 \
+    --max-model-len 18496 \
     --gpu-memory-utilization 0.42 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF \
     --port 8003 \
-    --max-model-len 17472 \
+    --max-model-len 18496 \
     --gpu-memory-utilization 0.42 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code \
     --port 8002 \
-    --max-model-len 17472 \
+    --max-model-len 18496 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
