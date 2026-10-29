@@ -531,7 +531,7 @@ class TestSupportsToolCalling:
                     require_vision,
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
-                        reason="Ministral 3 was introduced in transformers-5.0.0",
+                        reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
                     ),
                 ],
             ),
@@ -970,7 +970,7 @@ class TestIsChatTemplateStopTokenTrained:
                 require_vision,
                 pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
-                    reason="Ministral 3 was introduced in transformers-5.0.0",
+                    reason="Mistral Medium 3.5 tokenizer requires transformers>=5.0.0",
                 ),
             ],
         ),
