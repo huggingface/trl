@@ -17,6 +17,9 @@ Check that the chat template each reference Hub repo currently ships is one of t
 `trl/chat_templates/`. TRL recognizes a model by exact match against these copies, so a repo that changes its chat
 template stops being recognized until the new revision is stored.
 
+For each stored template, `REPOS` lists the repo it comes from and the most-downloaded chat checkpoint that ships it,
+so a popular checkpoint that changes its chat template on its own is caught too.
+
 Some reference repos are gated, so the Hugging Face token in use needs access to them.
 
 Usage, from the repository root:
@@ -43,9 +46,12 @@ REPOS = [
     "google/gemma-2-2b-it",
     "google/gemma-3-4b-it",
     "google/gemma-4-E2B-it",
+    "google/gemma-4-E4B-it",
     "google/gemma-7b-it",
     "HuggingFaceM4/Idefics3-8B-Llama3",
     "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
+    "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+    "LiquidAI/d1-3B",
     "LiquidAI/LFM2-1.2B",
     "LiquidAI/LFM2.5-1.2B-Instruct",
     "LiquidAI/LFM2.5-2.6B",
@@ -61,21 +67,27 @@ REPOS = [
     "microsoft/Phi-3-mini-4k-instruct",
     "microsoft/Phi-3.5-mini-instruct",
     "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+    "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16",
     "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
     "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
     "openai/gpt-oss-20b",
     "Qwen/Qwen2-VL-2B-Instruct",
     "Qwen/Qwen2.5-32B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
     "Qwen/Qwen2.5-VL-3B-Instruct",
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    "Qwen/Qwen3-0.6B",
     "Qwen/Qwen3-4B-Instruct-2507",
     "Qwen/Qwen3-8B",
     "Qwen/Qwen3-VL-2B-Instruct",
+    "Qwen/Qwen3-VL-8B-Instruct",
     "Qwen/Qwen3.5-0.8B",
     "Qwen/Qwen3.5-4B",
     "Qwen/Qwen3.6-35B-A3B",
     "Qwen/Qwen3.8-27B",
     "zai-org/GLM-4.5",
+    "zai-org/GLM-4.5-Air",
 ]
 
 
