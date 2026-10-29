@@ -77,7 +77,8 @@ class GOLDConfig(SFTConfig):
             Whether to enable extended ULD alignment that uses tokenizers to align and merge token probabilities across
             student and teacher tokenizations. When `True`, the trainer will compute token mappings and merge
             probabilities for split tokens; when `False`, ULD will use simple positional truncation like in the
-            original ULD paper. Set to `False` for SentencePiece or other non-ByteLevel tokenizers.
+            original ULD paper. Set to `False` for tokenizers that are neither ByteLevel nor byte-fallback BPE (e.g.
+            Llama 2).
         uld_token_merge_strategy (`str`, *optional*, defaults to `"observed"`):
             Strategy used to align answer logits and merge token probabilities in the ULD loss. With `"observed"`, the
             answer logits are sliced at the answer positions and split tokens (when `use_extended_uld=True`) are merged
@@ -318,8 +319,8 @@ class GOLDConfig(SFTConfig):
                 "Whether to enable extended ULD alignment that uses tokenizers to align and merge token "
                 "probabilities across student and teacher tokenizations. When True, the trainer will compute "
                 "token mappings and merge probabilities for split tokens; when False, ULD will use simple "
-                "positional truncation like in the original ULD paper. Set to False for SentencePiece or other "
-                "non-ByteLevel tokenizers."
+                "positional truncation like in the original ULD paper. Set to False for tokenizers that are "
+                "neither ByteLevel nor byte-fallback BPE (e.g. Llama 2)."
             )
         },
     )
