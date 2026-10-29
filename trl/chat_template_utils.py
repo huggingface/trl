@@ -707,6 +707,8 @@ phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
+qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
+
 # Also matches Qwen2-VL, which ships a byte-identical chat template.
 qwen2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl.jinja").read_text(encoding="utf-8")
 
@@ -1101,6 +1103,8 @@ phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
+qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
+
 qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.jinja").read_text(encoding="utf-8")
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text(encoding="utf-8")
@@ -1271,6 +1275,9 @@ def get_training_chat_template(
 
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
+
+    if chat_template == qwen2_5_base_chat_template:
+        return qwen2_5_base_training_chat_template
 
     if chat_template == qwen2_5_vl_chat_template:
         return qwen2_5_vl_training_chat_template
