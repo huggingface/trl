@@ -19,9 +19,11 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import subprocess
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -414,8 +416,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    def test_checkpoint_keeps_master_dtype_without_fsdp(self):
+    def _train_one_step_and_save(self, peft_config=None):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -437,8 +438,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             weight_transfer=_StubWeightTransfer(),
+            peft_config=peft_config,
         )
         trainer.train()
+        return trainer
+
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_checkpoint_keeps_master_dtype_without_fsdp(self):
+        trainer = self._train_one_step_and_save()
 
         assert trainer.model.dtype == torch.float32
         checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
@@ -449,6 +456,60 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         reloaded = AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto")
         for name, param in trainer.model.named_parameters():
             assert torch.equal(reloaded.get_parameter(name).to(param.device), param)
+
+    @require_peft
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self):
+        from peft import LoraConfig
+
+        self._train_one_step_and_save(peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
+
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "adapter_model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
+
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_checkpoint_saved_in_compute_dtype_under_fsdp(self):
+        # `_save` only casts under FSDP, so the training step runs under `accelerate launch` with the FSDP2 config on
+        # one process; `test_fsdp_checkpoint_body` is the launched half.
+        root = Path(__file__).resolve().parents[2]
+        subprocess.run(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                "trl/accelerate_configs/fsdp2.yaml",
+                "--num_processes",
+                "1",
+                "-m",
+                "pytest",
+                "tests/experimental/test_async_grpo_trainer.py",
+                "-k",
+                "test_fsdp_checkpoint_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            cwd=root,
+            env={**os.environ, "TRL_TEST_FSDP_OUTPUT_DIR": self.tmp_dir},
+            check=True,
+        )
+
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"BF16"}
+        with open(os.path.join(checkpoint, "config.json")) as f:
+            assert json.load(f)["dtype"] == "bfloat16"
+        assert AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto").dtype == torch.bfloat16
+        master = torch.load(os.path.join(checkpoint, "pytorch_model_fsdp.bin"), map_location="cpu", weights_only=True)
+        assert {tensor.dtype for tensor in master.values() if tensor.is_floating_point()} == {torch.float32}
+
+    @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by the FSDP checkpoint test")
+    def test_fsdp_checkpoint_body(self):
+        self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
+        trainer = self._train_one_step_and_save()
+        assert trainer.is_fsdp_enabled
 
     def test_train_model(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
