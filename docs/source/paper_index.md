@@ -1782,7 +1782,7 @@ Two loss formulations are provided:
 | P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
 | H-KL | `"h_kl"` | Hybrid: forward KL on renormalized distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
 
-TRL renormalizes H-KL distributions over the common set and the pooled P-KL teacher distribution after span averaging, so each KL compares normalized distributions. This intentionally differs from the unnormalized log-probability slices in the reference implementation. CE and KD use separate token and aligned-span counts over each accumulation window. Dynamic CE/KD balancing and P-KL top-k selection are computed per microbatch.
+As in the reference implementation, H-KL slices the full-vocabulary log-probabilities to the common set and P-KL averages the teacher log-probabilities over each span without renormalizing, so the KD term can be negative. CE and KD use separate token and aligned-span counts over each accumulation window. Dynamic CE/KD balancing and P-KL top-k selection are computed per microbatch.
 
 This implementation uses a frozen projection matrix. The paper also jointly learns the matrix for P-KL; that variant is not implemented here.
 
@@ -1804,7 +1804,7 @@ python examples/xtoken/xtoken.py \
     --teacher_model_name_or_path Qwen/Qwen3-4B \
     --dataset_name trl-lib/chatbot_arena_completions \
     --xtoken_loss_type p_kl \
-    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt \
+    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt \
     --lmbda 0.0
 ```
 
@@ -1818,7 +1818,7 @@ config = GOLDConfig(
     xtoken_temperature=1.0,  # "temperature τ=1.0"
     xtoken_dynamic_scaling=True,  # Eq. (7): stop-gradient CE/KD balance
     xtoken_loss_type="p_kl",
-    xtoken_projection_matrix_path="cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt",
+    xtoken_projection_matrix_path="cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt",
     teacher_tokenizer_name_or_path="Qwen/Qwen3-4B",
 )
 ```

@@ -21,18 +21,28 @@
 
 # docstyle-ignore
 """
+Build the projection matrix first (see examples/xtoken/build_projection_matrix.py for the optional exact-map and
+sort-and-cut steps):
+
+python examples/xtoken/build_projection_matrix.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --runtime-top-k 4 \
+    --output-dir cross_tokenizer_data
+
+Then train:
+
 python examples/xtoken/xtoken.py \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --teacher_model_name_or_path Qwen/Qwen3-4B \
     --dataset_name trl-lib/chatbot_arena_completions \
     --xtoken_loss_type p_kl \
-    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2-1B-Instruct_to_Qwen3-4B_multitoken_top_32_double_top4.pt \
+    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt \
     --lmbda 0.0 \
     --max_steps 5000 \
     --output_dir xtoken-output
 
-Build the projection matrix first with the scripts in examples/xtoken/. See
-https://huggingface.co/papers/2605.21699.
+See https://huggingface.co/papers/2605.21699.
 """
 
 from datasets import load_dataset
