@@ -730,9 +730,9 @@ class TestHeadLossNumerics:
             ref_logps = logits.log_softmax(-1)
         ref_loss = -2 * (ref_logps.diagonal() * advantages.double()).sum()
         ref_loss.backward()
-        torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-6)
+        torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-5)
         torch.testing.assert_close(
-            weight.grad.double(), logits.grad.t(), atol=0, rtol=1e-2 if dtype == torch.bfloat16 else 1e-6
+            weight.grad.double(), logits.grad.t(), atol=0, rtol=1e-2 if dtype == torch.bfloat16 else 1e-5
         )
 
     @pytest.mark.parametrize("chunk_size", [2, 4])

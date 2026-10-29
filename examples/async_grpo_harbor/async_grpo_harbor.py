@@ -18,7 +18,7 @@
 #     "trackio",
 #     "datasets",
 #     "peft",
-#     "openenv @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv @ git+https://github.com/openenv/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 # ]
 # ///
 
