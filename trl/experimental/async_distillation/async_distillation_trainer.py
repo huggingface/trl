@@ -1803,7 +1803,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 else:
                     num_experts = config.num_experts
                 num_experts_per_tok = config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so there is no attention mask and every token counts.
+            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
             aux_loss = load_balancing_loss_func(backbone_outputs.router_logits, num_experts, num_experts_per_tok, None)
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
