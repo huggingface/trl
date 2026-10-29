@@ -109,6 +109,10 @@ Always include the thinking block regardless of message position. The original c
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `qwen3_v2_training.jinja`
+
+Patched original Qwen3 template (shipped by the Qwen3 checkpoints before May 2025, and still by the Qwen3 base checkpoints). Same diff as `qwen3_training.jinja`, applied to `qwen3_v2.jinja`.
+
 ### `qwen3_vl_training.jinja`
 
 Patched Qwen3-VL template. Diff vs `qwen3_vl.jinja`:

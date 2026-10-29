@@ -70,6 +70,7 @@ REPOS = [
     "Qwen/Qwen2.5-VL-3B-Instruct",
     "Qwen/Qwen3-4B-Instruct-2507",
     "Qwen/Qwen3-8B",
+    "Qwen/Qwen3-8B-Base",
     "Qwen/Qwen3-VL-2B-Instruct",
     "Qwen/Qwen3.5-0.8B",
     "Qwen/Qwen3.5-4B",

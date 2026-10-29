@@ -712,6 +712,8 @@ qwen2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl.jinja").read_text(
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text(encoding="utf-8")
 
+qwen3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2.jinja").read_text(encoding="utf-8")
+
 qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text(encoding="utf-8")
 
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text(encoding="utf-8")
@@ -781,6 +783,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     elif chat_template in [
         qwen2_5_chat_template,
         qwen3_chat_template,
+        qwen3_v2_chat_template,
         qwen3_instruct_2507_chat_template,
         qwen3_vl_chat_template,
     ]:
@@ -1105,6 +1108,8 @@ qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text(encoding="utf-8")
 
+qwen3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2_training.jinja").read_text(encoding="utf-8")
+
 qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1277,6 +1282,9 @@ def get_training_chat_template(
 
     if chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
+
+    if chat_template == qwen3_v2_chat_template:
+        return qwen3_v2_training_chat_template
 
     if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template

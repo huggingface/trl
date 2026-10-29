@@ -159,7 +159,11 @@ Original Qwen2.5-VL chat template. Also matches Qwen2-VL, which ships a byte-ide
 
 ### `qwen3.jinja`
 
-Original Qwen3 chat template.
+Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 checkpoints since [895c8d1](https://huggingface.co/Qwen/Qwen3-8B/commit/895c8d171bc03c30e113cd7a28c02494b5e068b7)).
+
+### `qwen3_v2.jinja`
+
+Original Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 checkpoints before [895c8d1](https://huggingface.co/Qwen/Qwen3-8B/commit/895c8d171bc03c30e113cd7a28c02494b5e068b7), and still by the Qwen3 base checkpoints such as `Qwen/Qwen3-8B-Base`). Unlike `qwen3.jinja`, it assumes string message content, and reads the reasoning from `reasoning_content` whenever it is set. Response parsing reuses `qwen3_template`.
 
 ### `qwen3_instruct_2507.jinja`
 
@@ -364,6 +368,10 @@ Always include the thinking block regardless of message position. The original c
 ```
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_v2_training.jinja`
+
+Patched original Qwen3 template. Same diff as `qwen3_training.jinja`, applied to `qwen3_v2.jinja`.
 
 ### `qwen3_instruct_2507_training.jinja`
 
