@@ -59,7 +59,7 @@ from trl.trainer.utils import (
     use_adapter,
 )
 
-from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
+from .testing_utils import TrlTestCase, require_kernels, require_peft, require_rich, require_torch_accelerator
 
 
 if is_peft_available():
@@ -1972,10 +1972,13 @@ class TestAddFusedLMHeadLoss:
             # Forward only: its weights are FP8, and FP8 layers have no backward yet (huggingface/transformers#50031)
             pytest.param(
                 "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
-                marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.22.0"),
-                    reason="Mistral Large 4 was introduced in transformers-5.22.0",
-                ),
+                marks=[
+                    require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.22.0"),
+                        reason="Mistral Large 4 was introduced in transformers-5.22.0",
+                    ),
+                ],
             ),
         ],
     )
