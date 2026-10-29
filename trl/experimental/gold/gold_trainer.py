@@ -2103,7 +2103,7 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation.sync_weights()
             self._last_vllm_sync_step = self.state.global_step
 
-        _, completion_ids, _, _ = self.vllm_generation.generate(
+        _, completion_ids, _, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids_list,
             images=None,
             num_generations=self.num_generations,
@@ -2279,7 +2279,7 @@ class GOLDTrainer(SFTTrainer):
             generate_images = all_images
         else:
             generate_images = None
-        _, completion_ids, _, _ = self.vllm_generation.generate(
+        _, completion_ids, _, _, _ = self.vllm_generation.generate(
             prompts=all_prompt_ids,
             images=generate_images,
             num_generations=self.num_generations,

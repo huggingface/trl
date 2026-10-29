@@ -387,7 +387,7 @@ class RecordingVLLMGeneration:
 
     def generate(self, prompts, images, num_generations):
         self.prompts = prompts
-        return None, [self.completion_ids] * len(prompts), None, None
+        return None, [self.completion_ids] * len(prompts), None, None, None
 
 
 def _gold_vllm_trainer(monkeypatch, tmp_path, **config_kwargs):
@@ -2104,7 +2104,7 @@ def test_on_policy_vlm_vllm_does_not_duplicate_repeated_sampler_batch(monkeypatc
         def generate(self, prompts, images, num_generations):
             received["prompts"] = prompts
             received["images"] = images
-            return None, [[100 + i, self.eos_token_id] for i in range(len(prompts))], None, None
+            return None, [[100 + i, self.eos_token_id] for i in range(len(prompts))], None, None, None
 
     monkeypatch.setattr(gold_trainer_module, "is_vllm_available", lambda: True)
     monkeypatch.setattr(gold_trainer_module, "VLLMGeneration", RecordingVLLMGeneration)
