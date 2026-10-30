@@ -1,13 +1,14 @@
 # Asynchronous GRPO
 
 > [!IMPORTANT]
-> This trainer requires `vllm` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm`, `transformers>=5.2.0` and `kernels` (training loads FlashAttention from the Hub through it). For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
-> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
+> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first, then force-install transformers, then add `kernels` through TRL's extra, which pins the version transformers accepts:
 >
 > ```bash
 > pip install vllm
 > pip install 'transformers>=5.2.0' --no-deps
+> pip install 'trl[kernels]'
 > ```
 
 ## Overview
@@ -46,7 +47,7 @@ The number of concurrent requests sent to the vLLM server is capped by `max_infl
 
 `max_inflight_tasks` is a ceiling, not the number actually in flight. The worker polls the server's `/metrics` endpoint every few seconds and keeps a live cap underneath it (`rollout/inflight_cap`): past a certain concurrency, more requests make vLLM *slower*, because the KV cache fills, sequences are preempted and recomputed, and cached prefixes are evicted and re-prefilled. The cap starts at `KV cache tokens / max_model_len`, read from the server at startup: as many requests as fit at full length, so the first step cannot thrash. While usage stays under 0.6 with nothing queued, the cap grows by 25% each time a cap's worth of rollouts has completed, up to the ceiling. When KV cache usage passes 0.8, the cap is cut by 30%; no running request is cancelled, admissions just stop until the pool has drained below the new cap, and no further cut is taken until then. If the server does not expose `/metrics`, the cap stays at the ceiling.
 
-**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
+**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume. Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it; the fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP the checkpoint is also the resume file, so it keeps the master dtype.
 
 ## Quick start
 
@@ -73,6 +74,7 @@ The vLLM server and the trainer must run on **separate GPUs**. Use `CUDA_VISIBLE
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
 
@@ -96,6 +98,7 @@ Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, …) can be trained on **tex
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}'
 ```
 
@@ -103,9 +106,6 @@ CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
 
 > [!WARNING]
 > **Images are not supported yet.** Prompts containing images are not passed to the vLLM server or to the training forward pass. Multimodal training also needs the padding-free packing path to build 3D M-RoPE positions from the image grid, which is not implemented here.
-
-> [!WARNING]
-> **Hybrid models (Qwen3.5, Qwen3.6) need `flash-linear-attention` installed**, or their gated-DeltaNet layers silently fall back to a pure-PyTorch scan that costs ~20x (measured on Qwen3.5-2B: 1046 vs 52 µs/token). Those layers also carry recurrent state across a padding-free packed row, which the trainer does not reset at sample boundaries, so their training log-probs drift from what the server generated as more sequences are packed per row.
 
 ## Top-k and top-p sampling
 
@@ -115,6 +115,7 @@ Top-k and top-p renormalize the sampling distribution over a restricted candidat
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}' \
     --return-sampling-mask \
     --enable-scale-out
@@ -125,6 +126,13 @@ config = AsyncGRPOConfig(top_p=0.95, top_k=512)
 ```
 
 `--return-sampling-mask` makes vLLM record the candidate set (vLLM 0.28 or later, on its V2 model runner: `VLLM_USE_V2_MODEL_RUNNER=1` if the server refuses the flag), `--enable-scale-out` exposes the token-in-token-out endpoint that returns it. The worker checks both on the server when it starts. An older vLLM cannot return the set, so the trainer keeps normalizing over the whole vocabulary and warns about the biased ratio.
+
+## Score centering
+
+The server's log-probabilities never match the trainer's exactly: different kernels, a different precision, a policy a few steps behind. Importance weights alone do not correct for that, because the score  \\( \nabla_\theta \log \pi_\theta \\) of a sampled token does not average to zero under the sampler, so every update also pulls the policy toward the sampler ([Score centering](https://huggingface.co/papers/2609.20807)). By default the trainer subtracts that expectation at every position (`score_centering=True`), estimated over the sampler's `num_sampler_logprobs` most likely tokens, and drops the tokens whose importance ratio to the sampler falls outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]`. For that the worker requests the top log-probabilities of every generated token from the server, which it serializes per token: a large `num_sampler_logprobs` slows the server down, and its `--max-logprobs` bounds what it accepts. `score_centering=False` trains with the clipped objective alone. `sampling/masked_mean` is the fraction of tokens the bounds dropped and `sampling/sampler_mass` the sampler's probability mass covered by the top tokens.
+
+> [!WARNING]
+> Serializing the top log-probabilities is CPU work in vLLM's API server, and with its default single API server `num_sampler_logprobs=8` halves generation throughput. Start the server with `--api-server-count 8` on vLLM 0.32 or later: measured on one H100 with 1.5B to 7B models, the top-8 log-probabilities then cost under 3% of generation throughput. On vLLM 0.31 the same flag still leaves a 20 to 40% loss, fixed upstream by [vllm-project/vllm#58181](https://github.com/vllm-project/vllm/pull/58181).
 
 ## LoRA
 
@@ -147,6 +155,7 @@ Every weight sync has to get the updated policy to the server. By default the tr
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3-4B \
     --max-model-len 4096 \
     --logprobs-mode processed_logprobs \
+    --api-server-count 8 \
     --weight-transfer-config '{"backend":"nccl"}' \
     --enable-lora \
     --max-lora-rank 32 \
@@ -294,6 +303,7 @@ A few consequences:
 - **Any common prefix is shared**: the rollouts of a prompt, and across prompts a common system prompt or tool schema. The planner sends a sample to the row already holding its `group_id`, where its prompt already is. When that row is full, the sample goes to another row if a rank is still empty, or if that does not raise the most loaded row, which sets the micro-batch's time; otherwise the micro-batch closes.
 - **Nothing shared is plain packing**: every sample is then one segment whose path is itself, which is ordinary padding-free FA3 varlen packing.
 - **Only K/V is duplicated**: a shared prefix is gathered once per descendant segment, which is about what unpacked training would hold, and small with GQA.
+- **Gated DeltaNet hybrids are supported** (Qwen3.5, Qwen3.6, Qwen3-Next, …): their convolution reads each token's own predecessors, and their chunked delta rule starts each segment from its parent's final state (`trl/experimental/async_grpo/tree_gated_delta_rule.py`). This needs `transformers>=5.15.0`, where these layers call the module-level functions that tree packing patches. Models with any other non-attention layer are refused at init.
 
 What it buys: with nothing shared, it runs at about the speed of plain padding-free packing, and the speed-up grows roughly with the packing ratio (about 2.8–3x at a ratio of 3.4 on Qwen3-0.6B/1.7B, H100). The ratio is shared prefix × samples per row, so `batch/samples_per_row` is the leading indicator: near 1, nothing can be shared, and the lever is `token_budget`.
 
@@ -354,6 +364,9 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/vllm_running_requests`                                    | requests the server's engines are decoding (vLLM's `num_requests_running`, summed over engines). The gap to `rollout/inflight` is what sits in the API server process, building responses                                                   |
 | `rollout/vllm_queued_requests`                                     | requests the server has accepted but not yet scheduled (vLLM's `num_requests_waiting`, summed over engines). The cap does not grow while this is non-zero                                                                                    |
 | `rollout/vllm_preemptions_total`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
+| `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scored (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
+
+A group whose rollouts all received the same reward (or fewer than two of which could be scored) has zero advantage everywhere, so the worker drops it instead of enqueuing it: it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
 
 ### Tools
 

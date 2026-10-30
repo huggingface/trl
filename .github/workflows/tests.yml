@@ -251,7 +251,7 @@ jobs:
             "datasets==4.7.0" \
             "deepspeed==0.19.8" \
             "huggingface_hub==0.34.0" \
-            "liger-kernel==0.8.2" \
+            "math-verify==0.8.0" \
             "numpy==1.26.0" \
             "pandas==2.1.1" \
             "peft==0.17.0" \

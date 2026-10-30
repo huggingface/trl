@@ -16,10 +16,11 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "openenv[harbor] @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv[harbor] @ git+https://github.com/openenv/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
+#     "kernels",
 #     "transformers>=5.2",
 #     "huggingface_hub>=1.22",
 # ]
@@ -337,7 +338,7 @@ def main() -> None:
             str(source),
             "fetch",
             "--depth=1",
-            "https://github.com/huggingface/OpenEnv.git",
+            "https://github.com/openenv/OpenEnv.git",
             OPENENV_REVISION,
         ],
         check=True,
