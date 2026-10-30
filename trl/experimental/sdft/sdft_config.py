@@ -34,6 +34,15 @@ class SDFTConfig(_BaseConfig):
             Distillation objective mode. SDFT defaults to top-k logit distillation.
         distillation_topk (`int`, *optional*, defaults to `100`):
             Number of top tokens used by the default SDFT top-k logit objective.
+        distillation_topk_support (`Literal["student", "teacher"]`, *optional*, defaults to `"student"`):
+            Which side's logits define the top-k token support for `distillation_mode="topk_logits"`. SDFT's convention
+            is `"student"`; pass `"teacher"` to project onto the teacher's top-k instead. Only used when
+            `distillation_mode="topk_logits"`. With `use_teacher_server=True`, this
+            field is force-aligned to `"teacher"` at construction (the server only returns the teacher's top-k).
+        distillation_kl_clip (`float`, *optional*):
+            Per-token upper bound on the summed vocabulary divergence, applied before averaging across the batch.
+            Prevents high-divergence outlier tokens from dominating the training signal. `None` (the default) disables
+            clipping. Only supported for the `full_logits` and `topk_logits` modes.
         distillation_is_clip (`float`, *optional*, defaults to `2.0`):
             Clipping coefficient for importance sampling in self-distillation. `None` disables clipping.
         distillation_add_tail (`bool`, *optional*, defaults to `False`):
@@ -58,6 +67,10 @@ class SDFTConfig(_BaseConfig):
             Whether on-policy generation should use the teacher-conditioned prompt instead of the student prompt.
         teacher_prompt_template (`str`, *optional*, defaults to `"{prompt}\n\n{privileged_context}"`):
             Template used to combine the student prompt and privileged context into the teacher prompt.
+        teacher_chat_template_kwargs (`dict[str, Any]`, *optional*):
+            Extra kwargs forwarded to `apply_chat_template` when building the teacher prompt (for example
+            `{"enable_thinking": True}` to pair a thinking teacher with a non-thinking student). Defaults to the same
+            `chat_template_kwargs` used for the student prompt when not set.
 
         > Parameters that control the model
 
@@ -180,7 +193,12 @@ class SDFTConfig(_BaseConfig):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "generation_kwargs",
+        "chat_template_kwargs",
+        "teacher_chat_template_kwargs",
+    ]
 
     model_init_kwargs: dict[str, Any] | None = field(
         default=None,
@@ -270,13 +288,13 @@ class SDFTConfig(_BaseConfig):
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
-    generation_kwargs: dict[str, Any] | None = field(
+    generation_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
-    chat_template_kwargs: dict[str, Any] | None = field(
+    chat_template_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating completions."
@@ -403,6 +421,20 @@ class SDFTConfig(_BaseConfig):
         default=100,
         metadata={"help": "Number of top tokens used by the default SDFT top-k logit objective."},
     )
+    distillation_topk_support: Literal["student", "teacher"] = field(
+        default="student",
+        metadata={
+            "help": "Which side's logits define the top-k token support for `distillation_mode='topk_logits'`. "
+            "Only used when `distillation_mode='topk_logits'`."
+        },
+    )
+    distillation_kl_clip: float | None = field(
+        default=None,
+        metadata={
+            "help": "Pointwise per-vocabulary-entry clip applied to the divergence before it is summed over the "
+            "vocabulary. `None` disables clipping. Only supported for `full_logits` and `topk_logits` modes."
+        },
+    )
     distillation_is_clip: float | None = field(
         default=2.0,
         metadata={
@@ -425,6 +457,13 @@ class SDFTConfig(_BaseConfig):
             "help": "Template used to combine the student prompt and privileged context into the teacher prompt."
         },
     )
+    teacher_chat_template_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Extra kwargs forwarded to `apply_chat_template` when building the teacher prompt. Defaults "
+            "to the same `chat_template_kwargs` used for the student prompt when not set."
+        },
+    )
     num_loss_tokens_to_skip: int = field(
         default=0,
         metadata={"help": "Number of initial completion tokens to exclude from the distillation loss."},
@@ -437,6 +476,16 @@ class SDFTConfig(_BaseConfig):
                 "`distillation_mode='sampled_token'` only supports reverse KL, so it requires "
                 f"`distillation_alpha=1.0`, got {self.distillation_alpha}."
             )
+        if self.distillation_kl_clip is not None and self.distillation_mode not in ("full_logits", "topk_logits"):
+            raise ValueError(
+                "`distillation_kl_clip` is only supported for `distillation_mode` in {'full_logits', 'topk_logits'}, "
+                f"got `distillation_mode={self.distillation_mode!r}` with `distillation_kl_clip` set."
+            )
+        if self.use_teacher_server and self.distillation_mode == "topk_logits":
+            # The vLLM teacher server returns only the teacher's top-k logprobs (the student's full logit
+            # distribution is not available server-side to project onto), so the server path always uses teacher
+            # support regardless of the requested value; align the field so the config does not lie.
+            self.distillation_topk_support = "teacher"
         num_processes = self.world_size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
@@ -472,4 +521,14 @@ class SDFTConfig(_BaseConfig):
         ):
             raise ValueError(
                 "teacher_prompt_template must contain both `{prompt}` and `{privileged_context}` placeholders"
+            )
+
+        if self.parallelism_config is not None and (
+            self.parallelism_config.cp_enabled or self.parallelism_config.sp_enabled
+        ):
+            raise ValueError(
+                "SDFTTrainer does not support sequence-dim parallelism (`parallelism_config.cp_size > 1` or "
+                "`parallelism_config.sp_size > 1`) yet. SDFT builds model inputs after generation inside the trainer, "
+                "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
+                "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
             )
