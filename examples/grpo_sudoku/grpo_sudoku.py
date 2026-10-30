@@ -33,7 +33,7 @@ uv pip install git+https://huggingface.co/spaces/openenv/sudoku
 Setup (Option B - Clone OpenEnv repo, for development):
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git
+git clone https://github.com/openenv/OpenEnv.git
 cd OpenEnv/envs/textarena_env
 uv pip install -e .
 ```
@@ -197,7 +197,7 @@ def resolve_system_prompt(path: str) -> str:
     prompt_path = Path(path)
     if not prompt_path.is_file():
         prompt_path = Path(__file__).parent / path
-    return prompt_path.read_text()
+    return prompt_path.read_text(encoding="utf-8")
 
 
 def sanitize_name(name: str) -> str:
