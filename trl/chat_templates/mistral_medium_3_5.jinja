@@ -1,0 +1,263 @@
+{#- Default system message if no system prompt is passed. #}
+{%- set default_system_message = 'You are Mistral Medium 3.5, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.
+You are an intelligent conversational assistant powering an AI assistant called Le Chat.
+Your knowledge base was last updated on Friday, November 1, 2024.
+The current date is {today}.
+
+# GENERAL GUIDELINES
+
+- Accurately answer the user\'s question.
+- For uncertain information or when the user\'s request requires up-to-date or specific data, use the available tools to fetch the information.
+- Be very attentive to dates, always try to resolve dates (e.g. "yesterday" is {yesterday}) and when asked about information at specific dates, discard information that is at another date.
+
+# WEB BROWSING INSTRUCTIONS
+
+You cannot perform any web search or access internet to open URLs, links etc without dedicated tools.
+
+# MULTI-MODAL INSTRUCTIONS
+
+- You have the ability to read images.
+- You cannot read audio nor videos.
+- You cannot generate images without dedicated tools.
+
+# TOOL CALLING INSTRUCTIONS
+
+You may have access to tools that you can use to fetch information or perform actions. You must use these tools in the following situations:
+
+1. When the request requires up-to-date information.
+2. When the request requires specific data that you do not have in your knowledge base.
+3. When the request involves actions that you cannot perform without tools.
+
+Always prioritize using tools to provide the most accurate and helpful response.' %}
+
+{#- Begin of sequence token. #}
+{{- bos_token }}
+
+
+{#- Handle system prompt if it exists. #}
+{%- set loop_messages = messages %}
+{%- if messages[0]['role'] != 'system' and default_system_message != '' %}
+    {{- '[SYSTEM_PROMPT]' + default_system_message + '[/SYSTEM_PROMPT]' }}
+{%- endif %}
+
+
+{#- Tools and model settings definition #}
+{%- set available_tools = '' %}
+{%- set has_tools = false %}
+{%- if tools is defined and tools is not none and tools|length > 0 %}
+    {%- set has_tools = true %}
+    {%- set available_tools = '[AVAILABLE_TOOLS]' + (tools| tojson) + '[/AVAILABLE_TOOLS]' %}
+{%- endif %}
+{%- if reasoning_effort is not defined or reasoning_effort is none %}
+    {%- set reasoning_effort = 'none' %}
+{%- endif %}
+{%- if reasoning_effort not in ['none', 'high'] %}
+    {{- raise_exception('reasoning_effort must be either "none" or "high"') }}
+{%- endif %}
+{%- set model_settings = '[MODEL_SETTINGS]{"reasoning_effort": "' + reasoning_effort + '"}[/MODEL_SETTINGS]' %}
+
+{#- Macros #}
+{%- macro render_content(content, context_name, supported_types_desc, support_thinking, support_images) -%}
+    {%- if content is string -%}
+        {{- content -}}
+    {%- elif content -%}
+        {%- for block in content -%}
+            {%- if block['type'] == 'text' -%}
+                {{- block['text'] -}}
+            {%- elif support_thinking and block['type'] == 'thinking' -%}
+                {{- '[THINK]' + block['thinking'] -}}
+                {%- if block.get('closed', true) -%}{{- '[/THINK]' -}}{%- endif -%}
+            {%- elif support_images and block['type'] in ['image', 'image_url'] -%}
+                {{- '[IMG]' -}}
+            {%- else -%}
+                {{- raise_exception('Only ' + supported_types_desc + ' chunks are supported in ' + context_name + '.') -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{- raise_exception(context_name + ' must have non-empty content.') -}}
+    {%- endif -%}
+{%- endmacro -%}
+
+{#- Aggregate consecutive messages with the same role except system and tool. #}
+{#- A sentinel message is appended so the last group gets flushed inside the loop. #}
+{%- set ns_agg = namespace(messages=[], current_group=[], current_role=none) %}
+{%- for message in loop_messages + [{'role': '__sentinel__'}] %}
+    {%- if message['role'] != ns_agg.current_role or message['role'] == 'system' or message['role'] == 'tool' %}
+        {%- if ns_agg.current_role == 'tool' %}
+            {%- set ns_agg.messages = ns_agg.messages + ns_agg.current_group %}
+        {%- elif ns_agg.current_role is not none %}
+            {%- set ns_c = namespace(text_parts=[], chunks=[], has_non_text=false, tool_calls=[]) %}
+            {%- for msg in ns_agg.current_group %}
+                {#- Convert reasoning / reasoning_content to a leading thinking chunk. #}
+                {%- set reasoning = msg.get('reasoning_content', msg.get('reasoning', none)) %}
+                {%- if reasoning is not none and reasoning != '' %}
+                    {%- if msg['content'] is not none and msg['content'] is not string %}
+                        {%- for block in msg['content'] %}
+                            {%- if block['type'] == 'thinking' %}
+                                {{- raise_exception('Message cannot have both thinking chunks in content and a top-level `reasoning` or `reasoning_content` field.') }}
+                            {%- endif %}
+                        {%- endfor %}
+                    {%- endif %}
+                    {%- set think_chunk = {'type': 'thinking', 'thinking': reasoning} %}
+                    {%- if msg['content'] is string and msg['content'] != '' %}
+                        {%- set new_content = [think_chunk, {'type': 'text', 'text': msg['content']}] %}
+                    {%- elif msg['content'] is not none and msg['content'] is not string and msg['content'] | length > 0 %}
+                        {%- set new_content = [think_chunk] + msg['content'] | list %}
+                    {%- else %}
+                        {%- set new_content = [think_chunk] %}
+                    {%- endif %}
+                    {%- if msg['tool_calls'] is defined and msg['tool_calls'] is not none %}
+                        {%- set msg = {'role': msg['role'], 'content': new_content, 'tool_calls': msg['tool_calls']} %}
+                    {%- else %}
+                        {%- set msg = {'role': msg['role'], 'content': new_content} %}
+                    {%- endif %}
+                {%- endif %}
+                {%- if msg['content'] is string %}
+                    {%- set ns_c.text_parts = ns_c.text_parts + [msg['content']] %}
+                {%- elif msg['content'] is not none %}
+                    {%- set ns_msg = namespace(msg_text_parts=[]) %}
+                    {%- for block in msg['content'] %}
+                        {%- if block['type'] == 'text' %}
+                            {%- set ns_msg.msg_text_parts = ns_msg.msg_text_parts + [block['text']] %}
+                        {%- else %}
+                            {%- if ns_msg.msg_text_parts | length > 0 %}
+                                {%- set ns_c.text_parts = ns_c.text_parts + [ns_msg.msg_text_parts | join('')] %}
+                                {%- set ns_msg.msg_text_parts = [] %}
+                            {%- endif %}
+                            {%- if ns_c.text_parts | length > 0 %}
+                                {%- set ns_c.chunks = ns_c.chunks + [{'type': 'text', 'text': ns_c.text_parts | join('\n\n')}] %}
+                                {%- set ns_c.text_parts = [] %}
+                            {%- endif %}
+                            {%- set ns_c.chunks = ns_c.chunks + [block] %}
+                            {%- set ns_c.has_non_text = true %}
+                        {%- endif %}
+                    {%- endfor %}
+                    {%- if ns_msg.msg_text_parts | length > 0 %}
+                        {%- set ns_c.text_parts = ns_c.text_parts + [ns_msg.msg_text_parts | join('')] %}
+                    {%- endif %}
+                {%- endif %}
+                {%- if msg['tool_calls'] is defined and msg['tool_calls'] is not none %}
+                    {%- set ns_c.tool_calls = ns_c.tool_calls + msg['tool_calls'] | list %}
+                {%- endif %}
+            {%- endfor %}
+            {%- if ns_c.has_non_text %}
+                {%- if ns_c.text_parts | length > 0 %}
+                    {%- set ns_c.chunks = ns_c.chunks + [{'type': 'text', 'text': ns_c.text_parts | join('\n\n')}] %}
+                {%- endif %}
+                {%- set merged_content = ns_c.chunks %}
+            {%- else %}
+                {%- set merged_content = ns_c.text_parts | join('\n\n') %}
+            {%- endif %}
+            {%- if ns_c.tool_calls | length > 0 %}
+                {%- set ns_agg.messages = ns_agg.messages + [{'role': ns_agg.current_role, 'content': merged_content, 'tool_calls': ns_c.tool_calls}] %}
+            {%- else %}
+                {%- set ns_agg.messages = ns_agg.messages + [{'role': ns_agg.current_role, 'content': merged_content}] %}
+            {%- endif %}
+        {%- endif %}
+        {%- if message['role'] != '__sentinel__' %}
+            {%- set ns_agg.current_group = [message] %}
+            {%- set ns_agg.current_role = message['role'] %}
+        {%- endif %}
+    {%- else %}
+        {%- set ns_agg.current_group = ns_agg.current_group + [message] %}
+    {%- endif %}
+{%- endfor %}
+{%- set loop_messages = ns_agg.messages %}
+
+{#- Validates message ordering. #}
+{%- set ns = namespace(available_tools_and_settings_emitted=false) %}
+{%- if loop_messages | length > 0 and loop_messages[0]['role'] not in ['user', 'system'] %}
+    {{- raise_exception('Conversation must start with a user or system message, got ' + loop_messages[0]['role'] + '.') }}
+{%- endif %}
+{%- set ns_order = namespace(previous_role=none) %}
+{%- for message in loop_messages %}
+    {%- set current_role = message['role'] %}
+    {%- if ns_order.previous_role is not none %}
+        {%- if ns_order.previous_role == 'system' %}
+            {%- if current_role not in ['user', 'assistant', 'system'] %}
+                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+            {%- endif %}
+        {%- elif ns_order.previous_role == 'user' %}
+            {%- if current_role not in ['assistant', 'system', 'user'] %}
+                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+            {%- endif %}
+        {%- elif ns_order.previous_role == 'assistant' %}
+            {%- if current_role not in ['assistant', 'user', 'tool'] %}
+                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+            {%- endif %}
+        {%- elif ns_order.previous_role == 'tool' %}
+            {%- if current_role not in ['assistant', 'tool', 'user'] %}
+                {{- raise_exception('Unexpected role \'' + current_role + '\' after role \'' + ns_order.previous_role + '\'') }}
+            {%- endif %}
+        {%- endif %}
+    {%- endif %}
+    {%- set ns_order.previous_role = current_role %}
+{%- endfor %}
+
+{#- Handle conversation messages. #}
+{%- for message in loop_messages %}
+    {#- User messages supports text, image and image_url content. #}
+    {%- if message['role'] == 'user' %}
+        {%- if not ns.available_tools_and_settings_emitted %}
+            {{- available_tools }}
+            {{- model_settings }}
+            {%- set ns.available_tools_and_settings_emitted = true %}
+        {%- endif %}
+        {%- if message['content'] is not string and message['content'] %}
+            {#- When content has exactly one image and one text block, put image first. #}
+            {%- if message['content'] | length == 2 and message['content'][0]['type'] == 'text' and message['content'][1]['type'] in ['image', 'image_url'] %}
+                {%- set blocks = [message['content'][1], message['content'][0]] %}
+            {%- else %}
+                {%- set blocks = message['content'] %}
+            {%- endif %}
+            {%- set user_content = blocks %}
+        {%- else %}
+            {%- set user_content = message['content'] %}
+        {%- endif %}
+        {{- '[INST]' -}}
+        {{- render_content(user_content, 'user message content', supported_types_desc='text, image and image_url', support_thinking=false, support_images=true) -}}
+        {{- '[/INST]' }}
+
+    {#- Assistant messages supports text and thinking content. #}
+    {%- elif message['role'] == 'assistant' %}
+        {%- if (message['content'] is none or message['content'] == '' or message['content']|length == 0) and (message['tool_calls'] is not defined or message['tool_calls'] is none or message['tool_calls']|length == 0) %}
+            {{- raise_exception('Assistant message must have a string or a list of chunks in content or a list of tool calls.') }}
+        {%- endif %}
+
+        {%- if message['content'] %}
+            {{- render_content(message['content'], 'assistant message contents', supported_types_desc='text and thinking', support_thinking=true, support_images=false) -}}
+        {%- endif %}
+
+        {%- if message['tool_calls'] is defined and message['tool_calls'] is not none and message['tool_calls']|length > 0 %}
+            {%- for tool in message['tool_calls'] %}
+                {{- '[TOOL_CALLS]' }}
+                {%- set name = tool['function']['name'] %}
+                {%- set arguments = tool['function']['arguments'] %}
+                {%- if arguments is not string %}
+                    {%- set arguments = arguments|tojson|safe %}
+                {%- elif arguments == '' %}
+                    {%- set arguments = '{}' %}
+                {%- endif %}
+                {{- name + '[ARGS]' + arguments }}
+            {%- endfor %}
+        {%- endif %}
+
+        {{- eos_token }}
+
+    {#- Tool messages (multimodal). #}
+    {%- elif message['role'] == 'tool' %}
+        {{- '[TOOL_RESULTS]' -}}
+        {{- render_content(message['content'], 'tool message contents', supported_types_desc='text and image', support_images=true) -}}
+        {{- '[/TOOL_RESULTS]' }}
+
+    {#- System messages. #}
+    {%- elif message['role'] == 'system' %}
+        {{- '[SYSTEM_PROMPT]' -}}
+        {{- render_content(message['content'], 'system message contents', supported_types_desc='text', support_thinking=false, support_images=false) -}}
+        {{- '[/SYSTEM_PROMPT]' -}}
+
+    {#- Raise exception for unsupported roles. #}
+    {%- else %}
+        {{- raise_exception('Only user, assistant, system and tool roles are supported, got ' + message['role'] + '.') }}
+    {%- endif %}
+{%- endfor %}

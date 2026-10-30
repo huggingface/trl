@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
+import torch
 import transformers
 from jinja2 import TemplateError
 from packaging.version import Version
@@ -475,7 +476,7 @@ lfm2_2_5_template = {
     # LFM2.5 renders every tool call of a turn into a single `<|tool_call_start|>[...]<|tool_call_end|>` block, as a
     # comma-separated list of Python-style calls: `[get_weather(city='Paris', days=3), ping()]`. The `open_pattern`
     # therefore matches either the opening bracket or the comma separating two calls, and `close_pattern` matches the
-    # closing paren plus, for the last call, the trailing `]<|tool_call_end|>`.
+    # closing paren followed by the next call or, for the last call, by the trailing `]<|tool_call_end|>`.
     #
     # Argument values are rendered by the template's `format_arg_value` macro: strings single-quoted, mappings as JSON,
     # everything else via Jinja's `string` filter. `string_delims` turns the single-quoted strings back into JSON
@@ -495,7 +496,7 @@ lfm2_2_5_template = {
         },
         "tool_calls": {
             "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
-            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>|(?=,\s*\w+\())\s*",
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
@@ -537,7 +538,7 @@ lfm2_2_5_v3_template = {
         },
         "tool_calls": {
             "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
-            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>|(?=,\s*\w+\())\s*",
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
@@ -608,6 +609,31 @@ gemma4_template = {
         },
         "content": {
             "close_pattern": r"(?:<turn\|>|<\|tool_response>|<eos>)\s*|$",
+            "content": "text",
+        },
+    },
+}
+
+deepseekv3_template = {
+    # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
+    # `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and the reasoning field the tag.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?:<think>\n?)?(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<｜tool▁calls▁begin｜>)?<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n",
+            "close_pattern": r"\n```<｜tool▁call▁end｜>\s*(?:<｜tool▁calls▁end｜>)?",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<｜end▁of▁sentence｜>\s*|$",
             "content": "text",
         },
     },
@@ -688,6 +714,10 @@ llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(enco
 llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(encoding="utf-8")
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
+
+mistral_large_4_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4.jinja").read_text(encoding="utf-8")
+
+mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.jinja").read_text(encoding="utf-8")
 
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
 
@@ -772,7 +802,11 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template == glm4moe_chat_template:
+    if chat_template == deepseekv3_chat_template:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, deepseekv3_template
+    elif chat_template == glm4moe_chat_template:
         schema, template = glm4moe_schema, glm4moe_template
     elif chat_template == gptoss_chat_template:
         schema, template = gptoss_schema, gptoss_template
@@ -781,6 +815,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     elif chat_template in [
         qwen2_5_chat_template,
         qwen3_chat_template,
+        qwen3_training_chat_template,
         qwen3_instruct_2507_chat_template,
         qwen3_vl_chat_template,
     ]:
@@ -958,20 +993,18 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
     except TypeError:
-        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
-        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
-        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
-        messages1[1]["tool_calls"] = dummy_tool_calls
-        messages2[1]["tool_calls"] = dummy_tool_calls
-        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
-        ids2 = processing_class.apply_chat_template(
-            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
-        )
+        # The template rejects dict arguments (transformers#45419), so trainers must swap in the training template
+        return False
 
     # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:
         ids1 = ids1[0]
         ids2 = ids2[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(ids1, torch.Tensor):
+            ids1 = ids1.tolist()
+            ids2 = ids2.tolist()
 
     return ids2[: len(ids1)] == ids1
 
@@ -1031,6 +1064,10 @@ def is_chat_template_stop_token_trained(
     if is_vlm:
         input_ids = input_ids[0]
         assistant_masks = assistant_masks[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.tolist()
 
     # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
     # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
@@ -1076,6 +1113,14 @@ lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja"
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
+
+mistral_large_4_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+mistral_medium_3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_training.jinja").read_text(encoding="utf-8")
 
@@ -1247,6 +1292,12 @@ def get_training_chat_template(
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
+
+    if chat_template == mistral_large_4_chat_template:
+        return mistral_large_4_training_chat_template
+
+    if chat_template == mistral_medium_3_5_chat_template:
+        return mistral_medium_3_5_training_chat_template
 
     if chat_template == muse_glimmer_chat_template:
         return muse_glimmer_training_chat_template

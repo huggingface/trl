@@ -31,7 +31,7 @@ Original DeepSeek-R1-Distill chat template, shipped byte-identically by every di
 
 ### `deepseekv3.jinja`
 
-Original DeepSeek-V3 chat template.
+Original DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-R1`). Renders tool-call arguments only as strings, so trainers swap in `deepseekv3_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
 
 ### `diffusion_gemma.jinja`
 
@@ -47,7 +47,7 @@ Original Gemma 3 chat template (as shipped by `google/gemma-3-*` checkpoints). U
 
 ### `gemma4.jinja`
 
-Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` and the other checkpoints in that generation, at [6b7e72c](https://huggingface.co/google/gemma-4-E2B-it/commit/6b7e72c67d3c4556f42b56d5a68b4b8e864c63b4)). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
+Original Gemma 4 chat template (as shipped by `google/gemma-4-E2B-it` at [6b7e72c](https://huggingface.co/google/gemma-4-E2B-it/commit/6b7e72c67d3c4556f42b56d5a68b4b8e864c63b4); `google/gemma-4-E4B-it` went through the same revisions). Renders reasoning (`<|channel>thought\n...<channel|>`), assistant `tool_calls` (`<|tool_call>call:<name>{...}<tool_call|>` blocks), and multimodal `content` blocks. Response parsing uses `gemma4_template`.
 
 ### `gemma4_v2.jinja`
 
@@ -120,6 +120,14 @@ Original Llama 3.1 / 3.2 chat templates. Both render tool calls as a single bare
 ### `llava_next.jinja`
 
 Original Llava-Next chat template (as shipped by `llava-hf/llava-v1.6-mistral-7b-hf`). Renders multimodal `content` blocks in the LLaVA / Mistral `[INST] ... [/INST]` format. Does not support tool calling.
+
+### `mistral_large_4.jinja`
+
+Original Mistral Large 4 chat template (as shipped by `mistralai/Mistral-Large-4-1T-A52B`). Same format as `mistral_medium_3_5.jinja`, without the default system prompt, with `reasoning_effort` set to `low`, `medium` or `high` (defaults to `high`), and with `response_format` (JSON object or JSON schema) written into the `[MODEL_SETTINGS]` block.
+
+### `mistral_medium_3_5.jinja`
+
+Original Mistral Medium 3.5 chat template (as shipped by `mistralai/Mistral-Medium-3.5-128B`). Renders the Mistral `[INST] ... [/INST]` format with reasoning in `[THINK] ... [/THINK]`, tools in `[AVAILABLE_TOOLS]`, tool calls as `[TOOL_CALLS]name[ARGS]{...}` and tool results in `[TOOL_RESULTS]`, and writes the `reasoning_effort` into a `[MODEL_SETTINGS]` block before the first user turn.
 
 ### `muse_glimmer.jinja`
 
@@ -282,6 +290,14 @@ Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so
 Patched Llava-Next template. Diff vs `llava_next.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `mistral_large_4_training.jinja`
+
+Patched Mistral Large 4 template. Diff vs `mistral_large_4.jinja`: same change as `mistral_medium_3_5_training.jinja`, wrapping the assistant turn (content, tool calls and the end-of-turn token) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `mistral_medium_3_5_training.jinja`
+
+Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the original is already prefix-preserving, so the only change is wrapping the assistant turn (content, tool calls and the end-of-turn token) with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
 ### `muse_glimmer_training.jinja`
 
