@@ -203,7 +203,8 @@ def main() -> None:
             mask_truncated_completions=True,
             # Multi-turn rollouts: clip per-token ratios instead of masking whole sequences.
             vllm_importance_sampling_mode="token_truncate",
-            max_tool_calling_iterations=6,
+            # Invalid moves use tool rounds too. The environment still ends the game after 6 valid guesses.
+            max_tool_calling_iterations=12,
             push_to_hub=args.push_to_hub,
         ),
         environment_factory=WordleEnv,
