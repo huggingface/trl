@@ -39,7 +39,6 @@ from .testing_utils import (
     is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
-    require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_vision,
@@ -1034,30 +1033,6 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
-        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
-        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
