@@ -15,6 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl[vllm,peft]",
+#     "peft>=0.19.0",  # TRL raises on MoE models with older versions, see #7765
 #     "trackio",
 # ]
 # ///
@@ -34,7 +35,8 @@ On one 8-GPU node (each GPU runs its own vLLM engine and trains on its own slice
 
     accelerate launch --num_processes 8 examples/lfm2_5_moe_research_agent/3_grpo.py
 
-Evaluate the base model and the trained adapter on the same held-out questions with `2_evaluate.py`.
+Evaluate the base model with `2_evaluate.py`, and the trained model on the same held-out questions after merging its
+last checkpoint into the base model (see README.md): vLLM serves merged weights, not an adapter directory.
 """
 
 from peft import LoraConfig
@@ -76,6 +78,8 @@ trainer = GRPOTrainer(
     args=training_args,
     train_dataset=load_questions("train"),
     environment_factory=WikiLibrary,
+    # `all-linear` puts LoRA on the attention, the short convolutions and the two dense feed-forward layers. The routed
+    # experts are 3D parameters, not linear layers, so they stay frozen.
     peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
 )
 trainer.train()

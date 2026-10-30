@@ -12,7 +12,7 @@ torchrun --nproc_per_node 8 examples/lfm2_5_moe_research_agent/1_sft.py
 
 ![SFT loss](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/lfm2_5_moe_sft_loss.png)
 
-One epoch on 8 H100s: 938 steps in 16 minutes, 0.80 s and 27k tokens per step, 3.7k tokens/s per GPU, 31.5 GB peak per GPU. The loss goes from 1.16 to 0.03 and the token accuracy from 90.5% to 99.3%.
+One epoch on 8 H100s: 938 steps of 27k tokens in 16 minutes, so 3.4k tokens/s per GPU over the run (4.2k at the median step of 0.80 s), 31.5 GB peak per GPU. The loss goes from 1.16 to 0.03 and the token accuracy from 90.5% to 99.3%.
 
 The trained model is on the Hub as [trl-lib/LFM2.5-8B-A1B-SFT-function-calling](https://huggingface.co/trl-lib/LFM2.5-8B-A1B-SFT-function-calling) (with your own run, use the last checkpoint in the output directory):
 
@@ -61,7 +61,7 @@ accelerate launch --num_processes 8 examples/lfm2_5_moe_research_agent/3_grpo.py
 
 ![GRPO reward](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/lfm2_5_moe_grpo_reward.png)
 
-One H100, LoRA r=32, 4 questions x 8 episodes per step, 42 s per step (80% of it generating):
+One H100, LoRA r=32 on the attention, short convolutions and two dense layers (the routed experts stay frozen), 4 questions x 8 episodes per step, 42 s per step (80% of it generating):
 
 | | Exact match | Answer submitted | Episodes that `read` an article | Searches per episode |
 | --- | --- | --- | --- | --- |
@@ -94,7 +94,19 @@ read(title='Maroon 5')             -> Maroon 5 is an American pop rock band ... 
 submit_answer(answer='Matt Flynn') -> Answer submitted.
 ```
 
-The trained agent is on the Hub as [trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA](https://huggingface.co/trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA), the last LoRA checkpoint merged into the base model so vLLM can serve it (with your own run, merge it with `AutoPeftModelForCausalLM.from_pretrained(checkpoint).merge_and_unload()`). Play an episode on the first held-out question; each episode is written to `episode.jsonl`:
+The trained agent is on the Hub as [trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA](https://huggingface.co/trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA), the last LoRA checkpoint merged into the base model so vLLM can serve it. With your own run, merge the last checkpoint and save it with the tokenizer, then pass the output directory to `2_evaluate.py --model`:
+
+```python
+import torch
+from peft import AutoPeftModelForCausalLM
+from transformers import AutoTokenizer
+
+model = AutoPeftModelForCausalLM.from_pretrained("LFM2.5-8B-A1B-GRPO-HotpotQA/checkpoint-200", dtype=torch.bfloat16)
+model.merge_and_unload().save_pretrained("LFM2.5-8B-A1B-GRPO-HotpotQA-merged")
+AutoTokenizer.from_pretrained("LiquidAI/LFM2.5-8B-A1B").save_pretrained("LFM2.5-8B-A1B-GRPO-HotpotQA-merged")
+```
+
+Play an episode of the Hub model on the first held-out question; each episode is written to `episode.jsonl`:
 
 ```sh
 python examples/lfm2_5_moe_research_agent/2_evaluate.py --model trl-lib/LFM2.5-8B-A1B-GRPO-HotpotQA --num_questions 1 --output episode.jsonl
