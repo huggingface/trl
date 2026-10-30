@@ -255,7 +255,8 @@ def test_persistent_session_failures_stop_the_worker(make_loop):
     with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
         loop.run()
     assert loop._failed_event.is_set()
-    assert loop.rollout_buffer.empty()
+    # Only the ids of dropped groups, no samples
+    assert all(isinstance(item, int) for item in loop.rollout_buffer.queue)
 
 
 def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
