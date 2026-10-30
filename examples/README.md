@@ -4,6 +4,7 @@ Each example lives in its own self-contained folder. The full index and layout c
 
 For a small decision-model training run, see [`jeva_banking77`](jeva_banking77). It trains Qwen to choose a banking
 intent from candidate descriptions, including requests where none of the candidates apply.
+Its [training config](jeva_banking77/config.yaml) runs 1,000 LoRA steps with a stratified validation holdout.
 
 ## Adding a new example
 

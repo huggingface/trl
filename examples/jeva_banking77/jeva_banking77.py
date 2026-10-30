@@ -19,10 +19,10 @@
 """
 Train a Qwen decision model to select banking intents, including requests with no matching option.
 
-python examples/jeva_banking77/jeva_banking77.py --mode head --max_steps 100 --report_to none
+python examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
 
 accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
-    examples/jeva_banking77/jeva_banking77.py --mode lora --use_peft --max_steps 100 --report_to none
+    examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
 """
 
 import random
@@ -39,6 +39,9 @@ from trl.experimental.jeva import JevaConfig, JevaModel, JevaTrainer
 @dataclass
 class JevaScriptArguments(ScriptArguments):
     dataset_name: str = field(default="PolyAI/banking77", metadata={"help": "Intent classification dataset."})
+    dataset_test_split: str | None = field(
+        default=None, metadata={"help": "Evaluation split. Defaults to a stratified holdout from the training split."}
+    )
     num_options: int = field(default=8, metadata={"help": "Candidate intents per decision."})
     null_fraction: float = field(
         default=0.2, metadata={"help": "Fraction of decisions with the correct intent withheld."}
@@ -93,7 +96,11 @@ def main(script_args, training_args, model_args):
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
     train_dataset = dataset[script_args.dataset_train_split]
-    eval_dataset = dataset[script_args.dataset_test_split]
+    if script_args.dataset_test_split is None:
+        split = train_dataset.train_test_split(test_size=1024, stratify_by_column="label", seed=training_args.seed)
+        train_dataset, eval_dataset = split["train"], split["test"]
+    else:
+        eval_dataset = dataset[script_args.dataset_test_split]
     if script_args.max_train_samples is not None:
         train_dataset = train_dataset.shuffle(seed=training_args.seed).select(range(script_args.max_train_samples))
     if script_args.max_eval_samples is not None:

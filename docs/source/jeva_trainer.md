@@ -34,6 +34,9 @@ trainer.end()
 ```
 
 For a complete training script, see the [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77).
+Its `config.yaml` trains for 1,000 LoRA steps at `1e-4`, using 8,979 training and 1,024 validation examples from the
+training split. The test split is excluded by default. Add `--report_to trackio --trackio_space_id username/jeva-training`
+to log the run to a Space.
 
 `mode="head"` trains the projections and decision stack while keeping the encoder frozen. Use `mode="full"` to
 train everything, or `mode="lora"` with an existing adapter or `peft_config=LoraConfig(task_type="FEATURE_EXTRACTION",
