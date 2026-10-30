@@ -7,7 +7,7 @@ Basic single-trainer training scripts are not examples: they live in [`trl/scrip
 Shared resources sit at the root of `examples/`:
 
 - [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs): DeepSpeed ZeRO configuration files, passed with `--deepspeed`, used by many examples.
-- [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs): FSDP configuration files, passed with `--fsdp --fsdp_config`.
+- [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs): FSDP configuration files, passed with `--fsdp --fsdp_config` (a bare `--fsdp` on the command line needs transformers 5.10 or later; with older versions, set `fsdp=True` in the training config).
 - [`examples/datasets`](https://github.com/huggingface/trl/tree/main/examples/datasets): the scripts used to generate the `trl-lib` datasets used across the examples.
 
 **Getting Started**

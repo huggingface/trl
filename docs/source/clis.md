@@ -352,7 +352,21 @@ trl kto --config kto_config.yaml
 
 ### DeepSpeed and FSDP
 
-DeepSpeed ZeRO and FSDP are configured through the training arguments, like for any [`~transformers.Trainer`]: `--deepspeed` takes a DeepSpeed JSON config, and `--fsdp` turns on FSDP, tuned with `--fsdp_config`. Ready-to-use configs live in [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs) and [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs).
+DeepSpeed ZeRO and FSDP are configured through the training arguments, like for any [`~transformers.Trainer`]: `--deepspeed` takes a DeepSpeed JSON config, and `--fsdp` turns on FSDP, tuned with `--fsdp_config`. A bare `--fsdp` on the command line needs transformers 5.10 or later; with older versions, set `fsdp: true` in a config file. Ready-to-use configs live in [`examples/deepspeed_configs`](https://github.com/huggingface/trl/tree/main/examples/deepspeed_configs) and [`examples/fsdp_configs`](https://github.com/huggingface/trl/tree/main/examples/fsdp_configs). If you installed TRL with pip, save this ZeRO-2 config as `zero2.json` and pass `--deepspeed zero2.json`:
+
+```json
+{
+  "bf16": {"enabled": "auto"},
+  "zero_optimization": {
+    "stage": 2,
+    "offload_optimizer": {"device": "none"}
+  },
+  "gradient_accumulation_steps": "auto",
+  "gradient_clipping": "auto",
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto"
+}
+```
 
 <hfoptions id="trainer">
 <hfoption id="SFT">

@@ -56,7 +56,7 @@ class TrainingCommand(Command):
     def run(self, args: Namespace, context: CommandContext) -> int:
         import torch
         from accelerate.commands.config import default_config_file
-        from torch.distributed.run import get_args_parser, parse_args, run
+        from torch.distributed.run import get_args_parser, main
 
         from ..accelerate_config import resolve_accelerate_config_argument
         from ..accelerate_launcher import launch_training_script
@@ -104,5 +104,5 @@ class TrainingCommand(Command):
             return 0
         if "--nproc_per_node" not in launch_args:
             launch_args = ["--nproc_per_node", str(nproc_per_node), *launch_args]
-        run(parse_args([*launch_args, training_script, *training_script_args]))
+        main([*launch_args, training_script, *training_script_args])
         return 0
