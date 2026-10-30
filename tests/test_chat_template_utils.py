@@ -397,7 +397,7 @@ class TestAddResponseSchema:
     )
     @pytest.mark.skipif(
         not _SUPPORTS_RESPONSE_TEMPLATE,
-        reason="The legacy GLM-4-MoE response schema doesn't parse completions ending with a stop token",
+        reason="The legacy GLM-4-MoE response schema doesn't parse completions ending with a stop token (see #8031)",
     )
     def test_add_response_schema_glm4moe_end_of_turn(self, completion, expected):
         # GLM-4-MoE has no end-of-turn token: the model stops on the next role marker, `<|observation|>` after tool
