@@ -30,9 +30,7 @@ from .testing_utils import (
     is_bf16_supported,
     require_bitsandbytes,
     require_kernels,
-    require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_torch_accelerator,
     require_vision,
 )
@@ -185,6 +183,13 @@ class TestDPOTrainer(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
+            pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.7.0"),
@@ -204,6 +209,13 @@ class TestDPOTrainer(TrlTestCase):
                 marks=pytest.mark.skipif(
                     Version(transformers.__version__) < Version("5.0.0"),
                     reason="LFM2.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2MoeForCausalLM-2.5",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="LFM2-MoE requires transformers>=5.0.0",
                 ),
             ),
         ],
@@ -227,31 +239,6 @@ class TestDPOTrainer(TrlTestCase):
         # MoE models log the load-balancing auxiliary loss (on by default)
         if trainer.aux_loss_enabled:
             assert trainer.state.log_history[-1]["aux_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-
-        training_args = DPOConfig(output_dir=self.tmp_dir, learning_rate=0.1, use_liger_kernel=True, report_to="none")
-        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
-            trainer = DPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
-        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
-        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -791,7 +778,7 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_with_peft_config(self):
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
@@ -859,7 +846,7 @@ class TestDPOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -1006,6 +993,22 @@ class TestDPOTrainer(TrlTestCase):
             )
 
     @require_peft
+    def test_peft_ref_model_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(output_dir=self.tmp_dir, report_to="none")
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32"
+        )
+        ref_model = get_peft_model(ref_model, LoraConfig())
+        with pytest.raises(ValueError, match="`ref_model` cannot be a `PeftModel`"):
+            DPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                ref_model=ref_model,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_peft
     def test_train_peft_prompt_tuning(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         training_args = DPOConfig(
@@ -1090,8 +1093,8 @@ class TestDPOTrainer(TrlTestCase):
 
     @require_kernels
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
-        reason="Flash Attention 2 requires Ampere or newer GPU, or XPU",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+        reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
     )
     def test_train_padding_free(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -1100,12 +1103,16 @@ class TestDPOTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             padding_free=True,
-            model_init_kwargs={"attn_implementation": "kernels-community/flash-attn2"},
+            model_init_kwargs={
+                "attn_implementation": (
+                    "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn2"
+                )
+            },
             bf16=True,  # flash_attention_2 only supports bf16 and fp16
             report_to="none",
         )
         trainer = DPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

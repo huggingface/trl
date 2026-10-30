@@ -110,6 +110,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
         lossless_capture: bool = True,
+        max_session_failures_per_slot: int = 10,
+        max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
         # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
@@ -118,6 +120,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         super().__init__(**loop_kwargs)
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
+        if harness_adapter is None and (self.top_p < 1.0 or self.top_k > 0):
+            raise ValueError(
+                "`top_p < 1.0` or `top_k > 0` needs the candidate set of every sampled token, which an agent-owned "
+                "loop does not record. Pass a `harness_adapter` so TRL samples each turn, or sample the full vocabulary."
+            )
         if harness_adapter is None:
             sampling_kwargs = {
                 "temperature": self.temperature,
@@ -141,6 +148,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
         self._live_sessions: set = set()
+        self._max_session_failures_per_slot = max_session_failures_per_slot
+        self._max_session_backoff_s = max_session_backoff_s
+        self._consecutive_session_failures = 0
 
     async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
         # OpenEnv sessions are synchronous; metrics stay on the event loop.
@@ -161,6 +171,21 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 self._rates[f"tools/{name}/latency_s"][0] += elapsed
                 self._rates[f"tools/{name}/latency_s"][1] += 1
             self._push_rollout_metrics(**metrics)
+        if result is not self._EMPTY_ROLLOUT:
+            self._consecutive_session_failures = 0
+        elif not self._stop_event.is_set():
+            # A persistent failure (harness server down, broken sandbox) would otherwise spin without producing samples
+            self._consecutive_session_failures += 1
+            if self._consecutive_session_failures >= self._max_session_failures_per_slot * self.max_inflight_tasks:
+                raise RuntimeError(
+                    f"{self._consecutive_session_failures} harness sessions in a row were unscorable; see the "
+                    "warnings above for their errors."
+                )
+            backoff = min(2 ** (self._consecutive_session_failures - 1), self._max_session_backoff_s)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
         return result
 
     async def _run_loops(self, stop_event) -> None:
@@ -187,12 +212,17 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     def _run_session(self, prompt, group_id=0):
         """Return a rollout and its metrics from a pool thread.
 
-        Session failures are unscorable. Invalid training captures stop the worker.
+        Session failures and rejected captures of failed agents are unscorable. Other invalid training captures stop
+        the worker.
         """
         t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
         # Every generation in a group must select the same task.
         seed = group_id
+        if self.lora_name is not None:
+            # The agent sends the factory's model name on every call, and in vLLM's API an adapter is a model name:
+            # point each new session at the policy version published now.
+            self._factory.model = self._request_model
         try:
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
@@ -230,8 +260,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 if not isinstance(session, TrainableSession):
                     raise CaptureContractError("loop-owning training requires OpenEnv fetch_training_trace()")
                 loop_session = cast(TrainableSession, session)
+                exit_code = 0
                 try:
-                    loop_session.wait_for_completion()
+                    exit_code = loop_session.wait_for_completion()
                 except TimeoutError:
                     logger.warning("harness agent timed out; training captured turns, timed_out flagged")
                     timed_out = True
@@ -241,6 +272,12 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                     entries = captured.to_trace_entries()
                     trace = entries
                 except (ValueError, TypeError, KeyError) as exc:
+                    # A session that exited non-zero already reported a failed rollout, whose capture may be
+                    # untrainable (e.g. fatal validation findings). Drop it like a transport failure; a malformed
+                    # capture from a successful rollout still stops the worker.
+                    if exit_code != 0:
+                        logger.warning("capture of failed rollout (exit code %s) rejected: %s", exit_code, exc)
+                        return self._EMPTY_ROLLOUT, None
                     raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
@@ -309,8 +346,18 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
-        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
+        turn_ids, logprobs, sampling_mask, sampler_logprobs = asyncio.run_coroutine_threadsafe(
+            self._generate_one_turn(prompt_ids), self._loop
+        ).result()
+        turns.append(
+            TurnRecord(
+                prompt_ids,
+                turn_ids,
+                logprobs,
+                output_sampling_mask=sampling_mask,
+                output_sampler_logprobs=sampler_logprobs,
+            )
+        )
         response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools))
         turn_times.append((t_request, time.monotonic(), [tc.name for tc in response.tool_calls]))
         return ModelStepResult(response=response, prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs)
@@ -379,6 +426,10 @@ class HarnessRolloutWorker(AsyncRolloutWorker):
     `functools.partial(HarborSessionFactory, server_url, ...)`. In loop-owning mode, the worker calls it with
     `sampling=` from its training policy. With `harness_adapter`, it calls it without arguments and samples turns
     itself. Inject the worker via `AsyncGRPOTrainer(rollout_worker=...)`.
+
+    A failed session is unscorable, and the worker waits before the next one, doubling the wait up to
+    `max_session_backoff_s` seconds (defaults to `16`). After `max_session_failures_per_slot` (defaults to `10`)
+    unscorable sessions in a row per in-flight slot, the worker stops with an error.
     """
 
     _loop_cls = _HarnessRolloutLoop

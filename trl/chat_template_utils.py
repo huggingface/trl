@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
+import torch
 import transformers
 from jinja2 import TemplateError
 from packaging.version import Version
@@ -461,15 +462,15 @@ gptoss_template = {
     },
 }
 
-# An LFM2.5 argument value is either a single-quoted string, a JSON list/mapping, or a bare literal running up to the
-# next `,` or `)`. Lists and mappings contain those very separators, so the pattern has to consume balanced brackets,
-# which a regex can only do up to a fixed nesting depth. Three levels covers realistic tool arguments; deeper values
-# truncate.
+# An LFM2.5 argument value is either a single-quoted string (double-quoted for LFM2.5-VL-450M), a JSON list/mapping, or
+# a bare literal running up to the next `,` or `)`. Lists and mappings contain those very separators, so the pattern has
+# to consume balanced brackets, which a regex can only do up to a fixed nesting depth. Three levels covers realistic
+# tool arguments; deeper values truncate.
 _LFM2_2_5_ATOM = r"[^\[\]{}'\"]|'[^']*'|\"[^\"]*\""
 _LFM2_2_5_NESTED = _LFM2_2_5_ATOM
 for _ in range(3):
     _LFM2_2_5_NESTED = rf"{_LFM2_2_5_ATOM}|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]"
-_LFM2_2_5_ARG_VALUE = rf"'[^']*'|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]|[^,)]*"
+_LFM2_2_5_ARG_VALUE = rf"'[^']*'|\"[^\"]*\"|[\[{{](?:{_LFM2_2_5_NESTED})*[\]}}]|[^,)]*"
 
 lfm2_2_5_template = {
     # LFM2.5 renders every tool call of a turn into a single `<|tool_call_start|>[...]<|tool_call_end|>` block, as a
@@ -500,6 +501,48 @@ lfm2_2_5_template = {
             "content": "xml-inline",
             "content_args": {
                 "tag_pattern": rf"(?P<key>\w+)=(?P<value>{_LFM2_2_5_ARG_VALUE})",
+                "value_parser": {"name": "json", "args": {"string_delims": [["'", "'"]], "allow_non_json": True}},
+            },
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<\|im_end\|>\s*",
+            "content": "text",
+        },
+    },
+}
+
+# The later LFM2.5 template escapes `\`, `'`, newlines and carriage returns in string arguments, so a string runs up to
+# the first unescaped `'`. The `json` value parser does not unescape them: a string with `\` or a newline keeps its
+# escapes (`Paris\\nFrance`), and one with `'` also keeps its quotes (`'Saint-Jean-d\'Angély'`).
+_LFM2_2_5_V3_STR = r"'(?:[^'\\]|\\.)*'"
+_LFM2_2_5_V3_ATOM = rf"[^\[\]{{}}'\"]|{_LFM2_2_5_V3_STR}|\"(?:[^\"\\]|\\.)*\""
+_LFM2_2_5_V3_NESTED = _LFM2_2_5_V3_ATOM
+for _ in range(3):
+    _LFM2_2_5_V3_NESTED = rf"{_LFM2_2_5_V3_ATOM}|[\[{{](?:{_LFM2_2_5_V3_NESTED})*[\]}}]"
+_LFM2_2_5_V3_ARG_VALUE = rf"{_LFM2_2_5_V3_STR}|[\[{{](?:{_LFM2_2_5_V3_NESTED})*[\]}}]|[^,)]*"
+
+lfm2_2_5_v3_template = {
+    # Same tool-call format as `lfm2_2_5_template`. The later LFM2.5 template pre-fills the generation prompt with the
+    # `<think>` opener, so the start anchor consumes it, along with an immediate `</think>` when the model skips
+    # reasoning. Rendered history turns carry no pre-fill, hence the optional group. Reasoning content is therefore not
+    # framed by a `<think>` open in the model output; the zero-width lookahead only activates the reasoning field when a
+    # closing `</think>` is actually present, so a turn with no reasoning is parsed entirely as content.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"<\|im_start\|>assistant\n(?:<think>(?:</think>)?)?",
+    "fields": {
+        "thinking": {
+            "open_pattern": r"(?:<think>)?(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "repeats": True,
+            "content": "xml-inline",
+            "content_args": {
+                "tag_pattern": rf"(?P<key>\w+)=(?P<value>{_LFM2_2_5_V3_ARG_VALUE})",
                 "value_parser": {"name": "json", "args": {"string_delims": [["'", "'"]], "allow_non_json": True}},
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
@@ -631,7 +674,13 @@ lfm2_2_5_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5.jinja").read_text(enco
 
 lfm2_2_5_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v2.jinja").read_text(encoding="utf-8")
 
+lfm2_2_5_v3_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v3.jinja").read_text(encoding="utf-8")
+
+lfm2_2_5_v4_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_v4.jinja").read_text(encoding="utf-8")
+
 lfm2_2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl.jinja").read_text(encoding="utf-8")
+
+lfm2_2_5_vl_v2_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_2_5_vl_v2.jinja").read_text(encoding="utf-8")
 
 llama3_chat_template = (_CHAT_TEMPLATES_DIR / "llama3.jinja").read_text(encoding="utf-8")
 
@@ -640,6 +689,10 @@ llama3_1_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_1.jinja").read_text(enco
 llama3_2_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_2.jinja").read_text(encoding="utf-8")
 
 llava_next_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next.jinja").read_text(encoding="utf-8")
+
+mistral_large_4_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4.jinja").read_text(encoding="utf-8")
+
+mistral_medium_3_5_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5.jinja").read_text(encoding="utf-8")
 
 muse_glimmer_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer.jinja").read_text(encoding="utf-8")
 
@@ -733,6 +786,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
     elif chat_template in [
         qwen2_5_chat_template,
         qwen3_chat_template,
+        qwen3_training_chat_template,
         qwen3_instruct_2507_chat_template,
         qwen3_vl_chat_template,
     ]:
@@ -755,11 +809,15 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         lfm2_v2_chat_template,
         lfm2_2_5_chat_template,
         lfm2_2_5_v2_chat_template,
-        lfm2_2_5_vl_chat_template,
+        lfm2_2_5_vl_v2_chat_template,
     ]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, lfm2_2_5_template
+    elif chat_template in [lfm2_2_5_v3_chat_template, lfm2_2_5_v4_chat_template, lfm2_2_5_vl_chat_template]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, lfm2_2_5_v3_template
     elif chat_template in [
         gemma4_chat_template,
         gemma4_v2_chat_template,
@@ -920,6 +978,11 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
     if is_vlm:
         ids1 = ids1[0]
         ids2 = ids2[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(ids1, torch.Tensor):
+            ids1 = ids1.tolist()
+            ids2 = ids2.tolist()
 
     return ids2[: len(ids1)] == ids1
 
@@ -979,6 +1042,10 @@ def is_chat_template_stop_token_trained(
     if is_vlm:
         input_ids = input_ids[0]
         assistant_masks = assistant_masks[0]
+        # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+        # (huggingface/transformers#50094)
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.tolist()
 
     # The model stops by emitting an end-of-turn token, which is part of the added vocabulary rather than produced by
     # the base tokenizer's merges. Ignoring trailing whitespace, the last masked token must be that terminator; if it
@@ -1024,6 +1091,14 @@ lfm2_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "lfm2_v2_training.jinja"
 llama3_training_chat_template = (_CHAT_TEMPLATES_DIR / "llama3_training.jinja").read_text(encoding="utf-8")
 
 llava_next_training_chat_template = (_CHAT_TEMPLATES_DIR / "llava_next_training.jinja").read_text(encoding="utf-8")
+
+mistral_large_4_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_large_4_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+mistral_medium_3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "mistral_medium_3_5_training.jinja").read_text(
+    encoding="utf-8"
+)
 
 muse_glimmer_training_chat_template = (_CHAT_TEMPLATES_DIR / "muse_glimmer_training.jinja").read_text(encoding="utf-8")
 
@@ -1195,6 +1270,12 @@ def get_training_chat_template(
 
     if chat_template == llava_next_chat_template:
         return llava_next_training_chat_template
+
+    if chat_template == mistral_large_4_chat_template:
+        return mistral_large_4_training_chat_template
+
+    if chat_template == mistral_medium_3_5_chat_template:
+        return mistral_medium_3_5_training_chat_template
 
     if chat_template == muse_glimmer_chat_template:
         return muse_glimmer_training_chat_template

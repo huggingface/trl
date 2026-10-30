@@ -16,10 +16,11 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "openenv[harbor] @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "openenv[harbor] @ git+https://github.com/openenv/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 #     "vllm>=0.22,<0.26",
 #     "datasets>=3.2",
 #     "trackio",
+#     "kernels",
 #     "transformers>=5.2",
 #     "huggingface_hub>=1.22",
 # ]
@@ -100,7 +101,7 @@ def _spawn(cmd: list[str], log_path: pathlib.Path | None, env: dict[str, str] | 
         log_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         cmd,
-        stdout=open(log_path, "w") if log_path is not None else None,
+        stdout=open(log_path, "w", encoding="utf-8") if log_path is not None else None,
         stderr=subprocess.STDOUT,
         env={**os.environ, **(env or {})},
         start_new_session=True,
@@ -168,7 +169,7 @@ def wait_for_public_proxy(log: pathlib.Path, capture_port: int, deadline_s: floa
             print(f"[launcher] capture proxy reachable at {url}", flush=True)
             return url
         time.sleep(5)
-    tail = log.read_text(errors="replace")[-1500:] if log.exists() else "(no log)"
+    tail = log.read_text(encoding="utf-8", errors="replace")[-1500:] if log.exists() else "(no log)"
     raise RuntimeError(f"the capture proxy never became publicly reachable in {deadline_s:.0f}s\n{tail}")
 
 
@@ -222,7 +223,7 @@ def _published_url(log: pathlib.Path, capture_port: int) -> str | None:
     """The most recent published URL in the server log, or None."""
     if not log.exists():
         return None
-    text = re.sub(r"\x1b\[[0-9;]*m", "", log.read_text(errors="replace"))
+    text = re.sub(r"\x1b\[[0-9;]*m", "", log.read_text(encoding="utf-8", errors="replace"))
     found = re.findall(rf"capture\s+:{capture_port}\s+->\s+(https://\S+)", text)
     return found[-1].rstrip(".,") if found else None
 
@@ -233,7 +234,7 @@ def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_
     while time.monotonic() - started < deadline_s:
         if proc.poll() is not None:
             raise RuntimeError(
-                f"vLLM exited {proc.returncode} before serving\n{log.read_text(errors='replace')[-2000:]}"
+                f"vLLM exited {proc.returncode} before serving\n{log.read_text(encoding='utf-8', errors='replace')[-2000:]}"
             )
         if _http_ok(f"{url}/health"):
             print(f"[launcher] vLLM ready at {url}", flush=True)
@@ -262,7 +263,7 @@ def warm_sandbox_template(args: argparse.Namespace, vllm_url: str, logs: pathlib
     if rc != 0:
         # A verifier failure does not imply that the image build failed.
         print(f"[launcher] WARNING warm rollout exited {rc} after {took:.0f}s; continuing", flush=True)
-        print(f"[launcher] WARNING tail:\n{log.read_text(errors='replace')[-800:]}", flush=True)
+        print(f"[launcher] WARNING tail:\n{log.read_text(encoding='utf-8', errors='replace')[-800:]}", flush=True)
     else:
         print(f"[launcher] template warm after {took:.0f}s", flush=True)
 
@@ -337,7 +338,7 @@ def main() -> None:
             str(source),
             "fetch",
             "--depth=1",
-            "https://github.com/huggingface/OpenEnv.git",
+            "https://github.com/openenv/OpenEnv.git",
             OPENENV_REVISION,
         ],
         check=True,

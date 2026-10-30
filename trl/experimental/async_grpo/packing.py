@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+import sys
 from functools import cache
+from itertools import chain
 from typing import Any
 
+import numpy as np
 import torch
 from transformers import AttentionInterface
 from transformers.integrations.flash_attention import get_target_dtype
@@ -64,6 +68,17 @@ class TreeRow:
         novel = len(input_ids) - shared
         return len(self.tokens) + novel <= budget and self.trained + int(sample["completion_mask"].sum()) <= budget
 
+    def cost(self, sample: dict[str, Any]) -> int:
+        """Load `add(sample)` would add to the row: `depth + 1` for each of its tokens not already in the trie."""
+        input_ids = sample["input_ids"].tolist()
+        children, shared = self.roots, 0
+        for key in zip(input_ids, [*input_ids[1:], None], strict=True):
+            if key not in children:
+                break
+            children = self.children[children[key]]
+            shared += 1
+        return sum(depth + 1 for depth in range(shared, len(input_ids)))
+
     def add(self, sample: dict[str, Any]) -> None:
         input_ids = sample["input_ids"].tolist()
         children = self.roots
@@ -94,23 +109,34 @@ class TreeRow:
                 - `input_ids` (`N`): the unique tokens.
                 - `position_ids` (`N`): each token's position in its samples, which is its depth in the trie.
                 - `shift_labels` (`N`): next token each position predicts, `-100` where it is not trained.
+                - `sampling_mask` (`T`), `sampling_mask_counts` (`N`): candidate sets the sampler drew the next tokens
+                  from, laid end to end in position order, and the size of each position's set; `T` is `0` without
+                  top-k/top-p truncation. Ragged, because the sets average a few tokens but can reach the top-k cap.
+                - `sampler_ids` (`N`, `K`), `sampler_log_probs` (`N`, `K`): the sampler's most likely next tokens at
+                  the position and their log-probs, padded with `-1` and `-inf`; `K` is `0` unless requested.
                 - `tree_kv_index` (`K`): packed position of every K/V row [`tree_attention`] gathers, the
                   root-to-segment paths of all segments laid end to end.
                 - `tree_cu_seqlens_q` (`S + 1`), `tree_cu_seqlens_k` (`S + 1`): segment boundaries in the row, path
                   boundaries in `tree_kv_index`.
-                - `tree_max_seqlens` (`2`): longest segment and longest path.
+                - `tree_segment_parents` (`S`), `tree_segment_depths` (`S`): the segment tree, for the recurrent layers
+                  patched by [`patch_tree_gdn`].
+                - `tree_sizes` (`4 + depth`): longest segment, longest path, `K`, 64-token chunks, then the segments
+                  per depth. Every length the kernels launch with, so a rank reads them in one go (see [`unpad_tree`]).
                 - `token_index` (`M`): position whose prediction is each trained token. A shared position serves every
                   sample that shares it, so there are more loss terms than labelled positions.
                 - `old_log_probs` (`M`), `advantages` (`M`): generator log-probability and advantage of each target.
                 - `segment_id` (`M`): index of the sample each target came from.
         """
         input_ids, position_ids, offsets, paths, kv_index, cu_seqlens_k = [], [], [0], [], [], [0]
+        parents, depths = [], []
         packed = [0] * len(self.tokens)
         stack = [(node, None, 0) for node in reversed(self.roots.values())]
         while stack:
             node, parent, depth = stack.pop()
             segment = len(paths)
             start = len(input_ids)
+            parents.append(-1 if parent is None else parent)
+            depths.append(0 if parent is None else depths[parent] + 1)
             while True:
                 packed[node] = len(input_ids)
                 input_ids.append(self.tokens[node])
@@ -125,32 +151,72 @@ class TreeRow:
             cu_seqlens_k.append(len(kv_index))
             stack.extend((child, segment, depth) for child in reversed(self.children[node].values()))
 
+        lengths = [end - start for start, end in zip(offsets[:-1], offsets[1:], strict=True)]
         shift_labels = [-100] * len(input_ids)
+        sampling_mask = [[] for _ in input_ids]
+        num_logprobs = max(sample["sampler_ids"].shape[1] for sample in self.samples)
+        sampler_ids = np.full((len(input_ids), num_logprobs), -1, dtype=np.int64)
+        sampler_log_probs = np.full((len(input_ids), num_logprobs), -math.inf, dtype=np.float32)
         token_index, old_log_probs, advantages, segment_id = [], [], [], []
         for i, (sample, nodes) in enumerate(zip(self.samples, self.sample_nodes, strict=True)):
             ids, mask, logps = (sample[key].tolist() for key in ("input_ids", "completion_mask", "old_log_probs"))
+            first = len(token_index)
             for p in range(1, len(nodes)):
                 if mask[p]:
                     shift_labels[packed[nodes[p - 1]]] = ids[p]
+                    sampling_mask[packed[nodes[p - 1]]] = sample["sampling_mask"][p]
                     token_index.append(packed[nodes[p - 1]])
                     old_log_probs.append(logps[p])
                     advantages.append(sample["advantage"])
                     segment_id.append(i)
+            trained = np.flatnonzero(sample["completion_mask"][1:]) + 1
+            sampler_ids[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_ids"][trained]
+            sampler_log_probs[token_index[first:], : sample["sampler_ids"].shape[1]] = sample["sampler_log_probs"][
+                trained
+            ]
         return {
             "input_ids": torch.tensor(input_ids),
             "position_ids": torch.tensor(position_ids),
             "shift_labels": torch.tensor(shift_labels),
+            "sampling_mask": torch.tensor(list(chain.from_iterable(sampling_mask)), dtype=torch.long),
+            "sampling_mask_counts": torch.tensor(list(map(len, sampling_mask))),
+            "sampler_ids": torch.from_numpy(sampler_ids),
+            "sampler_log_probs": torch.from_numpy(sampler_log_probs),
             "tree_kv_index": torch.tensor(kv_index, dtype=torch.long),
             "tree_cu_seqlens_q": torch.tensor(offsets, dtype=torch.int32),
             "tree_cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
-            "tree_max_seqlens": torch.tensor(
-                [max(b - a for a, b in zip(offsets[:-1], offsets[1:], strict=True)), max(map(len, paths))]
+            "tree_segment_parents": torch.tensor(parents, dtype=torch.int32),
+            "tree_segment_depths": torch.tensor(depths, dtype=torch.int32),
+            "tree_sizes": torch.tensor(
+                [max(lengths), max(map(len, paths)), len(kv_index), sum(-(-length // 64) for length in lengths)]
+                + [depths.count(depth) for depth in range(max(depths) + 1)]
             ),
             "token_index": torch.tensor(token_index, dtype=torch.long),
             "old_log_probs": torch.tensor(old_log_probs, dtype=torch.float32),
             "advantages": torch.tensor(advantages, dtype=torch.float32),
             "segment_id": torch.tensor(segment_id, dtype=torch.long),
         }
+
+
+def unpad_tree(inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
+    """
+    This rank's tree from [`TreeRow.pack`], as the model's forward kwargs: the collator's inter-rank padding sliced
+    off, and the sizes the kernels launch with read to the host in a single transfer.
+    """
+    row = {key: value[0] for key, value in inputs.items() if key.startswith("tree_")}
+    max_seqlen_q, max_seqlen_k, n_kv, n_chunks, *level_sizes = [n for n in row["tree_sizes"].tolist() if n > 0]
+    n_segments = sum(level_sizes)
+    return {
+        "tree_kv_index": row["tree_kv_index"][:n_kv],
+        "tree_cu_seqlens_q": row["tree_cu_seqlens_q"][: n_segments + 1],
+        "tree_cu_seqlens_k": row["tree_cu_seqlens_k"][: n_segments + 1],
+        "tree_max_seqlen_q": max_seqlen_q,
+        "tree_max_seqlen_k": max_seqlen_k,
+        "tree_segment_parents": row["tree_segment_parents"][:n_segments],
+        "tree_segment_depths": row["tree_segment_depths"][:n_segments],
+        "tree_level_sizes": level_sizes,
+        "tree_n_chunks": n_chunks,
+    }
 
 
 TREE_ATTENTION = "tree_fa3"
@@ -162,6 +228,9 @@ def _flash_attn():
 
     if torch.version.hip:
         return get_kernel("kernels-community/aiter-flash-attn", version=2)
+    # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+        return get_kernel("kernels-community/flash-attn4", version=0)
     return get_kernel("kernels-community/flash-attn3", version=1)
 
 
@@ -204,3 +273,40 @@ def tree_attention(
 def register_tree_attention() -> None:
     AttentionInterface.register(TREE_ATTENTION, tree_attention)
     AttentionMaskInterface.register(TREE_ATTENTION, lambda **kwargs: None)
+
+
+_PATCHED = set()
+
+
+def patch_tree_gdn(model) -> bool:
+    """
+    Make the model's gated DeltaNet layers follow the tree of a tree-packed forward.
+
+    Transformers' hybrids (Qwen3.5, Qwen3-Next, OLMo-Hybrid, ...) run these layers through two module-level functions,
+    `causal_conv1d_fn` and `torch_chunk_gated_delta_rule`, and pass the forward's keyword arguments down to both. Both
+    are wrapped: given the tree of [`~packing.TreeRow.pack`] they follow it, otherwise they run unchanged.
+
+    Returns:
+        `bool`: whether the model's modeling module has those functions.
+    """
+    modeling = sys.modules[type(model).__module__]
+    conv, chunk = vars(modeling).get("causal_conv1d_fn"), vars(modeling).get("torch_chunk_gated_delta_rule")
+    if conv is None or chunk is None:
+        return False
+    if modeling in _PATCHED:
+        return True
+    from .tree_gated_delta_rule import tree_causal_conv1d, tree_chunk_gated_delta_rule
+
+    def causal_conv1d_fn(hidden_states, weight, bias=None, activation=None, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return conv(hidden_states, weight, bias, activation=activation, **kwargs)
+        return tree_causal_conv1d(hidden_states, weight, bias, activation, kwargs, conv)
+
+    def torch_chunk_gated_delta_rule(query, key, value, g, beta, use_qk_l2norm_in_kernel=False, **kwargs):
+        if "tree_segment_parents" not in kwargs:
+            return chunk(query, key, value, g=g, beta=beta, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, **kwargs)
+        return tree_chunk_gated_delta_rule(query, key, value, g, beta, kwargs, use_qk_l2norm_in_kernel), None
+
+    modeling.causal_conv1d_fn, modeling.torch_chunk_gated_delta_rule = causal_conv1d_fn, torch_chunk_gated_delta_rule
+    _PATCHED.add(modeling)
+    return True
