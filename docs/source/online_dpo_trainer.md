@@ -46,7 +46,7 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_online_dpo.py
+torchrun --nproc_per_node 8 train_online_dpo.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 1 hour. You can verify the training progress by checking the reward graph. An increasing trend in both the reward for rejected and chosen completions indicates that the model is improving and generating better responses over time.

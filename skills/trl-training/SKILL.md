@@ -74,4 +74,4 @@ The generation batch is `per_device_train_batch_size × num_processes × steps_p
 
 ## CLI
 
-Flags mirror the config fields: `trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara`. YAML via `--config`; distributed presets via `--accelerate_config zero3` (Python scripts: `accelerate launch train.py`).
+Flags mirror the config fields: `trl sft --model_name_or_path Qwen/Qwen2.5-0.5B --dataset_name trl-lib/Capybara`. YAML via `--config`; multi-GPU via `--nproc_per_node 8`, DeepSpeed via `--deepspeed examples/deepspeed_configs/zero3.json`, FSDP via `--fsdp` (Python scripts: `torchrun --nproc_per_node 8 train.py`).

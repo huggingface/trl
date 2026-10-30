@@ -37,8 +37,8 @@ python examples/grpo_continuous_batching/grpo_continuous_batching.py \
     --use_peft \
     --log_completions
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/grpo_continuous_batching/grpo_continuous_batching.py \
+torchrun --nproc_per_node 8 examples/grpo_continuous_batching/grpo_continuous_batching.py \
+    --deepspeed examples/deepspeed_configs/zero3.json \
     --model_name_or_path Qwen/Qwen3-1.7B \
     --output_dir grpo-gsm8k-continuous-batching \
     --num_generations 32 \

@@ -656,14 +656,10 @@ model = PeftModel.from_pretrained(base_model, "username/model-name-lora")
 
 ## Multi-GPU Training
 
-PEFT works seamlessly with TRL's multi-GPU support through `accelerate`:
+PEFT works seamlessly with TRL's multi-GPU support:
 
 ```bash
-# Configure accelerate
-accelerate config
-
-# Launch training
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --use_peft \
@@ -674,7 +670,7 @@ accelerate launch trl/scripts/sft.py \
 For QLoRA with multiple GPUs, the base model is automatically sharded:
 
 ```bash
-accelerate launch trl/scripts/sft.py \
+torchrun --nproc_per_node 8 trl/scripts/sft.py \
     --model_name_or_path meta-llama/Llama-2-70b-hf \
     --load_in_4bit \
     --use_peft \
@@ -713,7 +709,7 @@ model = AutoModelForCausalLM.from_pretrained(
 > [!IMPORTANT]
 > - Keep the `lm_head` module on the first GPU (device 0) to avoid errors
 > - See this [tutorial on device maps](https://github.com/huggingface/blog/blob/main/accelerate-large-models.md) for proper configuration
-> - Run training scripts directly (not with `accelerate launch`): `python script.py`
+> - Run training scripts directly (not with `torchrun`): `python script.py`
 > - Data Parallelism is not yet supported with NPP
 
 ## Resources

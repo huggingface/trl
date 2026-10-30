@@ -26,7 +26,7 @@
 NuminaMath example: RLOO on math dataset with vLLM.
 
   export TRACKIO_PROJECT="RLOO-NuminaMath-TIR"
-  accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/rloo_math/rloo_math.py
+  torchrun --nproc_per_node 8 examples/rloo_math/rloo_math.py
 
 For TL;DR or other datasets with a reward model, use the generic script:
   python -m trl.scripts.rloo --dataset_name trl-lib/tldr --reward_model_name_or_path ... --model_name_or_path ...
@@ -76,6 +76,7 @@ def main():
         vllm_mode="colocate",
         vllm_gpu_memory_utilization=0.5,
         run_name="Qwen3-0.6B-RLOO-NuminaMath-TIR",
+        deepspeed="examples/deepspeed_configs/zero3.json",
     )
 
     trainer = RLOOTrainer(

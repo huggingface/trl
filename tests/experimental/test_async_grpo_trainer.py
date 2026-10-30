@@ -422,7 +422,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def _train_one_step_and_save(self, peft_config=None):
+    def _train_one_step_and_save(self, peft_config=None, fsdp=False):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
@@ -435,6 +435,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             token_budget=64,
             vllm_server_timeout=5.0,
+            fsdp=fsdp,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -477,7 +478,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
     def test_fsdp_checkpoint_body(self):
         self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
-        trainer = self._train_one_step_and_save()
+        trainer = self._train_one_step_and_save(fsdp=True)
         assert trainer.is_fsdp_enabled
 
     def test_train_model(self):

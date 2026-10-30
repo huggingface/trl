@@ -949,7 +949,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             weight_transfer=_StubWeightTransfer(),
         )
 
-    def _train_one_step_and_save(self):
+    def _train_one_step_and_save(self, fsdp=False):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -963,6 +963,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             max_completion_length=8,
             vllm_server_timeout=5.0,
             token_budget=-1,
+            fsdp=fsdp,
             report_to="none",
         )
         trainer = AsyncDistillationTrainer(
@@ -989,7 +990,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
     def test_fsdp_checkpoint_body(self):
         self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
-        trainer = self._train_one_step_and_save()
+        trainer = self._train_one_step_and_save(fsdp=True)
         assert trainer.is_fsdp_enabled
 
     @pytest.mark.parametrize(

@@ -60,7 +60,7 @@ CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
-CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_math/async_distillation_mopd.py
+CUDA_VISIBLE_DEVICES=3 python examples/async_distillation_math/async_distillation_mopd.py
 """
 
 from datasets import interleave_datasets, load_dataset

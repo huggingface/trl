@@ -24,7 +24,7 @@
 """
 Train Gemma-3 on the Codeforces COTS dataset.
 
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/sft_gemma3/sft_gemma3.py
+torchrun --nproc_per_node 8 examples/sft_gemma3/sft_gemma3.py
 """
 
 from datasets import load_dataset
@@ -51,6 +51,7 @@ def main():
         gradient_accumulation_steps=8,
         dataset_num_proc=32,
         num_train_epochs=1,
+        deepspeed="examples/deepspeed_configs/zero3.json",
     )
 
     trainer = SFTTrainer(

@@ -107,7 +107,8 @@ def run(config: CorrectnessConfig) -> Trajectory:
     """Invoke the trl CLI as a subprocess; parse its trainer_state.json into a Trajectory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         cmd = ["trl", config.method]
-        cmd += ["--num_processes", str(config.num_processes)]
+        if config.num_processes > 1:
+            cmd += ["--nproc_per_node", str(config.num_processes)]
         cmd += ["--output_dir", tmpdir, *config.cli_args()]
         env = {**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(config.num_processes))}
         subprocess.run(cmd, check=True, env=env)
