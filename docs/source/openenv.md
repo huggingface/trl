@@ -1,6 +1,6 @@
 # OpenEnv Integration for Training LLMs with Environments
 
-[OpenEnv](https://github.com/huggingface/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
+[OpenEnv](https://github.com/openenv/OpenEnv) is an open-source framework for defining, deploying, and interacting with environments in reinforcement learning (RL) and agentic workflows. It provides standardized APIs for environment interaction and supports running environments as backend servers (via WebSocket or containerised execution). You can find a collection of ready-to-use OpenEnv environments on the [Hugging Face Hub](https://huggingface.co/collections/openenv/openenv-environment-hub).
 
 This guide covers **how to integrate OpenEnv with TRL**. For more on OpenEnv itself, see the [OpenEnv docs](https://huggingface.co/docs/openenv).
 
@@ -41,7 +41,7 @@ This installs the **environment client** (e.g., `EchoEnv`) that communicates wit
 For development, you can clone the OpenEnv repo and install locally:
 
 ```bash
-git clone https://github.com/huggingface/OpenEnv.git
+git clone https://github.com/openenv/OpenEnv.git
 cd OpenEnv/envs/echo_env
 pip install -e .
 ```
