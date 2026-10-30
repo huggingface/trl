@@ -14,8 +14,10 @@
 
 import contextlib
 import json
+import math
 import os
 import textwrap
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,7 +27,6 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, tqdm
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, concatenate_datasets
@@ -34,58 +35,53 @@ from packaging.version import Version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
+    set_seed,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import _tokenize, apply_chat_template, extract_prompt, is_conversational, prepare_multimodal_messages
-from ..import_utils import is_liger_kernel_available
+from ..data_utils import (
+    _tokenize,
+    apply_chat_template,
+    common_prefix_length,
+    extract_prompt,
+    is_conversational,
+    prepare_multimodal_messages,
+)
 from ..models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp
-from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
+from ..models.utils import disable_gradient_checkpointing
 from .base_trainer import _BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig
 from .utils import (
+    add_fused_lm_head,
     create_model_from_path,
     disable_dropout_in_model,
-    entropy_from_logits,
     flush_left,
     get_config_model_id,
+    global_then_local_main_first,
     hash_module,
-    maybe_gather_lm_head_ctx,
+    model_accepts_images,
     pad,
-    selective_log_softmax,
     use_adapter,
 )
 
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
-
-
 if is_peft_available():
     import peft
-    from peft import LoraConfig, PeftConfig, PeftModel, PromptLearningConfig, get_peft_model
+    from peft import LoraConfig, PeftConfig, PeftModel, PrefixTuningConfig, get_peft_model
     from peft.tuners.tuners_utils import BaseTunerLayer
 
 
 logger = get_logger(__name__)
-
-
-FLASH_ATTENTION_VARIANTS = {
-    "flash_attention_2",
-    "flash_attention_3",
-    "kernels-community/flash-attn2",
-    "kernels-community/flash-attn3",
-    "kernels-community/vllm-flash-attn3",
-}
 
 
 @dataclass
@@ -445,7 +441,7 @@ class DPOTrainer(_BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
-            - If provided, this model is used directly as the reference policy.
+            - If provided, this model is used directly as the reference policy. It cannot be a [`~peft.PeftModel`].
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before DPO training starts.
         args ([`DPOConfig`], *optional*):
@@ -479,7 +475,8 @@ class DPOTrainer(_BaseTrainer):
             [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
             `compute_result` argument. This will be triggered after the last eval batch to signal that the function
             needs to calculate and return the global summary statistics rather than accumulating the batch-level
-            statistics.
+            statistics. The logits it receives are recomputed with an extra forward pass. This is deprecated and will
+            be removed in v2.0.0.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -495,6 +492,8 @@ class DPOTrainer(_BaseTrainer):
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
+
+    loss_is_scaled_for_ga = False
 
     _tag_names = ["trl", "dpo"]
     _name = "DPO"
@@ -557,6 +556,9 @@ class DPOTrainer(_BaseTrainer):
             )
 
         # Model
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             if quantization_config is not None:
@@ -570,8 +572,10 @@ class DPOTrainer(_BaseTrainer):
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
@@ -590,11 +594,17 @@ class DPOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+        if ref_model is not None and is_peft_model(ref_model):
+            raise ValueError(
+                "`ref_model` cannot be a `PeftModel`. To train with PEFT, pass the `PeftModel` as `model` and omit "
+                "`ref_model`."
+            )
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
 
         # Handle pad token for processors or tokenizers
@@ -609,6 +619,11 @@ class DPOTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # PEFT
         if peft_config is not None:
@@ -639,31 +654,88 @@ class DPOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
+            # Prefix tuning moves the cache onto the model's device map, which reads `Cache.key_cache`, removed
+            # from transformers. Fixed in PEFT 0.18.0 (peft#2821).
+            if (
+                isinstance(peft_config, PrefixTuningConfig)
+                and Version(peft.__version__) <= Version("0.17.1")
+                and hasattr(model, "hf_device_map")
+            ):
+                raise ValueError(
+                    "Prefix tuning requires `peft>=0.18.0` when the model is loaded with a device map. Upgrade "
+                    "peft, or load the model with `device_map=None`. See "
+                    "https://github.com/huggingface/peft/issues/2821."
+                )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
+                )
+            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and any(
+                    isinstance(module, torch.nn.Linear)
+                    and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                    for name, module in model.named_modules()
+                )
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                logger.warning(
+                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
+                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model) and ref_model is None:
             # If the model is a PEFT model with a pretrained adapter, we need to create a "ref" adapter that is a copy
-            # of the "default" adapter, so that we can use it as the reference model during DPO training. PEFT only
-            # supports one adapter per model when the LoRA config uses `target_parameters` (see peft#3340), so in that
-            # case we skip the "ref" adapter and compute the reference log probs with adapters disabled, i.e. with the
-            # base model.
+            # of the "default" adapter, so that we can use it as the reference model during DPO training. Before PEFT
+            # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
+            # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
+            # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
-            if isinstance(default_config, LoraConfig) and default_config.target_parameters:
+            if (
+                isinstance(default_config, LoraConfig)
+                and Version(peft.__version__) < Version("0.20.0")
+                and default_config.target_parameters
+            ):
                 logger.warning(
-                    "PEFT can't add a frozen reference adapter alongside one that uses `target_parameters` "
+                    "PEFT<0.20.0 can't add a frozen reference adapter alongside one that uses `target_parameters` "
                     "(peft#3340), so the reference log probs are computed from the base model (adapters disabled). "
-                    "If you wrapped the model only to apply LoRA, pass a `peft_config` to the trainer instead; if you "
-                    "wrapped it deliberately (pretrained adapter or custom init), note that the base model matches "
-                    "your adapter only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
+                    "Upgrade to `peft>=0.20.0` to train against a copy of your adapter instead. If you wrapped the "
+                    "model only to apply LoRA, pass a `peft_config` to the trainer instead; if you wrapped it "
+                    "deliberately (pretrained adapter or custom init), note that the base model matches your adapter "
+                    "only when it's freshly zero-initialized. If it is, this warning is safe to ignore."
                 )
             else:
                 model.add_adapter("ref", default_config)
@@ -701,9 +773,11 @@ class DPOTrainer(_BaseTrainer):
         # original paper (see https://huggingface.co/papers/2305.14314, paragraph 3). Normally, this can be done by
         # passing `autocast_adapter_dtype=False` to `get_peft_model`, but this option is not yet supported for
         # quantized models. See: https://github.com/huggingface/peft/issues/2889
+        # The DoRA magnitude vector is excluded: unlike LoRA A/B, its optimizer updates can be smaller than bf16 can
+        # represent, silently freezing it, see #7268.
         if _is_quantized_model:
-            for param in model.parameters():
-                if param.requires_grad:
+            for name, param in model.named_parameters():
+                if param.requires_grad and "lora_magnitude_vector" not in name:
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
@@ -722,6 +796,16 @@ class DPOTrainer(_BaseTrainer):
                 "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
                 "model does not seem to be a vision-language model. Please check your model and dataset."
             )
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
         if self._is_vision_dataset and args.max_length is not None and args.truncation_mode == "keep_end":
             raise ValueError(
                 "truncation_mode='keep_end' is not supported for vision-language models. Image tokens reside "
@@ -736,7 +820,7 @@ class DPOTrainer(_BaseTrainer):
                 "forward pass of the reference model over the entire dataset is not supported for large "
                 "multimodal models. Set `precompute_ref_log_probs=False`."
             )
-        if data_collator is None and not self._is_vision_dataset:
+        if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or self._tokenizer.pad_token or self._tokenizer.eos_token
@@ -747,18 +831,23 @@ class DPOTrainer(_BaseTrainer):
                     "in the vocabulary before using it as a padding token."
                 )
             self._tokenizer.pad_token = pad_token
-            data_collator = DataCollatorForPreference(
-                pad_token_id=self._tokenizer.pad_token_id,
-                max_length=args.max_length,
-                truncation_mode=args.truncation_mode,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
-        elif data_collator is None and self._is_vision_dataset:
-            data_collator = DataCollatorForVisionPreference(
-                processor=processing_class,
-                max_length=args.max_length,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
+            # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+            # configs.
+            model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+            model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+            if self._is_vision_dataset:
+                data_collator = DataCollatorForVisionPreference(
+                    processor=processing_class,
+                    max_length=args.max_length,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
+            else:
+                data_collator = DataCollatorForPreference(
+                    pad_token_id=self._tokenizer.pad_token_id,
+                    max_length=args.max_length,
+                    truncation_mode=args.truncation_mode,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
 
         # Training arguments
         self.beta = args.beta
@@ -768,6 +857,15 @@ class DPOTrainer(_BaseTrainer):
         self.ld_alpha = args.ld_alpha
         self.f_divergence_type = args.f_divergence_type
         self.f_alpha_divergence_coef = args.f_alpha_divergence_coef
+        # The f-DPO reparameterization leaves a β·log Z(x) term that only cancels in the chosen-rejected reward
+        # difference, so the other losses have no valid f-divergence generalization.
+        f_divergence_loss_types = {"sigmoid", "sigmoid_norm", "hinge", "ipo", "exo_pair", "robust", "discopop", "sft"}
+        if self.f_divergence_type != "reverse_kl" and not set(self.loss_types) <= f_divergence_loss_types:
+            raise ValueError(
+                f"`f_divergence_type='{self.f_divergence_type}'` is only supported for the following loss types: "
+                f"{sorted(f_divergence_loss_types)}. You provided {self.loss_types}. Use the default "
+                "`f_divergence_type='reverse_kl'` with these losses."
+            )
         self.label_smoothing = args.label_smoothing
         self.use_weighting = args.use_weighting
         if self.use_weighting and any(loss_type in {"aot", "aot_unpaired"} for loss_type in self.loss_types):
@@ -786,59 +884,14 @@ class DPOTrainer(_BaseTrainer):
                 "value of 1e-3."
             )
 
-        # Liger loss
-        self.use_liger_kernel = args.use_liger_kernel
-        if self.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "You set `use_liger_kernel=True` but the liger kernel is not available. "
-                    "Please install liger-kernel first: `pip install liger-kernel`"
-                )
-            if len(self.loss_types) != 1:
-                raise NotImplementedError(
-                    "Multiple loss types are not yet supported when using Liger kernel. If you need this feature, "
-                    "please open a feature request at https://github.com/huggingface/trl/issues."
-                )
-            if compute_metrics is not None:
-                raise ValueError(
-                    "compute_metrics is not supported with the Liger kernel. compute_metrics requires to be able to "
-                    "recover the logits from the forward pass, but Liger kernel does not materialize logits."
-                )
-            if self.precompute_ref_logps:
-                raise ValueError(
-                    "Liger DPO loss does not support precomputing reference log probabilities. Either disable "
-                    "`precompute_ref_log_probs` or set `use_liger_kernel` to False."
-                )
-            if is_peft_model(model):
-                # The Liger fused DPO loss multiplies the hidden states by `lm_head.weight` directly. When the LM head
-                # is targeted by a PEFT adapter (`"lm_head"` in `target_modules`), `lm_head.weight` is the frozen base
-                # weight and the trainable adapter parameters live in separate submodules that Liger never sees. The
-                # head adapter would silently receive no gradient, so the model trains as if `lm_head` were frozen.
-                # Fail loudly rather than train a silently-frozen head.
-                output_embeddings = model.get_output_embeddings()
-                if isinstance(output_embeddings, BaseTunerLayer):
-                    raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with applying a PEFT adapter to `lm_head`. The Liger "
-                        "fused DPO loss reads `lm_head.weight` directly, so the adapter on the head is ignored and "
-                        "never trained. Either remove `'lm_head'` from your `target_modules`, or set "
-                        "`use_liger_kernel=False`."
-                    )
-                # Prompt-learning methods (PromptTuning, PrefixTuning, P-Tuning) inject virtual tokens via
-                # `PeftModel.forward()`. The Liger DPO loss bypasses `PeftModel.forward()` by calling the backbone
-                # directly, so virtual tokens are never prepended and the loss is computed on the wrong sequence.
-                # Fail loudly rather than train on a silently corrupted input.
-                if any(isinstance(cfg, PromptLearningConfig) for cfg in model.peft_config.values()):
-                    raise ValueError(
-                        "`use_liger_kernel=True` is incompatible with prompt-learning PEFT methods (PromptTuning, "
-                        "PrefixTuning, P-Tuning). The Liger DPO loss bypasses `PeftModel.forward()` by calling the "
-                        "backbone directly, so virtual tokens are never prepended and the loss is computed on the "
-                        "wrong sequence. Use a weight-based adapter such as LoRA instead, or set "
-                        "`use_liger_kernel=False`."
-                    )
-            self.liger_loss = LigerFusedLinearDPOLoss(beta=args.beta, loss_type=self.loss_types[0])
-            # Redirect the model.module forward to the model forward to ensure pre-forward hooks are called, so that
-            # under ZeRO-3 the parameter coordinator gathers/reduces `lm_head.weight` around the fused loss.
-            self._forward_redirection = _ForwardRedirection()
+        if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
+            # The log-probabilities are computed by multiplying the hidden states by `lm_head.weight` directly, so an
+            # adapter on the LM head would be ignored and never trained.
+            raise ValueError(
+                "Applying a PEFT adapter to `lm_head` is not supported: the log-probabilities are computed from "
+                "`lm_head.weight` directly, so the adapter would never be trained. Remove `'lm_head'` from your "
+                "`target_modules`."
+            )
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -875,30 +928,41 @@ class DPOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
+        # With several GPUs visible and no distributed launcher, `Trainer` wraps the model in `nn.DataParallel`, whose
+        # replicas would all run the forward bound to the original model. Checked after `Trainer.__init__`, which sets
+        # `n_gpu` to 1 for a model split across devices with `device_map`.
+        if args.n_gpu > 1:
+            raise ValueError(
+                f"{type(self).__name__} does not support `nn.DataParallel`, which `Trainer` uses when several GPUs are "
+                "visible to a single process. Launch the script with `accelerate launch` or `torchrun`, or make a "
+                "single GPU visible with `CUDA_VISIBLE_DEVICES`."
+            )
+
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
 
-        # MoE load-balancing auxiliary loss, applied to Mixture-of-Experts models (no effect otherwise)
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
         text_config = model.config.get_text_config()
-        is_moe = getattr(text_config, "output_router_logits", None) is not None
-        self.aux_loss_enabled = is_moe and args.router_aux_loss_coef != 0.0
-        self.router_aux_loss_coef = args.router_aux_loss_coef
-        if self.aux_loss_enabled and self.use_liger_kernel:
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
             raise ValueError(
-                "Liger DPO loss does not support the Mixture-of-Experts load-balancing auxiliary loss, because it "
-                "fuses the loss without materializing the router logits. Either set `router_aux_loss_coef` to `0.0` "
-                "to disable the auxiliary loss, or set `use_liger_kernel` to False."
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
             )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
 
         # Reference model
         if ref_model is None:
-            if is_peft_model(self.model) or args.precompute_ref_log_probs:
+            if is_peft_model(self.model) or (args.precompute_ref_log_probs and not self.is_fsdp_enabled):
                 # If PEFT is used, the reference model is not needed since the adapter can be disabled to revert to the
                 # initial model. If precompute_ref_log_probs is True, the reference model does not need to be kept in
-                # memory during training.
+                # memory during training. Under FSDP, the policy isn't sharded until `train`, so the precompute still
+                # loads a reference model, freed once it is done.
                 self.ref_model = None
             else:
                 ref_model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
@@ -908,6 +972,9 @@ class DPOTrainer(_BaseTrainer):
                 if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                     ref_model_init_kwargs["device_map"] = None
                 ref_model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+                # A policy passed as an instance wasn't loaded from `model_init_kwargs`, so build the reference like it
+                ref_model_init_kwargs.setdefault("dtype", self.model.dtype)
+                ref_model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
                 ref_model_path = get_config_model_id(self.model.config)
                 self.ref_model = create_model_from_path(ref_model_path, **ref_model_init_kwargs)
         else:
@@ -919,17 +986,52 @@ class DPOTrainer(_BaseTrainer):
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
 
+        # Liger's fused linear cross-entropy replaces `model.forward` when training starts, which would drop the fused
+        # LM head, so only its layer kernels are applied
+        if args.use_liger_kernel:
+            warnings.warn(
+                "`use_liger_kernel=True` is deprecated and will be removed in v2.0.0. Use the Hub kernels instead, "
+                'with `model_init_kwargs={"use_kernels": True}`.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            liger_kernel_config = args.liger_kernel_config or {}
+            if liger_kernel_config.get("fused_linear_cross_entropy"):
+                raise ValueError(
+                    '`liger_kernel_config={"fused_linear_cross_entropy": True}` is not supported: it replaces the '
+                    "model's forward, which this trainer patches with a fused LM head."
+                )
+            args.liger_kernel_config = {**liger_kernel_config, "fused_linear_cross_entropy": False}
+
+        # Compute the per-token log-probabilities in chunks, without materializing the full logits
+        # `mean_logits` and `is_top1` feed the `logits/*` and `mean_token_accuracy` metrics, `log_sum_sq_probs` the WPO
+        # weights
+        outputs = ("log_probs", "entropy", "mean_logits", "is_top1")
+        if self.use_weighting:
+            outputs += ("log_sum_sq_probs",)
+        add_fused_lm_head(self.model.get_base_model() if is_peft_model(self.model) else self.model, outputs=outputs)
+        if self.ref_model is not None:
+            add_fused_lm_head(self.ref_model)
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
+        # Tensor parallel ranks are given the same batch, so a token count gathered across all processes repeats
+        # every token once per rank in the group. Context and sequence parallelism shard the batch before the loss is
+        # computed, so they need no such correction.
+        if self.accelerator.parallelism_config is not None:
+            self._tp_size = self.accelerator.parallelism_config.tp_size
+        else:
+            self._tp_size = 1
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
+
+        # Hash before the reference model is sharded, since DTensor parameters can't be hashed
+        self._precompute_model_hash = (
+            hash_module(self.ref_model or self.model) if args.precompute_ref_log_probs else None
+        )
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
@@ -980,6 +1082,8 @@ class DPOTrainer(_BaseTrainer):
                         "eval",
                         self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size,
                     )
+            if self.is_fsdp_enabled and ref_model is None:
+                self.ref_model = None
 
     def _prepare_dataset(
         self,
@@ -993,7 +1097,7 @@ class DPOTrainer(_BaseTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed
             first_example = next(iter(dataset))
             if "prompt" not in first_example:
@@ -1049,23 +1153,28 @@ class DPOTrainer(_BaseTrainer):
                         "input_ids"
                     ]
 
-                # Check if the tokenized prompt starts with the tokenized prompt+completion
-                if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
-                    )
-                if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
-                    logger.warning(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
-                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                        "token handling. Verify that the tokenizer is processing text consistently."
+                # The completion starts where the tokenized prompt and prompt+completion diverge, which is not always
+                # after the prompt (see `common_prefix_length`)
+                prompt_len = min(
+                    common_prefix_length(prompt_ids, prompt_chosen_ids),
+                    common_prefix_length(prompt_ids, prompt_rejected_ids),
+                )
+                if prompt_len < len(prompt_ids):
+                    logger.warning_once(
+                        "The tokenized prompt is not a prefix of the tokenized prompt+completion, usually because the "
+                        "chat template renders the prompt alone differently or because tokens merge across the "
+                        "boundary. The completion starts where they diverge, and this end of the prompt is left out "
+                        "of the training sequence: "
+                        f"{processing_class.decode(prompt_ids[prompt_len:])!r}"
+                        ". The model is trained on a context that differs from the one it sees at inference. To avoid "
+                        "it, use a chat template that renders the prompt the same way in both cases, or end the "
+                        "prompt on a token boundary. This warning is shown once, but it likely applies to every "
+                        "example in the dataset."
                     )
 
-                output["prompt_ids"] = prompt_ids
-                output["chosen_ids"] = prompt_chosen_ids[len(prompt_ids) :]
-                output["rejected_ids"] = prompt_rejected_ids[len(prompt_ids) :]
+                output["prompt_ids"] = prompt_ids[:prompt_len]
+                output["chosen_ids"] = prompt_chosen_ids[prompt_len:]
+                output["rejected_ids"] = prompt_rejected_ids[prompt_len:]
                 return output
 
             dataset = dataset.map(
@@ -1114,7 +1223,7 @@ class DPOTrainer(_BaseTrainer):
                 "`precompute_ref_log_probs=True` is not supported with IterableDataset. Please use a map-style "
                 "Dataset or set `precompute_ref_log_probs=False`."
             )
-        model_hash = hash_module(self.ref_model or self.model)
+        model_hash = self._precompute_model_hash
         # Both inputs are rank-dependent under distributed training (ZeRO-3 shards the model), so broadcast rank 0's
         # value so all ranks share one cache file.
         fingerprint = [Hasher.hash((dataset._fingerprint, model_hash))]
@@ -1186,29 +1295,29 @@ class DPOTrainer(_BaseTrainer):
     def compute_ref_log_probs(self, model, inputs):
         """Computes reference log probabilities for a single padded batch."""
         device = self.accelerator.device
-
         _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
         model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
         model_kwargs["use_cache"] = False
+        labels = inputs["input_ids"].masked_fill(inputs["completion_mask"] == 0, -100)
 
-        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None and is_peft_model(self.model):
-                unwrapped_model = self.accelerator.unwrap_model(self.model)
-                with use_adapter(
-                    unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
-                ):
-                    ref_outputs = model(**model_kwargs)
-            else:
-                ref_outputs = model(**model_kwargs)
+        adapter_context = contextlib.nullcontext()
+        if self.ref_model is None and is_peft_model(self.model):
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            adapter_context = use_adapter(
+                unwrapped_model, adapter_name="ref" if "ref" in unwrapped_model.peft_config else None
+            )
 
-        input_ids = inputs["input_ids"]
-        completion_mask = inputs["completion_mask"]
-        shift_labels = input_ids[..., 1:]
-        shift_completion_mask = completion_mask[..., 1:]
-        ref_shift_logits = ref_outputs.logits[..., :-1, :]
-        ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-        ref_per_token_logps[shift_completion_mask == 0] = 0.0
+        with (
+            torch.no_grad(),
+            disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs),
+            adapter_context,
+            self.accelerator.autocast(),
+        ):
+            ref_per_token_logps = model(**model_kwargs, labels=labels, fused_lm_head=True).log_probs
 
+        shift_completion_mask = inputs["completion_mask"][..., 1:]
+        # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+        ref_per_token_logps = ref_per_token_logps[:, -shift_completion_mask.size(1) :]
         if self.ld_alpha is None:
             ref_logps = ref_per_token_logps.sum(dim=1)
         else:
@@ -1223,116 +1332,7 @@ class DPOTrainer(_BaseTrainer):
             tail_logps = (ref_per_token_logps * tail_mask).sum(dim=1)
             ref_logps = shared_logps + self.ld_alpha * tail_logps
 
-        ref_chosen_logps, ref_rejected_logps = ref_logps.chunk(2, dim=0)
-        return ref_chosen_logps, ref_rejected_logps
-
-    def _compute_loss_liger(self, model, inputs, return_outputs):
-        if return_outputs:
-            raise RuntimeError(
-                "return_outputs=True is not supported with the Liger DPO loss. The Liger loss computes the loss "
-                "without materializing logits, so outputs cannot be returned."
-            )
-
-        mode = "train" if self.model.training else "eval"
-
-        _non_model_keys = {"completion_mask", "ref_chosen_logps", "ref_rejected_logps"}
-        model_kwargs = {k: v for k, v in inputs.items() if k not in _non_model_keys}
-        model_kwargs["use_cache"] = False
-
-        if is_peft_model(model):
-            model = model.base_model.model
-
-        # `base_model` gives the backbone model (skipping `lm_head`) — text decoder for LMs, multimodal wrapper for
-        # VLMs (so vision-token injection runs before the text decoder). `get_decoder()` won't do: on VLMs it
-        # returns just the text stack and feeds image-placeholder IDs through it.
-        # Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is self` (re-runs `lm_head`).
-        # Fall back to `.model` there.
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            backbone = model.model
-        else:
-            backbone = model.base_model
-
-        outputs = backbone(**model_kwargs)
-        hidden_states = outputs.last_hidden_state[:, :-1].contiguous()
-        lm_head = model.get_output_embeddings()
-        weight = lm_head.weight
-        bias = lm_head.bias
-
-        with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-            if self.ref_model is None:
-                # PEFT model with no explicit reference model: recover reference behaviour by disabling / switching to
-                # the frozen "ref" adapter, exactly as _compute_loss does for logit-based reference computation.
-                model_unwrapped = self.accelerator.unwrap_model(self.model)
-                with use_adapter(
-                    model_unwrapped, adapter_name="ref" if "ref" in model_unwrapped.peft_config else None
-                ):
-                    ref_model_inner = model_unwrapped.base_model.model
-                    if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                        ref_backbone = ref_model_inner.model
-                    else:
-                        ref_backbone = ref_model_inner.base_model
-                    ref_outputs = ref_backbone(**model_kwargs)
-                    ref_lm_head = model_unwrapped.get_output_embeddings()
-            else:
-                ref_model_inner = self.ref_model.base_model.model if is_peft_model(self.ref_model) else self.ref_model
-                if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-                    ref_backbone = ref_model_inner.model
-                else:
-                    ref_backbone = ref_model_inner.base_model
-                ref_outputs = ref_backbone(**model_kwargs)
-                ref_lm_head = self.ref_model.get_output_embeddings()
-            ref_hidden_states = ref_outputs.last_hidden_state[:, :-1].contiguous()
-            ref_weight = ref_lm_head.weight
-            ref_bias = ref_lm_head.bias
-
-        input_ids = model_kwargs["input_ids"]
-        completion_mask = inputs["completion_mask"]
-        shift_completion_mask = completion_mask[:, 1:]
-        labels = input_ids[:, 1:].clone()
-        labels[shift_completion_mask == 0] = -100
-
-        with maybe_gather_lm_head_ctx(weight, bias, ref_weight, ref_bias):
-            loss, metrics = self.liger_loss(
-                weight, hidden_states, labels, bias, ref_hidden_states, ref_weight, ref_bias
-            )
-
-        (
-            chosen_logps,
-            rejected_logps,
-            chosen_logits_mean,
-            rejected_logits_mean,
-            nll_loss,
-            chosen_rewards,
-            rejected_rewards,
-        ) = metrics
-
-        if mode == "train":
-            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
-        self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
-
-        avg_chosen_logits = self.accelerator.gather_for_metrics(chosen_logits_mean).mean().item()
-        avg_rejected_logits = self.accelerator.gather_for_metrics(rejected_logits_mean).mean().item()
-        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
-        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
-
-        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
-        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
-        self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
-        self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
-
-        reward_accuracies = (chosen_rewards > rejected_rewards).float()
-        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
-        self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
-
-        margins = chosen_rewards - rejected_rewards
-        agg_margins = self.accelerator.gather(margins)
-        self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
-
-        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
-        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
-
-        return loss
+        return ref_logps.chunk(2, dim=0)
 
     def _compute_loss(self, model, inputs, return_outputs):
         mode = "train" if self.model.training else "eval"
@@ -1345,15 +1345,13 @@ class DPOTrainer(_BaseTrainer):
         # as a forward kwarg (not from the model config), so it must be passed here.
         if self.aux_loss_enabled:
             model_kwargs["output_router_logits"] = True
-        outputs = model(**model_kwargs)
-
-        input_ids = inputs["input_ids"]
         completion_mask = inputs["completion_mask"]
-        shift_logits = outputs.logits[..., :-1, :]
-        shift_labels = input_ids[..., 1:]
         shift_completion_mask = completion_mask[..., 1:]
-        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+        labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
+        outputs = model(**model_kwargs, labels=labels, fused_lm_head=True)
+        # Prompt-learning PEFT prepends virtual tokens to the outputs; keep the positions of the real tokens
+        seq_len = shift_completion_mask.size(1)
+        per_token_logps = outputs.log_probs[:, -seq_len:]
         if self.ld_alpha is None:
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
         else:
@@ -1375,23 +1373,22 @@ class DPOTrainer(_BaseTrainer):
             # The reference forward only needs logits for log-probs. Drop `output_router_logits` so the frozen
             # reference model does not materialize router logits and compute a discarded MoE aux loss.
             ref_model_kwargs = {k: v for k, v in model_kwargs.items() if k != "output_router_logits"}
-            # When gradient checkpointing is enabled with use_reentrant=True (default), calling the model inside a
+            # When gradient checkpointing is enabled with use_reentrant=True (non default), calling the model inside a
             # torch.no_grad() block triggers a harmless PyTorch warning ("None of the inputs have requires_grad=True").
             # Temporarily disable checkpointing to avoid this warning during inference.
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                if is_peft_model(model) and self.ref_model is None:
+                if is_peft_model(self.model) and self.ref_model is None:
                     # When training a PEFT adapter, how we obtain the reference depends on the setup:
                     # - New adapter: disabling adapters yields the base model.
                     # - Re-training an existing adapter: an initial copy is loaded under the name "ref".
-                    model = self.accelerator.unwrap_model(model)
-                    with use_adapter(model, adapter_name="ref" if "ref" in model.peft_config else None):
-                        ref_outputs = self.model(**ref_model_kwargs)
+                    ref_model_unwrapped = self.accelerator.unwrap_model(self.model)
+                    with use_adapter(
+                        ref_model_unwrapped, adapter_name="ref" if "ref" in ref_model_unwrapped.peft_config else None
+                    ):
+                        ref_outputs = self.model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
                 else:
-                    ref_outputs = self.ref_model(**ref_model_kwargs)
-
-            ref_shift_logits = ref_outputs.logits[..., :-1, :]
-            ref_per_token_logps = selective_log_softmax(ref_shift_logits, shift_labels)
-            ref_per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
+                    ref_outputs = self.ref_model(**ref_model_kwargs, labels=labels, fused_lm_head=True)
+            ref_per_token_logps = ref_outputs.log_probs[:, -seq_len:]
             if self.ld_alpha is None:
                 ref_logps = ref_per_token_logps.sum(dim=1)  # sum over sequence length
             else:
@@ -1409,13 +1406,13 @@ class DPOTrainer(_BaseTrainer):
             chosen_scores = chosen_logratios
             rejected_scores = rejected_logratios
         elif self.f_divergence_type == "forward_kl":
-            # f'(t) = 1 - 1/t  -> drop constant -> -exp(-logratio)
-            chosen_scores = -torch.exp(-chosen_logratios)
-            rejected_scores = -torch.exp(-rejected_logratios)
+            # f'(t) = 1 - 1/t
+            chosen_scores = 1 - torch.exp(-chosen_logratios)
+            rejected_scores = 1 - torch.exp(-rejected_logratios)
         elif self.f_divergence_type == "js_divergence":
-            # f'(t) = log(2t/(t+1)) -> drop log 2
-            chosen_scores = F.logsigmoid(chosen_logratios)
-            rejected_scores = F.logsigmoid(rejected_logratios)
+            # f'(t) = log(2t/(t+1)) = log 2 + logsigmoid(log t)
+            chosen_scores = math.log(2) + F.logsigmoid(chosen_logratios)
+            rejected_scores = math.log(2) + F.logsigmoid(rejected_logratios)
         elif self.f_divergence_type == "alpha_divergence":
             # alpha-divergence: f'(t) = (t^(α-1) - 1)/(α-1)
             if abs(self.f_alpha_divergence_coef - 1.0) < 1e-6:  # limit case f'(t) -> log(t), fall back to reverse_kl
@@ -1430,8 +1427,8 @@ class DPOTrainer(_BaseTrainer):
                 clamp_max = {torch.float16: 11.0, torch.bfloat16: 80.0, torch.float32: 80.0}[dtype]
                 t_chosen_float = torch.clamp(t_chosen.float(), max=clamp_max)
                 t_rejected_float = torch.clamp(t_rejected.float(), max=clamp_max)
-                chosen_scores = torch.exp(t_chosen_float).to(dtype) * coef
-                rejected_scores = torch.exp(t_rejected_float).to(dtype) * coef
+                chosen_scores = (torch.exp(t_chosen_float) - 1.0).to(dtype) * coef
+                rejected_scores = (torch.exp(t_rejected_float) - 1.0).to(dtype) * coef
         else:
             raise ValueError(f"Unknown f_divergence_type: {self.f_divergence_type}")
 
@@ -1459,7 +1456,7 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (ipo_delta - 1 / (2 * self.beta)) ** 2
 
             elif loss_type == "exo_pair":
-                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856, (Eq. 16)
+                # Implements EXO-pref from the paper https://huggingface.co/papers/2402.00856 (Eq. 16)
                 # Minimize KL(p_fθ || p_rh) for K=2; p_fθ = softmax(βπ * (log πθ − log π_ref)) over {chosen, rejected}
                 # p_rh = [(1−ε), ε]; expanded KL gives the weighted logsigmoid form below
                 epsilon = torch.tensor(self.label_smoothing, device=device)
@@ -1472,8 +1469,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = qw * (log_qw - log_pw) + ql * (log_ql - log_pl)
 
             elif loss_type == "nca_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = (
                     -F.logsigmoid(chosen_rewards)
                     - 0.5 * F.logsigmoid(-chosen_rewards)
@@ -1486,8 +1483,8 @@ class DPOTrainer(_BaseTrainer):
                 per_sequence_loss = (clean_loss_term - flipped_loss_term) / (1 - 2 * self.label_smoothing)
 
             elif loss_type == "bco_pair":
-                chosen_rewards = self.beta * chosen_scores
-                rejected_rewards = self.beta * rejected_scores
+                chosen_rewards = self.beta * chosen_logratios
+                rejected_rewards = self.beta * rejected_logratios
                 per_sequence_loss = -F.logsigmoid(chosen_rewards) - F.logsigmoid(-rejected_rewards)
 
             elif loss_type == "sppo_hard":
@@ -1495,8 +1492,8 @@ class DPOTrainer(_BaseTrainer):
                 # estimated using the PairRM score. The probability calculation is conducted outside of the trainer
                 # class. The version described here is the hard probability version, where P in Equation (4.7) of
                 # Algorithm 1 is set to 1 for the winner and 0 for the loser.
-                winner_margin_error = (chosen_scores - 0.5 / self.beta) ** 2
-                loser_margin_error = (rejected_scores + 0.5 / self.beta) ** 2
+                winner_margin_error = (chosen_logratios - 0.5 / self.beta) ** 2
+                loser_margin_error = (rejected_logratios + 0.5 / self.beta) ** 2
                 per_sequence_loss = winner_margin_error + loser_margin_error
 
             elif loss_type == "aot":
@@ -1532,7 +1529,7 @@ class DPOTrainer(_BaseTrainer):
                 # Use this loss when you believe the chosen outputs are worse than your model's default output.
                 # Decrease chosen likelihood and decrease rejected likelihood more
                 losses_chosen = torch.sigmoid(self.beta * chosen_logratios)
-                losses_rejected = 1 - torch.sigmoid(self.beta * delta_score)
+                losses_rejected = 1 - torch.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
                 per_sequence_loss = losses_chosen + losses_rejected
 
             elif loss_type == "discopop":
@@ -1548,13 +1545,13 @@ class DPOTrainer(_BaseTrainer):
                 )
 
             elif loss_type == "sft":
-                chosen_logits, _ = shift_logits.chunk(2, dim=0)
-                chosen_labels, _ = shift_labels.chunk(2, dim=0)
                 chosen_mask, _ = shift_completion_mask.chunk(2, dim=0)
-                batch_loss = F.cross_entropy(chosen_logits[chosen_mask.bool()], chosen_labels[chosen_mask.bool()])
+                chosen_per_token_logps, _ = per_token_logps.chunk(2, dim=0)
+                batch_loss = -chosen_per_token_logps[chosen_mask.bool()].mean()
+                batch_size = chosen_per_token_logps.size(0)
                 # Implementation convenience: expand the scalar SFT loss to a per-sequence tensor so it matches the
                 # shape of other losses; only the mean is used, so this is a no-op numerically.
-                per_sequence_loss = batch_loss.expand(chosen_logits.size(0))
+                per_sequence_loss = batch_loss.expand(batch_size)
 
             elif loss_type == "sigmoid_norm":
                 chosen_mask, rejected_mask = completion_mask.chunk(2, dim=0)
@@ -1574,10 +1571,7 @@ class DPOTrainer(_BaseTrainer):
                 # Eq (2) of the WPO paper: https://huggingface.co/papers/2406.11827
                 completion_lengths = shift_completion_mask.sum(dim=1).clamp_min(1)
                 with torch.no_grad():
-                    lse1 = torch.logsumexp(shift_logits, dim=-1)
-                    lse2 = torch.logsumexp(2.0 * shift_logits, dim=-1)
-                    log_denom = lse2 - 2.0 * lse1
-                    aligned_logps = (per_token_logps - log_denom) * shift_completion_mask
+                    aligned_logps = (per_token_logps - outputs.log_sum_sq_probs[:, -seq_len:]) * shift_completion_mask
                 mean_logps = aligned_logps.sum(dim=1) / completion_lengths
                 weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
@@ -1592,7 +1586,7 @@ class DPOTrainer(_BaseTrainer):
 
         # Log the metrics
         # Entropy
-        per_token_entropy = entropy_from_logits(shift_logits.detach())
+        per_token_entropy = outputs.entropy[:, -seq_len:].detach()
         mask = shift_completion_mask
         entropy_sum = (per_token_entropy * mask).sum()
         total_tokens = mask.sum()
@@ -1606,15 +1600,15 @@ class DPOTrainer(_BaseTrainer):
         # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            self._total_train_tokens += num_tokens_in_batch
+            self._total_train_tokens += num_tokens_in_batch // self._tp_size
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Average logits for chosen and rejected completions
-        chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
+        chosen_mean_logits, rejected_mean_logits = outputs.mean_logits[:, -seq_len:].chunk(2, dim=0)
         chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
-        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1).sum()
+        total_chosen_logits = chosen_mean_logits[chosen_mask.bool()].sum()
         total_chosen_tokens = chosen_mask.sum()
-        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1).sum()
+        total_rejected_logits = rejected_mean_logits[rejected_mask.bool()].sum()
         total_rejected_tokens = rejected_mask.sum()
         total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
         total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
@@ -1626,10 +1620,8 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
 
         # Token accuracy for the chosen completions
-        predictions = chosen_logits.argmax(dim=-1)
-        chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
-        chosen_labels = shift_labels[: len(shift_labels) // 2]
-        correct_predictions = (predictions == chosen_labels) & chosen_mask
+        chosen_is_top1, _ = outputs.is_top1[:, -seq_len:].chunk(2, dim=0)
+        correct_predictions = chosen_is_top1 & chosen_mask.bool()
         total_tokens = chosen_mask.sum()
         correct_tokens = correct_predictions.sum()
         correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
@@ -1660,6 +1652,15 @@ class DPOTrainer(_BaseTrainer):
         self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
         self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
+        if return_outputs:
+            warnings.warn(
+                "`return_outputs=True`, and the logits it passes to `compute_metrics`, are deprecated and will be removed "
+                "in v2.0.0. The fused LM head does not build the logits, so they are recomputed with an extra forward pass.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            with torch.no_grad():
+                outputs = model(**model_kwargs)
         return (loss, outputs) if return_outputs else loss
 
     def evaluate(
@@ -1732,18 +1733,6 @@ class DPOTrainer(_BaseTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         try:
-            if self.use_liger_kernel:
-                # Under ZeRO-3, `lm_head.weight` is sharded and the fused loss reads it directly (bypassing the
-                # module), so run the loss inside the engine's forward via `_forward_redirection` to arm the parameter
-                # coordinator's gather/reduce hooks.
-                deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-                is_zero3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-                unwrapped_model = self.accelerator.unwrap_model(model)
-                if is_zero3 or self.is_fsdp_enabled:
-                    return self._forward_redirection(
-                        model, unwrapped_model, self._compute_loss_liger, unwrapped_model, inputs, return_outputs
-                    )
-                return self._compute_loss_liger(unwrapped_model, inputs, return_outputs)
             return self._compute_loss(model, inputs, return_outputs)
         except ValueError as e:
             if "Image features and image tokens do not match" in str(e) and self.args.max_length is not None:
@@ -1776,7 +1765,7 @@ class DPOTrainer(_BaseTrainer):
         inputs = self._prepare_inputs(inputs)
         with torch.no_grad(), self.compute_loss_context_manager():
             if prediction_loss_only:
-                loss = self.compute_loss(model, inputs, return_outputs=False)  # logits aren't materialized with liger
+                loss = self.compute_loss(model, inputs, return_outputs=False)
                 logits, labels = None, None
             else:
                 loss, outputs = self.compute_loss(model, inputs, return_outputs=True)

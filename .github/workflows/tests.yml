@@ -4,19 +4,32 @@ on:
   push:
     branches:
       - main
-      - ci-*
-  pull_request:
     paths:
       # Run only when relevant files are modified
-      - ".github/**.yml"
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
+      - "Makefile"
       - "examples/**.py"
-      - "scripts/**.py"
-      - "tests/**.py"
-      - "trl/**.py"
+      - "tests/**"
+      - "trl/**"
       - "pyproject.toml"
       # Exclude if only experimental code/tests
       - "!trl/experimental/**"
       - "!tests/experimental/**"
+  pull_request:
+    paths:
+      # Run only when relevant files are modified
+      - ".github/workflows/tests.yml"
+      - ".github/actions/**"
+      - "Makefile"
+      - "examples/**.py"
+      - "tests/**"
+      - "trl/**"
+      - "pyproject.toml"
+      # Exclude if only experimental code/tests
+      - "!trl/experimental/**"
+      - "!tests/experimental/**"
+  workflow_dispatch:
 
 env:
   TQDM_DISABLE: 1
@@ -25,29 +38,19 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
 
-jobs:
-  check_code_quality:
-    name: Check code quality
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
-        with:
-          python-version: 3.12
-      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1
-        with:
-          extra_args: --all-files
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
+permissions: {}
+
+jobs:
   tests:
-    name: Tests
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
-      fail-fast: false
+    permissions:
+      contents: read
+    name: Tests with latest dependencies (CUDA)
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -59,17 +62,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -87,18 +90,19 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python ${{ matrix.python-version }} and latest dependencies
-          status: ${{ job.status }}
+          title: Tests with latest dependencies (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_dev:
-    name: Tests with dev dependencies
+    permissions:
+      contents: read
+    name: Tests with dev dependencies (CUDA)
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -110,17 +114,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -143,18 +147,19 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 and dev dependencies
-          status: ${{ job.status }}
+          title: Tests with dev dependencies (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_wo_optional_deps:
-    name: Tests without optional dependencies
+    permissions:
+      contents: read
+    name: Tests without optional dependencies (CUDA)
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -166,17 +171,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -194,18 +199,19 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 without optional dependencies
-          status: ${{ job.status }}
+          title: Tests without optional dependencies (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
   tests_min_versions:
-    name: Tests with minimum versions
+    permissions:
+      contents: read
+    name: Tests with minimum versions (CUDA)
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g6e-4xlarge
     container:
       image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
@@ -217,17 +223,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -237,10 +243,22 @@ jobs:
       - name: Install dependencies
         run: |
           source .venv/bin/activate
+          # Oldest supported Python, so every pin is exactly the pyproject floor
           uv pip install \
             ".[dev]" \
-            "accelerate==1.4.0" \
+            "accelerate==1.11.0" \
+            "bitsandbytes==0.45.2" \
             "datasets==4.7.0" \
+            "deepspeed==0.18.6" \
+            "huggingface_hub==0.34.0" \
+            "math-verify==0.8.0" \
+            "numpy==1.26.0" \
+            "pandas==2.1.1" \
+            "peft==0.17.0" \
+            "psutil==5.9.4" \
+            "pyarrow==21.0.0" \
+            "pyyaml==6.0.1" \
+            "torch==2.6.0" \
             "transformers==4.56.2"
 
       - name: Test with pytest
@@ -249,16 +267,17 @@ jobs:
           make test
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results with Python 3.12 and minimum dependencies versions
-          status: ${{ job.status }}
+          title: Tests with minimum versions (CUDA)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
-  distributed_smoke:
-    name: Distributed smoke tests
+  distributed:
+    permissions:
+      contents: read
+    name: Distributed tests (CUDA)
     runs-on:
       group: aws-g5-12xlarge-cache
     container:
@@ -274,17 +293,17 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
           apt-get update && apt-get install -y make git curl
 
       - name: Install uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Create Python virtual environment
         run: |
@@ -296,16 +315,157 @@ jobs:
           source .venv/bin/activate
           uv pip install ".[dev]"
 
-      - name: Run distributed smoke tests
+      - name: Run distributed tests
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
 
       - name: Post to Slack
-        if: github.ref == 'refs/heads/main' && always()  # Check if the branch is main
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: Results of distributed smoke tests
-          status: ${{ job.status }}
+          title: Distributed tests (CUDA)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  tests_amd:
+    permissions:
+      contents: read
+    name: Tests with latest dependencies (AMD)
+    runs-on:
+      group: hfc-amd-mi300-1gpu
+    container:
+      image: rocm/dev-ubuntu-24.04:7.2.4
+      # The runner assigns the GPUs through HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES in its env file
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    env:
+      # The pod sees 160 CPUs but its quota is 19 (`cpu.max`): one worker per CPU of the quota, one thread per worker
+      PYTEST_XDIST_AUTO_NUM_WORKERS: 19
+      OMP_NUM_THREADS: 1
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+          uv pip install ".[dev]"
+
+      - name: Check the ROCm build of torch
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          import torch
+
+          assert torch.version.hip, "CUDA torch got installed"
+          # ROCm may report zero devices before HIP is initialized
+          torch.cuda.init()
+          assert torch.cuda.device_count() == 1, "Unexpected GPU isolation"
+          # A dependency requiring `triton` installs the CUDA build over ROCm's `pytorch-triton-rocm`
+          x = torch.arange(16, device="cuda", dtype=torch.float32)
+          torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
+          PY
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          make test
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests with latest dependencies (AMD)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  distributed_amd:
+    permissions:
+      contents: read
+    name: Distributed tests (AMD)
+    runs-on:
+      group: hfc-amd-mi300-2gpu
+    container:
+      image: rocm/dev-ubuntu-24.04:7.2.4
+      # The runner assigns the GPUs through HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES in its env file
+      options: --device /dev/kfd --device /dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings --ipc=host
+    defaults:
+      run:
+        shell: bash
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+          uv pip install ".[dev]"
+
+      - name: Check the ROCm build of torch
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          import torch
+
+          assert torch.version.hip, "CUDA torch got installed"
+          # ROCm may report zero devices before HIP is initialized
+          torch.cuda.init()
+          assert torch.cuda.device_count() == 2, "Unexpected GPU isolation"
+          # A dependency requiring `triton` installs the CUDA build over ROCm's `pytorch-triton-rocm`
+          x = torch.arange(16, device="cuda", dtype=torch.float32)
+          torch.testing.assert_close(torch.compile(lambda x: x + 1, fullgraph=True)(x), x + 1)
+          PY
+
+      - name: Run distributed tests
+        run: |
+          source .venv/bin/activate
+          pytest -v tests/distributed/test_distributed.py
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Distributed tests (AMD)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

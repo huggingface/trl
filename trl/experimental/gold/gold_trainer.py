@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import random
 import textwrap
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
-from contextlib import nullcontext
 from functools import partial
 from itertools import takewhile
 from typing import Any, Optional
@@ -27,12 +27,10 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.utils import (
     DistributedType,
     broadcast_object_list,
     gather_object,
-    is_peft_model,
 )
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
@@ -49,7 +47,6 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.utils import (
     is_datasets_available,
-    is_liger_kernel_available,
     is_peft_available,
     is_rich_available,
 )
@@ -64,13 +61,14 @@ from ...extras.profiling import profiling_decorator
 from ...generation.vllm_generation import VLLMGeneration
 from ...import_utils import is_vllm_available
 from ...models import prepare_deepspeed
-from ...models.utils import _ForwardRedirection, unwrap_model_for_generation
+from ...models.utils import unwrap_model_for_generation
 from ...trainer.sft_trainer import SFTTrainer
 from ...trainer.utils import (
     RepeatSampler,
     create_model_from_path,
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     identity,
     pad,
     split_tensor_dict,
@@ -80,14 +78,11 @@ from ..utils import (
     DataCollatorForVisionLanguageChatML,
     empty_cache,
     encode_with_byte_offsets,
+    is_byte_level_tokenizer,
     pad_byte_offsets,
     piece_byte_len,
 )
 from .gold_config import GOLDConfig
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -182,21 +177,30 @@ def build_teacher_inputs_from_texts(
     tokenizer: PreTrainedTokenizerBase,
     prompt_texts: list[str],
     completion_texts: list[str],
+    use_extended_uld: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
 
     Returns ``(input_ids, labels, attention_mask, byte_offsets)``. ``byte_offsets`` is a ``[batch, seq, 2]`` tensor of
     UTF-8 byte ``(start, end)`` for each token: prompt and padding positions are filled with ``(0, 0)``; completion
     tokens carry offsets relative to the corresponding ``completion_text``; the appended EOS gets ``(content_len,
-    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``.
+    content_len)``. Byte offsets are derived from the fast tokenizer's char offsets via ``encode_with_byte_offsets``
+    when extended ULD is enabled. Positional ULD returns zero offsets because it does not consume them.
     """
 
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
-    backend = tokenizer.backend_tokenizer
 
     prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
-    completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+    if use_extended_uld:
+        # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
+        # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
+        completion_encs = encode_with_byte_offsets(
+            tokenizer.backend_tokenizer, completion_texts, add_special_tokens=False
+        )
+    else:
+        completion_ids = tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+        completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
 
     sequences: list[torch.Tensor] = []
     attention_masks: list[torch.Tensor] = []
@@ -218,7 +222,7 @@ def build_teacher_inputs_from_texts(
         offsets = [(0, 0)] * len(prompt_ids) + completion_offs
         if eos_token_id is not None:
             sequence.append(eos_token_id)
-            offsets.append((content_len, content_len))
+            offsets.append((content_len, content_len) if use_extended_uld else (0, 0))
 
         seq_tensor = torch.tensor(sequence, dtype=torch.long)
         sequences.append(seq_tensor)
@@ -795,7 +799,440 @@ class ULDLoss(nn.Module):
         return answers_index, answers_size
 
 
+# ---------------------------------------------------------------------------
+# X-Token cross-tokenizer KD (https://huggingface.co/papers/2605.21699)
+# ---------------------------------------------------------------------------
+
+# Per-process lazy caches keyed by (path, device, vocab_sizes).
+_SPARSE_PROJ_CACHE: dict = {}
+_EXACT_MAP_CACHE: dict = {}
+
+
+class _Fp32SparseMM(torch.autograd.Function):
+    """FP32 sparse-dense matmul that ignores surrounding BF16 autocast.
+
+    PyTorch has no BF16 sparse-mm kernel. ``custom_fwd``/``custom_bwd`` force FP32 inputs on the forward and disable
+    autocast in the backward, so the projection matmul stays in FP32 even inside ``autocast(bf16)``. The sparse matrix
+    is frozen, so its gradient slot returns ``None``.
+    """
+
+    @staticmethod
+    @torch.amp.custom_fwd(device_type="cuda", cast_inputs=torch.float32)
+    def forward(ctx, sparse_M, dense):
+        ctx.sparse_M = sparse_M
+        return torch.sparse.mm(sparse_M.t(), dense)
+
+    @staticmethod
+    @torch.amp.custom_bwd(device_type="cuda")
+    def backward(ctx, grad_out):
+        return None, torch.sparse.mm(ctx.sparse_M, grad_out)
+
+
+def _load_sparse_projection_matrix(path, device, *, student_vocab_size, teacher_vocab_size):
+    """Return a sparse-COO projection matrix W on ``device`` (per-process cached).
+
+    Accepts two on-disk formats from the NeMo-RL projection tools:
+    - Dense top-k: ``dict["indices"]`` / ``dict["likelihoods"]`` tensors.
+    - Sparse multi-token: ``dict[(s_id, t_id)] -> count``.
+
+    Both are normalised to a coalesced float32 sparse COO tensor of shape ``(V_s, V_t)``. See Algorithm 2 in
+    https://huggingface.co/papers/2605.21699.
+    """
+    key = (str(path), str(device), int(student_vocab_size), int(teacher_vocab_size))
+    if key in _SPARSE_PROJ_CACHE:
+        return _SPARSE_PROJ_CACHE[key]
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Projection matrix not found: {path}")
+    data = torch.load(path, map_location="cpu", weights_only=True)
+
+    normalize_rows = False
+    if isinstance(data, dict) and "indices" in data and "likelihoods" in data:
+        top_idx = data["indices"].long()
+        likelihoods = data["likelihoods"].float()
+        if top_idx.shape != likelihoods.shape:
+            raise ValueError(f"indices/likelihoods shape mismatch in {path}: {top_idx.shape} vs {likelihoods.shape}")
+        v_s, top_k = top_idx.shape
+        row = torch.arange(v_s).unsqueeze(1).expand(-1, top_k).reshape(-1)
+        col = top_idx.reshape(-1)
+        vals = likelihoods.reshape(-1)
+        indices = torch.stack([row, col], dim=0)
+    elif isinstance(data, dict) and data and all(isinstance(k, tuple) and len(k) == 2 for k in data):
+        pairs = list(data.keys())
+        row = torch.tensor([k[0] for k in pairs], dtype=torch.long)
+        col = torch.tensor([k[1] for k in pairs], dtype=torch.long)
+        indices = torch.stack([row, col], dim=0)
+        vals = torch.tensor(list(data.values()), dtype=torch.float32)
+        normalize_rows = True
+    else:
+        raise ValueError(
+            f"Unrecognised projection matrix format at {path}. Expected dict with "
+            "'indices'/'likelihoods' tensors or dict[(s_id, t_id)] -> count."
+        )
+
+    # Drop sentinels and entries outside the model vocabularies.
+    keep = (
+        (indices[0] >= 0) & (indices[0] < student_vocab_size) & (indices[1] >= 0) & (indices[1] < teacher_vocab_size)
+    )
+    indices, vals = indices[:, keep], vals[keep]
+
+    if normalize_rows and indices.numel() > 0:
+        row_sums = torch.zeros(student_vocab_size, dtype=vals.dtype)
+        row_sums.scatter_add_(0, indices[0], vals)
+        vals = vals / row_sums[indices[0]].clamp_min(torch.finfo(vals.dtype).eps)
+
+    sparse = torch.sparse_coo_tensor(
+        indices, vals, (student_vocab_size, teacher_vocab_size), device=device, dtype=torch.float32
+    ).coalesce()
+    _SPARSE_PROJ_CACHE[key] = sparse
+    return sparse
+
+
+def _load_exact_token_map(path, device, *, student_vocab_size, teacher_vocab_size):
+    """Build and cache the common/uncommon vocab partition for H-KL.
+
+    A student token joins the common set when its top-1 projection weight is >= 0.6 (relaxed threshold, hardcoded to
+    match the reference implementation). Collisions on the same teacher token keep the student with the highest weight.
+    See https://huggingface.co/papers/2605.21699 Section 3.2.
+    """
+    key = (str(path), str(device), int(student_vocab_size), int(teacher_vocab_size))
+    if key in _EXACT_MAP_CACHE:
+        return _EXACT_MAP_CACHE[key]
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Projection matrix not found: {path}")
+    data = torch.load(path, map_location="cpu", weights_only=True)
+    if not (isinstance(data, dict) and "indices" in data and "likelihoods" in data):
+        raise ValueError(f"H-KL requires the dense top-k projection format ('indices'/'likelihoods'). Got: {path}")
+
+    top_indices = data["indices"].long().to(device)
+    top_likelihoods = data["likelihoods"].float().to(device)
+    if top_indices.shape != top_likelihoods.shape:
+        raise ValueError(
+            f"indices/likelihoods shape mismatch in {path}: {top_indices.shape} vs {top_likelihoods.shape}"
+        )
+    v_s = int(student_vocab_size)
+    v_t = int(teacher_vocab_size)
+
+    sorted_vals, sorted_pos = torch.sort(top_likelihoods, dim=-1, descending=True)
+    file_v_s = min(top_indices.shape[0], v_s)
+    has_map = sorted_vals[:file_v_s, 0] >= 0.6
+
+    s_candidates = torch.where(has_map)[0]
+    empty = torch.empty(0, dtype=torch.long, device=device)
+    if s_candidates.numel() == 0:
+        result = {
+            "common_student": empty,
+            "common_teacher": empty,
+            "uncommon_student": torch.arange(v_s, device=device),
+            "uncommon_teacher": torch.arange(v_t, device=device),
+        }
+        _EXACT_MAP_CACHE[key] = result
+        return result
+
+    t_candidates = top_indices[s_candidates, sorted_pos[s_candidates, 0]]
+    prob_candidates = sorted_vals[s_candidates, 0]
+
+    in_bounds = (t_candidates >= 0) & (t_candidates < v_t)
+    s_vec = s_candidates[in_bounds]
+    t_vec = t_candidates[in_bounds]
+    prob_vec = prob_candidates[in_bounds]
+
+    # Per teacher token keep the student with the highest projection weight.
+    max_prob_per_t = torch.full((v_t,), float("-inf"), device=device, dtype=prob_vec.dtype)
+    max_prob_per_t.scatter_reduce_(0, t_vec, prob_vec, reduce="amax", include_self=True)
+    eligible = prob_vec >= max_prob_per_t[t_vec]
+
+    sentinel = v_s
+    eligible_s = torch.where(eligible, s_vec, s_vec.new_full(s_vec.shape, sentinel))
+    min_s_per_t = torch.full((v_t,), sentinel, device=device, dtype=s_vec.dtype)
+    min_s_per_t.scatter_reduce_(0, t_vec, eligible_s, reduce="amin", include_self=True)
+    winner_mask = eligible & (s_vec == min_s_per_t[t_vec])
+
+    common_student = s_vec[winner_mask]
+    common_teacher = t_vec[winner_mask]
+    sort_perm = torch.argsort(common_student)
+    common_student = common_student[sort_perm]
+    common_teacher = common_teacher[sort_perm]
+
+    common_s_mask = torch.zeros(v_s, dtype=torch.bool, device=device)
+    common_s_mask[common_student] = True
+    common_t_mask = torch.zeros(v_t, dtype=torch.bool, device=device)
+    common_t_mask[common_teacher] = True
+
+    result = {
+        "common_student": common_student,
+        "common_teacher": common_teacher,
+        "uncommon_student": (~common_s_mask).nonzero(as_tuple=True)[0],
+        "uncommon_teacher": (~common_t_mask).nonzero(as_tuple=True)[0],
+    }
+    _EXACT_MAP_CACHE[key] = result
+    return result
+
+
+class XTokenLoss(nn.Module):
+    """Cross-tokenizer knowledge-distillation loss with projection-matrix alignment.
+
+    Implements two variants from https://huggingface.co/papers/2605.21699:
+
+    - ``"p_kl"`` (Projection KL, paper Eq. 4): projects the full student distribution to teacher vocab space via a
+      sparse matrix W and computes forward KL, recovering signal for tokens in the uncommon set.
+    - ``"h_kl"`` (Hybrid KL, paper Eq. 3 and 5): GOLD hybrid structure with the common set built via top-1 mapping
+      under W (threshold ≥ 0.6) rather than strict string equality.
+
+    Both paths apply T² gradient scaling (Hinton 2015) and optionally a stop-gradient dynamic CE/KD balancing factor
+    (paper Eq. 7).
+
+    Token-span alignment reuses TRL's ``ULDLoss._align_by_byte_offsets``.
+    """
+
+    def __init__(
+        self,
+        config,
+        student_vocab_size,
+        teacher_vocab_size,
+        student_eos_token_id=None,
+        teacher_eos_token_id=None,
+    ):
+        super().__init__()
+        self.loss_type = config.xtoken_loss_type
+        self.projection_path = config.xtoken_projection_matrix_path
+        self.temperature = config.xtoken_temperature
+        self.dynamic_scaling = config.xtoken_dynamic_scaling
+        self.uncommon_topk = config.xtoken_uncommon_topk
+        self.vocab_topk = config.xtoken_vocab_topk
+        self.kl_weight = config.xtoken_kl_weight
+        self.ce_scale = config.xtoken_ce_scale
+        self.skip_student_eos = config.uld_skip_student_eos
+        self.skip_teacher_eos = config.uld_skip_teacher_eos
+        self.student_vocab_size = student_vocab_size
+        self.teacher_vocab_size = teacher_vocab_size
+        self.student_eos_token_id = student_eos_token_id
+        self.teacher_eos_token_id = teacher_eos_token_id
+        self.ignore_index = -100
+
+    def _proj_matrix(self, device):
+        return _load_sparse_projection_matrix(
+            self.projection_path,
+            device,
+            student_vocab_size=self.student_vocab_size,
+            teacher_vocab_size=self.teacher_vocab_size,
+        )
+
+    def _exact_map(self, device):
+        return _load_exact_token_map(
+            self.projection_path,
+            device,
+            student_vocab_size=self.student_vocab_size,
+            teacher_vocab_size=self.teacher_vocab_size,
+        )
+
+    def forward(
+        self,
+        student_logits,
+        teacher_logits,
+        student_labels,
+        teacher_labels,
+        student_byte_offsets,
+        teacher_byte_offsets,
+        loss_counts=None,
+    ):
+        teacher_logits = teacher_logits.detach()
+        device = student_logits.device
+        T = self.temperature
+        batch_size = student_logits.size(0)
+
+        if teacher_logits.shape[-1] > self.teacher_vocab_size:
+            teacher_logits = teacher_logits[..., : self.teacher_vocab_size]
+        if student_logits.shape[-1] > self.student_vocab_size:
+            student_logits = student_logits[..., : self.student_vocab_size]
+
+        alignment = self._get_alignment(student_labels, teacher_labels, student_byte_offsets, teacher_byte_offsets)
+
+        top_idx = projection = None
+        if self.loss_type == "p_kl" and any(paired for *_, paired in alignment):
+            vocab = teacher_logits.shape[-1]
+            topk = min(self.vocab_topk, vocab) if self.vocab_topk > 0 else vocab
+            top_idx = teacher_logits.amax(dim=(0, 1)).topk(topk).indices.sort().values
+            projection = self._proj_matrix(device)
+            if top_idx.numel() < projection.size(1):
+                # Restrict the sparse projection before matmul to avoid a full teacher-vocabulary output.
+                indices = projection.indices()
+                columns = torch.searchsorted(top_idx, indices[1])
+                keep = (columns < top_idx.numel()) & (top_idx[columns.clamp_max(top_idx.numel() - 1)] == indices[1])
+                projection = torch.sparse_coo_tensor(
+                    torch.stack([indices[0, keep], columns[keep]]),
+                    projection.values()[keep],
+                    (self.student_vocab_size, top_idx.numel()),
+                    device=device,
+                ).coalesce()
+
+        kd_terms = []
+        ce_terms = []
+        acc_num = acc_den = valid_pairs_total = proj_acc_num = proj_acc_den = 0
+
+        for i, (s0, ss, t0, ts, paired) in enumerate(alignment):
+            # CE covers every completion label, EOS included; only the KD span skips EOS.
+            ce_mask = student_labels[i, 1:] != self.ignore_index
+            ce_logits_i = student_logits[i, :-1][ce_mask]
+            ce_labels_i = student_labels[i, 1:][ce_mask]
+            ce_terms.append(F.cross_entropy(ce_logits_i.float(), ce_labels_i, reduction="sum"))
+            with torch.no_grad():
+                acc_num += int((ce_logits_i.argmax(dim=-1) == ce_labels_i).sum().item())
+                acc_den += int(ce_mask.sum().item())
+
+            if ss <= 0 or ts <= 0 or not paired:
+                kd_terms.append(student_logits[i].sum() * 0.0)
+                continue
+
+            # Alignment offsets describe the labels, one position after their prediction logits.
+            s_logits_i = student_logits[i, s0 - 1 : s0 + ss - 1]
+            t_logits_i = teacher_logits[i, t0 - 1 : t0 + ts - 1]
+            valid_pairs_total += len(paired)
+            if self.loss_type == "p_kl":
+                kd_i, p_num, p_den = self._compute_p_kl(s_logits_i, t_logits_i, paired, T, top_idx, projection)
+                proj_acc_num += p_num
+                proj_acc_den += p_den
+            else:
+                kd_i = self._compute_h_kl(s_logits_i, t_logits_i, paired, device, T)
+            kd_terms.append(kd_i * len(paired))
+
+        kd = torch.stack(kd_terms).sum() / max(valid_pairs_total, 1)
+        ce = torch.stack(ce_terms).sum() / max(acc_den, 1)
+
+        self.last_kl_loss = kd.detach()
+        self.last_ce_loss = ce.detach()
+        self.last_accuracy_num = acc_num
+        self.last_accuracy_den = acc_den
+        self.last_num_valid_pairs = float(valid_pairs_total) / batch_size
+        self.last_proj_accuracy_num = proj_acc_num
+        self.last_proj_accuracy_den = proj_acc_den
+
+        if loss_counts is not None:
+            ce_count, kd_count = loss_counts.clamp_min(1)
+            kd = kd * valid_pairs_total / kd_count
+            ce = ce * acc_den / ce_count
+
+        if self.dynamic_scaling:
+            # loss = sg(ce/kd) * kd + ce; kl_weight and ce_scale are intentionally ignored in this branch.
+            kd_abs = kd.detach().abs()
+            scale = torch.where(kd_abs > 0, ce.detach().abs() / kd_abs, torch.ones_like(kd_abs))
+            return scale * kd + ce
+        return self.kl_weight * kd + self.ce_scale * ce
+
+    def _get_alignment(self, student_labels, teacher_labels, student_offsets, teacher_offsets):
+        s_starts, s_sizes = self._answer_spans(
+            student_labels, skip_eos=self.skip_student_eos, eos_token_id=self.student_eos_token_id
+        )
+        t_starts, t_sizes = self._answer_spans(
+            teacher_labels, skip_eos=self.skip_teacher_eos, eos_token_id=self.teacher_eos_token_id
+        )
+        alignment = []
+        for i, (s0, ss, t0, ts) in enumerate(zip(s_starts, s_sizes, t_starts, t_sizes, strict=True)):
+            paired = []
+            if ss > 0 and ts > 0:
+                s_groups, t_groups = ULDLoss._align_by_byte_offsets(
+                    student_offsets[i, s0 : s0 + ss].tolist(), teacher_offsets[i, t0 : t0 + ts].tolist()
+                )
+                paired = [(sg, tg) for sg, tg in zip(s_groups, t_groups, strict=True) if sg and tg]
+            alignment.append((s0, ss, t0, ts, paired))
+        return alignment
+
+    @staticmethod
+    def _answer_spans(labels, *, skip_eos, eos_token_id):
+        starts, sizes = [], []
+        for row in labels:
+            mask = row.ne(-100)
+            mask[0] = False
+            if not mask.any():
+                starts.append(0)
+                sizes.append(0)
+                continue
+            starts.append(int(mask.nonzero(as_tuple=True)[0][0].item()))
+            sz = int(mask.sum().item())
+            last_idx = int(mask.nonzero(as_tuple=True)[0][-1].item())
+            sizes.append(sz - 1 if skip_eos and row[last_idx].item() == eos_token_id else sz)
+        return starts, sizes
+
+    @staticmethod
+    def _chunk_average(values, groups):
+        return torch.stack([values[group].mean(dim=0) for group in groups])
+
+    def _compute_p_kl(self, s_logits, t_logits, paired, T, top_idx, projection):
+        """P-KL: project student to teacher vocab, global top-k, forward KL with T² scaling.
+
+        Implements Eq. (4) from https://huggingface.co/papers/2605.21699.
+        """
+        eps = 1e-10
+        s_groups = [p[0] for p in paired]
+        t_groups = [p[1] for p in paired]
+
+        s_probs = self._chunk_average(F.softmax(s_logits.float() / T, dim=-1), s_groups)
+
+        s_proj_topk = _Fp32SparseMM.apply(projection, s_probs.t()).t()
+        s_proj_topk = s_proj_topk / (s_proj_topk.sum(dim=-1, keepdim=True) + eps)
+        s_log_proj = (s_proj_topk + eps).log()
+
+        # Average of log-softmaxes, not renormalized, as in the reference implementation
+        t_log = F.log_softmax(t_logits[:, top_idx].float() / T, dim=-1)
+        t_log_topk = self._chunk_average(t_log, t_groups)
+
+        with torch.no_grad():
+            proj_top1 = s_proj_topk.argmax(dim=-1)
+            tgt_top1 = t_log_topk.argmax(dim=-1)
+            proj_acc_n = int((proj_top1 == tgt_top1).sum().item())
+            proj_acc_d = int(proj_top1.shape[0])
+
+        per_chunk_kl = F.kl_div(s_log_proj, t_log_topk, reduction="none", log_target=True).sum(dim=-1)
+        return per_chunk_kl.mean() * (T * T), proj_acc_n, proj_acc_d
+
+    def _compute_h_kl(self, s_logits, t_logits, paired, device, T):
+        """H-KL: common-set forward KL + uncommon sorted-L1, T² scaling.
+
+        Common set built via top-1 mapping under W (threshold ≥ 0.6). Implements Eq. (3) and Eq. (5) from
+        https://huggingface.co/papers/2605.21699.
+        """
+        s_groups = [p[0] for p in paired]
+        t_groups = [p[1] for p in paired]
+
+        em = self._exact_map(device)
+        common_s, common_t = em["common_student"], em["common_teacher"]
+        uncommon_s, uncommon_t = em["uncommon_student"], em["uncommon_teacher"]
+
+        s_log = F.log_softmax(s_logits.float() / T, dim=-1)
+        t_log = F.log_softmax(t_logits.float() / T, dim=-1)
+        s_chunks = self._chunk_average(s_log, s_groups)
+        t_chunks = self._chunk_average(t_log, t_groups)
+
+        if common_s.numel() > 0:
+            # Full-vocab log-probs sliced to the common set, not renormalized, as in the reference implementation
+            s_common = s_chunks[:, common_s]
+            t_common = t_chunks[:, common_t]
+            kl_per_chunk = F.kl_div(s_common, t_common, reduction="none", log_target=True).sum(dim=-1)
+            kl_common = kl_per_chunk.mean()
+        else:
+            kl_common = s_chunks.new_zeros(())
+
+        if uncommon_s.numel() > 0 and uncommon_t.numel() > 0:
+            s_unc = s_chunks[:, uncommon_s].exp()
+            t_unc = t_chunks[:, uncommon_t].exp()
+            s_unc_sorted = s_unc.sort(dim=-1, descending=True).values
+            t_unc_sorted = t_unc.sort(dim=-1, descending=True).values
+            if self.uncommon_topk > 0:
+                k = min(self.uncommon_topk, s_unc_sorted.shape[-1], t_unc_sorted.shape[-1])
+                s_unc_sorted = s_unc_sorted[:, :k]
+                t_unc_sorted = t_unc_sorted[:, :k]
+            cap = min(s_unc_sorted.shape[-1], t_unc_sorted.shape[-1])
+            l1_uncommon = F.l1_loss(s_unc_sorted[:, :cap], t_unc_sorted[:, :cap], reduction="none").sum(dim=-1).mean()
+        else:
+            l1_uncommon = s_chunks.new_zeros(())
+
+        return (kl_common + l1_uncommon) * (T * T)
+
+
 class GOLDTrainer(SFTTrainer):
+    xtoken_loss_fn = None
+
     _tag_names = ["trl", "gold"]
     _name = "GOLD"
     _paper = {
@@ -807,7 +1244,7 @@ class GOLDTrainer(SFTTrainer):
                 title        = {{Unlocking On-Policy Distillation for Any Model Family}},
                 author       = {Carlos Miguel Patiño and Kashif Rasul and Quentin Gallouédec and Ben Burtenshaw and Sergio Paniego and Vaibhav Srivastav and Thibaud Frere and Ed Beeching and Lewis Tunstall and Leandro von Werra and Thomas Wolf},
                 year         = 2025,
-                url          = {https://huggingface.co/spaces/HuggingFaceH4/general-on-policy-logit-distillation},
+                url          = {https://huggingface.co/spaces/HuggingFaceH4/on-policy-distillation},
             }"""
         ),
     }
@@ -833,11 +1270,18 @@ class GOLDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
-        self.model_revision = (args.model_init_kwargs or {}).get("revision")
+        self.model_revision = (args.model_init_kwargs or {}).get("revision") if isinstance(model, str) else None
+        teacher_revision = (
+            (args.teacher_model_init_kwargs or {}).get("revision", args.teacher_model_revision)
+            if isinstance(teacher_model, str)
+            else None
+        )
         dataset_sample = next(iter(train_dataset)) if train_dataset is not None else {}
         if processing_class is None:
             model_id = model if isinstance(model, str) else get_config_model_id(model.config)
-            processing_class = AutoProcessor.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
+            processing_class = AutoProcessor.from_pretrained(
+                model_id, revision=self.model_revision, trust_remote_code=args.trust_remote_code
+            )
             # simplified logic from SFTTrainer
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -864,7 +1308,9 @@ class GOLDTrainer(SFTTrainer):
         if self._is_vlm:
             if isinstance(teacher_model, str):
                 # Teacher not yet instantiated -- validate it's a VLM
-                teacher_proc = AutoProcessor.from_pretrained(teacher_model, trust_remote_code=args.trust_remote_code)
+                teacher_proc = AutoProcessor.from_pretrained(
+                    teacher_model, revision=teacher_revision, trust_remote_code=args.trust_remote_code
+                )
                 if not isinstance(teacher_proc, ProcessorMixin):
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
@@ -875,7 +1321,7 @@ class GOLDTrainer(SFTTrainer):
                 ).model_type
             else:
                 # Teacher already instantiated — check if it looks like a VLM by checking for a vision config
-                if teacher_model.config.vision_config is None:
+                if "vision_config" not in teacher_model.config.sub_configs:
                     raise ValueError(
                         "VLM distillation requires both student and teacher to be vision-language models. "
                         "The student has a `ProcessorMixin` but the teacher model does not appear to be a VLM "
@@ -897,21 +1343,21 @@ class GOLDTrainer(SFTTrainer):
                     f"teacher is '{teacher_model_type}'. Images will be processed separately through each "
                     "model's processor, which may increase memory usage and computation time."
                 )
-            if is_cross_architecture or args.use_uld_loss:
+            if is_cross_architecture or args.use_uld_loss or args.xtoken_loss_type != "none":
                 self._teacher_processor = (
                     teacher_proc
                     if isinstance(teacher_model, str)
                     else AutoProcessor.from_pretrained(
                         teacher_model.config._name_or_path,
+                        revision=teacher_revision,
                         trust_remote_code=args.trust_remote_code,
                     )
                 )
-        if self._is_cross_architecture_vlm and not args.use_uld_loss:
+        if self._is_cross_architecture_vlm and not (args.use_uld_loss or args.xtoken_loss_type != "none"):
             raise ValueError(
                 "Cross-architecture VLM distillation (student and teacher have different `model_type`) is not "
                 "supported with the standard JSD loss because the models require different image token formats "
-                "and tokenizers. Please set `use_uld_loss=True` in your GOLDConfig to enable cross-tokenizer "
-                "alignment via ULD loss."
+                "and tokenizers. Enable ULD or X-Token loss for cross-tokenizer alignment."
             )
         self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
         if self._is_vision_dataset and not self._is_vlm:
@@ -947,52 +1393,29 @@ class GOLDTrainer(SFTTrainer):
             else:
                 data_collator = DataCollatorForChatML(tokenizer=self._tokenizer, max_length=args.max_length)
 
-        # Liger fused GKD loss (JSD)
-        self.use_liger_gkd_loss = False
-        if args.use_liger_kernel:
-            # The fused Liger JSD loss requires student and teacher to share a vocabulary, while ULD loss exists
-            # precisely for the cross-tokenizer case — the two cannot be combined.
-            if args.use_uld_loss:
-                raise ValueError(
-                    "`use_liger_kernel=True` cannot be combined with `use_uld_loss=True`. The fused Liger JSD loss "
-                    "requires the student and teacher to share a vocabulary, whereas ULD loss handles the "
-                    "cross-tokenizer case. Either set `use_uld_loss=False` (if your student and teacher are from the "
-                    "same family and the standard JSD loss applies), or set `use_liger_kernel=False`."
-                )
-            self.liger_loss = LigerFusedLinearJSDLoss(
-                beta=args.beta,
-                ignore_index=-100,
-                temperature=args.temperature,
-                compiled=False,
-                weight_hard_loss=0.0,
-                weight_soft_loss=1.0,
-            )
-            self.use_liger_gkd_loss = True
-            self._forward_redirection = _ForwardRedirection()
-
-        if args.teacher_model_init_kwargs is None:
-            teacher_model_init_kwargs = {}
-        elif not isinstance(teacher_model, str):
+        teacher_model_init_kwargs = dict(args.teacher_model_init_kwargs or {})
+        if not isinstance(teacher_model, str) and args.teacher_model_init_kwargs is not None:
             raise ValueError(
                 "You passed teacher_model_init_kwargs to the GOLDConfig, but your teacher_model is already instantiated."
             )
-        else:
-            teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["dtype"] = (
-                teacher_model_init_kwargs["dtype"]
-                if teacher_model_init_kwargs["dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["dtype"])
-            )
+        dtype = teacher_model_init_kwargs.get("dtype")
+        teacher_model_init_kwargs["dtype"] = dtype if dtype in ["auto", None] else getattr(torch, dtype)
 
-        if args.use_uld_loss and args.teacher_tokenizer_name_or_path is None:
+        _needs_teacher_tok = args.use_uld_loss or args.xtoken_loss_type != "none"
+        if _needs_teacher_tok and args.teacher_tokenizer_name_or_path is None:
             if isinstance(teacher_model, str):
                 args.teacher_tokenizer_name_or_path = teacher_model
             elif teacher_model.config._name_or_path:
                 args.teacher_tokenizer_name_or_path = teacher_model.config._name_or_path
             else:
                 raise ValueError(
-                    "`teacher_tokenizer_name_or_path` must be set when using ULD loss with a pre-instantiated teacher model."
+                    "`teacher_tokenizer_name_or_path` must be set when using ULD or X-Token loss with a pre-instantiated teacher model."
                 )
+
+        # The teacher revision pins a commit in the teacher model's repo, so it only applies to a tokenizer served from
+        # that same repo. ULD's cross-tokenizer setup points `teacher_tokenizer_name_or_path` at a different repo, where
+        # that commit does not exist.
+        teacher_tokenizer_revision = teacher_revision if args.teacher_tokenizer_name_or_path == teacher_model else None
 
         if isinstance(teacher_model, str):
             init_kwargs = dict(teacher_model_init_kwargs)
@@ -1005,19 +1428,21 @@ class GOLDTrainer(SFTTrainer):
             teacher_model = create_model_from_path(teacher_model, **init_kwargs)
         self.use_uld_loss = args.use_uld_loss
         self.teacher_tokenizer = None
-        if args.use_uld_loss and self._teacher_processor is not None:
+        if _needs_teacher_tok and self._teacher_processor is not None:
             self.teacher_tokenizer = self._teacher_processor.tokenizer
             if self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
-        elif args.use_uld_loss and args.teacher_tokenizer_name_or_path is not None:
+        elif _needs_teacher_tok and args.teacher_tokenizer_name_or_path is not None:
             self.teacher_tokenizer = AutoTokenizer.from_pretrained(
                 args.teacher_tokenizer_name_or_path,
+                revision=teacher_tokenizer_revision,
                 trust_remote_code=args.trust_remote_code,
             )
             if self.teacher_tokenizer.pad_token is None:
                 self.teacher_tokenizer.pad_token = self.teacher_tokenizer.eos_token
 
-        # Hybrid ULD loss configuration is handled in ULDLoss class
+        # Initialise to None so _prepare_dataset (called by super().__init__) can safely read this attribute.
+        self.xtoken_loss_fn = None
 
         super().__init__(
             model,
@@ -1035,8 +1460,17 @@ class GOLDTrainer(SFTTrainer):
 
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
-        if not args.use_uld_loss:
+        # X-Token KD needs the original teacher vocab; only resize for same-tokenizer JSD.
+        if not args.use_uld_loss and args.xtoken_loss_type == "none":
             teacher_model.resize_token_embeddings(self.model.config.get_text_config().vocab_size)
+
+        # Capture teacher vocab size before the model is wrapped by DeepSpeed/FSDP.
+        # Only needed when X-Token is active; avoids requiring teacher_model.config otherwise.
+        _teacher_vocab_size = (
+            min(teacher_model.config.get_text_config().vocab_size, len(self.teacher_tokenizer))
+            if args.xtoken_loss_type != "none"
+            else None
+        )
 
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
@@ -1068,6 +1502,15 @@ class GOLDTrainer(SFTTrainer):
         self._matched_step_eq = 0.0
         self._unmatched_step_eq = 0.0
 
+        self._xtoken_kl_sum = 0.0
+        self._xtoken_ce_sum = 0.0
+        self._xtoken_pair_sum = 0.0
+        self._xtoken_steps = 0.0
+        self._xtoken_accuracy_num = 0.0
+        self._xtoken_accuracy_den = 0.0
+        self._xtoken_projection_num = 0.0
+        self._xtoken_projection_den = 0.0
+
         self.uld_loss_fn = None
         if self.use_uld_loss:
             self.uld_loss_fn = ULDLoss(
@@ -1077,6 +1520,17 @@ class GOLDTrainer(SFTTrainer):
                 device=self.accelerator.device,
             )
 
+        self.xtoken_loss_fn = None
+        if args.xtoken_loss_type != "none":
+            self.xtoken_loss_fn = XTokenLoss(
+                config=args,
+                student_vocab_size=min(self.model.config.get_text_config().vocab_size, len(self._tokenizer)),
+                teacher_vocab_size=_teacher_vocab_size,
+                student_eos_token_id=self._tokenizer.eos_token_id,
+                teacher_eos_token_id=self.teacher_tokenizer.eos_token_id,
+            )
+            self.model_accepts_loss_kwargs = True
+
         generation_kwargs = {
             "max_new_tokens": args.max_completion_length,
             "temperature": args.temperature,
@@ -1085,6 +1539,9 @@ class GOLDTrainer(SFTTrainer):
             "top_k": args.top_k,
             "pad_token_id": self.pad_token_id,
         }
+        if isinstance(processing_class, ProcessorMixin):
+            # A sampled image token would mismatch the image features
+            generation_kwargs["suppress_tokens"] = [self.model.config.image_token_id]
         self.generation_config = GenerationConfig(**generation_kwargs)
         # Keep training-specific generation kwargs to overwrite model's original generation config
         self.generation_kwargs = generation_kwargs
@@ -1232,6 +1689,31 @@ class GOLDTrainer(SFTTrainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches, device)
+        if self.xtoken_loss_fn is not None and batch_samples:
+            # GOLD repeats each generation batch; count its buffered slices once.
+            self._fill_buffer(batch_samples[0], len(batch_samples))
+            self._xtoken_buffer_step = self._step
+            counts = torch.zeros(2, device=device, dtype=torch.long)
+            for inputs in self._buffered_inputs:
+                if self._vlm_collator is not None:
+                    pending = inputs
+                    inputs = self._vlm_collator([dict(example) for example in pending["_gold_vlm_lazy_examples"]])
+                    if self._teacher_processor is not None:
+                        inputs["_raw_images"] = pending["_gold_vlm_raw_images"]
+                        inputs["_raw_prompts"] = pending["_gold_vlm_raw_prompts"]
+                _, teacher_labels, _, teacher_offsets, _ = self._build_cross_tokenizer_teacher_inputs(inputs)
+                alignment = self.xtoken_loss_fn._get_alignment(
+                    inputs["labels"], teacher_labels, inputs["byte_offsets"], teacher_offsets
+                )
+                counts += counts.new_tensor(
+                    [int((inputs["labels"][:, 1:] != -100).sum()), sum(len(p) for *_, p in alignment)]
+                )
+            self._xtoken_loss_counts = self.accelerator.reduce(counts, reduction="sum")
+            num_items_in_batch = self._xtoken_loss_counts[0].clamp_min(1)
+        return batch_samples, num_items_in_batch
+
     @profiling_decorator
     def _prepare_inputs(self, generation_batch: dict[str, torch.Tensor | Any]) -> dict[str, torch.Tensor | Any]:
         if not self.model.training:
@@ -1251,10 +1733,12 @@ class GOLDTrainer(SFTTrainer):
             return generation_batch
 
         buffer_steps = self.args.gradient_accumulation_steps
-        if self._step % buffer_steps == 0 or self._buffered_inputs is None:
-            self._fill_buffer(generation_batch, buffer_steps)
-
-        slice_idx = self._step % buffer_steps
+        if self.xtoken_loss_fn is not None:
+            slice_idx = self._step - self._xtoken_buffer_step
+        else:
+            if self._step % buffer_steps == 0 or self._buffered_inputs is None:
+                self._fill_buffer(generation_batch, buffer_steps)
+            slice_idx = self._step % buffer_steps
         inputs = self._buffered_inputs[slice_idx]
         if isinstance(inputs, dict):
             if "_gold_vlm_on_policy_raw_examples" in inputs:
@@ -1288,7 +1772,10 @@ class GOLDTrainer(SFTTrainer):
         }
 
         with unwrap_model_for_generation(
-            self.model, self.accelerator, generation_kwargs=self.generation_kwargs
+            self.model,
+            self.accelerator,
+            generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             (
                 new_input_ids,
@@ -1504,6 +1991,7 @@ class GOLDTrainer(SFTTrainer):
 
         # convert_ids_to_tokens is a tokenizer method; VLM processors expose it via `.tokenizer`.
         tokenizer = self._tokenizer
+        byte_level = is_byte_level_tokenizer(tokenizer.backend_tokenizer)
 
         rows: list[list[tuple[int, int]]] = []
         for row_ids, row_labels in zip(new_input_ids.cpu().tolist(), new_labels.cpu().tolist(), strict=True):
@@ -1512,7 +2000,7 @@ class GOLDTrainer(SFTTrainer):
             for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
                 if label == -100:
                     continue
-                nb = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0])
+                nb = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0], byte_level)
                 offs[pos] = (cumulative, cumulative + nb)
                 cumulative += nb
             rows.append(offs)
@@ -1575,10 +2063,11 @@ class GOLDTrainer(SFTTrainer):
 
                 slice_inputs = slices[i]
 
-                if (
-                    self.use_uld_loss
-                    and self.teacher_tokenizer is not None
-                    and ("original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs)
+                _needs_text = (
+                    self.use_uld_loss or self.xtoken_loss_fn is not None
+                ) and self.teacher_tokenizer is not None
+                if _needs_text and (
+                    "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs
                 ):
                     raise ValueError(
                         "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
@@ -1594,6 +2083,15 @@ class GOLDTrainer(SFTTrainer):
                     raise ValueError(
                         "Off-policy batch missing `byte_offsets`. Use the default DataCollatorForChatML or set "
                         "`use_extended_uld=False`."
+                    )
+                if (
+                    self.xtoken_loss_fn is not None
+                    and self.teacher_tokenizer is not None
+                    and "byte_offsets" not in slice_inputs
+                ):
+                    raise ValueError(
+                        "Off-policy batch missing `byte_offsets`. X-Token loss requires byte offsets for "
+                        "token-span alignment. Use the default DataCollatorForChatML."
                     )
 
                 self._buffered_inputs[i] = slice_inputs
@@ -1643,7 +2141,7 @@ class GOLDTrainer(SFTTrainer):
             self.vllm_generation.sync_weights()
             self._last_vllm_sync_step = self.state.global_step
 
-        _, completion_ids, _, _ = self.vllm_generation.generate(
+        _, completion_ids, _, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids_list,
             images=None,
             num_generations=self.num_generations,
@@ -1665,6 +2163,7 @@ class GOLDTrainer(SFTTrainer):
             self.model,
             self.accelerator,
             generation_kwargs=self.generation_kwargs,
+            gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs,
         ) as unwrapped_model:
             max_completion_length = self.generation_config.max_new_tokens
             prompt_max_length = max(1, self.args.max_length - max_completion_length) if self.args.max_length else None
@@ -1818,7 +2317,7 @@ class GOLDTrainer(SFTTrainer):
             generate_images = all_images
         else:
             generate_images = None
-        _, completion_ids, _, _ = self.vllm_generation.generate(
+        _, completion_ids, _, _, _ = self.vllm_generation.generate(
             prompts=all_prompt_ids,
             images=generate_images,
             num_generations=self.num_generations,
@@ -2036,10 +2535,12 @@ class GOLDTrainer(SFTTrainer):
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
 
-        if packing and self.use_uld_loss and self.teacher_tokenizer is not None:
+        # xtoken_loss_fn is set after super().__init__() returns, so check args instead.
+        _cross_tok = (self.use_uld_loss or args.xtoken_loss_type != "none") and self.teacher_tokenizer is not None
+        if packing and _cross_tok:
             raise ValueError(
-                "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
-                "prompt/completion example."
+                "Packing is not supported with cross-tokenizer KD (ULD or X-Token) because byte-offset alignment is "
+                "defined per prompt/completion example."
             )
         if packing and self.use_privileged_context:
             raise ValueError(
@@ -2047,11 +2548,7 @@ class GOLDTrainer(SFTTrainer):
                 "prompt/completion example."
             )
 
-        if (
-            not is_processed
-            or (self.use_uld_loss and self.teacher_tokenizer is not None)
-            or self.use_privileged_context
-        ):
+        if not is_processed or _cross_tok or self.use_privileged_context:
             return self._prepare_dataset_with_original_text(
                 dataset, processing_class, args, packing, formatting_func, dataset_name
             )
@@ -2123,7 +2620,7 @@ class GOLDTrainer(SFTTrainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Apply the formatting function if any
             if formatting_func is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -2144,26 +2641,6 @@ class GOLDTrainer(SFTTrainer):
                 **map_kwargs,
             )
 
-            # Add EOS token if needed: non-conversational only
-            first_example = next(iter(dataset))
-            if not is_conversational(first_example):
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
-
-                def add_eos(example, eos_token):
-                    if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                        example["text"] = example["text"] + eos_token
-                    elif "completion" in example and not example["completion"].endswith(eos_token):
-                        example["completion"] = example["completion"] + eos_token
-                    return example
-
-                dataset = dataset.map(
-                    add_eos,
-                    fn_kwargs={"eos_token": processing_class.eos_token},
-                    remove_columns=("messages" if "messages" in column_names else None),  # renamed to "text"
-                    **map_kwargs,
-                )
-
             # Tokenize the dataset while preserving original text
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
@@ -2176,15 +2653,15 @@ class GOLDTrainer(SFTTrainer):
                 use_privileged_context,
                 teacher_prompt_template,
                 privileged_context_column,
+                use_extended_uld,
             ):
                 """Emit input_ids, attention_mask, byte_offsets, completion_mask, and the original prompt/completion
-                text. Byte offsets and input_ids come from a single ``encode_with_byte_offsets`` call.
+                text.
                 """
-                backend = processing_class.backend_tokenizer
                 result = {}
                 teacher_prompt_text = None
 
-                if "prompt" in example:  # prompt-completion case
+                if "prompt" in example and "completion" in example:  # prompt-completion case
                     if is_conversational(example):
                         prompt_text = processing_class.apply_chat_template(
                             example["prompt"],
@@ -2211,7 +2688,7 @@ class GOLDTrainer(SFTTrainer):
                         full_text = prompt_text + completion_text
                     result["original_prompt_text"] = prompt_text
                     result["original_completion_text"] = completion_text
-                elif is_conversational(example):
+                elif is_conversational(example) or "messages" in example:
                     messages = example["messages"]
                     assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
                     if assistant_indices:
@@ -2255,6 +2732,7 @@ class GOLDTrainer(SFTTrainer):
                 else:
                     text = example.get(dataset_text_field, example.get("text", ""))
                     prompt_text = ""
+                    completion_text = text
                     full_text = text
                     result["original_prompt_text"] = ""
                     result["original_completion_text"] = text
@@ -2291,19 +2769,48 @@ class GOLDTrainer(SFTTrainer):
                         example.get("chat_template_kwargs", {}),
                     )
 
-                # Single backend call: ids and char-derived byte offsets from the same encoding,
-                # so input_ids[i] is described by full_offs[i] without any boundary slop.
-                [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
-                prompt_byte_len = len(prompt_text.encode("utf-8"))
-                completion_start = next(
-                    (idx for idx, (s, _) in enumerate(full_offs) if s >= prompt_byte_len),
-                    len(input_ids),
+                if use_extended_uld:
+                    # Single backend call: ids and char-derived byte offsets from the same encoding,
+                    # so input_ids[i] is described by full_offs[i] without any boundary slop.
+                    backend = processing_class.backend_tokenizer
+                    [(input_ids, full_offs)] = encode_with_byte_offsets(backend, [full_text], add_special_tokens=False)
+                    prompt_byte_len = len(prompt_text.encode("utf-8"))
+                    # A token straddling the boundary is pulled into the completion here: extended ULD
+                    # re-splits it against the teacher's own byte offsets via `_align_by_byte_offsets`.
+                    completion_start = next(
+                        (idx for idx, (_, e) in enumerate(full_offs) if e > prompt_byte_len),
+                        len(input_ids),
+                    )
+                    # Completion-relative: prompt positions zeroed, completion offsets shifted to
+                    # the assistant content's first byte (matches build_teacher_inputs_from_texts).
+                    byte_offsets = [(0, 0)] * completion_start + [
+                        (max(0, s - prompt_byte_len), e - prompt_byte_len) for s, e in full_offs[completion_start:]
+                    ]
+                else:
+                    # Works with slow tokenizers too (e.g. SentencePiece): no `backend_tokenizer` needed.
+                    encoding = processing_class(full_text, add_special_tokens=False, return_offsets_mapping=True)
+                    input_ids = encoding["input_ids"]
+                    # Same boundary rule as extended ULD: a leading space at the seam is normally attached to
+                    # the following (completion) token by the tokenizer, so matching on `start` instead would
+                    # drop that token's content from the completion entirely.
+                    completion_start = next(
+                        (idx for idx, (_, end) in enumerate(encoding["offset_mapping"]) if end > len(prompt_text)),
+                        len(input_ids),
+                    )
+                    byte_offsets = [(0, 0)] * len(input_ids)
+
+                append_eos = (
+                    not is_conversational(example)
+                    and processing_class.eos_token_id is not None
+                    and (not input_ids or input_ids[-1] != processing_class.eos_token_id)
                 )
-                # Completion-relative: prompt positions zeroed, completion offsets shifted to
-                # the assistant content's first byte (matches build_teacher_inputs_from_texts).
-                byte_offsets = [(0, 0)] * completion_start + [
-                    (s - prompt_byte_len, e - prompt_byte_len) for s, e in full_offs[completion_start:]
-                ]
+                if append_eos:
+                    input_ids.append(processing_class.eos_token_id)
+                    if use_extended_uld:
+                        completion_byte_len = len(completion_text.encode("utf-8"))
+                        byte_offsets.append((completion_byte_len, completion_byte_len))
+                    else:
+                        byte_offsets.append((0, 0))
 
                 # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
                 # boundary so it survives truncation without re-tokenizing the prompt.
@@ -2327,7 +2834,10 @@ class GOLDTrainer(SFTTrainer):
                         clean_up_tokenization_spaces=False,
                     )
                     result["original_prompt_text"] = decode(input_ids[:completion_start])
-                    result["original_completion_text"] = decode(input_ids[completion_start:])
+                    completion_ids = input_ids[completion_start:]
+                    if append_eos:
+                        completion_ids = completion_ids[:-1]
+                    result["original_completion_text"] = decode(completion_ids)
 
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
@@ -2342,7 +2852,8 @@ class GOLDTrainer(SFTTrainer):
                 fn_kwargs={
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
-                    "max_length": getattr(args, "max_length", None),
+                    "max_length": args.max_length,
+                    "use_extended_uld": args.use_extended_uld or args.xtoken_loss_type != "none",
                     "use_privileged_context": self.use_privileged_context,
                     "teacher_prompt_template": self.teacher_prompt_template,
                     "privileged_context_column": self.privileged_context_column,
@@ -2369,19 +2880,6 @@ class GOLDTrainer(SFTTrainer):
 
                 dataset = dataset.select_columns(columns_to_select)
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-
-            if args.use_liger_kernel:
-                required_columns = {
-                    "input_ids",
-                    "attention_mask",
-                    "position_ids",
-                    "completion_mask",
-                    "messages",
-                    "original_prompt_text",
-                    "original_completion_text",
-                    "byte_offsets",
-                }
-                dataset = dataset.select_columns(required_columns.intersection(dataset.column_names))
 
         return dataset
 
@@ -2494,7 +2992,6 @@ class GOLDTrainer(SFTTrainer):
 
         Returns ``(input_ids, labels, attention_mask, byte_offsets, forward_kwargs)``.
         """
-        backend = self.teacher_tokenizer.backend_tokenizer
         pad_token_id = self.teacher_tokenizer.pad_token_id
         eos_token_id = self.teacher_tokenizer.eos_token_id
 
@@ -2507,7 +3004,15 @@ class GOLDTrainer(SFTTrainer):
             padding=True,
             return_tensors="pt",
         )
-        completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+        use_byte_offsets = self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld
+        if use_byte_offsets:
+            # Only the extended path needs the fast tokenizer's byte offsets; positional ULD works with slow
+            # (e.g. SentencePiece) tokenizers that have no `backend_tokenizer`.
+            backend = self.teacher_tokenizer.backend_tokenizer
+            completion_encs = encode_with_byte_offsets(backend, completion_texts, add_special_tokens=False)
+        else:
+            completion_ids = self.teacher_tokenizer(completion_texts, add_special_tokens=False)["input_ids"]
+            completion_encs = [(ids, [(0, 0)] * len(ids)) for ids in completion_ids]
 
         sequences: list[torch.Tensor] = []
         attention_masks: list[torch.Tensor] = []
@@ -2532,7 +3037,7 @@ class GOLDTrainer(SFTTrainer):
             offsets = [(0, 0)] * len(prompt_ids) + completion_offs
             if eos_token_id is not None:
                 sequence.append(eos_token_id)
-                offsets.append((content_len, content_len))
+                offsets.append((content_len, content_len) if use_byte_offsets else (0, 0))
 
             seq_tensor = torch.tensor(sequence, dtype=torch.long)
             sequences.append(seq_tensor)
@@ -2581,11 +3086,53 @@ class GOLDTrainer(SFTTrainer):
             forward_kwargs,
         )
 
+    def _build_cross_tokenizer_teacher_inputs(self, inputs):
+        if self._teacher_processor is not None:
+            # VLM teacher: render the prompt through the teacher's own processor so image
+            # placeholders and pixel tensors match the teacher model.
+            if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
+                raise ValueError(
+                    "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
+                    "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
+                    "or ensure your custom collator preserves these fields."
+                )
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+                teacher_forward_kwargs,
+            ) = self._build_teacher_vlm_inputs(
+                inputs["original_completion_text"], inputs["_raw_images"], inputs["_raw_prompts"]
+            )
+        else:
+            teacher_forward_kwargs = {}
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+            ) = build_teacher_inputs_from_texts(
+                self.teacher_tokenizer,
+                inputs["original_prompt_text"],
+                inputs["original_completion_text"],
+                use_extended_uld=self.uld_loss_fn is None or self.uld_loss_fn.use_extended_uld,
+            )
+
+        return (
+            teacher_input_ids,
+            teacher_labels,
+            teacher_attention_mask,
+            teacher_completion_byte_offsets,
+            teacher_forward_kwargs,
+        )
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Extract multimodal fields (pixel_values, image_grid_thw, ...) for student forward passes.
         # Standard JSD reuses these for the teacher (same-family VLM); cross-tokenizer ULD rebuilds
         # teacher inputs separately below.
         student_forward_kwargs = self._get_model_forward_kwargs(inputs)
+        _cross_tok = (self.use_uld_loss or self.xtoken_loss_fn is not None) and self.teacher_tokenizer is not None
         if self.use_privileged_context:
             if "teacher_prompt_text" not in inputs:
                 raise ValueError(
@@ -2631,36 +3178,16 @@ class GOLDTrainer(SFTTrainer):
                 temperature=self.temperature,
                 num_items_in_batch=num_items_in_batch,
             )
-        elif self.use_uld_loss and self.teacher_tokenizer is not None:
+        elif _cross_tok:
             # Both DataCollatorForChatML and the on-policy generation path attach these
             # fields, so cross-tokenizer ULD never has to round-trip through batch_decode.
-            prompt_texts = inputs["original_prompt_text"]
-            completion_texts = inputs["original_completion_text"]
-
-            if self._teacher_processor is not None:
-                # VLM teacher: render the prompt through the teacher's own processor so image
-                # placeholders and pixel tensors match the teacher model.
-                if "_raw_images" not in inputs or "_raw_prompts" not in inputs:
-                    raise ValueError(
-                        "VLM ULD distillation requires `_raw_images` and `_raw_prompts` in the batch so teacher "
-                        "inputs can be rendered with the teacher processor. Use the default GOLD VLM data collator "
-                        "or ensure your custom collator preserves these fields."
-                    )
-                (
-                    teacher_input_ids,
-                    teacher_labels,
-                    teacher_attention_mask,
-                    teacher_completion_byte_offsets,
-                    teacher_forward_kwargs,
-                ) = self._build_teacher_vlm_inputs(completion_texts, inputs["_raw_images"], inputs["_raw_prompts"])
-            else:
-                teacher_forward_kwargs = {}
-                (
-                    teacher_input_ids,
-                    teacher_labels,
-                    teacher_attention_mask,
-                    teacher_completion_byte_offsets,
-                ) = build_teacher_inputs_from_texts(self.teacher_tokenizer, prompt_texts, completion_texts)
+            (
+                teacher_input_ids,
+                teacher_labels,
+                teacher_attention_mask,
+                teacher_completion_byte_offsets,
+                teacher_forward_kwargs,
+            ) = self._build_cross_tokenizer_teacher_inputs(inputs)
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
@@ -2678,102 +3205,40 @@ class GOLDTrainer(SFTTrainer):
                 outputs_teacher = self.teacher_model(
                     input_ids=teacher_input_ids,
                     attention_mask=teacher_attention_mask,
+                    use_cache=False,
                     **teacher_forward_kwargs,
                 )
         else:
-            if self.use_liger_gkd_loss:
-                # Forward only through the base models (avoid lm_head to save memory).
-                # Route through the DDP/FSDP wrapper via _forward_redirection so that
-                # DDP.forward() is called and prepare_for_backward() fires correctly.
-                unwrapped_student = self.accelerator.unwrap_model(model)
-                student_outputs = self._forward_redirection(
-                    model,
-                    unwrapped_student,
-                    self._liger_student_forward,
-                    unwrapped_student,
-                    inputs,
-                )
+            outputs_student = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                **student_forward_kwargs,
+            )
 
-                self.teacher_model.eval()
-                unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-                base_teacher = self._liger_backbone(unwrapped_teacher)
-                with torch.no_grad():
-                    teacher_outputs = base_teacher(
-                        input_ids=inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                        use_cache=False,
-                        **student_forward_kwargs,
-                    )
-
-                student_hidden = student_outputs.last_hidden_state[:, :-1]
-                teacher_hidden = teacher_outputs.last_hidden_state[:, :-1]
-
-                del student_outputs, teacher_outputs
-
-                student_hidden = student_hidden.reshape(-1, student_hidden.shape[-1])
-                teacher_hidden = teacher_hidden.reshape(-1, teacher_hidden.shape[-1])
-
-                labels_mask = inputs["labels"] != -100
-                masked_input_ids = torch.where(
-                    labels_mask,
-                    inputs["input_ids"],
-                    torch.full_like(inputs["input_ids"], -100),
-                )
-                true_labels = masked_input_ids[:, 1:].reshape(-1)
-
-                student_head = unwrapped_student.get_output_embeddings()
-                teacher_head = unwrapped_teacher.get_output_embeddings()
-
-                loss = self.liger_loss(
-                    student_input=student_hidden,
-                    student_weight=student_head.weight,
-                    teacher_input=teacher_hidden,
-                    teacher_weight=teacher_head.weight,
-                    true_labels=true_labels,
-                    student_bias=getattr(student_head, "bias", None),
-                    teacher_bias=getattr(teacher_head, "bias", None),
-                )
-
-                # The Liger JSD loss normalizes by the local number of valid tokens. Under gradient accumulation we
-                # want the global normalization, so rescale by `num_valid_local / num_items_in_batch`.
-                if num_items_in_batch is not None:
-                    num_valid_local = (true_labels != -100).sum().clamp_min(1)
-                    if isinstance(num_items_in_batch, torch.Tensor):
-                        num_items_in_batch = num_items_in_batch.to(loss.device)
-                    loss = loss * num_valid_local / num_items_in_batch
-
-                del student_hidden, teacher_hidden, true_labels
-            else:
-                outputs_student = model(
+            self.teacher_model.eval()
+            with torch.no_grad():
+                outputs_teacher = self.teacher_model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                     **student_forward_kwargs,
                 )
 
-                self.teacher_model.eval()
-                with torch.no_grad():
-                    outputs_teacher = self.teacher_model(
-                        input_ids=inputs["input_ids"],
-                        attention_mask=inputs["attention_mask"],
-                        **student_forward_kwargs,
-                    )
-
-                # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
-                # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
-                # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
-                # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
-                # padded to the full-sequence width independently of `prompts`.
-                shifted_student_logits = outputs_student.logits[:, :-1, :]
-                shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
-                shifted_labels = inputs["labels"][:, 1:]
-                loss = self.generalized_jsd_loss(
-                    student_logits=shifted_student_logits,
-                    teacher_logits=shifted_teacher_logits,
-                    labels=shifted_labels,
-                    beta=self.beta,
-                    temperature=self.temperature,
-                    num_items_in_batch=num_items_in_batch,
-                )
+            # Standard causal shift: logits at position i predict the token at i + 1. The `labels != -100` mask
+            # inside `generalized_jsd_loss` already excludes prompt (and padding) positions, so we do not slice by
+            # prompt length. Slicing by `inputs["prompts"].shape[1]` (the batch-max prompt width) would drop real
+            # completion tokens for samples whose prompt is shorter than the batch maximum, since `labels` is
+            # padded to the full-sequence width independently of `prompts`.
+            shifted_student_logits = outputs_student.logits[:, :-1, :]
+            shifted_teacher_logits = outputs_teacher.logits[:, :-1, :]
+            shifted_labels = inputs["labels"][:, 1:]
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+                temperature=self.temperature,
+                num_items_in_batch=num_items_in_batch,
+            )
 
         if self.use_uld_loss and self.teacher_tokenizer is not None:
             student_labels = inputs["labels"]
@@ -2811,6 +3276,65 @@ class GOLDTrainer(SFTTrainer):
                 self._unmatched_sum += unmatched_val
                 self._matched_step_eq += step_eq
                 self._unmatched_step_eq += step_eq
+
+        if self.xtoken_loss_fn is not None and self.teacher_tokenizer is not None:
+            xtoken_student_byte_offsets = inputs.get("byte_offsets")
+            if xtoken_student_byte_offsets is None:
+                raise ValueError("Input batches must include `byte_offsets` when using X-Token loss.")
+
+            loss = self.xtoken_loss_fn(
+                student_logits=outputs_student.logits,
+                teacher_logits=outputs_teacher.logits,
+                student_labels=inputs["labels"],
+                teacher_labels=teacher_labels,
+                student_byte_offsets=xtoken_student_byte_offsets,
+                teacher_byte_offsets=teacher_completion_byte_offsets,
+                loss_counts=self._xtoken_loss_counts if num_items_in_batch is not None else None,
+            )
+
+            if num_items_in_batch is not None:
+                loss = loss * self.accelerator.num_processes
+
+            mode = "train" if self.model.training else "eval"
+            if mode == "train":
+                self._xtoken_kl_sum += self.xtoken_loss_fn.last_kl_loss.item()
+                self._xtoken_ce_sum += self.xtoken_loss_fn.last_ce_loss.item()
+                self._xtoken_pair_sum += self.xtoken_loss_fn.last_num_valid_pairs
+                self._xtoken_steps += 1.0
+                self._xtoken_accuracy_num += self.xtoken_loss_fn.last_accuracy_num
+                self._xtoken_accuracy_den += self.xtoken_loss_fn.last_accuracy_den
+                self._xtoken_projection_num += self.xtoken_loss_fn.last_proj_accuracy_num
+                self._xtoken_projection_den += self.xtoken_loss_fn.last_proj_accuracy_den
+            else:
+                dev = self.accelerator.device
+                self._metrics[mode]["xtoken/kl_loss"].append(
+                    self.accelerator.gather(self.xtoken_loss_fn.last_kl_loss).mean().item()
+                )
+                self._metrics[mode]["xtoken/ce_loss"].append(
+                    self.accelerator.gather(self.xtoken_loss_fn.last_ce_loss).mean().item()
+                )
+                acc_num = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_accuracy_num), device=dev)
+                ).sum()
+                acc_den = self.accelerator.gather(
+                    torch.tensor(float(self.xtoken_loss_fn.last_accuracy_den), device=dev)
+                ).sum()
+                self._metrics[mode]["xtoken/accuracy"].append((acc_num / acc_den).item() if acc_den > 0 else 0.0)
+                self._metrics[mode]["xtoken/num_valid_pairs"].append(
+                    self.accelerator.gather(torch.tensor(float(self.xtoken_loss_fn.last_num_valid_pairs), device=dev))
+                    .mean()
+                    .item()
+                )
+                if self.xtoken_loss_fn.loss_type == "p_kl":
+                    proj_num = self.accelerator.gather(
+                        torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_num), device=dev)
+                    ).sum()
+                    proj_den = self.accelerator.gather(
+                        torch.tensor(float(self.xtoken_loss_fn.last_proj_accuracy_den), device=dev)
+                    ).sum()
+                    self._metrics[mode]["xtoken/proj_accuracy"].append(
+                        (proj_num / proj_den).item() if proj_den > 0 else 0.0
+                    )
 
         empty_cache()
 
@@ -2895,51 +3419,6 @@ class GOLDTrainer(SFTTrainer):
             completion_texts,
         )
 
-    def _liger_backbone(self, unwrapped_model: nn.Module) -> nn.Module:
-        """Return the lm_head-free backbone used by the Liger JSD path (skips lm_head to save memory).
-
-        `base_model` gives the backbone — text decoder for LMs, multimodal wrapper for VLMs (so vision-token injection
-        runs before the text decoder). `get_decoder()` won't do: on VLMs it returns just the text stack and feeds
-        image-placeholder IDs through it. Pre-5.0 transformers VLMs set `base_model_prefix = ""` so `base_model is
-        self` (re-runs `lm_head`); fall back to `.model` there.
-        """
-        if is_peft_model(unwrapped_model):
-            unwrapped_model = unwrapped_model.base_model.model
-        if self._is_vlm and Version(transformers.__version__) < Version("5.0.0"):
-            return unwrapped_model.model
-        return unwrapped_model.base_model
-
-    def _liger_student_forward(self, student, inputs):
-        """Backbone forward used by the Liger JSD path (skips lm_head to save memory)."""
-        backbone = self._liger_backbone(student)
-        return backbone(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            use_cache=False,
-            **self._get_model_forward_kwargs(inputs),
-        )
-
-    def _get_liger_zero3_lm_head_gather_ctx(self, model: nn.Module):
-        if not self.use_liger_gkd_loss:
-            return nullcontext()
-
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
-            return nullcontext()
-
-        import deepspeed
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-        params = [student_head.weight, teacher_head.weight]
-        if student_head.bias is not None:
-            params.append(student_head.bias)
-        if teacher_head.bias is not None:
-            params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-
     # During eval, Trainer calls prediction_step. The inherited SFT prediction_step indexes the raw inputs before
     # collation, which breaks the VLM identity-collator path (inputs is a list of raw examples). We override it to
     # collate via _prepare_inputs and force compute_loss, evaluating the off-policy distillation loss over the
@@ -2968,9 +3447,7 @@ class GOLDTrainer(SFTTrainer):
         """
         buffer_steps = self.args.gradient_accumulation_steps
 
-        # Keep lm_head gathered across forward+backward for Liger + ZeRO-3.
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
-            loss = super().training_step(model, inputs, num_items_in_batch)
+        loss = super().training_step(model, inputs, num_items_in_batch)
 
         slice_idx = (self._step - 1) % buffer_steps
 
@@ -3010,8 +3487,16 @@ class GOLDTrainer(SFTTrainer):
                     self._unmatched_sum,
                     self._matched_step_eq,
                     self._unmatched_step_eq,
+                    self._xtoken_kl_sum,
+                    self._xtoken_ce_sum,
+                    self._xtoken_pair_sum,
+                    self._xtoken_steps,
+                    self._xtoken_accuracy_num,
+                    self._xtoken_accuracy_den,
+                    self._xtoken_projection_num,
+                    self._xtoken_projection_den,
                 ],
-                dtype=torch.float64 if device.type != "mps" else torch.float32,
+                dtype=torch.float32,
                 device=device,
             )
 
@@ -3031,6 +3516,14 @@ class GOLDTrainer(SFTTrainer):
                 unmatched_sum,
                 matched_eq,
                 unmatched_eq,
+                xtoken_kl_sum,
+                xtoken_ce_sum,
+                xtoken_pair_sum,
+                xtoken_steps,
+                xtoken_accuracy_num,
+                xtoken_accuracy_den,
+                xtoken_projection_num,
+                xtoken_projection_den,
             ) = vec.tolist()
 
             if on_eq > 0:
@@ -3043,10 +3536,21 @@ class GOLDTrainer(SFTTrainer):
             if unmatched_eq > 0:
                 logs["unmatched_loss"] = round(unmatched_sum / unmatched_eq, 4)
 
+            if xtoken_steps > 0:
+                logs["xtoken/kl_loss"] = xtoken_kl_sum / xtoken_steps
+                logs["xtoken/ce_loss"] = xtoken_ce_sum / xtoken_steps
+                logs["xtoken/num_valid_pairs"] = xtoken_pair_sum / xtoken_steps
+                logs["xtoken/accuracy"] = xtoken_accuracy_num / max(xtoken_accuracy_den, 1.0)
+                if xtoken_projection_den > 0:
+                    logs["xtoken/proj_accuracy"] = xtoken_projection_num / xtoken_projection_den
+
             self._on_policy_loss_total = self._off_policy_loss_total = 0.0
             self._on_policy_step_equiv = self._off_policy_step_equiv = 0.0
             self._matched_sum = self._unmatched_sum = 0.0
             self._matched_step_eq = self._unmatched_step_eq = 0.0
+            self._xtoken_kl_sum = self._xtoken_ce_sum = self._xtoken_pair_sum = self._xtoken_steps = 0.0
+            self._xtoken_accuracy_num = self._xtoken_accuracy_den = 0.0
+            self._xtoken_projection_num = self._xtoken_projection_den = 0.0
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.

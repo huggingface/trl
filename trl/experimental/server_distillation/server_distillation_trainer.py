@@ -17,7 +17,8 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from ..distillation.distillation_trainer import DistillationTrainer
+from ...extras.profiling import profiling_decorator
+from ...trainer.distillation_trainer import DistillationTrainer
 from .server_distillation_config import ServerDistillationConfig
 
 
@@ -132,8 +133,7 @@ class ServerDistillationTrainer(DistillationTrainer):
     Instead of running a local teacher forward pass, per-token teacher logprobs are fetched from a vLLM server via
     [`~generation.vllm_client.VLLMClient`]. The server only returns the teacher's top-k logprobs, so the divergence is
     restricted to a sparse support (top-1 for `beta > 0`, top-k for the pure forward path `beta = 0`). Everything else
-    — the student forward, generation, buffering, metrics — is inherited from
-    [`experimental.distillation.DistillationTrainer`].
+    — the student forward, generation, buffering, metrics — is inherited from [`DistillationTrainer`].
     """
 
     _tag_names = ["trl", "server-distillation"]
@@ -141,16 +141,14 @@ class ServerDistillationTrainer(DistillationTrainer):
 
     def __init__(
         self,
-        model=None,
+        model,
         args: ServerDistillationConfig | None = None,
-        data_collator=None,
         train_dataset=None,
         eval_dataset=None,
         processing_class=None,
-        compute_metrics=None,
         callbacks=None,
         optimizers=(None, None),
-        preprocess_logits_for_metrics=None,
+        quantization_config=None,
         peft_config=None,
     ):
         if args is None:
@@ -161,14 +159,12 @@ class ServerDistillationTrainer(DistillationTrainer):
             model=model,
             teacher_model=None,
             args=args,
-            data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            quantization_config=quantization_config,
             peft_config=peft_config,
         )
 
@@ -283,6 +279,7 @@ class ServerDistillationTrainer(DistillationTrainer):
         else:
             return jsd
 
+    @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # Reconstruct the old `input_ids` / `attention_mask` / `labels` layout this server path is built on from GRPO's
         # keys, so it rides on the base's (evolving) generation. The teacher-server loss is migrated onto the stable
@@ -339,9 +336,9 @@ class ServerDistillationTrainer(DistillationTrainer):
                 labels=trimmed_labels,
             )
 
-        # The base trainer disables Trainer's built-in grad-accum loss scaling (via `compute_loss_func`) because it
-        # normalizes by the global completion-token count. The server path normalizes locally with `batchmean` and does
-        # not consume `num_items_in_batch`, so it must re-apply that scaling itself.
+        # The base trainer sets `loss_is_scaled_for_ga = True` because it normalizes by the global completion-token
+        # count. The server path normalizes locally with `batchmean` and does not consume `num_items_in_batch`, so it
+        # must re-apply that scaling itself.
         if self.model.training:
             loss = loss / self.current_gradient_accumulation_steps
 

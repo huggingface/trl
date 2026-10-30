@@ -21,7 +21,6 @@ from .base_config import _BaseConfig
 
 @dataclass
 class DPOConfig(_BaseConfig):
-    # docstyle-ignore
     r"""
     Configuration class for the [`DPOTrainer`].
 
@@ -38,15 +37,15 @@ class DPOConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`DPOTrainer`] is provided as a string.
+            argument of the [`DPOTrainer`] is provided as a string. The `revision` value is also used when loading the
+            processing class.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
-            [`~transformers.AutoModelForCausalLM.from_pretrained`] and
-            [`~transformers.AutoProcessor.from_pretrained`].
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+            [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -58,14 +57,17 @@ class DPOConfig(_BaseConfig):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the left or
             right depending on the `truncation_mode`. If `None`, no truncation is applied.
         truncation_mode (`str`, *optional*, defaults to `"keep_start"`):
-            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is
-            `"keep_start"`. The `"keep_end"` value is deprecated and will be removed in v2.0.0.
+            Truncation mode to use when the sequence exceeds `max_length`. The only supported value is `"keep_start"`.
+            The `"keep_end"` value is deprecated and will be removed in v2.0.0.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the sequences will be padded to a multiple of this value.
+            Temporarily unavailable: since the DPO refactor, setting it to `True` warns and falls back to standard
+            padding. It is planned to return in a future update.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the sequences will be padded to a multiple of this value. `"auto"` pads to a multiple of 128 on
+            Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
         precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
             Whether to precompute the reference model log probabilities for the entire training dataset before
             training. This allows to save memory during training, as the reference model does not need to be kept in
@@ -92,7 +94,10 @@ class DPOConfig(_BaseConfig):
             tokens beyond shared lengths.
         f_divergence_type (`str`, *optional*, defaults to `"reverse_kl"`):
             f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: `reverse_kl`
-            (default), `forward_kl`, `js_divergence`, `alpha_divergence`.
+            (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on the
+            chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, `'hinge'`,
+            `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid f-divergence
+            generalization and are rejected with a non-default value.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `0.5`):
             α coefficient for the α-divergence u^-α regularizer, used only when `f_divergence_type='alpha_divergence'`.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
@@ -105,7 +110,7 @@ class DPOConfig(_BaseConfig):
             reference model. For the IPO loss (`loss_type='ipo'`), this value is the regularization parameter denoted
             by τ in the [paper](https://huggingface.co/papers/2310.12036).
         use_weighting (`bool`, *optional*, defaults to `False`):
-            Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference pairs using
+            Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference pairs using
             the policy's length-normalized sequence probabilities.
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the DiscoPOP paper, which controls the shape of the log-ratio modulated loss
@@ -122,8 +127,9 @@ class DPOConfig(_BaseConfig):
             reference policy during updates. The reference policy is updated according to the equation: `π_ref = α *
             π_θ + (1 - α) * π_ref_prev`. To use this parameter, you must set `sync_ref_model=True`.
         ref_model_sync_steps (`int`, *optional*, defaults to `512`):
-            τ parameter from the TR-DPO paper, which determines how frequently the current policy is synchronized with
-            the reference policy. To use this parameter, you must set `sync_ref_model=True`.
+            τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
+            frequently the current policy is synchronized with the reference policy. To use this parameter, you must
+            set `sync_ref_model=True`.
 
         > Deprecated parameters
 
@@ -157,7 +163,8 @@ class DPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `DPOTrainer` is provided as a string."
+            "the `DPOTrainer` is provided as a string. The `revision` value is also used when loading the processing "
+            "class."
         },
     )
     trust_remote_code: bool = field(
@@ -167,12 +174,12 @@ class DPOConfig(_BaseConfig):
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoProcessor.from_pretrained`."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     disable_dropout: bool = field(
@@ -206,12 +213,16 @@ class DPOConfig(_BaseConfig):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure."
+            "structure. Temporarily unavailable: since the DPO refactor, setting it to True warns and falls back to "
+            "standard padding. It is planned to return in a future update."
         },
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the sequences will be padded to a multiple of this value. `'auto'` pads to a multiple of "
+            "128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere."
+        },
     )
     precompute_ref_log_probs: bool = field(
         default=False,
@@ -261,7 +272,10 @@ class DPOConfig(_BaseConfig):
         default="reverse_kl",
         metadata={
             "help": "f-divergence regularizer between policy and reference (f-DPO paper). Possible values are: "
-            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`.",
+            "`reverse_kl` (default), `forward_kl`, `js_divergence`, `alpha_divergence`. Only the loss types built on "
+            "the chosen-rejected reward difference support a non-default value: `'sigmoid'`, `'sigmoid_norm'`, "
+            "`'hinge'`, `'ipo'`, `'exo_pair'`, `'robust'`, `'discopop'`, `'sft'`. The other loss types have no valid "
+            "f-divergence generalization and are rejected with a non-default value.",
         },
     )
     f_alpha_divergence_coef: float = field(
@@ -291,7 +305,7 @@ class DPOConfig(_BaseConfig):
     use_weighting: bool = field(
         default=False,
         metadata={
-            "help": "Whether to apply WPO-style weighting (https://huggingface.co/papers/2406.11827) to preference "
+            "help": "Whether to apply [WPO](https://huggingface.co/papers/2406.11827)-style weighting to preference "
             "pairs using the policy's length-normalized sequence probabilities."
         },
     )
@@ -364,3 +378,11 @@ class DPOConfig(_BaseConfig):
             )
 
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None

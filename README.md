@@ -22,9 +22,15 @@
 
 ## 🎉 What's New
 
-**🌍 Multi-environment agentic RL:** [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) now supports per-example environment selection and environment-owned rewards — mix multiple sandboxed task suites in one run and let each environment define its own scoring, with [Harbor](https://huggingface.co/docs/trl/harbor) and [OpenEnv](https://huggingface.co/docs/trl/openenv).
+**🔥 Mistral Large 4:** Fine-tune [Mistral Large 4](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on a single node of 8 B300s, on top of its FP8 weights. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_mistral_large_4).
 
-**🎯 KTO is now stable:** [`KTOTrainer`](https://huggingface.co/docs/trl/kto_trainer) graduates to the stable API after a full alignment pass with [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer).
+**🚀 Training on AMD GPUs:** TRL's trainers now run on [AMD Instinct GPUs](https://huggingface.co/docs/trl/amd_gpus) through PyTorch's ROCm build.
+
+**🔥 Beam:** Fine-tune [Beam](https://huggingface.co/reflection/Beam-1.0-501B-A23B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer) on a single node of 8 B300s. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_beam).
+
+**🔥 Muse Spark Open:** Fine-tune [Muse Spark Open](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B) with [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), sharded across your GPUs at load time. See the [8-node LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_muse_spark_open).
+
+**🚀 Training on AWS Trainium:** TRL's trainers now run on [AWS Trainium](https://huggingface.co/docs/trl/aws_trainium) through TorchNeuron, PyTorch's native Neuron backend.
 
 ## Overview
 
@@ -90,7 +96,7 @@ trainer.train()
 
 ### `GRPOTrainer`
 
-[`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) implements the [Group Relative Policy Optimization (GRPO) algorithm](https://huggingface.co/papers/2402.03300) that is more memory-efficient than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1).
+[`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) implements the [Group Relative Policy Optimization (GRPO) algorithm](https://huggingface.co/papers/2402.03300) that is more memory-efficient than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1). `accuracy_reward` needs math-verify, which you can install with `pip install trl[math_verify]`.
 
 ```python
 from datasets import load_dataset
@@ -178,7 +184,7 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
 ```bash
 trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name argilla/Capybara-Preferences \
-    --output_dir Qwen2.5-0.5B-DPO 
+    --output_dir Qwen2.5-0.5B-DPO
 ```
 
 **KTO:**

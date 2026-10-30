@@ -46,7 +46,6 @@ RewardFunc = Callable[..., list[float]]
 
 
 class A2POTrainer(_BaseTrainer):
-    # docstyle-ignore
     """
     Trainer for the A*-PO (Optimal Advantage Regression) method, introduced in [Accelerating RL for LLM Reasoning with
     Optimal Advantage Regression](https://huggingface.co/papers/2505.20686).
@@ -54,8 +53,8 @@ class A2POTrainer(_BaseTrainer):
     A*-PO runs in two stages:
 
     1. **Offline value estimation.** Before training, `num_value_samples` completions are sampled from the reference
-       policy for every training prompt and scored with `reward_funcs`. The optimal value is estimated as
-       `V*(x) = beta1 * log(mean_i exp(r(x, y_i) / beta1))` and cached per prompt.
+       policy for every training prompt and scored with `reward_funcs`. The optimal value is estimated as `V*(x) =
+       beta1 * log(mean_i exp(r(x, y_i) / beta1))` and cached per prompt.
     2. **On-policy regression.** During training, a single completion is generated per prompt from the current policy.
        The loss is the squared error between the implicit reward `beta2 * log(pi(y|x) / pi_ref(y|x))` and the optimal
        advantage estimate `r(x, y) - V*(x)`.
@@ -68,7 +67,7 @@ class A2POTrainer(_BaseTrainer):
             Reward function(s). Each takes `prompts` and `completions` (plus dataset columns as keyword arguments) and
             returns a list of float rewards. When multiple are provided, their weighted sum (see
             [`A2POConfig.reward_weights`]) is the scalar reward `r`, which A*-PO assumes to be binary (in `{0, 1}`).
-        args ([`A2POConfig`], *optional*):
+        args ([`experimental.a2po.A2POConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`], *optional*):
             Training dataset. Must contain a `"prompt"` column.
@@ -114,9 +113,11 @@ class A2POTrainer(_BaseTrainer):
             args = A2POConfig(f"{model if isinstance(model, str) else model.config._name_or_path}-A2PO")
 
         # Models
+        model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         model_id = model.config._name_or_path
 
@@ -130,8 +131,18 @@ class A2POTrainer(_BaseTrainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_id, padding_side="left", trust_remote_code=args.trust_remote_code
+                model_id, revision=model_revision, padding_side="left", trust_remote_code=args.trust_remote_code
             )
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if processing_class.eos_token_id not in eos_token_ids:
+            eos_token_ids = [processing_class.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -270,8 +281,9 @@ class A2POTrainer(_BaseTrainer):
         # so evaluation can still look up their V*.
         if self.args.filter_all_incorrect:
             self.train_dataset = self.train_dataset.filter(
-                lambda example: maybe_apply_chat_template(example, self.processing_class)["prompt"]
-                not in all_incorrect
+                lambda example: (
+                    maybe_apply_chat_template(example, self.processing_class)["prompt"] not in all_incorrect
+                )
             )
         logger.info(f"Stage 1 complete: estimated V* for {len(self._optimal_values)} prompts.")
 
@@ -309,7 +321,7 @@ class A2POTrainer(_BaseTrainer):
         # Attention mask: the tokenizer's prompt mask followed by the completion mask. The completion mask is 1 up to
         # and including the first EOS and 0 afterwards, so the terminal EOS stays in the log-prob sum (a plain
         # `!= pad_token_id` mask would drop it when `pad_token == eos_token`).
-        is_eos = completion_ids == self.processing_class.eos_token_id
+        is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)

@@ -13,10 +13,14 @@
 # limitations under the License.
 
 import os
+from pathlib import Path
 
 import torch
+import transformers
 from accelerate.utils import is_peft_model
+from datasets import Dataset
 from huggingface_hub.utils import send_telemetry
+from packaging.version import Version
 from transformers import CONFIG_MAPPING, Trainer, is_wandb_available
 
 from .. import __version__
@@ -32,6 +36,7 @@ if is_wandb_available():
 # private names never leak. Adding a new trainer requires an explicit entry here.
 _TELEMETRY_TRAINERS = {
     # Stable
+    "DistillationTrainer",
     "DPOTrainer",
     "GRPOTrainer",
     "KTOTrainer",
@@ -40,31 +45,25 @@ _TELEMETRY_TRAINERS = {
     "SFTTrainer",
     # Experimental
     "A2POTrainer",
+    "AsyncDistillationTrainer",
     "AsyncGRPOTrainer",
-    "BCOTrainer",
     "CPOTrainer",
-    "DistillationTrainer",
     "GKDTrainer",
     "GMPOTrainer",
     "GOLDTrainer",
-    "GRPOWithReplayBufferTrainer",
     "IWOPDTrainer",
-    "MiniLLMTrainer",
-    "NashMDTrainer",
     "OnlineDPOTrainer",
     "ORPOTrainer",
-    "PPOTrainer",
-    "PRMTrainer",
     "SDFTTrainer",
     "SDPOTrainer",
     "ServerDistillationTrainer",
-    "SSDTrainer",
-    "TPOTrainer",
-    "XPOTrainer",
 }
 
 
 class _BaseTrainer(Trainer):
+    # Whether `compute_loss` already scales the loss for gradient accumulation, see `Trainer.loss_is_scaled_for_ga`
+    loss_is_scaled_for_ga = None
+
     _tag_names = []
     _name = "Base"
     _paper = {}
@@ -72,6 +71,11 @@ class _BaseTrainer(Trainer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # `Trainer.loss_is_scaled_for_ga` requires transformers 5.19; older versions only read these two attributes
+        if Version(transformers.__version__) < Version("5.19.0") and self.loss_is_scaled_for_ga is not None:
+            self.model_accepts_loss_kwargs = False
+            if self.loss_is_scaled_for_ga:
+                self.compute_loss_func = "non-None value to disable scaling"
         self._send_telemetry()
 
     def _send_telemetry(self):
@@ -96,6 +100,8 @@ class _BaseTrainer(Trainer):
             gpu = torch.npu.get_device_name(0)
         elif device == "mlu":
             gpu = torch.mlu.get_device_name(0)
+        elif device == "neuron":
+            gpu = torch.neuron.get_device_properties(0).name
         else:
             gpu = "other"
         # Bucketed to avoid fingerprinting individual deployments by their exact cluster size.
@@ -108,6 +114,17 @@ class _BaseTrainer(Trainer):
         trainer = (
             cls.__name__ if cls.__name__ in _TELEMETRY_TRAINERS and cls.__module__.startswith("trl.") else "other"
         )
+        # How the data was loaded, never what it is. Hub downloads cache under `<cache>/<namespace>___<name>/`, while
+        # file-based builders land in `<cache>/<builder>/default-<hash>/`. A Hub repo of raw json/csv files also goes
+        # through a file-based builder, hence "files" rather than "local".
+        if not isinstance(self.train_dataset, Dataset):
+            dataset_source = "other"  # IterableDataset, torch Dataset, or no training dataset
+        elif not self.train_dataset.cache_files:
+            dataset_source = "memory"  # e.g. `Dataset.from_dict`
+        elif any("___" in part for part in Path(self.train_dataset.cache_files[0]["filename"]).parts):
+            dataset_source = "hub"
+        else:
+            dataset_source = "files"
         model_type = self.model.config.model_type
         model_arch = model_type if model_type in CONFIG_MAPPING else "other"
         send_telemetry(
@@ -117,6 +134,7 @@ class _BaseTrainer(Trainer):
             user_agent={
                 "model_arch": model_arch,
                 "peft": str(is_peft_model(self.model)).lower(),
+                "dataset_source": dataset_source,
                 "distributed": distributed,
                 "world_size": world_size,
                 "device": device,
@@ -138,7 +156,7 @@ class _BaseTrainer(Trainer):
                 Name of the model.
             dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
+            tags (`str` or `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():

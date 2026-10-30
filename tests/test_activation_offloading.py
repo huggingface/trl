@@ -12,8 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
+import torch.nn.functional as F
+from accelerate import PartialState
 from torch import nn
+from torch.backends.cuda import SDPAParams, can_use_efficient_attention
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -29,6 +34,10 @@ if is_peft_available():
 
 
 class TestActivationOffloading(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
     @require_torch_accelerator
     @require_peft
     def test_offloading_with_peft_models(self) -> None:
@@ -64,7 +73,9 @@ class TestActivationOffloading(TrlTestCase):
 
         # Second forward-backward pass with offloading
         torch.manual_seed(42)
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             loss_c = model(inp, labels=inp).loss
         loss_c.backward()
 
@@ -84,7 +95,9 @@ class TestActivationOffloading(TrlTestCase):
         inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
         # Run with offloading but disable for specific section
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             # First forward-backward with normal offloading
             torch.manual_seed(42)
             out1 = model(inp, labels=inp)
@@ -144,7 +157,9 @@ class TestActivationOffloading(TrlTestCase):
             p.grad = None
 
         # With offloading
-        with OffloadActivations():
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+        with offload_ctx:
             torch.manual_seed(42)
             out2 = model(inp, labels=inp).loss
             out2.backward()
@@ -155,6 +170,84 @@ class TestActivationOffloading(TrlTestCase):
         torch.testing.assert_close(out1, out2)
         for g1, g2 in zip(grads1, grads2, strict=True):
             torch.testing.assert_close(g1, g2)
+
+    @require_torch_accelerator
+    @pytest.mark.parametrize("use_streams", [False, True])
+    @pytest.mark.parametrize(
+        ("view", "dense"),
+        [
+            (lambda t: t.transpose(1, 2), True),
+            (lambda t: t[1:], True),  # storage offset
+            (lambda t: t[:, :-1], False),  # gaps between rows
+            (lambda t: t[1:, 1:], False),  # storage offset and gaps
+            (lambda t: t[1:].transpose(1, 2), True),
+        ],
+        ids=["transposed", "offset", "gaps", "offset_and_gaps", "transposed_offset"],
+    )
+    def test_saved_views_are_restored(self, use_streams, view, dense):
+        """Backward gets a saved view's values back, and a dense view also its strides."""
+        restored = []
+
+        class SavesView(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x):
+                # A tensor saved after the view evicts it from the forward stash, so even with streams it is
+                # restored from the CPU copy.
+                ctx.save_for_backward(view(x), x.new_ones(64))
+                ctx.input_shape = x.shape
+                return x.sum()
+
+            @staticmethod
+            def backward(ctx, grad):
+                saved, _ = ctx.saved_tensors
+                restored.append((saved.detach().clone(), saved.stride()))
+                return grad.expand(ctx.input_shape)
+
+        x = torch.randn(4, 6, 8, device=torch_device, requires_grad=True)
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0, max_fwd_stash_size=1):
+            SavesView.apply(x).backward()
+
+        ((values, stride),) = restored
+        torch.testing.assert_close(values, view(x).detach(), rtol=0, atol=0)
+        if dense:
+            assert stride == view(x).stride()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="SDPA memory-efficient attention requires CUDA")
+    @pytest.mark.parametrize("use_streams", [False, True])
+    def test_sdpa_efficient_attention_gradients(self, use_streams):
+        """SDPA's memory-efficient attention backward depends on the layout of the transposed query and output it saves."""
+        torch.manual_seed(0)
+        batch, heads, seq, head_dim = 2, 4, 64, 32
+        # half precision: the float32 kernel does not depend on the saved layout
+        q, k, v = (
+            torch.randn(batch, seq, heads, head_dim, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+            for _ in range(3)
+        )
+        mask = torch.ones(batch, 1, seq, seq, device="cuda", dtype=torch.bool).tril()
+        mask[1, :, :, seq // 2 :] = False  # padding: a mask routes SDPA to memory-efficient attention
+        weight = torch.randn(batch, heads, seq, head_dim, device="cuda", dtype=torch.bfloat16)
+
+        with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+            params = SDPAParams(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), mask, 0.0, False, False)
+            if not can_use_efficient_attention(params):
+                pytest.skip("Memory-efficient SDPA is unavailable for these inputs")
+
+        def grads():
+            for t in (q, k, v):
+                t.grad = None
+            with sdpa_kernel(SDPBackend.EFFICIENT_ATTENTION):
+                out = F.scaled_dot_product_attention(
+                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=mask
+                )
+                (out * weight).sum().backward()
+            return [t.grad.clone() for t in (q, k, v)]
+
+        expected = grads()
+        with OffloadActivations(use_streams=use_streams, min_offload_size=0):
+            actual = grads()
+
+        for a, e in zip(actual, expected, strict=True):
+            torch.testing.assert_close(a, e)
 
     @require_torch_accelerator
     def test_tensor_deduplication(self):
@@ -283,3 +376,32 @@ class TestActivationOffloading(TrlTestCase):
 
         param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
         assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"
+
+    @require_torch_accelerator
+    def test_tensor_deduplication_only_happens_in_streams_mode(self):
+        """Two saved views of the same storage are deduplicated (one re-offload skipped) only when use_streams=True."""
+
+        class SaveTensor(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, tensor):
+                ctx.save_for_backward(tensor)
+                return tensor.sum()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                (tensor,) = ctx.saved_tensors
+                return torch.ones_like(tensor) * grad_output
+
+        def offload_two_views(use_streams: bool) -> list[bool]:
+            base = torch.randn(64, 64, device=torch_device, requires_grad=True)
+            view1 = base.view(-1)
+            view2 = base.transpose(0, 1)
+            offload_ctx = OffloadActivations(use_streams=use_streams, min_offload_size=1)
+            with offload_ctx:
+                loss = SaveTensor.apply(view1) + SaveTensor.apply(view2)
+            modified_flags = [modified for _, modified, _, _, _ in offload_ctx.tracker.values()]
+            loss.backward()
+            return modified_flags
+
+        assert offload_two_views(use_streams=False) == [True, True]
+        assert offload_two_views(use_streams=True) == [True, False]

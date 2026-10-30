@@ -23,7 +23,7 @@ from typing import Any
 import datasets
 import torch
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -37,11 +37,10 @@ from transformers import (
     TrainerCallback,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_liger_kernel_available, is_peft_available
+from transformers.utils import is_datasets_available, is_peft_available
 
 from ...data_utils import is_conversational
 from ...models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ...models.utils import _ForwardRedirection
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     RepeatSampler,
@@ -65,10 +64,6 @@ from .loss_utils import (
 )
 from .sdft_config import SDFTConfig
 from .teacher_sync import PEFTAdapterEMACallback, SyncTeacherModelCallback, is_pure_lora_training
-
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 if is_peft_available():
@@ -211,6 +206,8 @@ class DemonstrationTeacherContextBuilder:
 class SDFTTrainer(_BaseTrainer):
     """Trainer for SDFT-style on-policy self-distillation with explicit teacher prompts."""
 
+    loss_is_scaled_for_ga = True
+
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
     config_cls = SDFTConfig
@@ -236,7 +233,7 @@ class SDFTTrainer(_BaseTrainer):
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: PeftConfig | None = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         if isinstance(train_dataset, IterableDataset):
             raise NotImplementedError("Iterable datasets are not yet supported in SDFTTrainer.")
@@ -251,11 +248,16 @@ class SDFTTrainer(_BaseTrainer):
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
 
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
+        model_revision = None
         if isinstance(model, str):
             model_init_kwargs = args.model_init_kwargs or {}
             if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
                 model_init_kwargs["device_map"] = None
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
         elif args.model_init_kwargs is not None:
             logger.warning(
@@ -299,6 +301,7 @@ class SDFTTrainer(_BaseTrainer):
         if processing_class is None:
             processing_class = AutoProcessor.from_pretrained(
                 get_config_model_id(model.config),
+                revision=model_revision,
                 truncation_side="left",
                 padding_side="left",
                 trust_remote_code=args.trust_remote_code,
@@ -313,6 +316,20 @@ class SDFTTrainer(_BaseTrainer):
 
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
 
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
@@ -333,7 +350,7 @@ class SDFTTrainer(_BaseTrainer):
             "do_sample": True,
             "pad_token_id": self._tokenizer.pad_token_id,
             "bos_token_id": self._tokenizer.bos_token_id,
-            "eos_token_id": self._tokenizer.eos_token_id,
+            "eos_token_id": self.eos_token_ids,
             "temperature": args.temperature,
             "top_p": args.top_p,
             "top_k": args.top_k,
@@ -369,41 +386,6 @@ class SDFTTrainer(_BaseTrainer):
                     "vocabulary, so `full_logits` is unavailable. Note `topk_logits` distills over the teacher's own "
                     "top-k support (the server cannot score the student's top-k indices)."
                 )
-            if args.use_liger_kernel:
-                raise ValueError(
-                    "`use_teacher_server=True` is incompatible with `use_liger_kernel`: the server returns top-k "
-                    "logprobs while the Liger fused loss needs full-vocabulary hidden states."
-                )
-        # Liger fused JSD loss for `full_logits`: same generalized JSD as `compute_divergence`, so alpha maps to beta.
-        self.use_liger_loss = False
-        if args.use_liger_kernel:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `use_liger_kernel` as the self-distillation loss. Run "
-                    "`pip install liger-kernel`."
-                )
-            if args.distillation_mode != "full_logits":
-                raise ValueError(
-                    "`use_liger_kernel` only supports `distillation_mode='full_logits'`, got "
-                    f"{args.distillation_mode!r}. The fused JSD kernel operates on the full vocabulary and cannot "
-                    "express the top-k support or sampled-token objectives."
-                )
-            if args.distillation_is_clip is not None:
-                raise ValueError(
-                    "`use_liger_kernel` is incompatible with `distillation_is_clip`: the fused kernel does not expose "
-                    "per-token losses for importance-sampling clipping."
-                )
-            self.liger_loss = LigerFusedLinearJSDLoss(
-                beta=args.distillation_alpha,
-                ignore_index=-100,
-                temperature=args.temperature,
-                compiled=False,
-                weight_hard_loss=0.0,
-                weight_soft_loss=1.0,
-            )
-            self._forward_redirection = _ForwardRedirection()
-            self.use_liger_loss = True
-
         super().__init__(
             model=model,
             args=args,
@@ -413,7 +395,6 @@ class SDFTTrainer(_BaseTrainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
-            compute_loss_func="non-None value to disable scaling",
         )
 
         self._last_loaded_step = -1 if self.use_vllm else 0
@@ -466,7 +447,6 @@ class SDFTTrainer(_BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         self._setup_teacher_model()
-        self.model_accepts_loss_kwargs = False
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
@@ -539,10 +519,13 @@ class SDFTTrainer(_BaseTrainer):
 
         # Build the teacher from the model path (like the GRPO/DPO reference model) rather than deep-copying the
         # student: under ZeRO-3 the student params are already sharded, so a deep copy would clone empty shards.
-        model_init_kwargs = self.args.model_init_kwargs or {}
+        model_init_kwargs = dict(self.args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
         if self.args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
             model_init_kwargs["device_map"] = None
         model_init_kwargs.setdefault("trust_remote_code", self.args.trust_remote_code)
+        # A student passed as an instance wasn't loaded from `model_init_kwargs`, so build the teacher like it
+        model_init_kwargs.setdefault("dtype", self.model.dtype)
+        model_init_kwargs.setdefault("attn_implementation", self.model.config._attn_implementation)
         self.teacher_model = create_model_from_path(get_config_model_id(self.model.config), **model_init_kwargs)
         self.teacher_model.requires_grad_(False)
         self.teacher_model.eval()
@@ -606,9 +589,7 @@ class SDFTTrainer(_BaseTrainer):
         )
 
     def training_step(self, model, inputs, num_items_in_batch):
-        # Gather spans forward+backward: the fused JSD computes the lm_head grad in backward.
-        with self._get_liger_zero3_lm_head_gather_ctx(model):
-            output = super().training_step(model, inputs, num_items_in_batch)
+        output = super().training_step(model, inputs, num_items_in_batch)
         self._step += 1
         return output
 
@@ -759,7 +740,7 @@ class SDFTTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+        prompt_ids_out, completion_ids_list, _, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids,
             images=None,
             num_generations=num_generations,
@@ -793,7 +774,7 @@ class SDFTTrainer(_BaseTrainer):
 
         prompt_length = generate_inputs["input_ids"].size(1)
         completion_ids = prompt_completion_ids[:, prompt_length:]
-        is_eos = completion_ids == self._tokenizer.eos_token_id
+        is_eos = torch.isin(completion_ids, torch.tensor(self.eos_token_ids, device=device))
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         seq_idx = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -834,8 +815,6 @@ class SDFTTrainer(_BaseTrainer):
 
         if self.use_teacher_server:
             loss = self._compute_server_distillation_loss(model, inputs)
-        elif self.use_liger_loss:
-            loss = self._compute_liger_loss(model, inputs)
         else:
             distillation_logits = self._compute_teacher_student_logits(model, self.teacher_model, inputs)
             loss = self._compute_self_distillation_loss(model, inputs, distillation_logits)
@@ -1134,130 +1113,6 @@ class SDFTTrainer(_BaseTrainer):
         logits = logits[:, -logits_to_keep:, :]
         return logits / self.temperature
 
-    def _compute_liger_loss(self, model, inputs: TrainingBatch) -> torch.Tensor:
-        """`full_logits` distillation via the Liger fused JSD kernel: forwards the base models for hidden states and
-        fuses the lm_head projection with the divergence, never materializing the full-vocab logits.
-
-        Each model is forwarded through its own wrapper via `_forward_redirection` so FSDP2/DeepSpeed materialize the
-        sharded params during the unwrapped base forward. The fused kernel needs both lm_head weights live at once, so
-        the frozen teacher weight is captured while the teacher is materialized and handed to the student pass.
-        """
-        logits_to_keep = inputs["completion_ids"].size(1)
-        completion_mask = inputs["completion_mask"]
-        loss_mask = completion_mask
-        if self.num_loss_tokens_to_skip > 0:
-            token_positions = torch.arange(completion_mask.size(1), device=completion_mask.device).unsqueeze(0)
-            loss_mask = completion_mask * (token_positions >= self.num_loss_tokens_to_skip).long()
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-
-        with torch.no_grad(), self._get_teacher_context_for_self_distillation():
-            teacher_hidden, teacher_weight, teacher_bias = self._forward_redirection(
-                self.teacher_model,
-                unwrapped_teacher,
-                self._liger_teacher_side,
-                unwrapped_teacher,
-                inputs,
-                logits_to_keep,
-            )
-
-        return self._forward_redirection(
-            model,
-            unwrapped_student,
-            self._liger_student_loss,
-            unwrapped_student,
-            inputs,
-            logits_to_keep,
-            loss_mask,
-            teacher_hidden,
-            teacher_weight,
-            teacher_bias,
-        )
-
-    def _liger_teacher_side(self, teacher, inputs: TrainingBatch, logits_to_keep: int):
-        """Teacher hidden states + frozen lm_head weight, captured while the teacher params are materialized."""
-        hidden = teacher.get_decoder()(
-            input_ids=inputs["teacher_input_ids"],
-            attention_mask=inputs["teacher_attention_mask"],
-            use_cache=False,
-        ).last_hidden_state
-        hidden = hidden[:, :-1][:, -logits_to_keep:]
-        head = teacher.get_output_embeddings()
-        # Clone so the weight survives re-sharding once this forward context exits.
-        weight = head.weight.detach().clone()
-        bias = head.bias.detach().clone() if head.bias is not None else None
-        return hidden, weight, bias
-
-    def _liger_student_loss(
-        self,
-        student,
-        inputs: TrainingBatch,
-        logits_to_keep,
-        loss_mask,
-        teacher_hidden,
-        teacher_weight,
-        teacher_bias,
-    ):
-        student_input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
-        student_attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
-        student_hidden = student.get_decoder()(
-            input_ids=student_input_ids,
-            attention_mask=student_attention_mask,
-            use_cache=False,
-        ).last_hidden_state
-        # Align hidden states to the completion-predicting positions, matching `_forward_logits`.
-        student_hidden = student_hidden[:, :-1][:, -logits_to_keep:]
-
-        # `ignore_index` masks non-response positions; the token values only feed the disabled hard-CE term.
-        completion_ids = inputs["completion_ids"]
-        true_labels = torch.where(loss_mask.bool(), completion_ids, torch.full_like(completion_ids, -100))
-
-        student_head = student.get_output_embeddings()
-        # Per-sequence then batch mean (grpo), matching the non-Liger path: the fused kernel reduces by total tokens
-        # (bnpo), so we call it per sequence and average.
-        seq_losses = [
-            self.liger_loss(
-                student_input=student_hidden[i],
-                student_weight=student_head.weight,
-                teacher_input=teacher_hidden[i],
-                teacher_weight=teacher_weight,
-                true_labels=true_labels[i],
-                student_bias=student_head.bias,
-                teacher_bias=teacher_bias,
-            )
-            for i in range(student_hidden.size(0))
-        ]
-        loss = torch.stack(seq_losses).mean()
-
-        mode = "train" if student.training else "eval"
-        self._log_self_distillation_metric(mode, self.accelerator.gather(loss.detach()).mean().item())
-        return loss
-
-    def _get_liger_zero3_lm_head_gather_ctx(self, model):
-        """Gather the sharded student/teacher lm_head weights for the fused matmul under ZeRO-3. Liger reads
-        `lm_head.weight` by attribute, so the gather hook never fires; the decoder forward gathers itself. No-op
-        outside ZeRO-3."""
-        if not self.use_liger_loss:
-            return nullcontext()
-
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        if deepspeed_plugin is None or deepspeed_plugin.zero_stage != 3:
-            return nullcontext()
-
-        import deepspeed
-
-        unwrapped_student = self.accelerator.unwrap_model(model)
-        unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-        student_head = unwrapped_student.get_output_embeddings()
-        teacher_head = unwrapped_teacher.get_output_embeddings()
-        params = [student_head.weight, teacher_head.weight]
-        if student_head.bias is not None:
-            params.append(student_head.bias)
-        if teacher_head.bias is not None:
-            params.append(teacher_head.bias)
-        return deepspeed.zero.GatheredParameters(params, modifier_rank=None)
-
     def _get_teacher_context_for_self_distillation(self):
         """Return the context manager that routes the teacher forward to the correct weights.
 
@@ -1283,11 +1138,17 @@ class SDFTTrainer(_BaseTrainer):
         device = self.accelerator.device
         completion_ids_list = self._get_completion_ids_list(batch)
         agg_completion_lengths = self.accelerator.gather(batch["raw_completion_lengths"])
+        # Fail clearly if the generation backend returned no completions (avoids a cryptic min() error below).
+        if agg_completion_lengths.numel() == 0:
+            raise RuntimeError(
+                "No completions were generated. This usually means the generation backend failed to return any "
+                "results; see the generation logs above for the underlying error."
+            )
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        eos_and_pad = [self._tokenizer.eos_token_id, self._tokenizer.pad_token_id]
+        eos_and_pad = [*self.eos_token_ids, self._tokenizer.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())

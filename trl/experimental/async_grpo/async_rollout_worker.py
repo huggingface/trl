@@ -14,27 +14,34 @@
 
 import asyncio
 import enum
+import functools
 import inspect
+import math
 import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
+import re
 import threading
 import time
 import traceback
 import uuid
 import warnings
+from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import chain, repeat
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
+from packaging.version import Version
 from transformers import PreTrainedTokenizerBase
 
 from ...chat_template_utils import (
@@ -44,8 +51,14 @@ from ...chat_template_utils import (
     is_chat_template_prefix_preserving,
     parse_response,
 )
-from ...import_utils import is_vllm_available
-from ...trainer.utils import get_callable_name, print_prompt_completions_sample
+from ...import_utils import is_aiohttp_available, is_vllm_available
+from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
@@ -53,20 +66,10 @@ logger = get_logger(__name__)
 Messages: TypeAlias = list[dict[str, str]]
 RolloutId: TypeAlias = str
 
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
-
-async def _retry_on_http_error(coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
-    """Retry an aiohttp coroutine on transport errors with bounded exponential backoff."""
-    for attempt in range(max_attempts):
-        try:
-            return await coro_factory()
-        except _RETRYABLE_HTTP_ERRORS as e:
-            if attempt >= max_attempts - 1:
-                raise
-            sleep = min(2 ** min(attempt, 4), 16)
-            logger.warning(f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s")
-            await asyncio.sleep(sleep)
+def _by_token_id(top_logprobs: list[dict[str, float]]) -> list[dict[int, float]]:
+    """Key each token's top log-probs by token id, which vLLM spells `token_id:<id>` when asked for ids."""
+    return [{int(token.removeprefix("token_id:")): logprob for token, logprob in top.items()} for top in top_logprobs]
 
 
 @dataclass(frozen=True)
@@ -76,15 +79,23 @@ class TurnRecord:
     prompt_ids: list[int]
     output_ids: list[int]
     output_log_probs: list[float] = field(default_factory=list)
+    # Completion-token eligibility. None supervises all output tokens; zeros retain context only.
+    output_mask: list[int] | None = None
+    # Per output token, the token ids the sampler could draw (top-k/top-p truncation); None without truncation.
+    output_sampling_mask: list[list[int]] | None = None
+    # Per output token, the sampler's log-prob of its most likely tokens, by token id; None when not requested.
+    output_sampler_logprobs: list[dict[int, float]] | None = None
 
 
 @dataclass
 class TrainingSequence:
-    """One training row. Maps 1:1 onto the list fields of `RolloutSample`."""
+    """One training row. Maps 1:1 onto the array fields of `RolloutSample`."""
 
     input_ids: list[int]  # full tokens (prompt included)
     completion_mask: list[int]  # 1 = train this token, 0 = context
-    old_log_probs: list[float]  # generator logprobs, 0.0 where mask is 0
+    old_log_probs: list[float]  # sampled logprobs; prompt-only context is zero-filled
+    sampling_mask: list[list[int]]  # per token, the sampler's candidate set; empty for context and without truncation
+    sampler_logprobs: list[dict[int, float]]  # per token, the sampler's top log-probs by id; empty when not asked
     rollout_id: RolloutId  # which conversation this row came from
 
 
@@ -115,26 +126,35 @@ class _SampleBuilder:
         self.tokens: list[int] = []
         self.loss_mask: list[int] = []
         self.logprobs: list[float] = []
+        self.sampling_mask: list[list[int]] = []
+        self.sampler_logprobs: list[dict[int, float]] = []
         self.last_response_start_idx: int | None = None
 
-    def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
+    def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
+        """Classify this turn's re-tokenization against the held tokens, and report by how many tokens it drifted."""
         matched = _common_prefix_len(self.tokens, turn.prompt_ids)
         drift = len(self.tokens) - matched
         if drift == 0:
-            return DriftKind.CLEAN
+            return DriftKind.CLEAN, 0
         start = self.last_response_start_idx
         if start is not None and matched >= start and drift < self._fork_threshold:
-            return DriftKind.REALIGN
-        return DriftKind.FORK
+            return DriftKind.REALIGN, drift
+        return DriftKind.FORK, drift
 
-    def append_turn(self, turn: TurnRecord, kind: DriftKind, *, trained: bool = True) -> None:
+    def append_turn(self, turn: TurnRecord, kind: DriftKind) -> None:
         assert kind is not DriftKind.FORK
         if kind is DriftKind.REALIGN:
             self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
         else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
             self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
         self.last_response_start_idx = len(self.tokens)
-        self._append(turn.output_ids, mask=int(trained), logprobs=turn.output_log_probs if trained else None)
+        self._append(
+            turn.output_ids,
+            mask=turn.output_mask if turn.output_mask is not None else 1,
+            logprobs=turn.output_log_probs,
+            sampling_mask=turn.output_sampling_mask,
+            sampler_logprobs=turn.output_sampler_logprobs,
+        )
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         matched = _common_prefix_len(self.tokens, prompt_ids)
@@ -142,30 +162,76 @@ class _SampleBuilder:
         self.tokens[matched:] = tail
         self.loss_mask[matched:] = [0] * len(tail)
         self.logprobs[matched:] = [0.0] * len(tail)
+        self.sampling_mask[matched:] = [[] for _ in tail]
+        self.sampler_logprobs[matched:] = [{} for _ in tail]
 
-    def _append(self, ids: list[int], *, mask: int, logprobs: list[float] | None = None) -> None:
+    def _append(
+        self,
+        ids: list[int],
+        *,
+        mask: int | list[int],
+        logprobs: list[float] | None = None,
+        sampling_mask: list[list[int]] | None = None,
+        sampler_logprobs: list[dict[int, float]] | None = None,
+    ) -> None:
+        """Append tokens with a uniform or per-token supervision mask."""
+        masks = [mask] * len(ids) if isinstance(mask, int) else mask
+        if len(masks) != len(ids):
+            raise ValueError("loss mask must contain one entry per token")
+        if any(masks) and logprobs is None:
+            raise ValueError("trainable tokens require one sampled logprob per token")
+        if logprobs is not None and len(logprobs) != len(ids):
+            raise ValueError("logprobs must contain one entry per token")
+        if sampling_mask is not None and len(sampling_mask) != len(ids):
+            raise ValueError("sampling mask must contain one entry per token")
         self.tokens.extend(ids)
-        self.loss_mask.extend([mask] * len(ids))
-        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
+        self.loss_mask.extend(masks)
+        self.logprobs.extend(logprobs if logprobs is not None else [0.0] * len(ids))
+        self.sampling_mask.extend(sampling_mask if sampling_mask is not None else [[] for _ in ids])
+        self.sampler_logprobs.extend(sampler_logprobs if sampler_logprobs is not None else [{} for _ in ids])
 
     def has_trained_token(self) -> bool:
         return any(self.loss_mask)
 
     def to_training_sequence(self, rollout_id: RolloutId) -> TrainingSequence:
-        return TrainingSequence(list(self.tokens), list(self.loss_mask), list(self.logprobs), rollout_id)
+        return TrainingSequence(
+            list(self.tokens),
+            list(self.loss_mask),
+            list(self.logprobs),
+            list(self.sampling_mask),
+            list(self.sampler_logprobs),
+            rollout_id,
+        )
 
 
-def _chain_to_sequences(turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int) -> list[TrainingSequence]:
-    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts."""
+def _chain_to_sequences(
+    turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int
+) -> tuple[list[TrainingSequence], dict[str, float]]:
+    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
+
+    Also returns the drift tally over the T-1 turn *transitions*: how many appended cleanly, realigned or forked, and
+    the total and largest drift in tokens. That tally is the only observability on `fork_threshold_tokens`, which is
+    otherwise a threshold tuned blind.
+    """
     builders: list[_SampleBuilder] = []
+    tally = {"clean": 0.0, "realign": 0.0, "fork": 0.0, "transitions": 0.0, "drift_tokens": 0.0, "drift_max": 0.0}
     for turn in turns:
-        if not builders or (kind := builders[-1].classify_token_drift(turn)) is DriftKind.FORK:
+        if not builders:
+            builders.append(_SampleBuilder(fork_threshold))
+            builders[-1].append_turn(turn, DriftKind.CLEAN)
+            continue
+        kind, drift = builders[-1].classify_token_drift(turn)
+        tally[kind.value] += 1
+        tally["transitions"] += 1
+        tally["drift_tokens"] += drift
+        tally["drift_max"] = max(tally["drift_max"], drift)
+        if kind is DriftKind.FORK:
             builder = _SampleBuilder(fork_threshold)
             builder.append_turn(turn, DriftKind.CLEAN)
             builders.append(builder)
         else:
             builders[-1].append_turn(turn, kind)
-    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()]
+    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()], tally
 
 
 @dataclass(slots=True)
@@ -188,13 +254,17 @@ class RolloutGroup:
 class RolloutSample:
     prompt: Messages
     completion: Messages
-    input_ids: list[int]
-    completion_mask: list[int]
-    old_log_probs: list[float]
+    input_ids: np.ndarray
+    completion_mask: np.ndarray
+    old_log_probs: np.ndarray
+    sampling_mask: list[list[int]]
+    sampler_ids: np.ndarray  # (len(input_ids), K), the sampler's most likely next tokens by position, padded with -1
+    sampler_log_probs: np.ndarray  # (len(input_ids), K), their log-probs, padded with -inf
     advantage: float
     model_version: int
     group_id: int
     metrics: dict[str, float]
+    enqueued_at: float | None = None
 
 
 # Env vars the child must drop so accelerate's `PartialState()` initialises in
@@ -221,6 +291,8 @@ def _scrub_child_env() -> None:
     # The child has no business touching CUDA; any library that imports torch
     # and lazily probes devices would race the parent's allocator.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # On ROCm, an empty CUDA_VISIBLE_DEVICES is ignored when HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES is set.
+    os.environ["HIP_VISIBLE_DEVICES"] = ""
     for k in _CHILD_ENV_TO_STRIP:
         os.environ.pop(k, None)
 
@@ -249,6 +321,7 @@ def _child_main(
     heartbeat_value: MPValue,
     failed_event: MPEvent,
     exception_info_queue: MPQueue,
+    metrics_queue: MPQueue,
 ) -> None:
     _scrub_child_env()
     # `accelerate.logging.get_logger` requires `PartialState()` to have been called.
@@ -263,6 +336,7 @@ def _child_main(
         heartbeat_value=heartbeat_value,
         failed_event=failed_event,
         exception_info_queue=exception_info_queue,
+        metrics_queue=metrics_queue,
     )
     child_ready_event.set()
     _spawn_stop_watcher(rollout_loop, stop_event)
@@ -291,29 +365,44 @@ class _AsyncRolloutLoop:
         dataset: Dataset,
         reward_funcs: list[Callable[..., list[float]]],
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
         failed_event: MPEvent,
         exception_info_queue: MPQueue,
+        metrics_queue: MPQueue,
         tools: list[Callable] | None = None,
         environment_factory: Callable[[], object] | dict[str, Callable[[], object]] | None = None,
         num_generations: int = 8,
         max_inflight_tasks: int = 128,
         queue_maxsize: int = 0,
+        score_queue_maxsize: int = 16,
         vllm_server_url: str = "http://localhost:8000",
+        lora_name: str | None = None,
         max_tokens: int = 32,
         temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        num_sampler_logprobs: int = 0,
+        min_p: float | None = None,
+        repetition_penalty: float = 1.0,
         request_timeout: int = 120,
         chat_template_kwargs: dict[str, Any] | None = None,
         max_tool_calling_iterations: int | None = None,
         log_completions: bool = False,
         num_completions_to_print: int | None = None,
         fork_threshold_tokens: int = 1024,
+        dataset_start_index: int = 0,
     ):
         self.model_name = model_name
+        self.lora_name = lora_name
         self.dataset = dataset
-        self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            start = dataset_start_index % len(dataset)
+            self._dataset_iter = iter(dataset.select(range(start, len(dataset))))
+        else:
+            self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
@@ -330,17 +419,31 @@ class _AsyncRolloutLoop:
                 FutureWarning,
             )
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
         self._failed_event = failed_event  # shared mp.Event
         self._exception_info_queue = exception_info_queue  # shared mp.Queue(maxsize=1)
+        self._metrics_queue = metrics_queue  # shared mp.Queue; drained by the trainer in `log()`
+        # Metric accumulators
+        self._counters: dict[str, float] = defaultdict(float)
+        self._rates: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        self._inflight = 0  # set by the generate loop, reported by the score loop
+        self._pushed_completion_tokens = 0
+        self._pushed_at = time.monotonic()
 
         self.num_generations = num_generations
         self.max_inflight_tasks = max_inflight_tasks
         self.queue_maxsize = queue_maxsize
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.sampling_replay = top_p < 1.0 or top_k > 0
+        self.num_sampler_logprobs = num_sampler_logprobs
+        self.min_p = min_p
+        self.repetition_penalty = repetition_penalty
         self.request_timeout = request_timeout
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.max_tool_calling_iterations = max_tool_calling_iterations
@@ -379,14 +482,15 @@ class _AsyncRolloutLoop:
                 instance = factory()
                 has_reset = False
                 methods = []
-                for member_name, member in inspect.getmembers(instance, predicate=inspect.ismethod):
+                # List on the class: getmembers on the instance evaluates properties
+                for member_name, _ in inspect.getmembers(type(instance), predicate=inspect.isfunction):
                     if member_name == "reset":
                         has_reset = True
                     elif member_name == "get_reward":
                         if type(instance) not in self._env_reward_types:
                             self._env_reward_types.append(type(instance))
                     elif not member_name.startswith("_"):
-                        methods.append(member)
+                        methods.append(getattr(instance, member_name))
                 if not has_reset:
                     raise ValueError(
                         "Each environment instance returned by `environment_factory` must define a callable `reset`."
@@ -410,10 +514,12 @@ class _AsyncRolloutLoop:
                 "defines a `get_reward` method."
             )
 
-        # The async worker can't await tools in its tool loop, so asynchronous tools are not supported.
-        for tool in self.tools:
-            if inspect.iscoroutinefunction(tool):
-                raise ValueError("Asynchronous tools are not supported yet.")
+        # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
+        self._tool_pool = ThreadPoolExecutor(max_workers=max(1, max_inflight_tasks), thread_name_prefix="grpo-tool")
+
+        self._inflight_cap = max_inflight_tasks
+        self._total_rollouts = 0
+        self._metrics_poll_s = 5.0
 
         # The chat template must be prefix-preserving in multi-turn training; if the tokenizer's
         # template isn't, swap in a training-safe one.
@@ -422,7 +528,7 @@ class _AsyncRolloutLoop:
         else:
             self.chat_template = None
 
-        self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=16)
+        self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=score_queue_maxsize)
         self._total_completion_tokens = 0
         self._total_groups_scored = 0
         self._generation_start_time: float | None = None
@@ -434,6 +540,15 @@ class _AsyncRolloutLoop:
     @property
     def model_version(self) -> int:
         return int(self._model_version_value.value)
+
+    @property
+    def _request_model(self) -> str:
+        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
+        # serves the base model, so the published version has to be part of the request. `model_version` reads the
+        # shared `mp.Value`, so a sync is picked up without extra IPC.
+        if self.lora_name is None:
+            return self.model_name
+        return f"{self.lora_name}-v{self.model_version}"
 
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -451,35 +566,149 @@ class _AsyncRolloutLoop:
             logger.exception(f"Worker process failed: {e}")
             raise
         finally:
+            self._tool_pool.shutdown(wait=True, cancel_futures=True)
             self._loop.close()
 
+    async def _check_sampling_replay(self) -> None:
+        """With top-k/top-p, make sure the server returns the candidate set of every sampled token.
+
+        That takes vLLM >= 0.28 started with `--return-sampling-mask` (recorded in its config) and `--enable-scale-out`
+        (the endpoint that returns the set). Checked once up front: without them the first rollout would fail on a
+        route that does not exist, after retrying it for minutes. An older vLLM cannot return the set at all, so it
+        keeps the full-vocabulary normalization, with a warning about the bias.
+        """
+        if not self.sampling_replay:
+            return
+        async with self.session.get(f"{self.vllm_server_url}/version") as r:
+            r.raise_for_status()
+            version = (await r.json())["version"]
+        if Version(version) < Version("0.28.0"):
+            logger.warning(
+                f"vLLM {version} cannot return the candidate set a token was sampled from (vLLM >= 0.28), so with "
+                "top_k/top_p the log-probabilities are normalized over the whole vocabulary and the importance ratio "
+                "is biased."
+            )
+            self.sampling_replay = False
+            return
+        async with self.session.get(f"{self.vllm_server_url}/server_info", params={"config_format": "json"}) as r:
+            r.raise_for_status()
+            model_config = (await r.json())["vllm_config"]["model_config"]
+        async with self.session.get(f"{self.vllm_server_url}/openapi.json") as r:
+            r.raise_for_status()
+            paths = (await r.json())["paths"]
+        if not model_config.get("return_sampling_mask") or "/inference/v1/generate" not in paths:
+            raise RuntimeError(
+                "top_k/top_p sampling needs the candidate set of every sampled token, which the trainer renormalizes "
+                "its log-probabilities over. Start the vLLM server (>= 0.28) with "
+                "`--return-sampling-mask --enable-scale-out`."
+            )
+
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=self.max_inflight_tasks)) as session:
+        connector = aiohttp.TCPConnector(limit=self.max_inflight_tasks + 1)
+        async with aiohttp.ClientSession(connector=connector) as session:
             self.session = session
+            await self._check_sampling_replay()
+            await self._init_inflight_cap()
             logger.info(
                 f"vllm worker started: num_generations={self.num_generations}, "
-                f"max_inflight_tasks={self.max_inflight_tasks}"
+                f"max_inflight_tasks={self.max_inflight_tasks}, inflight_cap={self._inflight_cap}, "
+                f"temperature={self.temperature}, top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
+                f"repetition_penalty={self.repetition_penalty}"
             )
             await asyncio.gather(
                 asyncio.create_task(self._generate_loop(stop_event=stop_event)),
                 asyncio.create_task(self._score_loop(stop_event=stop_event)),
+                asyncio.create_task(self._control_loop(stop_event=stop_event)),
             )
+
+    async def _init_inflight_cap(self) -> None:
+        """Start the cap at `KV cache tokens / max_model_len`: as many requests as fit at full length."""
+        try:
+            async with self.session.get(f"{self.vllm_server_url}/metrics") as response:
+                response.raise_for_status()
+                text = await response.text()
+            async with self.session.get(f"{self.vllm_server_url}/v1/models") as response:
+                response.raise_for_status()
+                models = await response.json()
+        except Exception as e:
+            logger.warning(f"Could not read the vLLM server's KV capacity, starting at max_inflight_tasks: {e!r}")
+            return
+        kv_matches = re.findall(r'^vllm:cache_config_info\{.*kv_cache_size_tokens="(\d+)"', text, re.M)
+        if not kv_matches:
+            logger.warning("`/metrics` has no `kv_cache_size_tokens`, starting at max_inflight_tasks")
+            return
+        kv_tokens = sum(map(int, kv_matches))
+        max_model_len = max(model["max_model_len"] for model in models["data"] if model["max_model_len"])
+        self._inflight_cap = max(1, min(self.max_inflight_tasks, kv_tokens // max_model_len))
+
+    async def _control_loop(self, stop_event: asyncio.Event) -> None:
+        """Size the in-flight cap from the vLLM server's load, polled from `/metrics`.
+
+        Cut the cap by 30% when the server's KV cache usage passes 0.8, once the pool has drained below the previous
+        cut. Nothing is cancelled; admissions stop until enough rollouts finish. Grow it by 25% while usage stays under
+        0.6 with nothing queued, once per turnover of the pool. Preemptions are reported, not acted on: a weight sync
+        resets the server's caches, which preempts every running request.
+        """
+        rollouts_at_change = 0
+        preemptions_seen = 0.0
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=self._metrics_poll_s)
+                return
+            except TimeoutError:
+                pass
+            try:
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with self.session.get(f"{self.vllm_server_url}/metrics", timeout=timeout) as response:
+                    response.raise_for_status()
+                    text = await response.text()
+            except Exception as e:
+                logger.warning(f"vLLM /metrics poll failed, in-flight cap unchanged: {e!r}")
+                continue
+            usage_matches = re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)
+            queued_matches = re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)
+            if not usage_matches or not queued_matches:
+                # An empty match looks identical to a genuinely idle server (usage=0.0, queued=0), which is exactly
+                # the condition that grows the cap -- so a metrics rename/reformat must not fall through to that
+                # arithmetic silently.
+                logger.warning("vLLM /metrics missing KV usage or queue depth, in-flight cap unchanged")
+                continue
+            usage = max(map(float, usage_matches))
+            running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
+            queued = sum(map(float, queued_matches))
+            preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
+            if usage > 0.8 and self._inflight <= self._inflight_cap:
+                self._inflight_cap = max(1, int(self._inflight_cap * 0.7))
+                rollouts_at_change = self._total_rollouts
+                logger.info(f"[control] cut in-flight cap to {self._inflight_cap} (kv cache usage {usage:.2f})")
+            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
+                self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_inflight_tasks)
+                rollouts_at_change = self._total_rollouts
+            self._push_metrics(
+                {
+                    "rollout/inflight_cap": float(self._inflight_cap),
+                    "rollout/kv_cache_usage": usage,
+                    "rollout/vllm_running_requests": running,
+                    "rollout/vllm_queued_requests": queued,
+                    "rollout/vllm_preemptions_total": preemptions - preemptions_seen,
+                }
+            )
+            preemptions_seen = preemptions
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, int, Any, object, Messages]] = {}
-        free_slots = set(range(self.max_inflight_tasks))
+        inflight_tasks: dict[asyncio.Task, tuple[int, Any, object, Messages]] = {}
         work_iter = self._repeat_iterator()
+        loop = asyncio.get_running_loop()
 
         self._generation_start_time = time.monotonic()
         try:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
                 self._heartbeat_value.value = time.time()
-                while free_slots and not stop_event.is_set():
+                while len(inflight_tasks) < self._inflight_cap and not stop_event.is_set():
                     group_id, row = next(work_iter)
-                    slot = free_slots.pop()
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the
                     # standalone tools.
@@ -506,7 +735,12 @@ class _AsyncRolloutLoop:
                         reset_kwargs = (
                             {k: v for k, v in row.items() if k != "environment"} if self._multi_environment else row
                         )
-                        observation = environment.reset(**reset_kwargs)
+                        t0 = time.monotonic()
+                        observation = await loop.run_in_executor(
+                            self._tool_pool, functools.partial(environment.reset, **reset_kwargs)
+                        )
+                        self._rates["env/reset_s"][0] += time.monotonic() - t0
+                        self._rates["env/reset_s"][1] += 1
                     # `prompt` is optional only when an environment owns the data; `reset()` then supplies it. Without
                     # an environment, a missing `prompt` is a malformed dataset and must still fail fast (KeyError).
                     if "prompt" not in row and self.environment_factories is not None:
@@ -529,8 +763,8 @@ class _AsyncRolloutLoop:
                     methods = []
                     if environment is not None:
                         methods = [
-                            member
-                            for member_name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+                            getattr(environment, member_name)
+                            for member_name, _ in inspect.getmembers(type(environment), predicate=inspect.isfunction)
                             if member_name not in ("reset", "get_reward") and not member_name.startswith("_")
                         ]
                     tool_dict = {tool.__name__: tool for tool in self._standalone_tools + methods}
@@ -559,8 +793,9 @@ class _AsyncRolloutLoop:
                     task = asyncio.create_task(
                         self._generate_one(prompt, tool_dict=tool_dict, tools=tools, group_id=group_id)
                     )
-                    inflight_tasks[task] = (group_id, slot, name, environment, prompt)
+                    inflight_tasks[task] = (group_id, name, environment, prompt)
 
+                self._inflight = len(inflight_tasks)  # gauge, reported by the score loop's push
                 if not inflight_tasks:
                     if stop_event.is_set():
                         return
@@ -572,10 +807,10 @@ class _AsyncRolloutLoop:
                     continue
 
                 for task in done:
-                    group_id, slot, name, environment, prompt = inflight_tasks.pop(task)
-                    free_slots.add(slot)
+                    group_id, name, environment, prompt = inflight_tasks.pop(task)
                     if task.exception() is not None:
                         raise task.exception()
+                    self._total_rollouts += 1
 
                     (
                         completion,
@@ -603,17 +838,24 @@ class _AsyncRolloutLoop:
                         env_type = type(environment)
                         if env_type in self._env_reward_types:
                             get_reward = environment.get_reward
-                            reward = await get_reward() if inspect.iscoroutinefunction(get_reward) else get_reward()
+                            t0 = time.monotonic()
+                            if inspect.iscoroutinefunction(get_reward):
+                                reward = await get_reward()
+                            else:
+                                reward = await loop.run_in_executor(self._tool_pool, get_reward)
+                            self._rates["env/reward_s"][0] += time.monotonic() - t0
+                            self._rates["env/reward_s"][1] += 1
                             group.env_rewards.append((env_type, reward))
                         else:
                             group.env_rewards.append(None)
                     if environment is not None:
                         self._environment_pool[name].append(environment)
-                    self._total_completion_tokens += sum(sum(s.completion_mask) for s in sequences)
+                    self._total_completion_tokens += len(completion_ids)
                     pending_completed[group_id] += 1
 
                     if pending_completed[group_id] == self.num_generations:
                         group.queued_at = time.monotonic()
+                        t_blocked = None
                         while True:
                             try:
                                 self._groups_to_score.put_nowait(group)
@@ -621,7 +863,12 @@ class _AsyncRolloutLoop:
                             except asyncio.QueueFull:
                                 if stop_event.is_set():
                                     return
+                                if t_blocked is None:
+                                    t_blocked = time.monotonic()
                                 await asyncio.sleep(0.1)
+                        if t_blocked is not None:
+                            # Generation held back by scoring
+                            self._push_metrics({"rollout/score_block_s": time.monotonic() - t_blocked})
                         del pending_groups[group_id]
                         del pending_completed[group_id]
         finally:
@@ -635,20 +882,20 @@ class _AsyncRolloutLoop:
                 pass
 
     async def _score_loop(self, stop_event: asyncio.Event) -> None:
+        t_idle_start = time.monotonic()
         while not stop_event.is_set():
             self._heartbeat_value.value = time.time()
-            t_wait = time.monotonic()
             try:
                 group = await asyncio.wait_for(self._groups_to_score.get(), timeout=0.5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             if group is None:
                 return
-            score_queue_wait = time.monotonic() - t_wait
+            score_idle = time.monotonic() - t_idle_start
             wait_scoring = time.monotonic() - group.queued_at
 
-            if score_queue_wait > 0.5:
-                logger.info(f"[score] waited {score_queue_wait:.1f}s for a group to score")
+            if score_idle > 0.5:
+                logger.info(f"[score] waited {score_idle:.1f}s for a group to score")
 
             t0 = time.monotonic()
             samples = await self._score_group(group)
@@ -658,42 +905,136 @@ class _AsyncRolloutLoop:
                 f"buffer_qsize={self.rollout_buffer.qsize()}"
             )
 
-            self._compute_rollout_metrics(samples, scoring_time, wait_scoring)
+            now = time.monotonic()
+            self._push_metrics(
+                {
+                    "rollout/score_s": scoring_time,
+                    "rollout/score_wait_s": wait_scoring,
+                    "rollout/score_queue_size": float(self._groups_to_score.qsize()),
+                    "rollout/inflight": float(self._inflight),
+                    # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
+                    "rollout/generated_tok_s": (
+                        float(self._total_completion_tokens - self._pushed_completion_tokens),
+                        now - self._pushed_at,
+                    ),
+                }
+            )
+            self._pushed_completion_tokens = self._total_completion_tokens
+            self._pushed_at = now
 
             if self.log_completions and samples:
                 print_prompt_completions_sample(
                     prompts=[s.prompt for s in samples],
                     completions=[s.completion for s in samples],
-                    rewards={"reward": [s.metrics["reward"] for s in samples]},
+                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,
                     num_samples=self.num_completions_to_print,
                 )
             self._total_groups_scored += 1
 
-            for sample in samples:
+            for item in samples or [group.group_id]:
+                t_blocked = None
                 while True:
                     try:
-                        self.rollout_buffer.put_nowait(sample)
+                        if isinstance(item, RolloutSample):
+                            item.enqueued_at = time.time()
+                        self.rollout_buffer.put_nowait(item)
                         break
                     except queue.Full:
                         if stop_event.is_set():
                             return
-                        logger.info(
-                            f"[score] rollout buffer full (maxsize={self.queue_maxsize}), "
-                            "waiting for trainer to consume..."
-                        )
+                        if t_blocked is None:
+                            t_blocked = time.monotonic()
+                            logger.info(
+                                f"[score] rollout buffer full (maxsize={self.queue_maxsize}), "
+                                "waiting for trainer to consume..."
+                            )
                         await asyncio.sleep(0.1)
+                if t_blocked is not None:
+                    self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
 
-    def _compute_rollout_metrics(self, samples: list[RolloutSample], scoring_time: float, wait_scoring: float) -> None:
-        assert self._generation_start_time is not None
-        elapsed = time.monotonic() - self._generation_start_time
-        generation_tok_per_sec = self._total_completion_tokens / elapsed if elapsed > 0 else 0.0
-        for sample in samples:
-            sample.metrics["generation_tok_per_s"] = generation_tok_per_sec
-            sample.metrics["scoring_time_ms"] = scoring_time * 1000
-            sample.metrics["wait_scoring_ms"] = wait_scoring * 1000
-            sample.metrics["buffer_qsize"] = self.rollout_buffer.qsize()
+            t_idle_start = time.monotonic()
+
+    async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
+        """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.
+
+        Every retried call in this loop targets vLLM, so the counter is named for the dependency rather than for the
+        transport.
+        """
+        for attempt in range(max_attempts):
+            try:
+                return await coro_factory()
+            except _RETRYABLE_HTTP_ERRORS as e:
+                if attempt >= max_attempts - 1:
+                    raise
+                self._counters["rollout/vllm_retry_total"] += 1
+                sleep = min(2 ** min(attempt, 4), 16)
+                logger.warning(
+                    f"{label} failed ({type(e).__name__}: {e}); retry {attempt + 1}/{max_attempts} in {sleep}s"
+                )
+                await asyncio.sleep(sleep)
+
+    def _push_metrics(self, values: dict[str, float | tuple[float, float]]) -> None:
+        """Send metrics to the trainer, along with the counters and rates accumulated since the last push."""
+        payload = dict(values)
+        payload.update(self._counters)
+        payload.update({key: (num, den) for key, (num, den) in self._rates.items()})
+        self._counters.clear()
+        self._rates.clear()
+        try:
+            self._metrics_queue.put_nowait(payload)
+        except queue.Full:
+            pass  # never block generation
+
+    def _push_rollout_metrics(
+        self,
+        *,
+        turns: int,
+        sequences: int,
+        completion_ids: list[int],
+        tally: dict[str, float],
+        loop_exhausted: bool,
+        duration_s: float,
+    ) -> None:
+        """One conversation's structure and its completion, aggregated per rollout."""
+        transitions = tally["transitions"]
+        completion_tokens = len(completion_ids)
+        self._rates["completions/mean_length"][0] += completion_tokens
+        self._rates["completions/mean_length"][1] += 1
+        self._rates["rollout/samples_per_rollout"][0] += sequences
+        self._rates["rollout/samples_per_rollout"][1] += 1
+        self._rates["rollout/turns_mean"][0] += turns
+        self._rates["rollout/turns_mean"][1] += 1
+        if completion_ids:
+            # NOTE(@aminediro):
+            # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
+            # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
+            # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
+            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][1] += 1
+        if self.tools:
+            # Only meaningful when the model has tools to call: with none, the loop always ends on the first turn and
+            # the metric would be a constant 0 cluttering every run that does not use tools.
+            self._rates["tools/loop_exhausted_frac"][0] += loop_exhausted
+            self._rates["tools/loop_exhausted_frac"][1] += 1
+        if transitions:
+            self._rates["rollout/fork_frac"][0] += tally["fork"]
+            self._rates["rollout/fork_frac"][1] += transitions
+            self._rates["rollout/realign_frac"][0] += tally["realign"]
+            self._rates["rollout/realign_frac"][1] += transitions
+            self._rates["rollout/drift_tokens_mean"][0] += tally["drift_tokens"]
+            self._rates["rollout/drift_tokens_mean"][1] += transitions
+        self._push_metrics(
+            {
+                "rollout/duration_s": duration_s,
+                "rollout/turns_max": float(turns),
+                "rollout/drift_tokens_max": tally["drift_max"],
+                "completions/max_length": float(completion_tokens),
+                "completions/min_length": float(completion_tokens),
+            }
+        )
 
     def _repeat_iterator(self) -> Iterator[tuple[int, dict[str, Any]]]:
         group_id = 0
@@ -723,6 +1064,7 @@ class _AsyncRolloutLoop:
         tool-call count, tool-failure count, rollout reward)`; the built-in worker's rollout reward is always `None`
         (it scores via `reward_funcs`/env), a trailing slot loop subclasses override.
         """
+        t_dispatch = time.monotonic()
         messages = list(prompt)  # a MESSAGE list, not a token list
         rollout_id = uuid.uuid4().hex
         turns: list[TurnRecord] = []
@@ -730,6 +1072,7 @@ class _AsyncRolloutLoop:
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
+        loop_exhausted = False
         max_iterations = self.max_tool_calling_iterations
         while True:
             prompt_ids = self.tokenizer.apply_chat_template(  # re-tokenize the WHOLE conversation
@@ -740,27 +1083,52 @@ class _AsyncRolloutLoop:
                 chat_template=self.chat_template,
                 **self.chat_template_kwargs,
             )
-            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
+            turn_ids, turn_logprobs, turn_sampling_mask, turn_sampler_logprobs = await self._generate_one_turn(
+                prompt_ids
+            )
+            assistant_message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools)
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             messages.append(assistant_message)
-            turns.append(TurnRecord(prompt_ids, turn_ids, turn_logprobs))
+            turns.append(
+                TurnRecord(
+                    prompt_ids,
+                    turn_ids,
+                    turn_logprobs,
+                    output_sampling_mask=turn_sampling_mask,
+                    output_sampler_logprobs=turn_sampler_logprobs,
+                )
+            )
             tool_calls = assistant_message.get("tool_calls")
-            if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
+            if tool_calls is None:
                 break
-            tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
+            if max_iterations is not None and iteration_num >= max_iterations:
+                # Cut off mid-loop: the model asked for another tool and we refused. The conversation is trained as if
+                # it had finished, so this is a silent truncation — hence the metric.
+                loop_exhausted = True
+                break
+            tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
             messages.extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
             iteration_num += 1
-        sequences = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)  # >= 1 row per conversation
+        # >= 1 row per conversation; `tally` is the drift bookkeeping over the turn transitions.
+        sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
+        self._push_rollout_metrics(
+            turns=len(turns),
+            sequences=len(sequences),
+            completion_ids=completion_ids,
+            tally=tally,
+            loop_exhausted=loop_exhausted,
+            duration_s=time.monotonic() - t_dispatch,
+        )
         return completion, completion_ids, sequences, tool_call_count, tool_failure_count, None
 
-    def _execute_tool_calls(
+    async def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]], tool_dict: dict[str, Callable]
     ) -> tuple[list[dict[str, str]], int, int]:
+        loop = asyncio.get_running_loop()
         tool_messages = []
         n_calls = 0
         n_failures = 0
@@ -768,32 +1136,88 @@ class _AsyncRolloutLoop:
             n_calls += 1
             function = tool_call["function"]
             name = function["name"]
+            self._counters[f"tools/{name}/call_total"] += 1
+            tool = tool_dict.get(name)
+            if tool is None:
+                # A hallucinated tool name is a policy error that should decay with training, unlike a tool that ran
+                # and raised — which is an environment problem. Counted apart so the two are not one number.
+                n_failures += 1
+                self._counters["tools/unknown_name_total"] += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
+                tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
+                continue
+            t0 = time.monotonic()
             try:
                 arguments = function.get("arguments", {})
-                result = tool_dict[name](**arguments)
+                if inspect.iscoroutinefunction(tool):
+                    result = await tool(**arguments)
+                else:
+                    result = await loop.run_in_executor(self._tool_pool, functools.partial(tool, **arguments))
             except Exception as error:
                 n_failures += 1
+                self._counters[f"tools/{name}/failure_total"] += 1
                 result = {"error": str(error)}
+            elapsed = time.monotonic() - t0
+            self._rates["tools/latency_s"][0] += elapsed
+            self._rates["tools/latency_s"][1] += 1
+            self._rates[f"tools/{name}/latency_s"][0] += elapsed
+            self._rates[f"tools/{name}/latency_s"][1] += 1
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
+        self._rates["tools/parallel_calls_mean"][0] += len(tool_calls)
+        self._rates["tools/parallel_calls_mean"][1] += 1
         return tool_messages, n_calls, n_failures
 
-    async def _generate_one_turn(self, prompt_ids: list[int]) -> tuple[list[int], list[float]]:
-        payload = {
-            "model": self.model_name,
-            "prompt": prompt_ids,
+    async def _generate_one_turn(
+        self, prompt_ids: list[int]
+    ) -> tuple[list[int], list[float], list[list[int]] | None, list[dict[int, float]] | None]:
+        """Sample one turn: its token ids, their logprobs, with top-k/top-p the candidate set of each token, and with
+        `num_sampler_logprobs` the sampler's top log-probs at each token, by token id."""
+        sampling_params = {
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "repetition_penalty": self.repetition_penalty,
             "n": 1,
-            "return_token_ids": True,
-            "logprobs": 0,
+            "logprobs": self.num_sampler_logprobs,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
-        output = await _retry_on_http_error(
-            lambda: self._post("/v1/completions", payload, self.request_timeout),
+        if self.min_p is not None:
+            sampling_params["min_p"] = self.min_p
+        if not self.sampling_replay:
+            payload = {
+                "model": self._request_model,
+                "prompt": prompt_ids,
+                "return_token_ids": True,
+                "return_tokens_as_token_ids": True,
+                **sampling_params,
+            }
+            output = await self._retry(
+                lambda: self._post("/v1/completions", payload, self.request_timeout),
+                max_attempts=30,
+                label="vllm /v1/completions",
+            )
+            choice = output["choices"][0]
+            sampler_logprobs = _by_token_id(choice["logprobs"]["top_logprobs"]) if self.num_sampler_logprobs else None
+            return choice["token_ids"], choice["logprobs"]["token_logprobs"], None, sampler_logprobs
+        payload = {"model": self._request_model, "token_ids": prompt_ids, "sampling_params": sampling_params}
+        output = await self._retry(
+            lambda: self._post("/inference/v1/generate", payload, self.request_timeout),
             max_attempts=30,
-            label="vllm /v1/completions",
+            label="vllm /inference/v1/generate",
         )
         choice = output["choices"][0]
-        return choice["token_ids"], choice["logprobs"]["token_logprobs"]
+        content = choice["logprobs"]["content"]
+        logprobs = [token["logprob"] for token in content]
+        sampler_logprobs = None
+        if self.num_sampler_logprobs:
+            sampler_logprobs = _by_token_id(
+                [{t["token"]: t["logprob"] for t in token["top_logprobs"]} for token in content]
+            )
+        return choice["token_ids"], logprobs, choice["sampling_mask"], sampler_logprobs
 
     async def _score_group(self, group: RolloutGroup) -> list[RolloutSample]:
         kwargs = dict(
@@ -804,9 +1228,7 @@ class _AsyncRolloutLoop:
         )
         all_rewards = await asyncio.gather(
             *[
-                reward_func(**kwargs)
-                if inspect.iscoroutinefunction(reward_func)
-                else asyncio.to_thread(reward_func, **kwargs)
+                reward_func(**kwargs) if is_async_callable(reward_func) else asyncio.to_thread(reward_func, **kwargs)
                 for reward_func in self.reward_funcs
             ]
         )
@@ -832,16 +1254,24 @@ class _AsyncRolloutLoop:
         rewards[all_nan_mask] = np.nan
 
         scored_mask = ~np.isnan(rewards)
+        scored = rewards[scored_mask]
         # NOTE: for NaN reward we set advantage to 0 !
         advantages = np.zeros_like(rewards)
         if scored_mask.any():
-            scored = rewards[scored_mask]
             advantages[scored_mask] = (scored - scored.mean()) / (scored.std() + 1e-8)
             reward_mean = float(scored.mean())
             reward_std = float(scored.std())
         else:
             reward_mean = reward_std = float("nan")
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
+
+        zero_std = bool(np.all(scored == scored[:1]))
+        self._rates["reward"][0] += float(scored.sum())
+        self._rates["reward"][1] += len(scored)
+        self._rates["frac_reward_zero_std"][0] += zero_std
+        self._rates["frac_reward_zero_std"][1] += 1
+        if zero_std:
+            return []
 
         total_calls = sum(group.tool_call_counts)
         tool_metrics = (
@@ -873,7 +1303,7 @@ class _AsyncRolloutLoop:
             )
         ):
             metrics = {
-                "reward": float(reward),
+                "reward_kept": float(reward),
                 "reward_std": reward_std,
                 **{
                     f"rewards/{name}": float(func_reward)
@@ -882,17 +1312,33 @@ class _AsyncRolloutLoop:
                 **tm,
             }
             for seq in sequences:
+                width = max(map(len, seq.sampler_logprobs))
+                shape = (len(seq.input_ids), width)
+                tops = seq.sampler_logprobs
+                sampler_ids = np.fromiter(
+                    chain.from_iterable(chain(top, repeat(-1, width - len(top))) for top in tops),
+                    dtype=np.int64,
+                    count=shape[0] * width,
+                ).reshape(shape)
+                sampler_log_probs = np.fromiter(
+                    chain.from_iterable(chain(top.values(), repeat(-math.inf, width - len(top))) for top in tops),
+                    dtype=np.float32,
+                    count=shape[0] * width,
+                ).reshape(shape)
                 samples.append(
                     RolloutSample(
                         prompt=prompt,
                         completion=completion,
-                        input_ids=seq.input_ids,
-                        completion_mask=seq.completion_mask,
-                        old_log_probs=seq.old_log_probs,
+                        input_ids=np.asarray(seq.input_ids, dtype=np.int64),
+                        completion_mask=np.asarray(seq.completion_mask, dtype=np.int64),
+                        old_log_probs=np.asarray(seq.old_log_probs, dtype=np.float32),
+                        sampling_mask=seq.sampling_mask,
+                        sampler_ids=sampler_ids,
+                        sampler_log_probs=sampler_log_probs,
                         advantage=float(advantage),
                         model_version=group.model_version,
                         group_id=group.group_id,
-                        metrics=dict(metrics),  # own copy per row; _compute_rollout_metrics mutates it
+                        metrics=dict(metrics),  # own copy per row
                     )
                 )
         return samples
@@ -908,7 +1354,7 @@ class _AsyncRolloutLoop:
                 content = await response.json()
                 return content if content else {}
 
-        return await _retry_on_http_error(_do_post, label=f"POST {path}", max_attempts=max_retries)
+        return await self._retry(_do_post, label=f"POST {path}", max_attempts=max_retries)
 
 
 class AsyncRolloutWorker:
@@ -935,10 +1381,10 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available(min_version="0.17.1"):
-            raise ImportError(
-                "vLLM >= 0.17.1 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.17.1'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)
@@ -949,9 +1395,13 @@ class AsyncRolloutWorker:
         self._heartbeat_value = ctx.Value("d", 0.0)
         self._failed_event = ctx.Event()
         self._exception_info_queue = ctx.Queue(maxsize=1)
+        # Metrics the child measures, drained by the trainer in `log()`. Bounded and dropped-on-full in the child, so a
+        # trainer that stops draining can never block generation.
+        self.metrics_queue = ctx.Queue(maxsize=4096)
         # Forwarded verbatim to _AsyncRolloutLoop in the child. queue_maxsize is also
         # forwarded — the child reads it for "rollout buffer full" log lines.
         loop_kwargs["queue_maxsize"] = queue_maxsize
+        loop_kwargs.setdefault("dataset_start_index", 0)
         self._loop_kwargs = loop_kwargs
         self._child_ready_timeout = child_ready_timeout
         self._process: mp.Process | None = None
@@ -982,7 +1432,8 @@ class AsyncRolloutWorker:
             raise TypeError(
                 "AsyncRolloutWorker forwards reward_funcs / tools / environment_factory to a spawned "
                 "child process, so they must be picklable. Lambdas and closures are not: use a "
-                "module-level function, functools.partial, or a callable class instance instead."
+                "module-level function, functools.partial, or a callable class instance instead "
+                "(tools are registered under their __name__, so they must be module-level functions)."
             ) from e
         self._process = self._mp_ctx.Process(
             target=_child_main,
@@ -996,6 +1447,7 @@ class AsyncRolloutWorker:
                 self._heartbeat_value,
                 self._failed_event,
                 self._exception_info_queue,
+                self.metrics_queue,
             ),
             name="grpo-rollout-worker-child",
             daemon=True,

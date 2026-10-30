@@ -14,13 +14,13 @@
 
 from dataclasses import dataclass, field
 
-from ..distillation.distillation_config import DistillationConfig
+from ...trainer.distillation_config import DistillationConfig
 
 
 @dataclass
 class ServerDistillationConfig(DistillationConfig):
     r"""
-    Configuration class for the [`ServerDistillationTrainer`].
+    Configuration class for the [`experimental.server_distillation.ServerDistillationTrainer`].
 
     Extends [`DistillationConfig`] with the address of an external vLLM server that scores the student's completions.
     The teacher is never held locally: instead of a local forward pass, per-token teacher logprobs are fetched from the
@@ -87,11 +87,6 @@ class ServerDistillationConfig(DistillationConfig):
 
         if self.reverse_kl_top_1_mode not in {"sampled", "argmax"}:
             raise ValueError("reverse_kl_top_1_mode must be one of: 'sampled', 'argmax'")
-        if self.use_liger_kernel:
-            raise ValueError(
-                "use_liger_kernel=True is not supported by ServerDistillationTrainer because the Liger loss path "
-                "requires a local teacher model."
-            )
         if self.teacher_model_server_url is None or not self.teacher_model_server_url.strip():
             raise ValueError("teacher_model_server_url must be set for ServerDistillationTrainer.")
         if self.beta == 0 and self.loss_top_k < 1:

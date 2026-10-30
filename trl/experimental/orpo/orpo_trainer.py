@@ -27,9 +27,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
-from accelerate import PartialState
 from accelerate.logging import get_logger
-from accelerate.utils import is_peft_model
+from accelerate.utils import is_peft_model, set_seed
 from datasets import Dataset
 from packaging.version import Version
 from torch import autocast
@@ -56,6 +55,7 @@ from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     disable_dropout_in_model,
     get_config_model_id,
+    global_then_local_main_first,
     log_table_to_comet_experiment,
     selective_log_softmax,
 )
@@ -70,7 +70,6 @@ from .orpo_config import ORPOConfig
 
 
 if is_peft_available():
-    import peft
     from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
@@ -130,6 +129,8 @@ class ORPOTrainer(_BaseTrainer):
             metric values.
     """
 
+    loss_is_scaled_for_ga = False
+
     _tag_names = ["trl", "orpo"]
     _name = "ORPO"
     _paper = {
@@ -186,7 +187,11 @@ class ORPOTrainer(_BaseTrainer):
             model_init_kwargs["device_map"] = model_init_kwargs.get("device_map", "auto")
 
         model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+        model_revision = model_init_kwargs.get("revision") if isinstance(model, str) else None
 
+        # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
+        # reproducibility.
+        set_seed(args.seed)
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
 
@@ -247,17 +252,11 @@ class ORPOTrainer(_BaseTrainer):
             # - See:
             #   - TRL issue: https://github.com/huggingface/trl/issues/6089
             #   - Upstream issue: https://github.com/deepspeedai/DeepSpeed/issues/8072
-            # - autocast_adapter_dtype was introduced in PEFT 0.12.0; before, no upcast existed: no need to pass the kwarg
             _is_quantized_model = getattr(model, "is_loaded_in_4bit", False) or getattr(
                 model, "is_loaded_in_8bit", False
             )
             get_peft_model_kwargs = {}
-            if (
-                args.deepspeed_plugin is not None
-                and args.deepspeed_plugin.zero_stage == 3
-                and not _is_quantized_model
-                and Version(peft.__version__) >= Version("0.12.0")
-            ):
+            if args.deepspeed_plugin is not None and args.deepspeed_plugin.zero_stage == 3 and not _is_quantized_model:
                 get_peft_model_kwargs["autocast_adapter_dtype"] = False
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
             if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
@@ -298,7 +297,7 @@ class ORPOTrainer(_BaseTrainer):
 
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                get_config_model_id(model.config), trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if args.max_length is None:
             logger.warning(
@@ -358,9 +357,7 @@ class ORPOTrainer(_BaseTrainer):
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
-        # Compute that only on the main process for faster data processing.
-        # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().main_process_first():
+        with global_then_local_main_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
@@ -369,6 +366,13 @@ class ORPOTrainer(_BaseTrainer):
                 num_proc=args.dataset_num_proc,
             )
             train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            # Drop examples whose prompt alone fills `max_length`: truncation removes every completion token, leaving
+            # no learning signal
+            train_dataset = train_dataset.filter(
+                lambda example: any(label != -100 for label in example["chosen_labels"])
+                and any(label != -100 for label in example["rejected_labels"]),
+                num_proc=args.dataset_num_proc,
+            )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
                 eval_dataset = eval_dataset.map(
@@ -377,6 +381,13 @@ class ORPOTrainer(_BaseTrainer):
                     num_proc=args.dataset_num_proc,
                 )
                 eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                # Drop examples whose prompt alone fills `max_length`: truncation removes every completion token, leaving
+                # no learning signal
+                eval_dataset = eval_dataset.filter(
+                    lambda example: any(label != -100 for label in example["chosen_labels"])
+                    and any(label != -100 for label in example["rejected_labels"]),
+                    num_proc=args.dataset_num_proc,
+                )
 
         # Transformers explicitly set use_reentrant=True in the past to silence a PyTorch warning, but the default was
         # never updated once PyTorch switched to recommending use_reentrant=False. Until that change lands upstream
@@ -399,11 +410,6 @@ class ORPOTrainer(_BaseTrainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
-        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
-        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
-        # self.model_accepts_loss_kwargs to False to enable scaling.
-        self.model_accepts_loss_kwargs = False
 
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
@@ -537,13 +543,13 @@ class ORPOTrainer(_BaseTrainer):
                 self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
-            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
-
             # if combined sequence is too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if len(answer_tokens["prompt_input_ids"]) + len(answer_tokens["input_ids"]) > self.max_length:
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - longer_response_length]
+                        answer_tokens[k] = answer_tokens[k][
+                            : max(0, self.max_length - len(answer_tokens["prompt_input_ids"]))
+                        ]
 
             # Create labels
             chosen_sequence_tokens = {

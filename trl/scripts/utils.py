@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 # Temporarily import from the local module instead of transformers to avoid an upstream latency issue
-# See: https://github.com/huggingface/transformers/issues/44273
+# See https://github.com/huggingface/transformers/issues/44273
 # This workaround can be reverted once the fix is included in the minimum required transformers version
 from trl.scripts._hf_argparser import DataClass, DataClassType, HfArgumentParser
 
@@ -323,8 +323,10 @@ class TrlParser(HfArgumentParser):
             config_index = args.index("--config")
             args.pop(config_index)  # remove the --config flag
             config_path = args.pop(config_index)  # get the path to the config file
-            with open(config_path) as yaml_file:
+            with open(config_path, encoding="utf-8") as yaml_file:
                 config = yaml.safe_load(yaml_file)
+            if not isinstance(config, dict):
+                raise ValueError(f"Config file {config_path} must contain a YAML mapping.")
 
             # Set the environment variables specified in the config file
             if "env" in config:

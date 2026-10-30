@@ -32,6 +32,13 @@ from ..testing_utils import is_bf16_supported
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 
+# v3 (transformers >= 5.16 default) crashes in the backward when num_heads != num_heads_kv, see
+# https://github.com/huggingface/kernels-community/issues/1085. The pin selects the v2 branch, whose cu128 matrix
+# only covers torch 2.11 (https://github.com/huggingface/kernels-community/issues/1082), so a runner torch bump
+# fails at load with "no build variant". Drop once #1085 is fixed and the cu128 stable-ABI builds are rebuilt:
+# the nightly still resolves to 48628c8, the broken one.
+FA2_KERNEL = "kernels-community/flash-attn2@v2"
+
 SFT_DATASET = "trl-lib/Capybara"
 DPO_DATASET = "trl-lib/ultrafeedback_binarized"
 
@@ -108,7 +115,7 @@ def run(config: CorrectnessConfig) -> Trajectory:
         state_paths = list(Path(tmpdir).glob("**/trainer_state.json"))
         if not state_paths:
             raise RuntimeError(f"trainer_state.json not produced in {tmpdir}")
-        state = json.loads(state_paths[0].read_text())
+        state = json.loads(state_paths[0].read_text(encoding="utf-8"))
 
     steps = [
         StepRecord(
@@ -129,11 +136,11 @@ def run(config: CorrectnessConfig) -> Trajectory:
 
 def save(trajectory: Trajectory, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(trajectory), indent=2))
+    path.write_text(json.dumps(asdict(trajectory), indent=2), encoding="utf-8")
 
 
 def load(path: Path) -> Trajectory:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     return Trajectory(
         config=data["config"],
         env=data["env"],
@@ -191,9 +198,10 @@ def _build(
 
 # Equivalence classes: each maps to a `members` list plus per-field `tol` (max |Δ|) and `residual_tol` (mean Δ)
 # dicts. The first member is the canonical config — it owns the class's reference snapshot and is the only one
-# re-recorded under `--update-references`. Every other member is asserted to match that snapshot.
-# Tuning tip: run `python tests/invariant/test_invariant.py <klass> --report` to see actual Δs and set tolerances
-# to ~1.5–2× the observed noise.
+# re-recorded by `python -m tests.invariant.test_invariant <klass>`. Every other member is asserted to match that
+# snapshot.
+# Tuning tip: `pytest tests/invariant/ -m invariant -k <klass>` reports the observed max |Δ| per field when it
+# exceeds the tolerance; set tolerances to ~1.5-2x that noise.
 EQUIVALENCE_CLASSES: dict[str, dict] = {
     "sft": {
         "tol": {"loss": 1e-3, "grad_norm": 1e-1},
@@ -206,7 +214,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
         ],
     },
     "sft_fa2": {
-        # loss_type not pinned; this class exercises the current SFTConfig default ("chunked_nll").
+        # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
         # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
         # The grad_norm tol (5.0) is intentionally ~50× looser than the non-FA2 sft class (0.1): it is sized to the
         # FA2 varlen kernel noise observed in practice, not a regression budget. Do not tighten it without re-running
@@ -218,7 +226,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
@@ -227,7 +235,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2_padfree",
                 "sft",
                 SFT_DATASET,
-                attn="kernels-community/flash-attn2",  # to avoid cross-contamination between samples when padding_free=True
+                attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
                 per_device_train_batch_size=2,
