@@ -31,8 +31,8 @@ A Job gives you one container and one command, and MOPD needs five processes. Th
     vllm serve RL-Code   (GPU 2)   the code teacher, alone since code prompts are the longest
     async_distillation_mopd.py (GPU 3)   the training script, downloaded and run unmodified
 
-Every teacher gets a larger `--max-model-len` than the student: scoring sends the student's whole sequence plus one
-token. The two teachers on GPU 1 start one after the other, since vLLM sizes its cache from the memory free at
+Every teacher gets a larger `--max-model-len` than the student (64 tokens more): scoring sends the student's whole
+sequence plus one token. The two teachers on GPU 1 start one after the other, since vLLM sizes its cache from the memory free at
 startup.
 
 Requirements:
@@ -67,7 +67,7 @@ import urllib.request
 
 # Use --train-script-url to test an unmerged revision.
 TRAIN_SCRIPT_URL = "https://raw.githubusercontent.com/huggingface/trl/main/examples/async_distillation_math/async_distillation_mopd.py"
-CHECKPOINTS = "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B"
+MODEL_PREFIX = "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B"
 
 _children: list[subprocess.Popen] = []
 
@@ -139,7 +139,7 @@ def wait_for_vllm(url: str, proc: subprocess.Popen, log: pathlib.Path, deadline_
 
 def start_teacher(name: str, port: int, device: str, memory: float, args: argparse.Namespace, logs: pathlib.Path):
     cmd = [
-        "vllm", "serve", f"{CHECKPOINTS}-{name}",
+        "vllm", "serve", f"{MODEL_PREFIX}-{name}",
         "--port", str(port),
         "--max-model-len", str(args.max_model_len + 64),
         "--gpu-memory-utilization", str(memory),
@@ -152,8 +152,8 @@ def start_teacher(name: str, port: int, device: str, memory: float, args: argpar
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    # Prompt (the longest in the prompt mix is under 2048 tokens) + the script's max_completion_length (16384)
-    p.add_argument("--max-model-len", type=int, default=18432)
+    # Prompt (the longest in the prompt mix is 2583 tokens with the chat template) + max_completion_length (16384)
+    p.add_argument("--max-model-len", type=int, default=19456)
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
     p.add_argument("--logs", default="./logs")
     return p.parse_args()
@@ -187,7 +187,7 @@ def main() -> None:
     student_url = "http://127.0.0.1:8000"
     student_log = logs / "vllm-student.log"
     student_cmd = [
-        "vllm", "serve", f"{CHECKPOINTS}-MixSFT",
+        "vllm", "serve", f"{MODEL_PREFIX}-MixSFT",
         "--port", "8000",
         "--max-model-len", str(args.max_model_len),
         "--weight-transfer-config", '{"backend":"nccl"}',
@@ -213,7 +213,7 @@ def main() -> None:
     trainer = _spawn([sys.executable, str(script)], None, env={"CUDA_VISIBLE_DEVICES": "3"})
     rc = trainer.wait()
     print(f"[launcher] training exited {rc}", flush=True)
-    raise SystemExit(rc)
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
@@ -221,3 +221,4 @@ if __name__ == "__main__":
         main()
     finally:
         _cleanup()
+        sys.stdout.flush()

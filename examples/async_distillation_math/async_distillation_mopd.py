@@ -36,33 +36,33 @@ Start the teachers that share GPU 1 one after the other, since vLLM sizes its ca
 
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT \
     --port 8000 \
-    --max-model-len 18432 \
+    --max-model-len 19456 \
     --weight-transfer-config '{"backend":"nccl"}'
 
 CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math \
     --port 8001 \
-    --max-model-len 18496 \
+    --max-model-len 19520 \
     --gpu-memory-utilization 0.42 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF \
     --port 8003 \
-    --max-model-len 18496 \
+    --max-model-len 19520 \
     --gpu-memory-utilization 0.42 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code \
     --port 8002 \
-    --max-model-len 18496 \
+    --max-model-len 19520 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_math/async_distillation_mopd.py
 """
 
-from datasets import load_dataset
+from datasets import interleave_datasets, load_dataset
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
 
@@ -71,14 +71,20 @@ def main() -> None:
     dataset = load_dataset("BytedTsinghua-SIA/Open-MOPD-Data", data_files="rl_prompt_mix/train.parquet", split="train")
     # The prompts already carry each domain's system prompt, so only the domain label needs renaming
     dataset = dataset.select_columns(["prompt", "domain"]).rename_column("domain", "teacher_id").shuffle(seed=42)
+    # The raw mix is about half instruction following, so sample math, code and instruction following 40/40/20
+    dataset = interleave_datasets(
+        [dataset.filter(lambda row, d=domain: row["teacher_id"] == d) for domain in ("math", "code", "if")],
+        probabilities=[0.4, 0.4, 0.2],
+        seed=42,
+    )
 
     config = AsyncDistillationConfig(
         output_dir="async_distillation_mopd",
         per_device_train_batch_size=4,
         gradient_accumulation_steps=16,
         max_completion_length=16384,
-        beta=1.0,  # the paper's fusion stage minimizes reverse KL against the routed teacher
-        teacher_top_k=16,
+        beta=1.0,  # MOPD's fusion stage minimizes reverse KL against the routed teacher
+        teacher_top_k=1,  # with beta=1.0 only the teacher's logprob of the sampled token is used
         teacher_server_urls={
             "math": "http://localhost:8001",
             "code": "http://localhost:8002",
@@ -89,6 +95,7 @@ def main() -> None:
         request_timeout=3600,
         max_staleness=8,
         max_steps=90,
+        save_strategy="no",
         learning_rate=1.5e-6,
         lr_scheduler_type="constant",
         report_to="trackio",
