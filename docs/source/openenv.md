@@ -612,6 +612,9 @@ Some agents cannot be driven this way because they own their own loop. A product
 
 For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` that drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
 
+> [!NOTE]
+> This path requires `openenv>=0.7.0`, the first release with the `TrainingTrace` capture API: `pip install "openenv>=0.7.0"`.
+
 ### How it works
 
 TRL does not sample each turn here. The agent runs to completion on its own, and TRL reads back what it did:
