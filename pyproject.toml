@@ -51,7 +51,7 @@ trl = "trl.cli:main"
 
 [project.optional-dependencies]
 deepspeed = [
-    "deepspeed>=0.18.6",
+    "deepspeed>=0.19.8",
     "transformers!=5.1.0",  # see transformers#43780
 ]
 harbor = [
@@ -99,7 +99,7 @@ vlm = [
 ]
 dev = [
     # deepspeed
-    "deepspeed>=0.18.6",
+    "deepspeed>=0.19.8",
     # kernels: transformers renamed the "hub-kernels" extra to "kernels" in 5.1.0
     "transformers[kernels]",  # transformers >= 5.1.0
     "transformers[hub-kernels]",  # transformers < 5.1.0
