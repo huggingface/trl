@@ -573,6 +573,7 @@ class TestSupportsToolCalling:
                 ),
             ),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", id="gptoss"),
+            pytest.param("trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", id="granitemoehybrid"),
             pytest.param(
                 "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
                 id="lfm2-2.5",
