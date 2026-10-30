@@ -513,7 +513,7 @@ def _rollout_loop(**kwargs):
     return _AsyncRolloutLoop(**kwargs)
 
 
-def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_len=32768):
+def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
     loop = _rollout_loop(
         processing_class=tokenizer,
         teacher_server_urls=teacher_server_urls,
@@ -522,7 +522,7 @@ def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_len=32768):
     )
     # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
-    loop.teacher_max_model_lens = dict.fromkeys(teacher_server_urls, teacher_max_model_len)
+    loop.teacher_max_model_lens = teacher_max_model_lens or dict.fromkeys(teacher_server_urls, 32768)
     return loop
 
 
@@ -587,13 +587,13 @@ class TestMultiTeacherRouting:
     Multiple teachers enable MOPD: each row's `teacher_id` column selects among them; a missing or unmapped
     `teacher_id` is a configuration error, not a silent fallback. Each request must carry the URL *and* the served
     model id of the teacher it routes to, since `/v1/completions` names the model it addresses and every teacher serves
-    its own.
+    its own, and the sequence must fit that teacher's `max_model_len`.
     """
 
-    def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_len=32768):
+    def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_lens=None):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-        loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_len)
+        loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens)
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
@@ -645,10 +645,12 @@ class TestMultiTeacherRouting:
     def test_raises_when_the_teacher_has_no_room_to_score_the_sequence(self):
         (sample,), _ = self._run(ONE_TEACHER, None)
         sequence_length = len(sample.input_ids)
-        # Scoring asks for one throwaway token past the sequence, so a teacher needs one more position than its length
-        self._run(ONE_TEACHER, None, teacher_max_model_len=sequence_length + 1)
-        with pytest.raises(ValueError, match="--max-model-len"):
-            self._run(ONE_TEACHER, None, teacher_max_model_len=sequence_length)
+        # Scoring asks for one throwaway token past the sequence, so a teacher needs one more position than its length.
+        # Each row is checked against its own teacher's limit: math has room for this sequence, code does not.
+        max_model_lens = {"math": sequence_length + 1, "code": sequence_length}
+        self._run(TWO_TEACHERS, "math", teacher_max_model_lens=max_model_lens)
+        with pytest.raises(ValueError, match="'code'.*--max-model-len"):
+            self._run(TWO_TEACHERS, "code", teacher_max_model_lens=max_model_lens)
 
 
 class TestBetaRange:

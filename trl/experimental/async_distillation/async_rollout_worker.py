@@ -539,7 +539,7 @@ class _AsyncRolloutLoop:
 
         teacher_id, teacher_server_url = self._resolve_teacher_server_url(row)
         # Scoring sends the whole sequence and asks for one throwaway token. A teacher without room for that rejects
-        # the request with a 400 that `_retry` would keep retrying, so training would stall instead of failing.
+        # the request with a 400 that `_retry` retries for minutes before surfacing it without the cause.
         sequence_length = len(prompt_ids) + len(completion_ids)
         if sequence_length >= self.teacher_max_model_lens[teacher_id]:
             raise ValueError(

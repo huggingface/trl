@@ -55,7 +55,7 @@ trainer = AsyncDistillationTrainer(
 trainer.train()
 ```
 
-The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k` can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer enabled so the trainer can push updated weights into it. Scoring sends the student's whole sequence and asks the teacher for one more token, so if you set `--max-model-len`, give the teacher a larger one than the student:
+The teacher server, the student's vLLM server, and the trainer must run on **separate GPUs**. Both are plain `vllm serve` instances, but they need different flags: the teacher is only ever scored (`--logprobs-mode processed_logprobs` so `teacher_temperature` reaches its returned logprobs, `--max-logprobs -1` so `teacher_top_k` can exceed vLLM's default cap of 20), while the student is only ever generated from and needs NCCL weight transfer enabled so the trainer can push updated weights into it. Scoring sends the student's whole sequence and asks the teacher for one more token, so the teacher's `--max-model-len` (or its default) must be larger than the student's:
 
 ```bash
 # Terminal 1: teacher server on GPU 0 (static, never updated)
