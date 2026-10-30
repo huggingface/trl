@@ -531,7 +531,6 @@ class _AsyncRolloutLoop:
         self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=score_queue_maxsize)
         self._total_completion_tokens = 0
         self._total_groups_scored = 0
-        self._generation_start_time: float | None = None
         self.session: aiohttp.ClientSession | None = None
 
         self._loop = asyncio.new_event_loop()
@@ -702,7 +701,6 @@ class _AsyncRolloutLoop:
         work_iter = self._repeat_iterator()
         loop = asyncio.get_running_loop()
 
-        self._generation_start_time = time.monotonic()
         try:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
