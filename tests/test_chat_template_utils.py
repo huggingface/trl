@@ -36,6 +36,7 @@ from trl.chat_template_utils import (
     gemma4_v4_chat_template,
     gemma4_v5_chat_template,
     get_training_chat_template,
+    glm5_3_flash_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
@@ -376,6 +377,45 @@ class TestAddResponseSchema:
         response = tokenizer(completion, add_special_tokens=False).input_ids
         parsed = parse_response(tokenizer, response, prefix=prefix.input_ids)
         assert parsed == expected
+
+    @pytest.mark.parametrize("chat_template", [pytest.param(glm5_3_flash_chat_template, id="glm5.3-flash")])
+    @pytest.mark.parametrize(
+        "completion, expected",
+        [
+            pytest.param("</think>12<|user|>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                "Hmmm.</think>12<|user|>",
+                {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+                id="reasoning",
+            ),
+            pytest.param(
+                "</think><tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>"
+                "<|observation|>",
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}}
+                    ],
+                },
+                id="tool_calls",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Later GLM templates only get a new-style response template, which requires transformers>=5.13",
+    )
+    def test_add_response_schema_glm_think_prefill(self, chat_template, completion, expected):
+        # Later GLM generation prompts end with `<think>`, which rendered turns without reasoning lack, so the
+        # completion can't be sliced off a rendered conversation.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
+        tokenizer.chat_template = chat_template
+        tokenizer = add_response_schema(tokenizer)
+        messages = [{"role": "user", "content": "What is 3*4?"}]
+        prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        response = tokenizer(completion, add_special_tokens=False).input_ids
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
 
     @pytest.mark.parametrize(
         "completion, expected",
