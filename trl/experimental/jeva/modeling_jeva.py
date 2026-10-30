@@ -26,6 +26,7 @@ from huggingface_hub import snapshot_download
 from torch import nn
 from torch.distributed.nn.functional import all_gather, all_reduce
 from transformers import AutoModel, PreTrainedModel
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import ModelOutput
 
 from .configuration_jeva import JevaModelConfig
@@ -148,6 +149,8 @@ class JevaModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_flash_attn = True
     _no_split_modules = ["JevaDecisionBlock"]
+    _keep_in_fp32_modules = ["context_proj", "option_proj", "core"]
+    _keep_in_fp32_modules_strict = ["context_proj", "option_proj", "core"]
 
     def __init__(self, config, backbone=None):
         super().__init__(config)
@@ -159,6 +162,11 @@ class JevaModel(PreTrainedModel):
         self.context_proj = nn.Linear(config.backbone_config.hidden_size, config.projection_dim, bias=False)
         self.option_proj = nn.Linear(config.backbone_config.hidden_size, config.projection_dim, bias=False)
         self.core = JevaDecisionStack(config)
+        if is_deepspeed_zero3_enabled():
+            self._keep_in_fp32_modules = []
+            self._keep_in_fp32_modules_strict = []
+            for module in (self.context_proj, self.option_proj, self.core):
+                module.to(dtype=self.backbone.dtype)
         self.freeze_backbone = False
         self.router_aux_loss_coef = 0.0
         self.post_init()

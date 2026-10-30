@@ -185,12 +185,14 @@ class JevaTrainer(_BaseTrainer):
         if self._cp_group is None:
             return contextlib.nullcontext, inputs
         cp_size = self.accelerator.parallelism_config.cp_size
+        length = max(inputs[name]["input_ids"].shape[1] for name in ("state_inputs", "option_inputs"))
+        padded_length = length + (-length) % (2 * cp_size)
         buffers = []
         for name in ("state_inputs", "option_inputs"):
             values = dict(inputs[name])
             values["sequence_lengths"] = values["attention_mask"].sum(-1)
             length = values["input_ids"].shape[1]
-            pad_length = (-length) % (2 * cp_size)
+            pad_length = padded_length - length
             values["input_ids"] = F.pad(values["input_ids"], (0, pad_length), value=self.processing_class.pad_token_id)
             values["attention_mask"] = F.pad(values["attention_mask"], (0, pad_length))
             values["position_ids"] = (

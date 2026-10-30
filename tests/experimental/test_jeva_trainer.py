@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import os
 
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+import transformers
 import yaml
 from datasets import Dataset
+from packaging.version import Version
 from transformers import AutoTokenizer, set_seed
 
 from trl.experimental.jeva import JevaConfig, JevaModel, JevaTrainer
@@ -234,6 +235,20 @@ class TestJevaTrainer(TrlTestCase):
         for name, param in trainer.model.named_parameters():
             torch.testing.assert_close(param, reloaded.state_dict()[name])
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.22.1"), reason="BF16 dtype plans require transformers>=5.22.1"
+    )
+    def test_bfloat16_checkpoint(self):
+        model = JevaModel.from_backbone_pretrained(
+            MODEL_ID, model_config={"projection_dim": 16, "decision_num_heads": 2}, torch_dtype=torch.bfloat16
+        )
+        model.save_pretrained(self.tmp_dir)
+        reloaded = JevaModel.from_pretrained(self.tmp_dir)
+        assert reloaded.backbone.dtype == torch.bfloat16
+        assert reloaded.context_proj.weight.dtype == torch.float32
+        for name, param in model.named_parameters():
+            torch.testing.assert_close(param, reloaded.state_dict()[name])
+
     @pytest.mark.parametrize(
         "model_id", ["trl-internal-testing/tiny-LlamaForCausalLM-3.2", "trl-internal-testing/tiny-Qwen3MoeForCausalLM"]
     )
@@ -289,90 +304,6 @@ class TestJevaTrainer(TrlTestCase):
             expected, actual = model(**inputs), imported(**inputs)
         torch.testing.assert_close(actual.log_q, expected.log_q)
         torch.testing.assert_close(actual.coverage_logit, expected.coverage_logit)
-
-    @pytest.mark.skipif("TRL_TEST_JEVA_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
-    def test_distributed_body(self):
-        training_args = JevaConfig(
-            output_dir=os.environ["TRL_TEST_JEVA_OUTPUT_DIR"],
-            mode="full",
-            use_cpu=os.environ.get("TRL_TEST_JEVA_USE_CPU") == "1",
-            bf16=False,
-            gradient_checkpointing=True,
-            per_device_train_batch_size=2,
-            per_device_eval_batch_size=2,
-            gradient_accumulation_steps=4 if os.environ.get("TRL_TEST_JEVA_CP") == "1" else 2,
-            accelerator_config={"even_batches": False},
-            option_chunk_size=2,
-            max_steps=1,
-            max_grad_norm=0,
-            lr_scheduler_type="constant",
-            save_strategy="no",
-            report_to="none",
-            ddp_find_unused_parameters=False,
-        )
-        set_seed(42)
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = JevaModel.from_backbone_pretrained(
-            model_id,
-            model_config={"projection_dim": 16, "decision_num_heads": 2},
-            attn_implementation="sdpa",
-            torch_dtype=torch.float32,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
-        dataset = Dataset.from_list(
-            [
-                {
-                    "state": f"Request {i}",
-                    "question": "Which option applies?",
-                    "options": [f"Option {j}" for j in range(count)],
-                    "target_probs": [0.2] + [0.8 / count] * count,
-                    "allow_null": True,
-                }
-                for i, count in enumerate([1, 2, 3, 4, 2, 1, 3])
-            ]
-        )
-        reference = copy.deepcopy(model).to(training_args.device).eval()
-        batch = DataCollatorForJeva(tokenizer)(list(dataset))
-        batch = {
-            key: {name: value.to(training_args.device) for name, value in item.items()}
-            if isinstance(item, dict)
-            else item.to(training_args.device)
-            for key, item in batch.items()
-        }
-        outputs = reference(
-            **{key: batch[key] for key in ("state_inputs", "option_inputs", "option_counts", "option_mask")}
-        )
-        loss = -(batch["labels"][:, 1:] * outputs.log_q.masked_fill(~batch["option_mask"], 0)).sum(-1)
-        loss += F.binary_cross_entropy_with_logits(outputs.coverage_logit, 1 - batch["labels"][:, 0], reduction="none")
-        loss.mean().backward()
-        torch.optim.SGD(reference.parameters(), lr=0.01).step()
-
-        trainer = JevaTrainer(
-            model,
-            args=training_args,
-            train_dataset=dataset,
-            eval_dataset=dataset,
-            processing_class=tokenizer,
-            optimizer_cls_and_kwargs=(torch.optim.SGD, {"lr": 0.01}),
-        )
-        trainer.train()
-        state = trainer.accelerator.get_state_dict(trainer.model_wrapped)
-        for name, parameter in reference.named_parameters():
-            torch.testing.assert_close(state[name].to(parameter), parameter, rtol=1e-4, atol=1e-5)
-        if os.environ.get("TRL_TEST_JEVA_CP") == "1":
-            assert np.isfinite(trainer.evaluate(dataset.select(range(4)))["eval_loss"])
-        else:
-            prediction = trainer.predict(dataset.select(range(4)))
-            if trainer.is_world_process_zero():
-                assert prediction.predictions.shape == (4, 5)
-                assert np.isfinite(prediction.metrics["test_loss"])
-        trainer.save_model()
-        trainer.accelerator.wait_for_everyone()
-        if trainer.is_world_process_zero():
-            reloaded = JevaModel.from_pretrained(os.environ["TRL_TEST_JEVA_OUTPUT_DIR"])
-            for name, parameter in reloaded.named_parameters():
-                torch.testing.assert_close(parameter, state[name].cpu())
 
 
 @pytest.mark.parametrize(

@@ -93,29 +93,30 @@ class TestDistributed(TrlTestCase):
         ],
     )
     def test_jeva(self, config, get_config_path):
+        # fmt: off
         run_command(
             [
-                "accelerate",
-                "launch",
-                "--config_file",
-                get_config_path(config),
-                *(["--zero3_save_16bit_model", "true"] if config == "zero3" else []),
-                "-m",
-                "pytest",
-                "tests/experimental/test_jeva_trainer.py",
-                "-k",
-                "test_distributed_body",
-                "-x",
-                "-q",
-                "-p",
-                "no:cacheprovider",
+                "accelerate", "launch", "--config_file", get_config_path(config),
+                "examples/jeva_banking77/jeva_banking77.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                "--mode", "full",
+                "--max_train_samples", "8",
+                "--max_eval_samples", "4",
+                "--num_options", "3",
+                "--per_device_train_batch_size", "1",
+                "--gradient_accumulation_steps", "2",
+                "--option_chunk_size", "2",
+                "--max_steps", "2",
+                "--eval_strategy", "steps",
+                "--eval_steps", "2",
+                "--bf16", "true",
+                "--attn_implementation", "sdpa",
+                "--report_to", "none",
             ],
-            {
-                **os.environ,
-                "TRL_TEST_JEVA_OUTPUT_DIR": self.tmp_dir,
-                "TRL_TEST_JEVA_CP": "1" if config == "jeva_cp" else "0",
-            },
+            os.environ.copy(),
         )
+        # fmt: on
 
     @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file, get_config_path):

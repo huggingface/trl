@@ -111,12 +111,10 @@ def main(script_args, training_args, model_args):
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
-        compute_metrics=compute_metrics,
     )
-    if training_args.eval_strategy != "no":
-        metrics = trainer.evaluate(metric_key_prefix="initial_eval")
-        trainer.log_metrics("initial_eval", metrics)
-        trainer.save_metrics("initial_eval", metrics)
+    parallelism_config = trainer.accelerator.parallelism_config
+    if parallelism_config is None or not parallelism_config.cp_enabled:
+        trainer.compute_metrics = compute_metrics
     result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
     trainer.save_model(training_args.output_dir)
     trainer.save_metrics("train", result.metrics)

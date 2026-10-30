@@ -75,7 +75,7 @@ For expert or tensor parallelism, save a JevaModel first, then load the complete
 with `ep_size=tp_size`. Token-dispatch EP is rejected until Transformers Trainer supports it. Follow Transformers'
 checkpoint restrictions for models sharded at load time.
 
-Torch context parallelism requires FSDP2, `cp_size > 1`, SDPA, and Transformers 5.22.1 or newer.
+Torch context parallelism uses FSDP2, `cp_size > 1`, BF16, SDPA, and Transformers 5.22.1 or newer.
 The trainer shards state and option sequences and reduces pooled representations across context ranks. Evaluation
 supports `eval_loss` only; prediction gathering and `compute_metrics` are unavailable. This works
 with full causal attention encoders; recurrent, sliding-window, and chunked-attention encoders are excluded.
