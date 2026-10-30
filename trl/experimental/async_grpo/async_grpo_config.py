@@ -140,6 +140,12 @@ class AsyncGRPOConfig(_BaseConfig):
             sample can ever exceed the budget. A sample longer than `token_budget` fits in no row and is dropped with a
             warning. Set `<= 0` to disable token budgeting and instead pack a fixed `per_device_train_batch_size ×
             num_processes` samples per micro-batch, balanced across the rows.
+        tree_attn_kernel_kwargs (`dict[str, Any]` or `str`, *optional*):
+            Keyword arguments for `kernels.get_kernel`, used to load the FlashAttention kernel tree packing runs on,
+            e.g. `{"revision": "<commit>"}` to pick a build other than the default. The kernel itself is chosen by
+            device: `kernels-community/aiter-flash-attn` on ROCm, `kernels-community/flash-attn4` on Blackwell GPUs
+            (compute capability 10 and above), `kernels-community/flash-attn3` otherwise. If `None`, each is loaded at
+            the version tree packing is tested with.
 
         > Parameters that control the async rollout pipeline
 
@@ -190,7 +196,11 @@ class AsyncGRPOConfig(_BaseConfig):
     >   decaying schedule together with an explicit `max_steps`.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "chat_template_kwargs"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "chat_template_kwargs",
+        "tree_attn_kernel_kwargs",
+    ]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
@@ -396,6 +406,14 @@ class AsyncGRPOConfig(_BaseConfig):
             "dropped with a warning. Set <= 0 to disable token budgeting and instead pack a fixed "
             "`per_device_train_batch_size × num_processes` samples per micro-batch, attention-cost-balanced across "
             "the rows."
+        },
+    )
+    tree_attn_kernel_kwargs: dict[str, Any] | str | None = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `kernels.get_kernel`, used to load the FlashAttention kernel tree packing "
+            'runs on, e.g. `{"revision": "<commit>"}` to pick a build other than the default. If None, the '
+            "device's kernel is loaded at the version tree packing is tested with."
         },
     )
 

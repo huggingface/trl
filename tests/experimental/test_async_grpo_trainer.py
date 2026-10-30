@@ -35,13 +35,20 @@ from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
 from safetensors import safe_open
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
+from transformers import (
+    AttentionInterface,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    PreTrainedModel,
+)
 from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("transformers", minversion="5.2.0")
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer, packing
 from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -1732,6 +1739,21 @@ class TestTreePackingParity(TrlTestCase):
             torch.cat([g.flatten() for g in run.values()]) for run in (packed_grads, alone_grads)
         )
         assert (packed_grads - alone_grads).norm() < 2e-2 * alone_grads.norm()
+
+
+def test_tree_attn_kernel_kwargs_reach_get_kernel():
+    # `get_kernel` downloads the kernel from the Hub, so it is the one thing faked here
+    pytest.importorskip("kernels")
+    packing.register_tree_attention({"revision": "abc123"})
+    try:
+        kernel_kwargs = AttentionInterface._global_mapping[TREE_ATTENTION].keywords["kernel_kwargs"]
+        packing._flash_attn.cache_clear()
+        with patch("kernels.get_kernel") as get_kernel:
+            packing._flash_attn(kernel_kwargs)
+        assert get_kernel.call_args.kwargs == {"revision": "abc123"}
+    finally:
+        packing._flash_attn.cache_clear()
+        packing.register_tree_attention()
 
 
 class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
