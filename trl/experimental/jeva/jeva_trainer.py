@@ -250,6 +250,7 @@ class JevaTrainer(_BaseTrainer):
             predicted = probabilities.argmax(-1)
             target = inputs["labels"].argmax(-1)
             hard_choice = inputs["is_choice"] & (inputs["labels"].max(-1).values == 1)
+            present = hard_choice & (target != 0)
             predicted_null = (predicted == 0) & hard_choice
             target_null = (target == 0) & hard_choice
             true_null = predicted_null & target_null
@@ -258,6 +259,7 @@ class JevaTrainer(_BaseTrainer):
                 "candidate_loss": (candidate_loss.detach(), ones),
                 "coverage_loss": (coverage_loss.detach() * inputs["allow_null"], ones),
                 "choice_accuracy": ((predicted == target) & hard_choice, hard_choice),
+                "candidate_accuracy": ((outputs.log_q.argmax(-1) + 1 == target) & present, present),
                 "null_precision": (true_null, predicted_null),
                 "null_recall": (true_null, target_null),
                 "null_rate": ((predicted == 0) & inputs["allow_null"], inputs["allow_null"]),

@@ -94,10 +94,11 @@ The loss combines candidate cross entropy with coverage cross entropy for null-e
 equal weight, regardless of its option count. Predictions and targets have null in the first column; evaluation
 pads missing candidate columns with `-100`, which should be masked in `compute_metrics`.
 
-The trainer logs `candidate_loss`, `coverage_loss`, `choice_accuracy`, `null_precision`, `null_recall`, `null_rate`,
+The trainer logs `candidate_loss`, `coverage_loss`, `choice_accuracy`, `candidate_accuracy`, `null_precision`, `null_recall`, `null_rate`,
 `brier`, `null_brier`, and `entropy` during training and evaluation. Coverage loss is the null-enabled contribution
 averaged over all decisions; it adds to candidate loss to give the decision loss. Choice accuracy and null
-precision/recall use hard Choice labels only. Null rate and null Brier error use null-enabled rows. Ratios with no
+precision/recall use hard Choice labels only. Candidate accuracy measures selection among candidates on answer-present
+hard Choice rows. Null rate and null Brier error use null-enabled rows. Ratios with no
 eligible examples are zero. Metrics are aggregated across ranks and batches. Set `report_to="trackio"` to track them.
 
 ## Usage tips

@@ -201,6 +201,10 @@ class TestJevaTrainer(TrlTestCase):
         assert metrics["eval_choice_accuracy"] == pytest.approx(
             ((predicted == target) & hard_choice).sum().item() / hard_choice.sum().item()
         )
+        present = hard_choice & (target != 0)
+        assert metrics["eval_candidate_accuracy"] == pytest.approx(
+            ((outputs.log_q.argmax(-1) + 1 == target) & present).sum().item() / present.sum().item()
+        )
         assert metrics["eval_null_precision"] == pytest.approx(true_null / max(predicted_null.sum().item(), 1))
         assert metrics["eval_null_recall"] == pytest.approx(true_null / target_null.sum().item())
         assert metrics["eval_null_rate"] == pytest.approx(
