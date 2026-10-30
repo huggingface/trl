@@ -33,6 +33,14 @@ from transformers.utils import ModelOutput
 from .configuration_jeva import JevaModelConfig
 
 
+def _log_softmax(logits):
+    logits = logits.float()
+    maximum = logits.argmax(dim=-1, keepdim=True)
+    shifted = (logits - logits.gather(-1, maximum)).scatter(-1, maximum, 0.0)
+    others = shifted.exp().scatter(-1, maximum, 0.0)
+    return shifted - torch.log1p(others.sum(dim=-1, keepdim=True))
+
+
 class JevaPositiveScalar(nn.Module):
     def __init__(self, value, minimum):
         super().__init__()
@@ -85,7 +93,9 @@ class JevaDecisionBlock(nn.Module):
         queries = self.q_proj(z).reshape(batch_size, self.num_heads, self.head_dim)
         queries = F.normalize(queries.float(), dim=-1)
         logits = torch.einsum("bhd,bkhd->bhk", queries, keys.float())
-        attention = F.softmax((logits / self.tau_set().float()).masked_fill(~option_mask[:, None], -torch.inf), dim=-1)
+        attention = _log_softmax(
+            (logits / self.tau_set().float()).masked_fill(~option_mask[:, None], -torch.inf)
+        ).exp()
         attention = torch.where(option_mask[:, None], attention, torch.zeros_like(attention))
         message = torch.einsum("bhk,bkhd->bhd", attention, values.float()).reshape(batch_size, self.dim)
         message = self.o_proj(message.to(self.o_proj.weight.dtype)).to(z.dtype)
@@ -114,7 +124,7 @@ class JevaDecisionStack(nn.Module):
             z = block(z, options, option_mask)
         scores = torch.einsum("bd,bkd->bk", self.final_norm(z).float(), options.float())
         masked_scores = scores.masked_fill(~option_mask, -torch.inf)
-        log_q = F.log_softmax((scores / self.tau_dec().float()).masked_fill(~option_mask, -torch.inf), dim=-1)
+        log_q = _log_softmax((scores / self.tau_dec().float()).masked_fill(~option_mask, -torch.inf))
         coverage_logit = (masked_scores.max(dim=-1).values - self.coverage_bias.float()) / self.tau_cov().float()
         return log_q, coverage_logit
 

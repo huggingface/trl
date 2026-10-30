@@ -35,6 +35,10 @@ from .jeva_config import JevaConfig
 from .modeling_jeva import JevaModel
 
 
+def _coverage_loss(logits, targets):
+    return targets * F.softplus(-logits) + (1 - targets) * F.softplus(logits)
+
+
 class JevaTrainer(_BaseTrainer):
     """
     Trainer for [Jeva: System One Models from First Principles](https://huggingface.co/papers/2610.18773).
@@ -227,9 +231,7 @@ class JevaTrainer(_BaseTrainer):
         candidates = inputs["labels"][:, 1:].float()
         log_q = outputs.log_q.float().masked_fill(~inputs["option_mask"], 0.0)
         candidate_loss = -(candidates * log_q).sum(-1)
-        coverage_loss = F.binary_cross_entropy_with_logits(
-            outputs.coverage_logit.float(), candidates.sum(-1), reduction="none"
-        )
+        coverage_loss = _coverage_loss(outputs.coverage_logit.float(), candidates.sum(-1))
         per_example_loss = candidate_loss + coverage_loss * inputs["allow_null"]
         count = len(per_example_loss) if num_items_in_batch is None else num_items_in_batch
         loss = per_example_loss.sum() / count

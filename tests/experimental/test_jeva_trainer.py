@@ -26,11 +26,38 @@ from transformers import AutoTokenizer, set_seed
 
 from trl.experimental.jeva import JevaConfig, JevaModel, JevaTrainer
 from trl.experimental.jeva.data import DataCollatorForJeva
+from trl.experimental.jeva.jeva_trainer import _coverage_loss
+from trl.experimental.jeva.modeling_jeva import _log_softmax
 
 from ..testing_utils import TrlTestCase, require_peft
 
 
 MODEL_ID = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+
+
+def test_confident_gradients():
+    logits = torch.tensor(
+        [[9.0, -9.0, -9.0], [2.0, 1.0, -torch.inf], [3.0, -torch.inf, -torch.inf]], requires_grad=True
+    )
+    reference = logits.detach().double().requires_grad_(True)
+    loss = -_log_softmax(logits)[:, 0].sum()
+    expected = -reference.log_softmax(-1)[:, 0].sum()
+    (gradient,) = torch.autograd.grad(loss, logits)
+    (expected_gradient,) = torch.autograd.grad(expected, reference)
+    torch.testing.assert_close(gradient.double(), expected_gradient, rtol=1e-6, atol=1e-14)
+    assert gradient[0, 0] < 0
+    torch.testing.assert_close(gradient.sum(-1), torch.zeros(3), atol=1e-8, rtol=0)
+
+    coverage = torch.tensor([18.0, -18.0], requires_grad=True)
+    targets = torch.tensor([1.0, 0.0])
+    reference = coverage.detach().double().requires_grad_(True)
+    loss = _coverage_loss(coverage, targets).sum()
+    expected = F.binary_cross_entropy_with_logits(reference, targets.double(), reduction="sum")
+    (gradient,) = torch.autograd.grad(loss, coverage)
+    (expected_gradient,) = torch.autograd.grad(expected, reference)
+    torch.testing.assert_close(loss.double(), expected, rtol=1e-6, atol=1e-14)
+    torch.testing.assert_close(gradient.double(), expected_gradient, rtol=1e-6, atol=1e-14)
+    assert gradient[0] < 0 < gradient[1]
 
 
 @pytest.fixture

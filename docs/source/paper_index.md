@@ -1939,6 +1939,8 @@ Identifies softmax collapse at high-confidence predictions and cancellation when
 agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
 probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
 KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+[`experimental.jeva.JevaTrainer`] uses stable log-softmax in its decision head and signed softplus terms for coverage
+cross-entropy to preserve gradients for confident decisions.
 
 Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
 identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
