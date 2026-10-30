@@ -16,6 +16,7 @@
 
 import asyncio
 import itertools
+import multiprocessing as mp
 import queue
 import threading
 import time
@@ -26,11 +27,19 @@ from unittest.mock import MagicMock
 
 import pytest
 from accelerate import PartialState
+from transformers import AutoTokenizer
 
 
 pytest.importorskip("openenv.core.harness.training")
 
-from openenv.core.harness import HarnessRolloutResult, MCPHarnessAdapter, ToolResult, ToolTraceEntry, TrainingTrace
+from openenv.core.harness import (
+    HarnessRolloutResult,
+    MCPHarnessAdapter,
+    ToolResult,
+    ToolTraceEntry,
+    TrainingTrace,
+    VerifyResult,
+)
 
 from trl.experimental.async_grpo import openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
@@ -111,7 +120,7 @@ def make_loop():
 
     def make(factory=None, *, factory_builder=None, **kwargs):
         kwargs.setdefault("temperature", 0.8)
-        tokenizer = MagicMock(eos_token_id=0, pad_token_id=0)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         loop = openenv_harness._HarnessRolloutLoop(
             harness_session_factory=factory_builder or (lambda **kwargs: factory),
             model_name="test",
@@ -120,8 +129,8 @@ def make_loop():
             processing_class=tokenizer,
             eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
-            model_version_value=SimpleNamespace(value=0),
-            heartbeat_value=SimpleNamespace(value=0.0),
+            model_version_value=mp.Value("i", 0),
+            heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
             metrics_queue=queue.Queue(),
@@ -160,7 +169,7 @@ class Session:
         return TrainingTrace.from_entries([row])
 
     def verify(self, completion):
-        return SimpleNamespace(env_reward=0.25)
+        return VerifyResult(env_reward=0.25)
 
     def close(self):
         self.closed.set()
@@ -231,6 +240,17 @@ def test_transport_failures_remain_unscorable(make_loop, phase):
         assert session.closed.is_set()
 
 
+def test_persistent_session_failures_stop_the_worker(make_loop):
+    def create(*args, **kwargs):
+        raise ConnectionError("harness server unavailable")
+
+    loop = make_loop(SimpleNamespace(create=create), max_session_backoff_s=0)
+    with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
+        loop.run()
+    assert loop._failed_event.is_set()
+    assert loop.rollout_buffer.empty()
+
+
 def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session = Session(captured_entry())
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
@@ -254,7 +274,13 @@ def test_capture_error_closes_other_inflight_sessions(make_loop):
     blocking.wait_for_completion = wait
     broken = Session(captured_entry())
     broken.row["prompt_token_ids"] = []
-    broken.wait_for_completion = lambda: started.wait(3)
+
+    def wait_then_exit_cleanly():
+        started.wait(3)
+        # A capture rejected after a non-zero exit is unscorable, not fatal
+        return 0
+
+    broken.wait_for_completion = wait_then_exit_cleanly
     sessions = iter([blocking, broken])
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: next(sessions)))
     with pytest.raises(openenv_harness.CaptureContractError):
@@ -306,7 +332,6 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     loop = make_loop(
         SimpleNamespace(create=lambda *args, **kwargs: Session(captured_entry())), harness_adapter=Adapter()
     )
-    loop.tokenizer.apply_chat_template = MagicMock(return_value=[1])
 
     async def generate_one_turn(prompt_ids):
         return [2, 3], [-0.1, -0.2], None, None
@@ -348,7 +373,7 @@ def test_harness_worker_produces_scored_training_samples(make_loop):
     def create(*args, **kwargs):
         reward = float(next(indices) % 2)
         session = Session(captured_entry())
-        session.verify = lambda completion: SimpleNamespace(env_reward=reward)
+        session.verify = lambda completion: VerifyResult(env_reward=reward)
         return session
 
     loop = make_loop(SimpleNamespace(create=create))
@@ -371,8 +396,8 @@ def test_harness_worker_produces_scored_training_samples(make_loop):
     loop._loop.run_until_complete(run())
     rows = [loop.rollout_buffer.get_nowait() for _ in range(8)]
     assert {row.group_id for row in rows} == {0}
-    assert all(row.input_ids == [1, 2, 3] and row.completion_mask == [0, 1, 0] for row in rows)
-    assert all(row.old_log_probs == [0.0, -0.1, -0.2] for row in rows)
+    assert all(row.input_ids.tolist() == [1, 2, 3] and row.completion_mask.tolist() == [0, 1, 0] for row in rows)
+    assert all(row.old_log_probs.tolist() == pytest.approx([0.0, -0.1, -0.2]) for row in rows)
     assert min(row.advantage for row in rows) < 0 < max(row.advantage for row in rows)
 
 
