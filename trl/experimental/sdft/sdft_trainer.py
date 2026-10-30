@@ -210,7 +210,6 @@ class SDFTTrainer(_BaseTrainer):
 
     _tag_names = ["trl", "sdft"]
     _name = "SDFT"
-    config_cls = SDFTConfig
     # docstyle-ignore
     _paper = {
         "title": "Self-Distillation Enables Continual Learning",
