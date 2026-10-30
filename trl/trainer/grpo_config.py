@@ -326,7 +326,8 @@ class GRPOConfig(_BaseConfig):
             and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
             the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
             later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1` and
-            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`).
+            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`). vLLM also applies `repetition_penalty` to the logprobs
+            it returns, so `repetition_penalty != 1.0` requires `vllm_importance_sampling_correction=False`.
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -933,7 +934,9 @@ class GRPOConfig(_BaseConfig):
             "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
             "logprobs are normalized over the candidate set each token was sampled from, which requires "
             '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
-            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`)."
+            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`). vLLM "
+            "also applies `repetition_penalty` to the logprobs it returns, so `repetition_penalty != 1.0` requires "
+            "`vllm_importance_sampling_correction=False`."
         },
     )
     vllm_importance_sampling_mode: str = field(
@@ -1092,6 +1095,13 @@ class GRPOConfig(_BaseConfig):
                 "`vllm_importance_sampling_correction=False`."
             )
 
+        if self.use_vllm and self.vllm_importance_sampling_correction and self.repetition_penalty != 1.0:
+            raise ValueError(
+                "`repetition_penalty != 1.0` needs `vllm_importance_sampling_correction=False`: vLLM applies the "
+                "penalty to the log-probs it returns and the trainer does not, so the importance sampling ratios are "
+                "biased."
+            )
+
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 
         if self.log_completions_hub_repo is not None and not self.log_completions:
@@ -1185,11 +1195,4 @@ class GRPOConfig(_BaseConfig):
             raise ValueError(
                 "At least one of `vllm_importance_sampling_clip_min` or `vllm_importance_sampling_clip_max` "
                 "must be set when `vllm_importance_sampling_mode` is a `*_truncate` mode."
-            )
-
-        if self.use_vllm and self.vllm_importance_sampling_correction and self.repetition_penalty != 1.0:
-            raise ValueError(
-                "`repetition_penalty != 1.0` needs `vllm_importance_sampling_correction=False`: vLLM applies the "
-                "penalty to the log-probs it returns and the trainer does not, so the importance sampling ratio "
-                "collapses to 0."
             )
