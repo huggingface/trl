@@ -2615,3 +2615,23 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.eos_token_id == eos_token_id
         # The model's own eos tokens are kept, since any of them halts generation
         assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
+
+    @pytest.mark.parametrize(
+        "trainer_cls, topic",
+        [
+            (SFTTrainer, "trl/SFTTrainer"),
+            # A subclass, like a copy of the trainer's code (e.g. Unsloth's `UnslothSFTTrainer`), keeps its `_name`
+            (type("MySFTTrainer", (SFTTrainer,), {}), "trl/SFTTrainer"),
+            (type("MySFTTrainer", (SFTTrainer,), {"_name": "My SFT"}), "trl/other"),
+        ],
+    )
+    def test_telemetry_topic(self, trainer_cls, topic, monkeypatch):
+        # Telemetry is off in CI, and `send_telemetry` would reach the Hub
+        monkeypatch.delenv("CI", raising=False)
+        sent = []
+        monkeypatch.setattr("trl.trainer.base_trainer.send_telemetry", lambda **kwargs: sent.append(kwargs))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer_cls(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset)
+
+        assert [kwargs["topic"] for kwargs in sent] == [topic]
