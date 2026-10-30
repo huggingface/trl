@@ -27,87 +27,98 @@ from huggingface_hub import snapshot_download
 from torch import nn
 from torch.distributed.nn.functional import all_gather, all_reduce
 from transformers import AutoModel, PreTrainedModel
+from transformers.activations import ACT2FN
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import ModelOutput
 
 from .configuration_jeva import JevaModelConfig
 
 
-def _log_softmax(logits):
+def _log_softmax(logits: torch.Tensor) -> torch.Tensor:
     logits = logits.float()
-    maximum = logits.argmax(dim=-1, keepdim=True)
-    shifted = (logits - logits.gather(-1, maximum)).scatter(-1, maximum, 0.0)
-    others = shifted.exp().scatter(-1, maximum, 0.0)
-    return shifted - torch.log1p(others.sum(dim=-1, keepdim=True))
+    max_indices = logits.argmax(dim=-1, keepdim=True)
+    shifted_logits = (logits - logits.gather(-1, max_indices)).scatter(-1, max_indices, 0.0)
+    exp_others = shifted_logits.exp().scatter(-1, max_indices, 0.0)
+    return shifted_logits - torch.log1p(exp_others.sum(dim=-1, keepdim=True))
 
 
 class JevaPositiveScalar(nn.Module):
-    def __init__(self, value, minimum):
+    def __init__(self, value: float, minimum: float) -> None:
         super().__init__()
         self.minimum = minimum
         self.initial_value = math.log(math.expm1(max(value - minimum, 1e-6)))
         self.raw = nn.Parameter(torch.tensor([self.initial_value]))
 
-    def forward(self):
+    def forward(self) -> torch.Tensor:
         return self.minimum + F.softplus(self.raw)
 
 
 class JevaSwiGLU(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: JevaModelConfig) -> None:
         super().__init__()
-        dim = config.projection_dim
-        width = round(dim * config.decision_ffn_ratio)
-        self.gate_proj = nn.Linear(dim, width, bias=False)
-        self.up_proj = nn.Linear(dim, width, bias=False)
-        self.down_proj = nn.Linear(width, dim, bias=False)
+        self.hidden_size = config.projection_dim
+        self.intermediate_size = round(self.hidden_size * config.decision_ffn_ratio)
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.act_fn = ACT2FN["silu"]
         self.dropout = nn.Dropout(config.decision_dropout)
         self.zero_init_output = config.decision_zero_init_ffn
 
-    def forward(self, x):
-        return self.dropout(self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x)))
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.act_fn(self.gate_proj(hidden_states)) * self.up_proj(hidden_states)
+        hidden_states = self.down_proj(hidden_states)
+        return self.dropout(hidden_states)
 
 
 class JevaDecisionBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: JevaModelConfig) -> None:
         super().__init__()
-        self.dim = config.projection_dim
+        self.hidden_size = config.projection_dim
         self.num_heads = config.decision_num_heads
-        self.head_dim = self.dim // self.num_heads
+        self.head_dim = self.hidden_size // self.num_heads
         self.depth_scale = 1 / math.sqrt(config.decision_depth)
-        self.q_proj = nn.Linear(self.dim, self.dim, bias=False)
-        self.k_proj = nn.Linear(self.dim, self.dim, bias=False)
-        self.v_proj = nn.Linear(self.dim, self.dim, bias=False)
-        self.o_proj = nn.Linear(self.dim, self.dim, bias=False)
+        self.q_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
         self.tau_set = JevaPositiveScalar(config.tau_set_init, config.min_temperature)
         ratio = min(max(config.alpha_over_tau_init, 1e-4), 1 - 1e-4)
         self.initial_gamma = math.log(ratio / (1 - ratio))
         self.gamma = nn.Parameter(torch.tensor([self.initial_gamma]))
-        self.ffn_norm = nn.RMSNorm(self.dim, eps=1e-6) if config.decision_ffn_ratio > 0 else None
+        self.ffn_norm = nn.RMSNorm(self.hidden_size, eps=1e-6) if config.decision_ffn_ratio > 0 else None
         self.ffn = JevaSwiGLU(config) if config.decision_ffn_ratio > 0 else None
 
-    def forward(self, z, options, option_mask):
-        batch_size, num_options = options.shape[:2]
-        keys = self.k_proj(options).reshape(batch_size, num_options, self.num_heads, self.head_dim)
-        values = self.v_proj(options).reshape(batch_size, num_options, self.num_heads, self.head_dim)
-        keys = F.normalize(keys.float(), dim=-1)
-        queries = self.q_proj(z).reshape(batch_size, self.num_heads, self.head_dim)
-        queries = F.normalize(queries.float(), dim=-1)
-        logits = torch.einsum("bhd,bkhd->bhk", queries, keys.float())
-        attention = _log_softmax(
-            (logits / self.tau_set().float()).masked_fill(~option_mask[:, None], -torch.inf)
+    def forward(
+        self, hidden_states: torch.Tensor, option_states: torch.Tensor, option_mask: torch.Tensor
+    ) -> torch.Tensor:
+        residual = hidden_states
+        batch_size, num_options = option_states.shape[:2]
+        key_states = self.k_proj(option_states).reshape(batch_size, num_options, self.num_heads, self.head_dim)
+        value_states = self.v_proj(option_states).reshape(batch_size, num_options, self.num_heads, self.head_dim)
+        key_states = F.normalize(key_states.float(), dim=-1)
+        query_states = self.q_proj(hidden_states).reshape(batch_size, self.num_heads, self.head_dim)
+        query_states = F.normalize(query_states.float(), dim=-1)
+        attn_weights = torch.einsum("bhd,bkhd->bhk", query_states, key_states)
+        attn_weights = _log_softmax(
+            (attn_weights / self.tau_set().float()).masked_fill(~option_mask[:, None], -torch.inf)
         ).exp()
-        attention = torch.where(option_mask[:, None], attention, torch.zeros_like(attention))
-        message = torch.einsum("bhk,bkhd->bhd", attention, values.float()).reshape(batch_size, self.dim)
-        message = self.o_proj(message.to(self.o_proj.weight.dtype)).to(z.dtype)
+        attn_weights = torch.where(option_mask[:, None], attn_weights, torch.zeros_like(attn_weights))
+        attn_output = torch.einsum("bhk,bkhd->bhd", attn_weights, value_states.float())
+        attn_output = attn_output.reshape(batch_size, self.hidden_size)
+        attn_output = self.o_proj(attn_output.to(self.o_proj.weight.dtype)).to(residual.dtype)
         alpha = self.tau_set() * torch.sigmoid(self.gamma) * self.depth_scale
-        z = z + alpha.to(z.dtype) * message
+        hidden_states = residual + alpha.to(residual.dtype) * attn_output
         if self.ffn is not None:
-            z = z + self.depth_scale * self.ffn(self.ffn_norm(z.to(self.ffn_norm.weight.dtype))).to(z.dtype)
-        return z
+            residual = hidden_states
+            hidden_states = self.ffn_norm(hidden_states.to(self.ffn_norm.weight.dtype))
+            hidden_states = self.ffn(hidden_states).to(residual.dtype)
+            hidden_states = residual + self.depth_scale * hidden_states
+        return hidden_states
 
 
 class JevaDecisionStack(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: JevaModelConfig) -> None:
         super().__init__()
         self.normalize_initial_state = config.normalize_state
         self.blocks = nn.ModuleList([JevaDecisionBlock(config) for _ in range(config.decision_depth)])
@@ -117,12 +128,16 @@ class JevaDecisionStack(nn.Module):
         self.initial_coverage_bias = config.coverage_bias_init
         self.coverage_bias = nn.Parameter(torch.tensor([float(config.coverage_bias_init)]))
 
-    def forward(self, state, options, option_mask):
-        options = F.normalize(options, dim=-1)
-        z = F.normalize(state, dim=-1) if self.normalize_initial_state else state
+    def forward(
+        self, hidden_states: torch.Tensor, option_states: torch.Tensor, option_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        option_states = F.normalize(option_states, dim=-1)
+        if self.normalize_initial_state:
+            hidden_states = F.normalize(hidden_states, dim=-1)
         for block in self.blocks:
-            z = block(z, options, option_mask)
-        scores = torch.einsum("bd,bkd->bk", self.final_norm(z).float(), options.float())
+            hidden_states = block(hidden_states, option_states, option_mask)
+        hidden_states = self.final_norm(hidden_states)
+        scores = torch.einsum("bd,bkd->bk", hidden_states.float(), option_states.float())
         masked_scores = scores.masked_fill(~option_mask, -torch.inf)
         log_q = _log_softmax((scores / self.tau_dec().float()).masked_fill(~option_mask, -torch.inf))
         coverage_logit = (masked_scores.max(dim=-1).values - self.coverage_bias.float()) / self.tau_cov().float()
