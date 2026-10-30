@@ -378,6 +378,40 @@ class TestAddResponseSchema:
         assert parsed == expected
 
     @pytest.mark.parametrize(
+        "completion, expected",
+        [
+            pytest.param("<think></think>\n12<|user|>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                "<think></think>\n<tool_call>multiply\n<arg_key>a</arg_key>\n<arg_value>3</arg_value>\n"
+                "<arg_key>b</arg_key>\n<arg_value>4</arg_value>\n</tool_call><|observation|>",
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}
+                    ],
+                },
+                id="tool_calls",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="The legacy GLM-4-MoE response schema doesn't parse completions ending with a stop token",
+    )
+    def test_add_response_schema_glm4moe_end_of_turn(self, completion, expected):
+        # GLM-4-MoE has no end-of-turn token: the model stops on the next role marker, `<|observation|>` after tool
+        # calls, otherwise `<|user|>`. Rendered history turns don't end with it, so the completion can't be sliced off a
+        # rendered conversation.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
+        tokenizer = add_response_schema(tokenizer)
+        messages = [{"role": "user", "content": "What is 3*4?"}]
+        prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        response = tokenizer(completion, add_special_tokens=False).input_ids
+        parsed = parse_response(tokenizer, response, prefix=prefix.input_ids, tools=[multiply])
+        assert parsed == expected
+
+    @pytest.mark.parametrize(
         "processor_name",
         [
             pytest.param(

@@ -414,7 +414,7 @@ glm4moe_template = {
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
-            "close_pattern": r"<\|user\|>\s*|$",
+            "close_pattern": r"<\|(?:user|observation)\|>\s*|$",
             "content": "text",
         },
     },
