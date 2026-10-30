@@ -1671,7 +1671,13 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
     @pytest.mark.parametrize(
-        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
+        ],
     )
     def test_aux_loss(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
@@ -1690,6 +1696,18 @@ class TestAddFusedLMHead:
         )
 
         torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", dtype=torch.float32
+        ).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
 
     @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])

@@ -1729,22 +1729,22 @@ def add_fused_lm_head(
             # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
-            if Version(transformers.__version__) < Version("5.0.0"):
-                num_experts = self.num_experts
-                num_experts_per_tok = self.num_experts_per_tok
-            else:
-                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
-                    transformers.__version__
-                ) < Version("5.6.0"):
-                    num_experts = self.num_experts
+            router_logits = backbone_outputs.router_logits
+            if router_logits:
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    num_experts_per_tok = self.num_experts_per_tok
                 else:
-                    num_experts = text_config.num_experts
-                num_experts_per_tok = text_config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
-            aux_loss = load_balancing_loss_func(
-                backbone_outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
-            )
+                    num_experts_per_tok = text_config.num_experts_per_tok
+                # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
+                num_experts = router_logits[0].shape[-1]
+                # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
+                # counts.
+                aux_loss = load_balancing_loss_func(
+                    router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                )
+            else:
+                # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
+                aux_loss = loss.new_zeros(())
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return FusedCausalLMOutput(
