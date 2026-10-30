@@ -349,7 +349,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays for the best guess of the game whether or not it ended, and each invalid move costs 0.1. TRL logs each term separately, so `rewards/reward_win/mean` tracks the win rate.
+A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays for the best guess of the game whether or not it ended, and each invalid move costs 0.1. TRL logs each term separately, so `rewards/reward_win/mean` goes up with the win rate.
 
 ### Running the example
 

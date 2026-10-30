@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
         description="Run GRPO training for Wordle using the TextArena OpenEnv environment."
     )
     parser.add_argument("--model", type=str, default="openenv/Qwen3-1.7B-Wordle-SFT", help="Model to train.")
-    parser.add_argument("--env-url", type=str, default="https://openenv-wordle.hf.space", help="Environment URL.")
+    parser.add_argument("--env-url", type=str, required=True, help="URL of your copy of the openenv/wordle Space.")
     parser.add_argument("--max-steps", type=int, default=150, help="Number of training steps.")
     parser.add_argument("--learning-rate", type=float, default=1e-6, help="Learning rate.")
     parser.add_argument("--output-dir", type=str, default=None, help="Where to store outputs and checkpoints.")
@@ -125,7 +125,8 @@ def main() -> None:
 
     env_url = args.env_url
     # A private Space needs your token. A public one ignores it.
-    headers = {"Authorization": f"Bearer {get_token()}"} if get_token() else None
+    token = get_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else None
 
     class WordleEnv:
         def __init__(self):
