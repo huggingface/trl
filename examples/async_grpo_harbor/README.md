@@ -6,20 +6,19 @@ logprobs, and loss masks, then updates the same vLLM instance.
 ## Local setup
 
 Use Python 3.12 and this TRL checkout. The typed capture API was merged in
-[OpenEnv #1280](https://github.com/openenv/OpenEnv/pull/1280). Install the pinned upstream revision:
+[OpenEnv #1280](https://github.com/openenv/OpenEnv/pull/1280) and released in OpenEnv 0.7.0. Install that release:
 
 ```sh
-git clone https://github.com/openenv/OpenEnv.git OpenEnv
-git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
-pip install -e . trackio datasets ./OpenEnv[harbor] kernels
+git clone --depth 1 --branch v0.7.0 https://github.com/openenv/OpenEnv.git OpenEnv
+pip install -e . trackio datasets "openenv[harbor]==0.7.0" kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-The source path is required because this revision's environment wheel does not package
-`harbor_env.harness`. Both the core package and the harness above use the same revision.
+The source path is required because the OpenEnv wheel does not package `harbor_env.harness`.
+Keep the checkout on the same tag as the installed package.
 
 Run the OpenEnv server with its sandbox credentials, then start vLLM and the trainer using the commands
-in [async_grpo_harbor.py](async_grpo_harbor.py). The server additionally needs `pip install './OpenEnv[harbor]'`;
+in [async_grpo_harbor.py](async_grpo_harbor.py). The server additionally needs `pip install "openenv[harbor]==0.7.0"`;
 the trainer can use an existing server. Use the same model and vLLM endpoint for rollouts and weight updates.
 Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-inflight + 1` (9 for the defaults); the factory
 keeps one connection for task metadata. The Jobs launcher sets this capacity automatically.
