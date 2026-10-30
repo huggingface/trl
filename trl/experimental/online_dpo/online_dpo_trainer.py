@@ -917,33 +917,6 @@ class OnlineDPOTrainer(_BaseTrainer):
             name = name.replace(prefix, "")
         return name
 
-    def process_vision_row(
-        self, features: dict[str, list | torch.Tensor], processing_class=None
-    ) -> dict[str, list[int]]:
-        """
-        Process a vision row for VLM models (adapted from DPO trainer)
-        """
-        processor = processing_class or self.processing_class
-        processed_features = processor(images=[features["image"]], text=features["prompt"], add_special_tokens=False)
-
-        prompt_input_ids = processed_features["input_ids"][0]
-
-        # Create the output dict with required fields
-        output = {
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": processed_features["attention_mask"][0],
-        }
-
-        # Add vision-specific fields
-        if "pixel_values" in processed_features:
-            output["pixel_values"] = processed_features["pixel_values"][0]
-        if "pixel_attention_mask" in processed_features:
-            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
-        if "image_sizes" in processed_features:
-            output["image_sizes"] = processed_features["image_sizes"][0]
-
-        return output
-
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
