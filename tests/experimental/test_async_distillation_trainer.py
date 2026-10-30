@@ -652,6 +652,11 @@ class TestMultiTeacherRouting:
         with pytest.raises(ValueError, match="'code'.*--max-model-len"):
             self._run(TWO_TEACHERS, "code", teacher_max_model_lens=max_model_lens)
 
+    def test_skips_the_length_check_when_the_teacher_does_not_report_max_model_len(self):
+        # Only vLLM adds `max_model_len` to `/v1/models`
+        _, requests = self._run(ONE_TEACHER, None, teacher_max_model_lens={"default": None})
+        assert [url for url, _ in requests] == ["http://default:8001"]
+
 
 class TestBetaRange:
     """beta must be a valid generalized-JSD interpolation coefficient in [0.0, 1.0], matching

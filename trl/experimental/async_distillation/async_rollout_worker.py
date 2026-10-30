@@ -273,7 +273,7 @@ class _AsyncRolloutLoop:
         # Served model id per teacher, resolved from each teacher server's `/v1/models` in `_run_loops`, since
         # `/v1/completions` names the model it is addressing and a teacher serves a different one than the student.
         self.teacher_model_names: dict[str, str] = {}
-        self.teacher_max_model_lens: dict[str, int] = {}
+        self.teacher_max_model_lens: dict[str, int | None] = {}
 
         self._total_completion_tokens = 0
         self._total_samples_scored = 0
@@ -340,7 +340,9 @@ class _AsyncRolloutLoop:
                 label=f"teacher {teacher_id} /v1/models",
             )
             self.teacher_model_names[teacher_id] = models["data"][0]["id"]
-            self.teacher_max_model_lens[teacher_id] = models["data"][0]["max_model_len"]
+            # vLLM adds `max_model_len` to the OpenAI model card. Without it, `_generate_and_score_one` skips the
+            # length check
+            self.teacher_max_model_lens[teacher_id] = models["data"][0].get("max_model_len")
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
@@ -541,12 +543,12 @@ class _AsyncRolloutLoop:
         # Scoring sends the whole sequence and asks for one throwaway token. A teacher without room for that rejects
         # the request with a 400 that `_retry` retries for minutes before surfacing it without the cause.
         sequence_length = len(prompt_ids) + len(completion_ids)
-        if sequence_length >= self.teacher_max_model_lens[teacher_id]:
+        max_model_len = self.teacher_max_model_lens[teacher_id]
+        if max_model_len is not None and sequence_length >= max_model_len:
             raise ValueError(
-                f"Teacher {teacher_id!r} at {teacher_server_url} has max_model_len="
-                f"{self.teacher_max_model_lens[teacher_id]}, too short to score a {sequence_length}-token sequence "
-                "(scoring needs one position past it). Serve every teacher with a `--max-model-len` larger than the "
-                "student's."
+                f"Teacher {teacher_id!r} at {teacher_server_url} has max_model_len={max_model_len}, too short to "
+                f"score a {sequence_length}-token sequence (scoring needs one position past it). Serve every teacher "
+                "with a `--max-model-len` larger than the student's."
             )
         t_score = time.monotonic()
         teacher_topk_ids, teacher_topk_logprobs = await self._score_with_teacher(
