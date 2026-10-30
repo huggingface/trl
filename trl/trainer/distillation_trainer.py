@@ -1059,7 +1059,7 @@ class DistillationTrainer(_BaseTrainer):
 
             # Generate using vLLM with raw token IDs. Distillation is n=1 and uses the teacher distribution rather than
             # sampled logprobs, so we request one completion per prompt and discard vLLM's logprobs.
-            _, completion_ids, _, _ = self.vllm_generation.generate(
+            _, completion_ids, _, _, _ = self.vllm_generation.generate(
                 prompts=prompt_ids,
                 images=images,
                 num_generations=1,
@@ -1184,6 +1184,11 @@ class DistillationTrainer(_BaseTrainer):
         if self._is_vlm:
             prefix_ids = prefix_ids[0]
             full_ids = full_ids[0]
+            # Special case for Mistral: its processor (Pixtral) returns tensors even with `return_tensors=None`
+            # (huggingface/transformers#50094)
+            if isinstance(prefix_ids, torch.Tensor):
+                prefix_ids = prefix_ids.tolist()
+                full_ids = full_ids.tolist()
 
         # Some chat templates (notably Qwen3/Qwen3.5) render "...<|im_end|>\n" after an assistant/tool block.
         # When we compute `suffix_ids` by slicing `full_ids`, we must align the slicing boundary to
