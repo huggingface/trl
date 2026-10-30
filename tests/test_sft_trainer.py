@@ -1224,6 +1224,30 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.2.0"),
+        reason="Qwen3.5 models were introduced in transformers-5.2.0",
+    )
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
+    def test_packing_rows_with_linear_attention(self):
+        # Gated DeltaNet layers take packed sequences as several rows from transformers 5.23.0, and as one row before
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", dtype="float32"
+        )
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, packing=True, max_length=64, per_device_train_batch_size=4, report_to="none"
+        )
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        batch = next(iter(trainer.get_train_dataloader()))
+        if Version(transformers.__version__) < Version("5.23.0"):
+            assert batch["input_ids"].shape[0] == 1
+        else:
+            assert batch["input_ids"].shape[0] > 1
+
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_eval_packing(self):

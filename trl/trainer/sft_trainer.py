@@ -969,7 +969,17 @@ class SFTTrainer(_BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
-        self.padding_free = args.padding_free
+        # Before transformers 5.23.0, recurrent and convolutional layers (e.g. gated DeltaNet) pass the packed rows as
+        # they are to varlen kernels that only take a single row, so BFD-packed batches are flattened for these models
+        # (huggingface/transformers#50185)
+        text_config = model.config.get_text_config()
+        layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
+        self.padding_free = args.padding_free or (
+            args.packing
+            and args.packing_strategy in {"bfd", "bfd_split"}
+            and bool(layer_types)
+            and Version(transformers.__version__) < Version("5.23.0")
+        )
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
