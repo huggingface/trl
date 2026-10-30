@@ -1,0 +1,119 @@
+name: Tests with vLLM
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Runs daily at 3am UTC
+
+  workflow_dispatch:
+
+  pull_request:
+    paths:
+      - ".github/workflows/tests_vllm.yml"
+
+env:
+  TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TRL_EXPERIMENTAL_SILENCE: 1
+
+permissions: {}
+
+jobs:
+  tests:
+    permissions:
+      contents: read
+    name: Tests with vLLM (${{ matrix.vllm }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both ends of the supported range: the floor from pyproject.toml, and the newest release it allows
+        vllm: [floor, latest]
+    runs-on:
+      group: aws-g5-12xlarge-cache
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        env:
+          VLLM_END: ${{ matrix.vllm }}
+        run: |
+          source .venv/bin/activate
+          uv pip install packaging
+          # Pin this end's vLLM exactly, so a conflicting requirement fails the install instead of moving vLLM
+          version=$(python - "$VLLM_END" <<'EOF'
+          import json, sys, tomllib, urllib.request
+          from packaging.requirements import Requirement
+          from packaging.version import Version
+          extra = tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["vllm"]
+          specifier = next(Requirement(r).specifier for r in extra if Requirement(r).name == "vllm")
+          releases = json.load(urllib.request.urlopen("https://pypi.org/pypi/vllm/json"))["releases"]
+          versions = sorted(v for v in map(Version, releases) if v in specifier)
+          print(versions[0] if sys.argv[1] == "floor" else versions[-1])
+          EOF
+          )
+          extras="test,vllm,vlm,peft"
+          # The async distillation trainer loads FlashAttention from the Hub; its tests only run at the latest end
+          if [ "$VLLM_END" != "floor" ]; then
+            extras="$extras,kernels"
+          fi
+          uv pip install ".[$extras]" "vllm==$version"
+
+      - name: Check the environment
+        run: |
+          source .venv/bin/activate
+          nvidia-smi
+          # The server tests need 2 GPUs; with fewer, they would be skipped and the job would pass without testing
+          python -c "import torch, transformers, vllm; print(f'vllm {vllm.__version__}, torch {torch.__version__}, transformers {transformers.__version__}'); assert torch.cuda.device_count() >= 2"
+
+      - name: Test the vLLM client and server
+        run: |
+          source .venv/bin/activate
+          # A hung NCCL transfer otherwise runs until the runner drops the step and reports it as passed
+          timeout 45m pytest -v -rs tests/test_vllm_client_server.py
+
+      - name: Test the trainers with vLLM
+        if: ${{ !cancelled() }}
+        env:
+          CUDA_VISIBLE_DEVICES: "0"  # the trainers refuse `nn.DataParallel`, which several visible GPUs would trigger
+          VLLM_END: ${{ matrix.vllm }}
+        run: |
+          source .venv/bin/activate
+          files="tests/test_grpo_trainer.py tests/test_rloo_trainer.py tests/test_distillation_trainer.py tests/experimental/test_online_dpo_trainer.py"
+          # The async trainers need transformers>=5.2.0, which the vLLM floor does not allow
+          if [ "$VLLM_END" != "floor" ]; then
+            files="$files tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py"
+          fi
+          # One process per test, since colocated vLLM engines keep their GPU memory until the process exits
+          pytest --collect-only -q -k "vllm" $files | grep "::" | xargs -d '\n' -I{} timeout 30m pytest -v -rsx {}
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests with vLLM (${{ matrix.vllm }})
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
