@@ -1,15 +1,33 @@
 name: Tests (experimental)
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      # Run only when relevant files are modified
+      - ".github/workflows/tests-experimental.yml"
+      - ".github/actions/**"
+      - "Makefile"
+      - "trl/experimental/**"
+      - "tests/experimental/**"
+      - "pyproject.toml"
   pull_request:
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests-experimental.yml"
+      - ".github/actions/**"
+      - "Makefile"
       - "trl/experimental/**"
       - "tests/experimental/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'  # Runs daily at 2am UTC
 
 env:
   TQDM_DISABLE: 1
+  CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   PYTORCH_ALLOC_CONF: "expandable_segments:True"
@@ -38,10 +56,10 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
@@ -64,3 +82,11 @@ jobs:
         run: |
           source .venv/bin/activate
           make test_experimental
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests (experimental)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}

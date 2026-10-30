@@ -235,6 +235,10 @@ That's how `make test` is implemented (without the `pip install` line)!
 
 You can specify a smaller set of tests to test only the feature you're working on.
 
+Tests exercise real objects: a tiny model from `trl-internal-testing`, a real tokenizer, config, and dataset. Do not use `SimpleNamespace`, `MagicMock`, `object.__new__` (building an instance without its `__init__`), or monkeypatched internals as stand-ins: they only have what the test author thought of, so the test keeps passing when the real code changes. Mock only what cannot run in the test environment, like a remote server.
+
+Test behavior through the public API (the trainer, its config, public functions) rather than private methods: a test that calls a private method usually has to build the object around it by hand, and it breaks on any refactor of the internals. Call a private function directly only when its behavior cannot be reached deterministically otherwise, such as a pure helper.
+
 ### Default values guidelines
 
 1. **Use defaults when appropriate**:  
@@ -377,6 +381,33 @@ The deprecation and removal schedule is based on each feature's usage and impact
 * **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
 
 These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.
+
+### Dependency version floors
+
+Raising the minimum supported version of a dependency is a breaking change for anyone still on an older release, so it needs a reason beyond tidying the code. The question is not "does this bump let us delete something", but "what does keeping the old version cost us, and who pays if we drop it".
+
+* **Floor older than 2 years**: fine to drop, no further justification needed. It is unlikely anyone is still on a release that old.
+* **Floor younger than 2 years**: weigh how hard the old version is to keep working against how many users depend on it.
+    * Cheap to keep: keep it until it reaches 2 years. A warning filter or a one-line version guard costs us nothing.
+    * Hard to keep, few users: raise the floor.
+    * Hard to keep, many users: keep it, and accept that it takes real work. That is where the effort should go. `transformers` is a core dependency that everyone is on, so it is almost always this case, even when it means a lot of branching.
+* **Never require a release younger than 1 year**, however expensive the old one is to keep. Users on lagging stacks (conda-forge, cluster images, another library's upper bound) cannot move to it yet.
+
+Some dependencies have their own agreed window. `vLLM` is still unstable, moves fast, and is only used by the online trainers, so its window is 5 months: older releases can be dropped freely, and the 1-year minimum does not apply.
+
+Declaring a first floor for a dependency that has none is not covered by the above: it drops support for nothing, it only records what we already test.
+
+When TRL needs an API newer than the floor, the default is a version guard, not a bump. Put a floor change in its own PR and say in the description which version guards, compatibility shims or warning filters it retires.
+
+The minimum-versions CI job pins every dependency exactly at its floor, so a floor change also updates its pin.
+
+### Python versions
+
+TRL follows the [CPython release cycle](https://devguide.python.org/versions/): a new Python version comes out every October and is supported for 5 years.
+
+* **Adding a new version**: once PyTorch and the core dependencies publish wheels for it and the test suite passes, add it to the classifiers in `pyproject.toml` and to the nightly matrix in `.github/workflows/tests_python_versions.yml`.
+* **Dropping a version**: drop it once it reaches end of life. The schedule only gives the month, and the actual end of life is the date of the final release, which can fall anywhere in that month, so drop it after that release is out, and move the minimum-versions CI job to the new oldest version. A version that old is always past the 2-year mark of [Dependency version floors](#dependency-version-floors).
+* **Default version**: PR CI, the documentation build, the release workflow and the Docker images run on a single Python version, and the nightly matrix covers the other supported ones. The exception is the minimum-versions job, which runs on the oldest supported Python so that every floor installs and it can pin each one exactly. The default is the version most TRL users run, as shown by the download stats on [pypistats](https://pypistats.org/packages/trl). Review it every October, after the new CPython release, and switch when another version has overtaken it. A newer version that few users run would leave the version most of them use tested only nightly.
 
 ### Working with warnings
 

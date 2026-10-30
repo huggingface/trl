@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import itertools
 import json
 import time
 import uuid
@@ -109,6 +110,8 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
         lossless_capture: bool = True,
+        max_session_failures_per_slot: int = 10,
+        max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
         # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
@@ -117,6 +120,11 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         super().__init__(**loop_kwargs)
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
+        if harness_adapter is None and (self.top_p < 1.0 or self.top_k > 0):
+            raise ValueError(
+                "`top_p < 1.0` or `top_k > 0` needs the candidate set of every sampled token, which an agent-owned "
+                "loop does not record. Pass a `harness_adapter` so TRL samples each turn, or sample the full vocabulary."
+            )
         if harness_adapter is None:
             sampling_kwargs = {
                 "temperature": self.temperature,
@@ -140,6 +148,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
         )
         self._live_sessions: set = set()
+        self._max_session_failures_per_slot = max_session_failures_per_slot
+        self._max_session_backoff_s = max_session_backoff_s
+        self._consecutive_session_failures = 0
 
     async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
         # OpenEnv sessions are synchronous; metrics stay on the event loop.
@@ -150,7 +161,31 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             if correctness is not None:
                 self._rates["rollout/correctness_mean"][0] += correctness
                 self._rates["rollout/correctness_mean"][1] += 1.0
+            for name, count in metrics.pop("tool_calls_by_name").items():
+                self._counters[f"tools/{name}/call_total"] += count
+            for name, count in metrics.pop("tool_failures_by_name").items():
+                self._counters[f"tools/{name}/failure_total"] += count
+            for name, elapsed in metrics.pop("tool_latency"):
+                self._rates["tools/latency_s"][0] += elapsed
+                self._rates["tools/latency_s"][1] += 1
+                self._rates[f"tools/{name}/latency_s"][0] += elapsed
+                self._rates[f"tools/{name}/latency_s"][1] += 1
             self._push_rollout_metrics(**metrics)
+        if result is not self._EMPTY_ROLLOUT:
+            self._consecutive_session_failures = 0
+        elif not self._stop_event.is_set():
+            # A persistent failure (harness server down, broken sandbox) would otherwise spin without producing samples
+            self._consecutive_session_failures += 1
+            if self._consecutive_session_failures >= self._max_session_failures_per_slot * self.max_inflight_tasks:
+                raise RuntimeError(
+                    f"{self._consecutive_session_failures} harness sessions in a row were unscorable; see the "
+                    "warnings above for their errors."
+                )
+            backoff = min(2 ** (self._consecutive_session_failures - 1), self._max_session_backoff_s)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
         return result
 
     async def _run_loops(self, stop_event) -> None:
@@ -177,12 +212,17 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
     def _run_session(self, prompt, group_id=0):
         """Return a rollout and its metrics from a pool thread.
 
-        Session failures are unscorable. Invalid training captures stop the worker.
+        Session failures and rejected captures of failed agents are unscorable. Other invalid training captures stop
+        the worker.
         """
         t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
         # Every generation in a group must select the same task.
         seed = group_id
+        if self.lora_name is not None:
+            # The agent sends the factory's model name on every call, and in vLLM's API an adapter is a model name:
+            # point each new session at the policy version published now.
+            self._factory.model = self._request_model
         try:
             session = self._factory.create(prompt, seed=seed, episode_id=rollout_id)
         except Exception:
@@ -192,23 +232,37 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         timed_out = False
         trace: list[TraceEntry] = []
         tool_calls_by_name: dict[str, int] = {}
+        tool_failures_by_name: dict[str, int] = {}
+        tool_latency: list[tuple[str, float]] = []
         try:
             if self._stop_event.is_set():
                 return self._EMPTY_ROLLOUT, None
             if self._adapter is not None:
                 turns: list[TurnRecord] = []
+                turn_times: list[tuple[float, float, list[str]]] = []
                 result = self._adapter.run_white_box(
-                    functools.partial(self._sample_turn, turns), session, self._limits
+                    functools.partial(self._sample_turn, turns, turn_times), session, self._limits
                 )
                 completion = result.messages
                 tool_call_count = int(result.metrics.get("tool_calls", len(result.tool_trace)))
-                tool_failure_count = sum(1 for entry in result.tool_trace if entry.result.error is not None)
+                for entry in result.tool_trace:
+                    tool_calls_by_name[entry.tool_name] = tool_calls_by_name.get(entry.tool_name, 0) + 1
+                    if entry.result.error is not None:
+                        tool_failures_by_name[entry.tool_name] = tool_failures_by_name.get(entry.tool_name, 0) + 1
+                # A turn's tool calls run between its reply and the next request, so that gap (harness overhead
+                # included) is their latency. The trailing turn has no next request and is not timed.
+                tool_latency = [
+                    (name, (t_request - t_reply) / len(names))
+                    for (_, t_reply, names), (t_request, _, _) in itertools.pairwise(turn_times)
+                    for name in names
+                ]
             else:
                 if not isinstance(session, TrainableSession):
                     raise CaptureContractError("loop-owning training requires OpenEnv fetch_training_trace()")
                 loop_session = cast(TrainableSession, session)
+                exit_code = 0
                 try:
-                    loop_session.wait_for_completion()
+                    exit_code = loop_session.wait_for_completion()
                 except TimeoutError:
                     logger.warning("harness agent timed out; training captured turns, timed_out flagged")
                     timed_out = True
@@ -218,11 +272,18 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                     entries = captured.to_trace_entries()
                     trace = entries
                 except (ValueError, TypeError, KeyError) as exc:
+                    # A session that exited non-zero already reported a failed rollout, whose capture may be
+                    # untrainable (e.g. fatal validation findings). Drop it like a transport failure; a malformed
+                    # capture from a successful rollout still stops the worker.
+                    if exit_code != 0:
+                        logger.warning("capture of failed rollout (exit code %s) rejected: %s", exit_code, exc)
+                        return self._EMPTY_ROLLOUT, None
                     raise CaptureContractError(str(exc)) from exc
                 completion = _messages_from_trace(entries)
                 tool_calls_by_name = _tool_call_counts_by_name(entries)
                 tool_call_count = sum(tool_calls_by_name.values())
-                tool_failure_count = _tool_failure_count(entries)
+                tool_failures_by_name = _tool_failures_by_name(entries)
+            tool_failure_count = sum(tool_failures_by_name.values())
             verify = session.verify(completion)
             env_reward = float(verify.env_reward) if verify.env_reward is not None else None
             outcome = HarnessRolloutOutcome(
@@ -247,6 +308,9 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 tally=tally,
                 loop_exhausted=timed_out,
                 duration_s=time.monotonic() - t_dispatch,
+                tool_calls_by_name=tool_calls_by_name,
+                tool_failures_by_name=tool_failures_by_name,
+                tool_latency=tool_latency,
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
@@ -263,11 +327,18 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             except Exception:
                 logger.warning("harness session close failed", exc_info=True)
 
-    def _sample_turn(self, turns: list[TurnRecord], messages, tools, sampling) -> ModelStepResult:
-        """OpenEnv `ModelStep`: sample one assistant turn against vLLM and record a `TurnRecord` into `turns`."""
+    def _sample_turn(
+        self, turns: list[TurnRecord], turn_times: list[tuple[float, float, list[str]]], messages, tools, sampling
+    ) -> ModelStepResult:
+        """OpenEnv `ModelStep`: sample one assistant turn against vLLM and record a `TurnRecord` into `turns`.
+
+        `turn_times` gets `(request time, reply time, requested tool names)` per turn, for the tool latency metrics.
+        """
+        t_request = time.monotonic()
+        tools = _tools_to_schema(tools)
         prompt_ids = self.tokenizer.apply_chat_template(
             messages,
-            tools=_tools_to_schema(tools),
+            tools=tools,
             add_generation_prompt=True,
             tokenize=True,
             return_dict=False,
@@ -275,12 +346,21 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs = asyncio.run_coroutine_threadsafe(self._generate_one_turn(prompt_ids), self._loop).result()
-        turns.append(TurnRecord(prompt_ids, turn_ids, logprobs))
-        message = parse_response(self.tokenizer, turn_ids, prefix=prompt_ids)
-        return ModelStepResult(
-            response=_msg_to_llm_response(message), prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs
+        turn_ids, logprobs, sampling_mask, sampler_logprobs = asyncio.run_coroutine_threadsafe(
+            self._generate_one_turn(prompt_ids), self._loop
+        ).result()
+        turns.append(
+            TurnRecord(
+                prompt_ids,
+                turn_ids,
+                logprobs,
+                output_sampling_mask=sampling_mask,
+                output_sampler_logprobs=sampler_logprobs,
+            )
         )
+        response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools))
+        turn_times.append((t_request, time.monotonic(), [tc.name for tc in response.tool_calls]))
+        return ModelStepResult(response=response, prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs)
 
 
 def _turns_from_training_trace(trace: TrainingTrace) -> list[TurnRecord]:
@@ -307,19 +387,25 @@ def _tool_call_counts_by_name(entries: list[TraceEntry]) -> dict[str, int]:
     return counts
 
 
-def _tool_failure_count(entries: list[TraceEntry]) -> int:
-    """Estimate failures from the last request's tool-result text, deduplicated by name and content."""
-    seen, failures = set(), 0
-    for msg in (entries[-1]["request"] if entries else {}).get("messages") or []:
+def _tool_failures_by_name(entries: list[TraceEntry]) -> dict[str, int]:
+    """Estimate failures per tool from the last request's tool-result text, deduplicated by name and content."""
+    messages = (entries[-1]["request"] if entries else {}).get("messages") or []
+    # A tool result names its call id, not its tool; the assistant message that issued the call has the name.
+    names = {
+        tc.get("id"): (tc.get("function") or tc).get("name") for m in messages for tc in m.get("tool_calls") or []
+    }
+    seen, failures = set(), {}
+    for msg in messages:
         if msg.get("role") != "tool":
             continue
-        key = (msg.get("name"), str(msg.get("content"))[:200])
+        name = msg.get("name") or names.get(msg.get("tool_call_id"))
+        key = (name, str(msg.get("content"))[:200])
         if key in seen:
             continue
         seen.add(key)
         text = str(msg.get("content") or "").lower()
         if any(w in text for w in ("error", "failed", "traceback", "exception")):
-            failures += 1
+            failures[name] = failures.get(name, 0) + 1
     return failures
 
 
@@ -340,6 +426,10 @@ class HarnessRolloutWorker(AsyncRolloutWorker):
     `functools.partial(HarborSessionFactory, server_url, ...)`. In loop-owning mode, the worker calls it with
     `sampling=` from its training policy. With `harness_adapter`, it calls it without arguments and samples turns
     itself. Inject the worker via `AsyncGRPOTrainer(rollout_worker=...)`.
+
+    A failed session is unscorable, and the worker waits before the next one, doubling the wait up to
+    `max_session_backoff_s` seconds (defaults to `16`). After `max_session_failures_per_slot` (defaults to `10`)
+    unscorable sessions in a row per in-flight slot, the worker stops with an error.
     """
 
     _loop_cls = _HarnessRolloutLoop

@@ -76,8 +76,9 @@ class GRPOConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -322,13 +323,15 @@ class GRPOConfig(_BaseConfig):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
-            and constrained.
+            and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
+            the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
+            later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1` and
+            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`).
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
 
-                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped to
-                [C_min, C_max].
+                - `"token_truncate"`: Token-level truncated IS. Per-token ratios are clipped to [C_min, C_max].
                 - `"token_mask"`: Token-level masked IS. Per-token ratios outside [C_min, C_max] are set to zero.
                 - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped to
                 [C_min, C_max] and applied to all tokens in the sequence.
@@ -507,9 +510,13 @@ class GRPOConfig(_BaseConfig):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
+            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
+            "pad elsewhere."
+        },
     )
 
     # Parameters that control generation
@@ -923,7 +930,10 @@ class GRPOConfig(_BaseConfig):
             "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
             "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
             "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
-            "IS ratios are computed and constrained."
+            "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
+            "logprobs are normalized over the candidate set each token was sampled from, which requires "
+            '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
+            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`)."
         },
     )
     vllm_importance_sampling_mode: str = field(
@@ -1042,6 +1052,14 @@ class GRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.use_transformers_paged:
             warnings.warn(
@@ -1060,6 +1078,18 @@ class GRPOConfig(_BaseConfig):
                 "`parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation inside the trainer, "
                 "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
+        if (
+            self.use_vllm
+            and self.vllm_importance_sampling_correction
+            and self.top_k == 0
+            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0)
+        ):
+            raise ValueError(
+                "`top_p < 1.0` or `min_p > 0.0` needs `top_k > 0`: vLLM bounds the candidate set it returns for each "
+                "sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
+                "`vllm_importance_sampling_correction=False`."
             )
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextvars
+import copy
 import itertools
 import json
 import math
@@ -28,17 +29,26 @@ from dataclasses import dataclass, field
 from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+)
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
 from ...models.utils import _ForwardRedirection
@@ -541,12 +551,16 @@ class _EpochStopCallback(TrainerCallback):
         self._trainer = trainer
         self._target = target_prompts
 
-    def on_step_end(self, _args, _state, control, **_kwargs):
+    def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
         trained = self._trainer._prompts_before_resume + len(self._trainer._trained_prompts)
         reached = torch.tensor(int(trained >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
+            # `max_steps` is only a safety ceiling here, so `DefaultFlowCallback` never reaches its end-of-training save.
+            # Save the final step the same way, or the steps since the last multiple of `save_steps` are lost.
+            if args.save_strategy == SaveStrategy.STEPS:
+                control.should_save = True
 
 
 def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
@@ -579,8 +593,8 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
                     **sample.metrics,
                     "model_version": int(sample.model_version),
                     "teacher_id": sample.teacher_id,  # which teacher scored it; the one thing MOPD traces need
-                    "prompt_tokens": len(sample.input_ids) - int(sum(sample.completion_mask)),
-                    "completion_tokens": int(sum(sample.completion_mask)),
+                    "prompt_tokens": len(sample.input_ids) - int(sample.completion_mask.sum()),
+                    "completion_tokens": int(sample.completion_mask.sum()),
                 },
             )
             for sample in samples[:max_traces]
@@ -718,16 +732,13 @@ class DataCollatorForRollout(DataCollatorMixin):
     per-rank in `compute_loss`.
 
     Structurally the same as [`~trl.experimental.async_grpo.async_grpo_trainer.DataCollatorForRollout`], with
-    `advantages` replaced by the ragged `teacher_topk_ids` / `teacher_topk_logprobs` (padded per-position to
+    `advantages` replaced by `teacher_topk_ids` / `teacher_topk_logprobs` (already padded by the worker to
     `teacher_top_k + 1` candidates with id `-1` / logprob `-inf`, then packed along the sequence dimension like every
     other per-token field).
 
     Args:
         pad_token_id (`int`):
             Token id used to pad `input_ids`.
-        teacher_top_k (`int`):
-            Number of teacher candidates per position (before the trainer's own tail-bucket handling); every position's
-            candidate list is padded/truncated to this width so it tensorizes.
         num_processes (`int`, *optional*, defaults to `1`):
             Number of DP ranks; the micro-batch is packed into this many rows.
         teacher_id_to_idx (`dict[str, int]`, *optional*):
@@ -744,7 +755,6 @@ class DataCollatorForRollout(DataCollatorMixin):
     """
 
     pad_token_id: int
-    teacher_top_k: int
     num_processes: int = 1
     teacher_id_to_idx: dict[str, int] | None = None
     return_tensors: str = "pt"
@@ -759,31 +769,28 @@ class DataCollatorForRollout(DataCollatorMixin):
         # The dataloader uses batch_size=1 over a planner that pre-partitions each micro-batch into `num_processes`
         # rows, so `examples` is a length-1 list holding that single micro-batch (one group per rank).
         (groups,) = examples
-        width = self.teacher_top_k + 1
 
         input_ids, attention_mask, completion_mask, position_ids = [], [], [], []
         teacher_topk_ids, teacher_topk_logprobs = [], []
         teacher_id_idx = [] if self.teacher_id_to_idx else None
         for group in groups:
             seq_lengths = [len(example["input_ids"]) for example in group]
-            ids = [token for example in group for token in example["input_ids"]]
-            input_ids.append(torch.tensor(ids, dtype=torch.long))
+            ids = np.concatenate([example["input_ids"] for example in group])
+            input_ids.append(torch.as_tensor(ids, dtype=torch.long))
             attention_mask.append(torch.ones(len(ids), dtype=torch.long))
             completion_mask.append(
-                torch.tensor([m for example in group for m in example["completion_mask"]], dtype=torch.long)
+                torch.as_tensor(np.concatenate([example["completion_mask"] for example in group]), dtype=torch.long)
             )
             position_ids.append(torch.cat([torch.arange(n) for n in seq_lengths]))
 
-            row_teacher_ids, row_teacher_logprobs = [], []
-            for example in group:
-                for cand_ids, cand_lps in zip(
-                    example["teacher_topk_ids"], example["teacher_topk_logprobs"], strict=False
-                ):
-                    pad_n = width - len(cand_ids)
-                    row_teacher_ids.append(list(cand_ids) + [-1] * pad_n)
-                    row_teacher_logprobs.append(list(cand_lps) + [float("-inf")] * pad_n)
-            teacher_topk_ids.append(torch.tensor(row_teacher_ids, dtype=torch.long))
-            teacher_topk_logprobs.append(torch.tensor(row_teacher_logprobs, dtype=torch.float32))
+            teacher_topk_ids.append(
+                torch.as_tensor(np.concatenate([example["teacher_topk_ids"] for example in group]), dtype=torch.long)
+            )
+            teacher_topk_logprobs.append(
+                torch.as_tensor(
+                    np.concatenate([example["teacher_topk_logprobs"] for example in group]), dtype=torch.float32
+                )
+            )
 
             if teacher_id_idx is not None:
                 # One teacher_id per example, broadcast across its own tokens (constant within a sample).
@@ -808,7 +815,7 @@ class DataCollatorForRollout(DataCollatorMixin):
 
         # Total valid completion tokens across the micro-batch. Repeated per rank so that DataLoaderDispatcher
         # (dispatch_batches=True) slices correctly on dim=0.
-        n_trained_tokens = sum(sum(example["completion_mask"]) for example in all_examples)
+        n_trained_tokens = sum(int(example["completion_mask"].sum()) for example in all_examples)
         global_n_tokens = torch.full((self.num_processes,), float(n_trained_tokens), dtype=torch.float32)
 
         sample_tokens = [len(example["input_ids"]) for example in all_examples]
@@ -847,7 +854,7 @@ class DataCollatorForRollout(DataCollatorMixin):
         # forwarded — the prompt, and any completion position the teacher scored no candidate for. FLOPs are spent on
         # both, so both are worth a number, and their ratio is what says how much of the forward earns no gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
-        trained = [sum(example["completion_mask"]) for example in all_examples]
+        trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
         self.metrics["sample/forwarded_tokens_max"].append(float(max(forwarded)))
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
@@ -1154,12 +1161,17 @@ class AsyncDistillationTrainer(_BaseTrainer):
     ```
 
     Args:
-        model (`str`):
-            Student model to be trained. Must be a string, being the *model id* of a pretrained model hosted inside a
-            model repo on huggingface.co, or a path to a *directory* containing model weights saved using
-            [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
-            [`~transformers.AutoModelForCausalLM.from_pretrained`]. The model name is also used to identify the student
-            model on its vLLM server.
+        model (`str` or [`~transformers.PreTrainedModel`]):
+            Student model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`]. Loaded with
+              [`~transformers.AutoModelForCausalLM.from_pretrained`].
+            - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
+              FlashAttention backend for padding-free training.
+
+            The model name from the config is used to identify the student model on its vLLM server.
         args ([`experimental.async_distillation.AsyncDistillationConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -1209,7 +1221,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: str,
+        model: "str | PreTrainedModel",
         args: AsyncDistillationConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         processing_class: PreTrainedTokenizerBase | None = None,
@@ -1220,17 +1232,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
         weight_transfer: WeightTransferProtocol | None = None,
     ):
         if args is None:
-            args = AsyncDistillationConfig(f"{model.split('/')[-1]}-AsyncDistillation")
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = AsyncDistillationConfig(f"{model_name}-AsyncDistillation")
 
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
-        model_name = model
-        model_init_kwargs = args.model_init_kwargs or {}
-        model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
-        model_init_kwargs.setdefault("dtype", args.dtype)
-        model_revision = model_init_kwargs.get("revision")
         # FlashAttention is required: training runs in padding-free mode, where sequences are concatenated into a
         # single row and attention is derived from `position_ids` resets. SDPA/eager can't handle this. Unlike
         # AsyncGRPOTrainer, the student's own lm_head is NOT given a fused head (via `add_fused_lm_head`), a chunked
@@ -1238,20 +1247,48 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # candidate token ids per position (the teacher's top-k + tail), not just the realized token's logprob, which
         # is all that head supports. `compute_loss` chunks the lm_head projection itself instead (`_jsd_loss_chunk`),
         # a different mechanism that does support multiple candidate ids per position.
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map=None,
-            attn_implementation="kernels-community/flash-attn3",
-            **model_init_kwargs,
-        )
+        # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
+        if torch.version.hip:
+            attn_implementation = "kernels-community/aiter-flash-attn@v2"
+        elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+            attn_implementation = "kernels-community/flash-attn4"
+        else:
+            attn_implementation = "kernels-community/flash-attn3"
+        if isinstance(model, str):
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
+            model_init_kwargs.setdefault("dtype", args.dtype)
+            model_init_kwargs.setdefault("attn_implementation", attn_implementation)
+            model_revision = model_init_kwargs.get("revision")
+            model = AutoModelForCausalLM.from_pretrained(model, device_map=None, **model_init_kwargs)
+        else:
+            model_revision = None
+            model.set_attn_implementation(attn_implementation)
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `AsyncDistillationConfig`, but your model is already "
+                    "instantiated. The `model_init_kwargs` will be ignored."
+                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
 
+        # MoE load-balancing auxiliary loss. `output_router_logits` in the config means the model returns its router
+        # logits; `router_aux_loss_coef` is the architecture's own coefficient, 0.0 when the config declares none.
+        text_config = model.config.get_text_config()
+        coef = args.router_aux_loss_coef
+        self.router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", 0.0) if coef is None else coef
+        if coef and not hasattr(text_config, "output_router_logits"):
+            raise ValueError(
+                f"`router_aux_loss_coef` is set to {coef} but {type(model).__name__} is not a Mixture-of-Experts model "
+                f"that returns its router logits, so there is no auxiliary loss to weight."
+            )
+        self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(
-                model_name, revision=model_revision, trust_remote_code=args.trust_remote_code
+                get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
@@ -1322,12 +1359,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         )
 
         precision = self.accelerator.mixed_precision
-        dtype = {
+        self.compute_dtype = {
             "bf16": "bfloat16",
             "fp16": "float16",
             "no": str(self.model.dtype).removeprefix("torch."),
         }.get(precision, precision)
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompts trained. Unlike AsyncGRPOTrainer there is no num_generations multiplier and no forking: each dataset
@@ -1468,6 +1505,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
+                if self._lora_sync:
+                    # The worker was built before the server was probed, so it does not know the adapter name yet.
+                    # Without it, its requests name the base model and keep sampling the base policy.
+                    self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=get_config_model_id(model.config),
@@ -1554,7 +1595,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 batch_size=1,
                 collate_fn=DataCollatorForRollout(
                     self.processing_class.pad_token_id,
-                    self.args.teacher_top_k,
                     num_processes,
                     self._teacher_id_to_idx if len(self._teacher_ids) > 1 else None,
                     prompts_trained=self._trained_prompts,
@@ -1661,10 +1701,16 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # (a no-op if bf16/fp16 aren't enabled) — otherwise FlashAttention (which requires fp16/bf16 inputs) sees
         # fp32 hidden states and errors. Under PEFT, `base_model` is the `LoraModel` tuner, whose forward runs the full
         # causal LM, so the backbone is reached through `get_base_model()`; its layers carry the adapters in place.
-        backbone = (unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model).base_model
+        causal_lm = unwrapped_model.get_base_model() if is_peft_model(unwrapped_model) else unwrapped_model
+        backbone = causal_lm.base_model
         forward_start = time.time()
+        # MoE models: request router logits so the load-balancing loss can be computed below
+        router_kwargs = {"output_router_logits": True} if self.aux_loss_enabled else {}
         with self.accelerator.autocast():
-            hidden_states = backbone(input_ids=input_ids, position_ids=position_ids, use_cache=False).last_hidden_state
+            backbone_outputs = backbone(
+                input_ids=input_ids, position_ids=position_ids, use_cache=False, **router_kwargs
+            )
+        hidden_states = backbone_outputs.last_hidden_state
         self._last_forward_time_s = time.time() - forward_start
         hidden_states = hidden_states[:, :-1, :][0]  # (seq_len - 1, H), drop the unused last-position prediction
 
@@ -1741,6 +1787,27 @@ class AsyncDistillationTrainer(_BaseTrainer):
         loss = loss / tokens_per_rank.to(torch.float32)
         loss = loss / self.current_gradient_accumulation_steps
 
+        # The divergence loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
+        if self.aux_loss_enabled:
+            # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
+            from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
+
+            if Version(transformers.__version__) < Version("5.0.0"):
+                num_experts = causal_lm.num_experts
+                num_experts_per_tok = causal_lm.num_experts_per_tok
+            else:
+                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
+                if config.model_type == "gpt_oss" and Version("5.0.0") <= Version(transformers.__version__) < Version(
+                    "5.6.0"
+                ):
+                    num_experts = causal_lm.num_experts
+                else:
+                    num_experts = config.num_experts
+                num_experts_per_tok = config.num_experts_per_tok
+            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
+            aux_loss = load_balancing_loss_func(backbone_outputs.router_logits, num_experts, num_experts_per_tok, None)
+            loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
+
         with torch.no_grad():
             local_count = token_mask_1d.sum().float()
             stats = torch.stack([local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_count])
@@ -1786,6 +1853,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     else:
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append(float("nan"))
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(float("nan"))
+
+            if self.aux_loss_enabled:
+                gathered_aux = self.accelerator.reduce(aux_loss.detach().to(torch.float32), reduction="sum")
+                self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
         # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
         # `_log_step_metrics`. The counts are batch-wide (the collator broadcasts one value per rank), so they are read
@@ -1936,7 +2007,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         model = self.accelerator.unwrap_model(self.model)
 
         logger.info("Weight sync: pausing vLLM...")
-        if self.accelerator.is_main_process and self.weight_transfer:
+        if self.accelerator.is_main_process:
             self.weight_transfer.pause()
         t_pause = time.time()
         logger.info(f"Weight sync: pause took {t_pause - t0:.1f}s, waiting for all ranks...")
@@ -1950,7 +2021,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         if is_peft_model(model):
             model.merge_adapter()
         try:
-            if self.accelerator.is_main_process and self.weight_transfer:
+            if self.accelerator.is_main_process:
                 self.weight_transfer.send_weights(self._streaming_iter())
             else:
                 # Non-rank-0 processes must still participate in full_tensor() collectives for FSDP2.
@@ -1965,8 +2036,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         logger.info(f"Weight sync: resuming vLLM... (transfer took {t_transfer - t_barrier:.1f}s)")
         if self.accelerator.is_main_process:
-            if self.weight_transfer:
-                self.weight_transfer.resume()
+            self.weight_transfer.resume()
             self.model_version += 1
             if self.rollout_worker:
                 self.rollout_worker.update_model_version(self.model_version)
@@ -2030,6 +2100,21 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
+    def _save(self, output_dir=None, state_dict=None):
+        if not self.is_fsdp_enabled or self.accelerator.mixed_precision not in ("bf16", "fp16"):
+            return super()._save(output_dir, state_dict)
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16}[self.compute_dtype]
+        for name, tensor in state_dict.items():
+            if tensor.is_floating_point():
+                state_dict[name] = tensor.to(dtype)
+        super()._save(output_dir, state_dict)
+        model = self.accelerator.unwrap_model(self.model)
+        if not is_peft_model(model):
+            config = copy.deepcopy(model.config)
+            config.dtype = self.compute_dtype
+            config.save_pretrained(output_dir)
+
     def _save_checkpoint(self, model, trial):
         if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
@@ -2041,7 +2126,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
-            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w") as f:
+            with open(os.path.join(checkpoint_dir, "rollout_state.json"), "w", encoding="utf-8") as f:
                 json.dump(rollout_state, f)
         super()._save_checkpoint(model, trial)
 
@@ -2067,7 +2152,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 elif not isinstance(self.train_dataset, Dataset):
                     logger.warning("Resuming with an IterableDataset; the rollout worker will restart from prompt 0.")
                 else:
-                    with open(rollout_state_file) as f:
+                    with open(rollout_state_file, encoding="utf-8") as f:
                         rollout_state = json.load(f)
                     self.rollout_worker._loop_kwargs["dataset_start_index"] = rollout_state["prompt_index"]
                     self._prompts_before_resume = rollout_state["prompt_index"]

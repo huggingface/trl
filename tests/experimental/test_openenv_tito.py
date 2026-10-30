@@ -16,8 +16,10 @@
 
 import asyncio
 import itertools
+import multiprocessing as mp
 import queue
 import threading
+import time
 from collections import defaultdict
 from functools import partial
 from types import SimpleNamespace
@@ -25,11 +27,19 @@ from unittest.mock import MagicMock
 
 import pytest
 from accelerate import PartialState
+from transformers import AutoTokenizer
 
 
 pytest.importorskip("openenv.core.harness.training")
 
-from openenv.core.harness import TrainingTrace
+from openenv.core.harness import (
+    HarnessRolloutResult,
+    MCPHarnessAdapter,
+    ToolResult,
+    ToolTraceEntry,
+    TrainingTrace,
+    VerifyResult,
+)
 
 from trl.experimental.async_grpo import openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
@@ -87,34 +97,20 @@ def test_consumer_rejects_invalid_full_masks(mask):
 
 
 @pytest.mark.parametrize(
-    "adapter,lossless,threshold", [(None, True, 0), (None, False, 1024), (SimpleNamespace(), True, 1024)]
+    "adapter,lossless,threshold", [(None, True, 0), (None, False, 1024), (MCPHarnessAdapter(), True, 1024)]
 )
-def test_loop_owning_capture_defaults_to_lossless_reconciliation(monkeypatch, adapter, lossless, threshold):
-    def init(self, **kwargs):
-        self._fork_threshold_tokens = kwargs.get("fork_threshold_tokens", 1024)
-        self.max_tool_calling_iterations = 8
-        self.temperature = 0.8
-        self.top_p = 1.0
-        self.top_k = -1
-        self.min_p = 0.0
-        self.repetition_penalty = 1.0
-        self.max_tokens = 32
-        self.reward_func_names = []
-        self.max_inflight_tasks = 1
-
-    monkeypatch.setattr(openenv_harness._AsyncRolloutLoop, "__init__", init)
-    factory = MagicMock(return_value=SimpleNamespace())
-    loop = openenv_harness._HarnessRolloutLoop(
-        harness_session_factory=factory, harness_adapter=adapter, lossless_capture=lossless
+def test_loop_owning_capture_defaults_to_lossless_reconciliation(make_loop, adapter, lossless, threshold):
+    factory_calls = []
+    loop = make_loop(
+        factory_builder=lambda **kwargs: factory_calls.append(kwargs),
+        harness_adapter=adapter,
+        lossless_capture=lossless,
     )
-    try:
-        assert loop._fork_threshold_tokens == threshold
-        if adapter is not None:
-            factory.assert_called_once_with()
-        else:
-            factory.assert_called_once_with(sampling=openenv_harness.training_sampling({"temperature": 0.8}))
-    finally:
-        loop._session_pool.shutdown()
+    assert loop._fork_threshold_tokens == threshold
+    if adapter is not None:
+        assert factory_calls == [{}]
+    else:
+        assert factory_calls == [{"sampling": openenv_harness.training_sampling({"temperature": 0.8})}]
 
 
 @pytest.fixture
@@ -124,16 +120,17 @@ def make_loop():
 
     def make(factory=None, *, factory_builder=None, **kwargs):
         kwargs.setdefault("temperature", 0.8)
-        tokenizer = MagicMock(eos_token_id=0, pad_token_id=0)
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         loop = openenv_harness._HarnessRolloutLoop(
             harness_session_factory=factory_builder or (lambda **kwargs: factory),
             model_name="test",
             dataset=[{"prompt": [{"role": "user", "content": "task"}]}],
             reward_funcs=[],
             processing_class=tokenizer,
+            eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
-            model_version_value=SimpleNamespace(value=0),
-            heartbeat_value=SimpleNamespace(value=0.0),
+            model_version_value=mp.Value("i", 0),
+            heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
             metrics_queue=queue.Queue(),
@@ -172,10 +169,15 @@ class Session:
         return TrainingTrace.from_entries([row])
 
     def verify(self, completion):
-        return SimpleNamespace(env_reward=0.25)
+        return VerifyResult(env_reward=0.25)
 
     def close(self):
         self.closed.set()
+
+
+def test_loop_owning_capture_rejects_truncated_sampling(make_loop):
+    with pytest.raises(ValueError, match="candidate set"):
+        make_loop(top_p=0.95, top_k=512)
 
 
 @pytest.mark.parametrize("temperature", [0.3, 0.8, 1.2])
@@ -238,6 +240,17 @@ def test_transport_failures_remain_unscorable(make_loop, phase):
         assert session.closed.is_set()
 
 
+def test_persistent_session_failures_stop_the_worker(make_loop):
+    def create(*args, **kwargs):
+        raise ConnectionError("harness server unavailable")
+
+    loop = make_loop(SimpleNamespace(create=create), max_session_backoff_s=0)
+    with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
+        loop.run()
+    assert loop._failed_event.is_set()
+    assert loop.rollout_buffer.empty()
+
+
 def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session = Session(captured_entry())
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
@@ -261,7 +274,13 @@ def test_capture_error_closes_other_inflight_sessions(make_loop):
     blocking.wait_for_completion = wait
     broken = Session(captured_entry())
     broken.row["prompt_token_ids"] = []
-    broken.wait_for_completion = lambda: started.wait(3)
+
+    def wait_then_exit_cleanly():
+        started.wait(3)
+        # A capture rejected after a non-zero exit is unscorable, not fatal
+        return 0
+
+    broken.wait_for_completion = wait_then_exit_cleanly
     sessions = iter([blocking, broken])
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: next(sessions)))
     with pytest.raises(openenv_harness.CaptureContractError):
@@ -295,13 +314,66 @@ def test_concurrent_correctness_metrics_stay_on_event_loop(make_loop):
     assert sum(item["rollout/correctness_mean"][1] for item in metrics) == 32
 
 
+def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch):
+    """The adapter runs the tools between two model turns; that gap is logged as their latency, by name."""
+    call = {"type": "function", "function": {"name": "bash", "arguments": {}}}
+    replies = iter([{"role": "assistant", "tool_calls": [call, {**call, "function": {"name": "edit"}}]}, {}])
+    monkeypatch.setattr(openenv_harness, "parse_response", lambda *args, **kwargs: next(replies))
+
+    class Adapter:
+        def run_white_box(self, step, session, limits):
+            trace = []
+            for tc in step([{"role": "user", "content": "task"}], [], {}).response.tool_calls:
+                time.sleep(0.02)
+                trace.append(ToolTraceEntry(tc.name, tc.args, ToolResult(error="boom" if tc.name == "edit" else None)))
+            step([{"role": "user", "content": "task"}], [], {})
+            return HarnessRolloutResult(messages=[{"role": "assistant", "content": "done"}], tool_trace=trace)
+
+    loop = make_loop(
+        SimpleNamespace(create=lambda *args, **kwargs: Session(captured_entry())), harness_adapter=Adapter()
+    )
+
+    async def generate_one_turn(prompt_ids):
+        return [2, 3], [-0.1, -0.2], None, None
+
+    loop._generate_one_turn = generate_one_turn
+    result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
+    assert result[3:5] == (2, 1)
+    payload = loop._metrics_queue.get_nowait()
+    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
+    assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
+    assert payload["tools/latency_s"][1] == 2 and payload["tools/latency_s"][0] >= 0.04
+    assert payload["tools/bash/latency_s"][1] == 1 and payload["tools/edit/latency_s"][0] >= 0.02
+
+
+def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
+    """Captured tool results carry `tool_call_id`, not a name; failures still land on the right tool."""
+    row = captured_entry()
+    row["request"]["messages"] = [
+        {"role": "user", "content": "task"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "a", "function": {"name": "bash"}}, {"id": "b", "function": {"name": "edit"}}],
+        },
+        {"role": "tool", "tool_call_id": "a", "content": "ok"},
+        {"role": "tool", "tool_call_id": "b", "content": "Traceback: boom"},
+    ]
+    row["response"]["choices"][0]["message"]["tool_calls"] = [{"id": "c", "function": {"name": "bash"}}]
+    loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: Session(row)))
+    result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
+    assert result[3:5] == (1, 1)
+    payload = loop._metrics_queue.get_nowait()
+    assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
+    assert "tools/latency_s" not in payload
+
+
 def test_harness_worker_produces_scored_training_samples(make_loop):
     indices = itertools.count()
 
     def create(*args, **kwargs):
         reward = float(next(indices) % 2)
         session = Session(captured_entry())
-        session.verify = lambda completion: SimpleNamespace(env_reward=reward)
+        session.verify = lambda completion: VerifyResult(env_reward=reward)
         return session
 
     loop = make_loop(SimpleNamespace(create=create))
@@ -324,8 +396,8 @@ def test_harness_worker_produces_scored_training_samples(make_loop):
     loop._loop.run_until_complete(run())
     rows = [loop.rollout_buffer.get_nowait() for _ in range(8)]
     assert {row.group_id for row in rows} == {0}
-    assert all(row.input_ids == [1, 2, 3] and row.completion_mask == [0, 1, 0] for row in rows)
-    assert all(row.old_log_probs == [0.0, -0.1, -0.2] for row in rows)
+    assert all(row.input_ids.tolist() == [1, 2, 3] and row.completion_mask.tolist() == [0, 1, 0] for row in rows)
+    assert all(row.old_log_probs.tolist() == pytest.approx([0.0, -0.1, -0.2]) for row in rows)
     assert min(row.advantage for row in rows) < 0 < max(row.advantage for row in rows)
 
 
