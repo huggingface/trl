@@ -14,6 +14,7 @@
 
 
 import contextvars
+import copy
 import itertools
 import json
 import math
@@ -30,10 +31,12 @@ from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
+import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import broadcast_object_list, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging.version import Version
 from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
@@ -56,7 +59,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import TREE_ATTENTION, TreeRow, register_tree_attention
+from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -122,10 +125,12 @@ class RolloutWorkerProtocol(Protocol):
 
     Attributes:
         rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it. The two queue types are
-            structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
-            default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
-            an in-process worker uses `queue.Queue`.
+            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it, or the bare `int` group id of
+            a group it scored but has nothing to train on (every advantage zero), so the prompt still counts as
+            consumed for epochs and checkpoint resume. The two queue types are structurally identical (`get` /
+            `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default [`AsyncRolloutWorker`]
+            runs its loop in a spawned process and uses `multiprocessing.Queue`, while an in-process worker uses
+            `queue.Queue`.
         metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
             Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
             like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
@@ -237,11 +242,11 @@ class _TrainBeginCallback(TrainerCallback):
 class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
-    An epoch is counted in distinct prompt-groups actually trained (accumulated in the collator, which runs on the main
-    process just before the model forward). This is fork-independent: all generations of a prompt and all forked rows
-    of a conversation share one `group_id`, so a conversation forking into many rows still counts once. Only the main
-    process collates (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel
-    workers in lockstep.
+    An epoch is counted in distinct prompt-groups consumed: trained (accumulated in the collator, which runs on the
+    main process just before the model forward) or dropped for zero advantage. This is fork-independent: all
+    generations of a prompt and all forked rows of a conversation share one `group_id`, so a conversation forking into
+    many rows still counts once. Only the main process collates (`dispatch_batches=True`), so the stop decision is
+    reduced across ranks to keep data-parallel workers in lockstep.
     """
 
     def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
@@ -250,8 +255,9 @@ class _EpochStopCallback(TrainerCallback):
 
     def on_step_end(self, args, _state, control, **_kwargs):
         acc = self._trainer.accelerator
-        trained = self._trainer._groups_before_resume + len(self._trainer._trained_groups)
-        reached = torch.tensor(int(trained >= self._target), device=acc.device)
+        trainer = self._trainer
+        consumed = trainer._groups_before_resume + len(trainer._trained_groups | trainer._dropped_groups)
+        reached = torch.tensor(int(consumed >= self._target), device=acc.device)
         if int(acc.reduce(reached, reduction="sum").item()) >= 1:
             control.should_training_stop = True
             # `max_steps` is only a safety ceiling here, so `DefaultFlowCallback` never reaches its end-of-training save.
@@ -308,6 +314,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         check_health_fn,
         stale_after_s,
         metrics,
+        dropped_groups,
         max_staleness=3,
         poll_interval_s=5.0,
         report_to=None,
@@ -320,6 +327,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
         # `dispatch_batches=True`), which is also the only process where the queue wait is real, so its metrics need no
         # communication at all — they are appended straight into the sink the trainer reduces in `log()`.
         self.metrics = metrics
+        self.dropped_groups = dropped_groups
         # Blocking-get time, accumulated here and flushed by `training_step` at the optimizer-step boundary — the only
         # place that knows when a step's worth of waiting is done.
         self.wait_s = 0.0
@@ -363,6 +371,10 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
             self.wait_s += wait_s
             if wait_s > 1.0:
                 logger.info(f"waited {wait_s:.1f}s for sample (qsize={self.queue.qsize()})")
+
+            if isinstance(sample, int):
+                self.dropped_groups.add(sample)
+                continue
 
             version = self.model_version_fn()
             staleness = version - sample.model_version
@@ -607,9 +619,6 @@ class DataCollatorForRollout(DataCollatorMixin):
             "sampling_mask": -1,
             "sampler_ids": -1,
             "sampler_log_probs": -math.inf,
-            "tree_kv_index": -1,
-            "tree_cu_seqlens_q": -1,
-            "tree_cu_seqlens_k": -1,
         }
         batch = {key: pad([p[key] for p in packed], padding_value=padding.get(key, 0)) for key in packed[0]}
         batch["attention_mask"] = pad([torch.ones_like(p["input_ids"]) for p in packed], padding_value=0)
@@ -1117,10 +1126,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
         layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
         # Check tree attention compat
         if layer_types:
-            raise ValueError(
-                f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing only routes attention layers "
-                "along each sample's own path; a recurrent or convolutional layer would scan across samples."
-            )
+            if layer_types == {"linear_attention"} and Version(transformers.__version__) < Version("5.15.0"):
+                raise ValueError(
+                    f"Tree packing of {type(model).__name__}'s gated DeltaNet layers requires transformers>=5.15.0: "
+                    "before it, these layers call the functions they stored at init rather than the module-level "
+                    "ones tree packing patches, so they would scan across samples."
+                )
+            if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
+                raise ValueError(
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
+                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
+                    "convolutional layer would scan across samples."
+                )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
                 f"{type(model).__name__} uses attention sinks, which the FA3 kernel used by tree packing does not "
@@ -1255,16 +1272,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
         )
 
         precision = self.accelerator.mixed_precision
-        dtype = {
+        self.compute_dtype = {
             "bf16": "bfloat16",
             "fp16": "float16",
             "no": str(self.model.dtype).removeprefix("torch."),
         }.get(precision, precision)
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, dtype)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)
 
         # Epoch handling: stop after num_train_epochs full passes over the PROMPT dataset, counted as distinct
         # prompt-groups trained (fork-independent).
         self._trained_groups: set[int] = set()
+        self._dropped_groups: set[int] = set()
         # Tracks restart to match `num_train_epochs`
         self._groups_before_resume = 0
         self._epoch_stop_groups: int | None = None
@@ -1387,6 +1405,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
                 self.rollout_worker = rollout_worker
+                if self._lora_sync:
+                    # The worker was built before the server was probed, so it does not know the adapter name yet.
+                    # Without it, its requests name the base model and keep sampling the base policy.
+                    self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     model_name=get_config_model_id(model.config),
@@ -1450,6 +1472,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 check_health_fn=self.rollout_worker.check_health,
                 stale_after_s=self.args.heartbeat_stale_after_s,
                 metrics=self._metrics["train"],
+                dropped_groups=self._dropped_groups,
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
             )
@@ -1520,7 +1543,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 "tree_kv_index",
                 "tree_cu_seqlens_q",
                 "tree_cu_seqlens_k",
-                "tree_max_seqlens",
+                "tree_segment_parents",
+                "tree_segment_depths",
+                "tree_sizes",
             ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1546,10 +1571,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             sampling_mask[row, col] = candidates
             sampling_mask = sampling_mask.unsqueeze(0)
         sampler_ids = inputs["sampler_ids"][mask_bool].unsqueeze(0) if self.args.score_centering else None
-        tree_kwargs = {
-            key: inputs[key][inputs[key] >= 0] for key in ("tree_kv_index", "tree_cu_seqlens_q", "tree_cu_seqlens_k")
-        }
-        tree_kwargs["tree_max_seqlen_q"], tree_kwargs["tree_max_seqlen_k"] = inputs["tree_max_seqlens"][0].tolist()
 
         forward_start = time.time()
         # MoE models: request router logits so the forward returns the load-balancing loss
@@ -1562,7 +1583,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             score_ids=sampler_ids,
             fused_lm_head=True,
             **router_kwargs,
-            **tree_kwargs,
+            **unpad_tree(inputs),
         )
         log_probs = outputs.log_probs.flatten()[token_index]
         entropy = outputs.entropy.flatten()[token_index]
@@ -1927,14 +1948,29 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 self.rollout_worker.update_model_version(self.model_version)
         return t_pause, t_barrier, t_transfer
 
+    def _save(self, output_dir=None, state_dict=None):
+        if not self.is_fsdp_enabled or self.accelerator.mixed_precision not in ("bf16", "fp16"):
+            return super()._save(output_dir, state_dict)
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16}[self.compute_dtype]
+        for name, tensor in state_dict.items():
+            if tensor.is_floating_point():
+                state_dict[name] = tensor.to(dtype)
+        super()._save(output_dir, state_dict)
+        model = self.accelerator.unwrap_model(self.model)
+        if not is_peft_model(model):
+            config = copy.deepcopy(model.config)
+            config.dtype = self.compute_dtype
+            config.save_pretrained(output_dir)
+
     def _save_checkpoint(self, model, trial):
         if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
-            trained = self._trained_groups
-            first_untrained = next(g for g in itertools.count() if g not in trained)
-            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_untrained
+            consumed = self._trained_groups | self._dropped_groups
+            first_unconsumed = next(g for g in itertools.count() if g not in consumed)
+            prompt_index = self.rollout_worker._loop_kwargs["dataset_start_index"] + first_unconsumed
             # `model_version` rides along so adapter names keep counting across a resume: restarting at v1 would
             # republish a different adapter under a name a still-running server already holds.
             rollout_state = {"prompt_index": prompt_index, "model_version": self.model_version}
