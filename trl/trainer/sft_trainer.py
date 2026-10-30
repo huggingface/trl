@@ -97,11 +97,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded with `-100` to the maximum length of the batch. If `padding_free` is set
-    to `False`, the following key is also returned:
+    to `False` and the examples are not packed, the following key is also returned:
     - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following keys are also returned:
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
-    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths of the flattened sequence.
+    If `padding_free` is set to `True` or the examples are packed (they have a `"seq_lengths"` key, as produced by BFD
+    packing), the following keys are returned instead:
+    - `"position_ids"`: Tensor of position IDs, restarting at each sequence, padded to the maximum length of the batch.
+    - `"cu_seq_lens_q"`, `"cu_seq_lens_k"`: Cumulative sequence lengths over the flattened rows, padded with empty
+      sequences to a multiple of 16.
     - `"max_length_q"`, `"max_length_k"`: Length of the longest sequence.
     - `"seq_idx"`: Tensor of the sequence index of each token.
 
@@ -110,7 +112,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             Token ID to use for padding.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly and returned instead of the attention mask.
+            generated accordingly and returned instead of the attention mask. Packed examples get position IDs instead
+            of the attention mask either way, but stay as rows unless this is set.
         return_position_ids (`bool`, *optional*, defaults to `False`):
             If set to `True`, position IDs are returned alongside the attention mask in the padded (non-padding-free)
             mode. Required by sequence parallelism (Ulysses/ALST), which shards batches along the sequence dimension
@@ -153,8 +156,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
      'labels': tensor([[-100, 2, 3, -100, 5]]),
-     'cu_seq_lens_q': tensor([0, 3, 5], dtype=torch.int32),
-     'cu_seq_lens_k': tensor([0, 3, 5], dtype=torch.int32),
+     'cu_seq_lens_q': tensor([0, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5], dtype=torch.int32),
+     'cu_seq_lens_k': tensor([0, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5], dtype=torch.int32),
      'max_length_q': 3,
      'max_length_k': 3,
      'seq_idx': tensor([[0, 0, 0, 1, 1]], dtype=torch.int32)}
@@ -176,14 +179,15 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         input_ids = [torch.tensor(ids) for ids in input_ids]
         labels = [torch.tensor(lbl) for lbl in labels]
 
-        # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
-        # compute wrong cu_seq_lens from the all-1s mask
-        if self.padding_free or self.return_position_ids:
+        # Packed examples hold several sequences per row. Like padding-free batches, they get per-sequence position IDs
+        # and sequence boundaries instead of an attention mask, which would let the sequences of a row see each other
+        per_sequence = self.padding_free or batch_seq_lengths is not None
+        if per_sequence or self.return_position_ids:
             if batch_seq_lengths is not None:
                 position_ids = self.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        if not self.padding_free:
+        if not per_sequence:
             attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         # If padding_free, flatten everything into a single sequence
@@ -203,21 +207,27 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
-        if self.padding_free:
+        if per_sequence:
             output["position_ids"] = pad(
                 position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
+            # The padding of each row is one sequence, not one per padding token
+            for row, ids in zip(output["position_ids"], position_ids, strict=True):
+                row[len(ids) :] = torch.arange(row.numel() - len(ids))
             output["labels"][output["position_ids"] == 0] = -100
-            # Sequence boundaries for the varlen kernels (flash attention, linear attention). Computed here, on CPU,
-            # since the model would otherwise derive them from `position_ids` with device-to-host syncs in every layer.
-            seq_starts = (output["position_ids"][0] == 0).nonzero().flatten()
-            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].size(1)])]).to(torch.int32)
+            # Sequence boundaries for the varlen kernels (flash attention, linear attention), indexing the flattened
+            # rows. Computed here, on CPU, since the model would otherwise derive them from `position_ids` with
+            # device-to-host syncs in every layer.
+            seq_starts = (output["position_ids"].flatten() == 0).nonzero().flatten()
+            cu_seq_lens = torch.cat([seq_starts, torch.tensor([output["position_ids"].numel()])]).to(torch.int32)
+            # Rounded up to a multiple of 16 with empty sequences, so that a compiled model only sees a few shapes
+            cu_seq_lens = torch.cat([cu_seq_lens, cu_seq_lens[-1:].repeat(-cu_seq_lens.numel() % 16)])
             output["cu_seq_lens_q"] = output["cu_seq_lens_k"] = cu_seq_lens
             output["max_length_q"] = output["max_length_k"] = int(cu_seq_lens.diff().max())
             # Sequence index of each token, for the short convolutions of linear-attention layers
             output["seq_idx"] = torch.repeat_interleave(
                 torch.arange(cu_seq_lens.numel() - 1, dtype=torch.int32), cu_seq_lens.diff()
-            )[None]
+            ).view_as(output["position_ids"])
         else:
             if self.return_position_ids:
                 output["position_ids"] = pad(
@@ -959,9 +969,17 @@ class SFTTrainer(_BaseTrainer):
                     param.data = param.data.to(torch.bfloat16)
 
         # Data collator
-        # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
-        # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy in {"bfd", "bfd_split"})
+        # Before transformers 5.23.0, recurrent and convolutional layers (e.g. gated DeltaNet) pass the packed rows as
+        # they are to varlen kernels that only take a single row, so BFD-packed batches are flattened for these models
+        # (huggingface/transformers#50185)
+        text_config = model.config.get_text_config()
+        layer_types = set(getattr(text_config, "layer_types", None) or []) - {"full_attention", "sliding_attention"}
+        self.padding_free = args.padding_free or (
+            args.packing
+            and args.packing_strategy in {"bfd", "bfd_split"}
+            and bool(layer_types)
+            and Version(transformers.__version__) < Version("5.23.0")
+        )
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -1697,7 +1715,7 @@ class SFTTrainer(_BaseTrainer):
             if "attention_mask" in inputs:
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
+                local_num_tokens = torch.tensor(inputs["position_ids"].numel(), device=inputs["position_ids"].device)
                 num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
