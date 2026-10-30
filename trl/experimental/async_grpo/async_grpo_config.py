@@ -42,6 +42,12 @@ class AsyncGRPOConfig(_BaseConfig):
             trainer's own precision. Closing that gap end to end also requires serving the vLLM server in the same
             dtype (`vllm serve --dtype`); a mismatch is logged as a warning at train start. A `dtype` in
             `model_init_kwargs` takes precedence.
+
+            This only sets the dtype the weights are loaded in. Under FSDP with mixed precision (`bf16=True` is the
+            default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master weights and
+            the optimizer state are fp32 whatever `dtype` says, while the forward and backward run in bf16 or fp16.
+            Checkpoints are then written in that mixed-precision dtype, not in fp32. Without FSDP nothing upcasts:
+            `dtype="bfloat16"` with `bf16=True` keeps bf16 weights and optimizer states, which is pure bf16 training.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
@@ -198,8 +204,10 @@ class AsyncGRPOConfig(_BaseConfig):
         default="float32",
         metadata={
             "help": "Dtype to load the model under. Defaults to 'float32', the precision the training-inference "
-            "mismatch results this trainer is measured against were obtained at. A `dtype` in `model_init_kwargs` "
-            "takes precedence.",
+            "mismatch results this trainer is measured against were obtained at. Under FSDP with mixed precision the "
+            "master weights and optimizer state are fp32 regardless (accelerate upcasts before sharding) and "
+            "checkpoints are written in the bf16/fp16 compute dtype. A `dtype` in `model_init_kwargs` takes "
+            "precedence.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )

@@ -1,13 +1,14 @@
 # Asynchronous GRPO
 
 > [!IMPORTANT]
-> This trainer requires `vllm` and `transformers>=5.2.0`. For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
+> This trainer requires `vllm`, `transformers>=5.2.0` and `kernels` (training loads FlashAttention from the Hub through it). For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not).
 >
-> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first and then force-install transformers:
+> Currently, `vllm` and `transformers` have conflicting dependency constraints. To work around this, install vLLM first, then force-install transformers, then add `kernels` through TRL's extra, which pins the version transformers accepts:
 >
 > ```bash
 > pip install vllm
 > pip install 'transformers>=5.2.0' --no-deps
+> pip install 'trl[kernels]'
 > ```
 
 ## Overview
@@ -46,7 +47,7 @@ The number of concurrent requests sent to the vLLM server is capped by `max_infl
 
 `max_inflight_tasks` is a ceiling, not the number actually in flight. The worker polls the server's `/metrics` endpoint every few seconds and keeps a live cap underneath it (`rollout/inflight_cap`): past a certain concurrency, more requests make vLLM *slower*, because the KV cache fills, sequences are preempted and recomputed, and cached prefixes are evicted and re-prefilled. The cap starts at `KV cache tokens / max_model_len`, read from the server at startup: as many requests as fit at full length, so the first step cannot thrash. While usage stays under 0.6 with nothing queued, the cap grows by 25% each time a cap's worth of rollouts has completed, up to the ceiling. When KV cache usage passes 0.8, the cap is cut by 30%; no running request is cancelled, admissions just stop until the pool has drained below the new cap, and no further cut is taken until then. If the server does not expose `/metrics`, the cap stays at the ceiling.
 
-**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume.
+**Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume. Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it; the fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP the checkpoint is also the resume file, so it keeps the master dtype.
 
 ## Quick start
 
