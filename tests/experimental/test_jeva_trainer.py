@@ -275,7 +275,10 @@ class TestJevaTrainer(TrlTestCase):
                 "decision_arch": "matrix_stack",
                 "context_proj": model.context_proj.state_dict(),
                 "option_proj": model.option_proj.state_dict(),
-                "core": model.core.state_dict(),
+                "core": {
+                    key: value.reshape(()) if value.numel() == 1 else value
+                    for key, value in model.core.state_dict().items()
+                },
             },
             tmp_path / "head.pt",
         )

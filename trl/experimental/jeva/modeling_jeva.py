@@ -36,7 +36,7 @@ class JevaPositiveScalar(nn.Module):
         super().__init__()
         self.minimum = minimum
         self.initial_value = math.log(math.expm1(max(value - minimum, 1e-6)))
-        self.raw = nn.Parameter(torch.tensor(self.initial_value))
+        self.raw = nn.Parameter(torch.tensor([self.initial_value]))
 
     def forward(self):
         return self.minimum + F.softplus(self.raw)
@@ -71,7 +71,7 @@ class JevaDecisionBlock(nn.Module):
         self.tau_set = JevaPositiveScalar(config.tau_set_init, config.min_temperature)
         ratio = min(max(config.alpha_over_tau_init, 1e-4), 1 - 1e-4)
         self.initial_gamma = math.log(ratio / (1 - ratio))
-        self.gamma = nn.Parameter(torch.tensor(self.initial_gamma))
+        self.gamma = nn.Parameter(torch.tensor([self.initial_gamma]))
         self.ffn_norm = nn.RMSNorm(self.dim, eps=1e-6) if config.decision_ffn_ratio > 0 else None
         self.ffn = JevaSwiGLU(config) if config.decision_ffn_ratio > 0 else None
 
@@ -103,7 +103,7 @@ class JevaDecisionStack(nn.Module):
         self.tau_dec = JevaPositiveScalar(config.tau_dec_init, config.min_temperature)
         self.tau_cov = JevaPositiveScalar(config.tau_cov_init, config.min_temperature)
         self.initial_coverage_bias = config.coverage_bias_init
-        self.coverage_bias = nn.Parameter(torch.tensor(float(config.coverage_bias_init)))
+        self.coverage_bias = nn.Parameter(torch.tensor([float(config.coverage_bias_init)]))
 
     def forward(self, state, options, option_mask):
         options = F.normalize(options, dim=-1)
@@ -271,7 +271,9 @@ class JevaModel(PreTrainedModel):
             ("option_proj", model.option_proj),
             ("core", model.core),
         ):
-            module.load_state_dict(head[name])
+            module.load_state_dict(
+                {key: value.reshape(1) if value.ndim == 0 else value for key, value in head[name].items()}
+            )
         return model
 
     def get_input_embeddings(self):
