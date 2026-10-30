@@ -36,7 +36,12 @@ from trl.chat_template_utils import (
     gemma4_v4_chat_template,
     gemma4_v5_chat_template,
     get_training_chat_template,
+    glm4_7_chat_template,
+    glm5_1_chat_template,
+    glm5_2_chat_template,
+    glm5_3_chat_template,
     glm5_3_flash_chat_template,
+    glm5_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
@@ -378,7 +383,17 @@ class TestAddResponseSchema:
         parsed = parse_response(tokenizer, response, prefix=prefix.input_ids)
         assert parsed == expected
 
-    @pytest.mark.parametrize("chat_template", [pytest.param(glm5_3_flash_chat_template, id="glm5.3-flash")])
+    @pytest.mark.parametrize(
+        "chat_template",
+        [
+            pytest.param(glm4_7_chat_template, id="glm4.7"),
+            pytest.param(glm5_chat_template, id="glm5"),
+            pytest.param(glm5_1_chat_template, id="glm5.1"),
+            pytest.param(glm5_2_chat_template, id="glm5.2"),
+            pytest.param(glm5_3_chat_template, id="glm5.3"),
+            pytest.param(glm5_3_flash_chat_template, id="glm5.3-flash"),
+        ],
+    )
     @pytest.mark.parametrize(
         "completion, expected",
         [
