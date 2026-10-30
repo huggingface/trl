@@ -734,7 +734,7 @@ class ULDLoss(nn.Module):
             JSD loss for matched tokens
         """
         # Reshape to [batch_size * seq_len, vocab_size] format expected by generalized_jsd_loss
-        batch_seq_len, num_matched = student_logits.shape
+        num_matched = student_logits.shape[1]
 
         student_logits_reshaped = student_logits.view(-1, num_matched)
         teacher_logits_reshaped = teacher_logits.view(-1, num_matched)
