@@ -41,6 +41,7 @@ from torch.distributed._tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.modeling_flash_attention_utils import lazy_import_flash_attention
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
@@ -1093,17 +1094,38 @@ class AsyncGRPOTrainer(_BaseTrainer):
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.temperature = args.temperature
 
-        register_tree_attention()
-
         # Model
         # PEFT initializes the adapter weights randomly, so set_seed must be done before creating the model to ensure
         # reproducibility.
         set_seed(args.seed)
+        self.attn_implementation = None
         if isinstance(model, str):
             model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
             model_init_kwargs.setdefault("trust_remote_code", args.trust_remote_code)
             model_init_kwargs.setdefault("dtype", args.dtype)
             model_revision = model_init_kwargs.get("revision")
+            self.attn_implementation = model_init_kwargs.pop("attn_implementation", None)
+        else:
+            model_revision = None
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
+        if self.attn_implementation is None:
+            if torch.version.hip:
+                self.attn_implementation = "kernels-community/aiter-flash-attn@v2"
+            elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+                # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above),
+                # FlashAttention-4 does.
+                self.attn_implementation = "kernels-community/flash-attn4"
+            else:
+                self.attn_implementation = "kernels-community/flash-attn3"
+        if lazy_import_flash_attention(self.attn_implementation)[0][1] is None:
+            raise ValueError("Tree attention requires a FlashAttention implementation with variable-length support.")
+        # The model uses the tree adapter; each forward selects the Trainer's underlying FlashAttention backend.
+        register_tree_attention()
+        if isinstance(model, str):
             model = create_model_from_path(
                 model,
                 device_map=None,
@@ -1111,13 +1133,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 **model_init_kwargs,
             )
         else:
-            model_revision = None
             model.set_attn_implementation(TREE_ATTENTION)
-            if args.model_init_kwargs is not None:
-                logger.warning(
-                    "You passed `model_init_kwargs` to the `AsyncGRPOConfig`, but your model is already instantiated. "
-                    "The `model_init_kwargs` will be ignored."
-                )
 
         if args.use_liger_kernel:
             raise NotImplementedError("`use_liger_kernel` is not supported yet.")
@@ -1582,6 +1598,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             support_ids=sampling_mask,
             score_ids=sampler_ids,
             fused_lm_head=True,
+            tree_attn_implementation=self.attn_implementation,
             **router_kwargs,
             **unpad_tree(inputs),
         )

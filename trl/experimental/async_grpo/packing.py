@@ -14,7 +14,6 @@
 
 import math
 import sys
-from functools import cache
 from itertools import chain
 from typing import Any
 
@@ -23,6 +22,7 @@ import torch
 from transformers import AttentionInterface
 from transformers.integrations.flash_attention import get_target_dtype
 from transformers.masking_utils import AttentionMaskInterface
+from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 
 class TreeRow:
@@ -222,18 +222,6 @@ def unpad_tree(inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
 TREE_ATTENTION = "tree_fa3"
 
 
-@cache
-def _flash_attn():
-    from kernels import get_kernel
-
-    if torch.version.hip:
-        return get_kernel("kernels-community/aiter-flash-attn", version=2)
-    # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
-    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
-        return get_kernel("kernels-community/flash-attn4", version=0)
-    return get_kernel("kernels-community/flash-attn3", version=1)
-
-
 def tree_attention(
     module,
     query,
@@ -246,28 +234,34 @@ def tree_attention(
     tree_cu_seqlens_k,
     tree_max_seqlen_q,
     tree_max_seqlen_k,
+    tree_attn_implementation,
     scaling=None,
     sliding_window=None,
     softcap=None,
     **kwargs,
 ):
     dtype = get_target_dtype(query, module) or query.dtype
-    query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    out = _flash_attn().flash_attn_varlen_func(
+    query, key, value = (x.transpose(1, 2).to(dtype) for x in (query, key, value))
+    # Transformers selects the requested FlashAttention backend and adapts its kernel arguments.
+    # Each segment queries its root-to-segment path, whose K/V length can exceed the query length.
+    out = _flash_attention_forward(
         query,
-        key.index_select(0, tree_kv_index),
-        value.index_select(0, tree_kv_index),
-        tree_cu_seqlens_q,
-        tree_cu_seqlens_k,
-        tree_max_seqlen_q,
-        tree_max_seqlen_k,
+        key.index_select(1, tree_kv_index),
+        value.index_select(1, tree_kv_index),
+        attention_mask=None,
+        query_length=query.shape[1],
+        is_causal=True,
+        cu_seq_lens_q=tree_cu_seqlens_q,
+        cu_seq_lens_k=tree_cu_seqlens_k,
+        max_length_q=tree_max_seqlen_q,
+        max_length_k=tree_max_seqlen_k,
         softmax_scale=scaling,
-        causal=True,
-        window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),
-        **({"softcap": softcap} if softcap else {}),
+        sliding_window=sliding_window,
+        softcap=softcap,
+        target_dtype=dtype,
+        attn_implementation=tree_attn_implementation,
     )
-    out = out[0] if isinstance(out, tuple) else out
-    return out.unsqueeze(0), None
+    return out, None
 
 
 def register_tree_attention() -> None:
