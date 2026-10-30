@@ -52,6 +52,7 @@ _TELEMETRY_TRAINERS = {
     "GMPOTrainer",
     "GOLDTrainer",
     "IWOPDTrainer",
+    "JevaTrainer",
     "OnlineDPOTrainer",
     "ORPOTrainer",
     "SDFTTrainer",

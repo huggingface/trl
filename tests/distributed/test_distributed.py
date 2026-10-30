@@ -64,6 +64,59 @@ def get_config_path(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            "fsdp2",
+            pytest.param(
+                "jeva_cp",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.22.1"),
+                    reason="Jeva context parallelism requires transformers>=5.22.1",
+                ),
+            ),
+        ],
+    )
+    def test_jeva(self, config, get_config_path):
+        run_command(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                get_config_path(config),
+                *(["--zero3_save_16bit_model", "true"] if config == "zero3" else []),
+                "-m",
+                "pytest",
+                "tests/experimental/test_jeva_trainer.py",
+                "-k",
+                "test_distributed_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {
+                **os.environ,
+                "TRL_TEST_JEVA_OUTPUT_DIR": self.tmp_dir,
+                "TRL_TEST_JEVA_CP": "1" if config == "jeva_cp" else "0",
+            },
+        )
+
     @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file, get_config_path):
         run_command(

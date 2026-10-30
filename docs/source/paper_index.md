@@ -1968,6 +1968,36 @@ training_args = DistillationConfig(
 )
 ```
 
+## Jeva
+
+Papers relating to [`experimental.jeva.JevaTrainer`].
+
+### Jeva: System One Models from First Principles
+
+**📜 Paper**: https://huggingface.co/papers/2610.18773
+
+Jeva independently encodes a state and its options, then refines the state against immutable option representations.
+Its decision stack separates conditional candidate preferences from answer availability, allowing explicit null
+outcomes and variable-size candidate sets. The trainer fits Choice, Noul, and Score target distributions with
+candidate cross entropy and an optional coverage objective.
+
+```python
+from peft import LoraConfig
+from trl.experimental.jeva import JevaConfig
+
+training_args = JevaConfig(
+    mode="lora",
+    output_dir="jeva-output",
+    max_grad_norm=1.0,  # "configured threshold 1.0"
+)
+peft_config = LoraConfig(
+    r=64,  # "LoRA uses rank 64"
+    lora_alpha=128,  # "scaling parameter 128"
+    lora_dropout=0.05,  # "training dropout 0.05"
+    task_type="FEATURE_EXTRACTION",
+)
+```
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models
