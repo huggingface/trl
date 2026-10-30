@@ -31,7 +31,7 @@ Original DeepSeek-R1-Distill chat template, shipped byte-identically by every di
 
 ### `deepseekv3.jinja`
 
-Original DeepSeek-V3 chat template.
+Original DeepSeek-V3 chat template (as shipped by `deepseek-ai/DeepSeek-R1`). Renders tool-call arguments only as strings, so trainers swap in `deepseekv3_training.jinja` when tools are enabled. Response parsing uses `deepseekv3_template`.
 
 ### `diffusion_gemma.jinja`
 
