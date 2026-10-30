@@ -616,13 +616,26 @@ $$
 \log \pi_\theta(o_{i,t} \mid q, o_{i,<t}) = z_{o_{i,t}} - \log \sum_{v \in \textcolor{red}{\mathcal{S}_{i,t}}} e^{z_v}.
 $$
 
-Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0` or `top_k > 0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
+Without it the importance ratio is biased low and the gradient keeps pushing probability mass onto tokens the sampler never draws, which collapses training. This is supported in the [`experimental.async_grpo.AsyncGRPOTrainer`]: with `top_p < 1.0`, `top_k > 0` or `min_p > 0.0`, the rollout worker records each token's support from vLLM (>= 0.28, started with `--return-sampling-mask --enable-scale-out`) and the trainer renormalizes over it:
 
 ```python
 from trl.experimental.async_grpo import AsyncGRPOConfig
 
 training_args = AsyncGRPOConfig(
     ...,
+    top_p=0.95,
+    top_k=512,
+)
+```
+
+It is also supported in the [`GRPOTrainer`] with vLLM in colocate mode (>= 0.28): with `top_k > 0` and the importance sampling correction enabled (the default), vLLM returns each token's support and the trainer renormalizes over it:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,
     top_p=0.95,
     top_k=512,
 )
@@ -1769,6 +1782,60 @@ training_args = GOLDConfig(
 )
 ```
 
+### X-Token: Projection-Guided Cross-Tokenizer Knowledge Distillation
+
+**📜 Paper**: https://huggingface.co/papers/2605.21699
+
+X-Token extends the GOLD distillation framework to student-teacher pairs that **do not share a tokenizer**. It is an **off-policy** method (`lmbda=0`): the dataset provides the completion text, both student and teacher run forward passes on that text, and the cross-tokenizer KD loss is computed between their logits. No on-policy student rollouts are needed. A precomputed sparse projection matrix W ∈ ℝ^{V_s × V_t} maps each student token to the teacher tokens it most plausibly corresponds to, projecting the student distribution into the teacher vocab space so the two can be compared directly. Used in TRL via [`experimental.gold.GOLDTrainer`] with `xtoken_loss_type="p_kl"` or `"h_kl"`.
+
+Two loss formulations are provided:
+
+| Variant | `xtoken_loss_type` | Description |
+|---------|-------------------|-------------|
+| P-KL | `"p_kl"` | Projects the full student distribution into teacher vocab via W and computes forward KL on a global top-k subset. Implements Eq. (4) of the paper. |
+| H-KL | `"h_kl"` | Hybrid: forward KL on renormalized distributions over a relaxed common set (top-1 projection weight ≥ 0.6) and sorted-L1 on uncommon tokens. Implements Eq. (3) with the mapping from Eq. (5). |
+
+As in the reference implementation, H-KL slices the full-vocabulary log-probabilities to the common set and P-KL averages the teacher log-probabilities over each span without renormalizing, so the KD term can be negative. CE and KD use separate token and aligned-span counts over each accumulation window. Dynamic CE/KD balancing and P-KL top-k selection are computed per microbatch.
+
+This implementation uses a frozen projection matrix. The paper also jointly learns the matrix for P-KL; that variant is not implemented here.
+
+First build the projection matrix with the prep scripts in `examples/xtoken/`. Step 1 re-tokenizes the student vocab with the teacher tokenizer; the optional `--runtime-top-k` flag then sorts and trims the matrix in one go (equivalent to running `sort_and_cut_projection_matrix.py` afterwards):
+
+```bash
+python examples/xtoken/build_projection_matrix.py \
+    --student-model meta-llama/Llama-3.2-1B-Instruct \
+    --teacher-model Qwen/Qwen3-4B \
+    --runtime-top-k 4 \
+    --output-dir cross_tokenizer_data
+```
+
+Then train with the example script (off-policy, no vLLM needed):
+
+```bash
+python examples/xtoken/xtoken.py \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --teacher_model_name_or_path Qwen/Qwen3-4B \
+    --dataset_name trl-lib/chatbot_arena_completions \
+    --xtoken_loss_type p_kl \
+    --xtoken_projection_matrix_path cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt \
+    --lmbda 0.0
+```
+
+or pass the path to [`experimental.gold.GOLDConfig`] directly:
+
+```python
+from trl.experimental.gold import GOLDConfig
+
+config = GOLDConfig(
+    lmbda=0.0,  # "off-policy knowledge distillation"
+    xtoken_temperature=1.0,  # "temperature τ=1.0"
+    xtoken_dynamic_scaling=True,  # Eq. (7): stop-gradient CE/KD balance
+    xtoken_loss_type="p_kl",
+    xtoken_projection_matrix_path="cross_tokenizer_data/projection_map_Llama-3.2_to_Qwen3_multitoken_top_32_double_special_top4.pt",
+    teacher_tokenizer_name_or_path="Qwen/Qwen3-4B",
+)
+```
+
 ### Knowledge Distillation of Large Language Models
 
 **📜 Paper**: https://huggingface.co/papers/2306.08543
@@ -1863,6 +1930,43 @@ For more details, see the [SDFT Trainer documentation](sdft_trainer).
 Simple Self-Distillation (SSD) improves code generation by sampling completions from the model at a training-time temperature and truncation configuration, then fine-tuning on those raw, unverified samples with standard cross-entropy loss. No reward model, verifier, teacher model, or reinforcement learning is needed. SSD reshapes token distributions in a context-dependent way: suppressing distractor tails at "lock" positions (where syntax leaves little ambiguity) while preserving diversity at "fork" positions (where multiple valid continuations exist).
 
 TRL shipped an implementation as `SSDTrainer` up to v1.15; it is no longer part of the library and remains available in the git history.
+
+### A Fix for Softmax and Cross-Entropy
+
+**📜 Paper**: https://huggingface.co/papers/2610.31642
+
+Identifies softmax collapse at high-confidence predictions and cancellation when student and teacher logits nearly
+agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
+probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
+KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+
+Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
+identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
+TRL's kernels preserve these gradients using stable FP32 formulas.
+
+The separate FSDP2 output-casting issue discussed in Appendix B.1 is addressed by
+[Accelerate #4403](https://github.com/huggingface/accelerate/pull/4403). Older Accelerate versions need a mixed
+precision policy with `output_dtype=None` to retain FP32 kernel outputs.
+
+The following example maps Section 7's reported hyperparameters to TRL's forward-KL objective, which shares the
+student gradient of soft-target cross-entropy. It illustrates language-model distillation rather than reproducing the
+paper's modular arithmetic experiment. The paper initializes the student with the teacher's weights; this must be
+handled when constructing the models, independently of the config. Other trainer defaults remain unchanged.
+
+```python
+from trl import DistillationConfig
+
+training_args = DistillationConfig(
+    beta=0.0,  # Forward KL has the same student gradient as soft-target cross-entropy.
+    temperature=4.0,  # "distillation temperature T=4"
+    learning_rate=2e-3,  # "eta=2 x 10^-3"
+    lr_scheduler_type="constant",
+    optim="adamw_torch",  # AdamW with zero weight decay has the same updates as Adam.
+    weight_decay=0.0,  # "lambda=0"
+    adam_epsilon=1e-8,  # "epsilon=10^-8"
+    max_steps=2000,  # "2,000 steps of Adam"
+)
+```
 
 ## Distributed Training
 

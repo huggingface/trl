@@ -47,7 +47,7 @@ SFTConfig(
     max_length=1024,        # truncation length; None disables truncation
     packing=True,           # pack sequences into max_length blocks: fewer pad tokens, higher throughput
     padding_free=True,      # flatten batch, no padding; requires FlashAttention; implied by packing
-    use_liger_kernel=True,  # fused Liger kernels, reduces peak memory
+    model_init_kwargs={"use_kernels": True},  # Hub kernels for the model's layers
     assistant_only_loss=True,  # loss only on assistant turns (conversational datasets)
 )
 ```
