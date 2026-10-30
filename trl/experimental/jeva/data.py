@@ -182,4 +182,5 @@ class DataCollatorForJeva:
             "option_mask": option_mask,
             "labels": labels,
             "allow_null": torch.tensor([r.allow_null for r in rows]),
+            "is_choice": torch.tensor([r.decision_type == "choice" for r in rows]),
         }

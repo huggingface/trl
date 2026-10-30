@@ -23,6 +23,7 @@ import accelerate
 import torch
 import torch.nn.functional as F
 import transformers
+from accelerate.utils import recursively_apply
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, set_seed
@@ -167,8 +168,6 @@ class JevaTrainer(_BaseTrainer):
                 )
             if text_config._attn_implementation != "sdpa":
                 raise ValueError("Context parallelism requires an encoder loaded with attn_implementation='sdpa'")
-            if compute_metrics is not None:
-                raise ValueError("Context parallelism supports eval_loss only; omit compute_metrics")
             self._cp_group = self.accelerator.torch_device_mesh["cp"].get_group()
         if (
             Version(accelerate.__version__) >= Version("1.12.0")
@@ -207,6 +206,7 @@ class JevaTrainer(_BaseTrainer):
         ), inputs
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        mode = "train" if self.model.training else "eval"
         option_inputs = inputs["option_inputs"]
         # Sharded encoders must execute the same number of option chunks on every rank.
         if self.accelerator.num_processes > 1 and self.args.option_chunk_size is not None:
@@ -238,21 +238,76 @@ class JevaTrainer(_BaseTrainer):
         if self.aux_loss_enabled:
             steps = self.current_gradient_accumulation_steps if num_items_in_batch is not None else 1
             loss = loss + self.router_aux_loss_coef * outputs.aux_loss / steps
-            mode = "train" if self.model.training else "eval"
-            self._metrics[mode]["aux_loss"].append(self.accelerator.gather(outputs.aux_loss.detach()).mean().item())
+        with torch.no_grad():
+            coverage = torch.where(inputs["allow_null"], outputs.coverage_logit.float().sigmoid(), 1.0)
+            probabilities = torch.cat(
+                [(1 - coverage)[:, None], coverage[:, None] * outputs.log_q.float().softmax(-1)], -1
+            )
+            predicted = probabilities.argmax(-1)
+            target = inputs["labels"].argmax(-1)
+            hard_choice = inputs["is_choice"] & (inputs["labels"].max(-1).values == 1)
+            predicted_null = (predicted == 0) & hard_choice
+            target_null = (target == 0) & hard_choice
+            true_null = predicted_null & target_null
+            ones = torch.ones_like(candidate_loss)
+            metrics = {
+                "candidate_loss": (candidate_loss.detach(), ones),
+                "coverage_loss": (coverage_loss.detach() * inputs["allow_null"], ones),
+                "choice_accuracy": ((predicted == target) & hard_choice, hard_choice),
+                "null_precision": (true_null, predicted_null),
+                "null_recall": (true_null, target_null),
+                "null_rate": ((predicted == 0) & inputs["allow_null"], inputs["allow_null"]),
+                "brier": ((probabilities - inputs["labels"]).square().sum(-1), ones),
+                "null_brier": ((probabilities[:, 0] - inputs["labels"][:, 0]).square(), inputs["allow_null"]),
+                "entropy": (-(probabilities * probabilities.clamp_min(1e-30).log()).sum(-1), ones),
+            }
+            if self.aux_loss_enabled:
+                metrics["aux_loss"] = (outputs.aux_loss.detach().expand_as(ones), ones)
+            values = torch.stack(
+                [
+                    torch.stack([numerator.float(), denominator.float()], -1)
+                    for numerator, denominator in metrics.values()
+                ],
+                1,
+            )
+            values = self._gather_for_metrics(values)
+            for key, totals in zip(metrics, values.sum(0).tolist(), strict=True):
+                self._metrics[mode][key].append(totals)
         return (loss, outputs) if return_outputs else loss
 
+    def _gather_for_metrics(self, values):
+        replicas = self.get_tp_size() * self.get_cp_size()
+        if replicas == 1:
+            if self.model.training:
+                return self.accelerator.gather(values)
+            return self.accelerator.gather_for_metrics(values)
+
+        def remove_replicas(tensor):
+            # Keep one copy per data-parallel rank before removing the final batch's padding.
+            tensor = tensor.reshape(self.accelerator.num_processes, -1, *tensor.shape[1:])[::replicas].flatten(0, 1)
+            if (
+                not self.model.training
+                and self.accelerator.gradient_state.end_of_dataloader
+                and self.accelerator.gradient_state.remainder > 0
+            ):
+                tensor = tensor[: self.accelerator.gradient_state.remainder]
+            return tensor
+
+        return recursively_apply(remove_replicas, self.accelerator.gather(values))
+
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        if self._cp_group is not None and not prediction_loss_only:
-            raise ValueError("Prediction gathering is not supported with context parallelism; use evaluate()")
+        if self.get_tp_size() * self.get_cp_size() > 1:
+            self.gather_function = self._gather_for_metrics
         inputs = self._prepare_inputs(inputs)
         cp_context, inputs = self._prepare_context_parallel_inputs(model, inputs)
         with torch.no_grad(), self.compute_loss_context_manager(), cp_context():
             loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
         if prediction_loss_only:
             return loss.detach(), None, None
-        coverage = torch.where(inputs["allow_null"], outputs.coverage_logit.sigmoid(), 1.0)
-        probabilities = torch.cat([(1 - coverage)[:, None], coverage[:, None] * outputs.log_q.exp()], dim=-1)
+        coverage = torch.where(inputs["allow_null"], outputs.coverage_logit.float().sigmoid(), 1.0)
+        probabilities = torch.cat(
+            [(1 - coverage)[:, None], coverage[:, None] * outputs.log_q.float().softmax(-1)], dim=-1
+        )
         mask = F.pad(inputs["option_mask"], (1, 0), value=True)
         return (
             loss.detach(),
@@ -262,7 +317,10 @@ class JevaTrainer(_BaseTrainer):
 
     def log(self, logs, start_time=None):
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(value) / len(value) for key, value in self._metrics[mode].items()}
+        metrics = {
+            key: sum(numerator for numerator, _ in values) / max(sum(denominator for _, denominator in values), 1)
+            for key, values in self._metrics[mode].items()
+        }
         if mode == "eval":
             metrics = {f"eval_{key}": value for key, value in metrics.items()}
         logs.update(metrics)

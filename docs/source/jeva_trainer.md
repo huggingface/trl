@@ -61,6 +61,12 @@ The loss combines candidate cross entropy with coverage cross entropy for null-e
 equal weight, regardless of its option count. Predictions and targets have null in the first column; evaluation
 pads missing candidate columns with `-100`, which should be masked in `compute_metrics`.
 
+The trainer logs `candidate_loss`, `coverage_loss`, `choice_accuracy`, `null_precision`, `null_recall`, `null_rate`,
+`brier`, `null_brier`, and `entropy` during training and evaluation. Coverage loss is the null-enabled contribution
+averaged over all decisions; it adds to candidate loss to give the decision loss. Choice accuracy and null
+precision/recall use hard Choice labels only. Null rate and null Brier error use null-enabled rows. Ratios with no
+eligible examples are zero. Metrics are aggregated across ranks and batches. Set `report_to="trackio"` to track them.
+
 ## Usage tips
 
 - Set `max_state_length` and `max_option_length` separately. Overflow raises unless `truncation="truncate"`.
@@ -77,7 +83,7 @@ checkpoint restrictions for models sharded at load time.
 
 Torch context parallelism uses FSDP2, `cp_size > 1`, BF16, SDPA, and Transformers 5.22.1 or newer.
 The trainer shards state and option sequences and reduces pooled representations across context ranks. Evaluation
-supports `eval_loss` only; prediction gathering and `compute_metrics` are unavailable. This works
+and prediction count each decision once, including when using `compute_metrics`. This works
 with full causal attention encoders; recurrent, sliding-window, and chunked-attention encoders are excluded.
 DeepSpeed Ulysses is not supported. Standard Transformers model loading also honors registered component patches
 and attention/kernel implementations.

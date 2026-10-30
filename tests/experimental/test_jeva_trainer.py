@@ -99,6 +99,7 @@ class TestJevaTrainer(TrlTestCase):
                 max_steps=2,
                 per_device_train_batch_size=2,
                 option_chunk_size=1,
+                logging_steps=1,
                 report_to="none",
             ),
             train_dataset=dataset,
@@ -108,6 +109,8 @@ class TestJevaTrainer(TrlTestCase):
         before = {name: p.detach().clone() for name, p in model.named_parameters()}
         result = trainer.train()
         assert np.isfinite(result.training_loss)
+        logs = trainer.state.log_history[0]
+        assert logs["loss"] == pytest.approx(logs["candidate_loss"] + logs["coverage_loss"], abs=1e-4)
         changed = {name for name, p in model.named_parameters() if not torch.equal(p, before[name])}
         assert any(name.startswith("core.") for name in changed)
         if mode == "head":
@@ -119,7 +122,8 @@ class TestJevaTrainer(TrlTestCase):
         else:
             assert any(name.startswith("backbone.") for name in changed)
 
-    def test_loss_and_predictions(self, tokenizer, dataset):
+    @pytest.mark.parametrize("batch_size", [1, 2, 5])
+    def test_loss_and_predictions(self, tokenizer, dataset, batch_size):
         model = make_model().eval()
         batch = DataCollatorForJeva(tokenizer)(list(dataset))
         with torch.no_grad():
@@ -142,7 +146,11 @@ class TestJevaTrainer(TrlTestCase):
         trainer = JevaTrainer(
             model,
             args=JevaConfig(
-                output_dir=self.tmp_dir, use_cpu=True, bf16=False, report_to="none", per_device_eval_batch_size=2
+                output_dir=self.tmp_dir,
+                use_cpu=True,
+                bf16=False,
+                report_to="none",
+                per_device_eval_batch_size=batch_size,
             ),
             train_dataset=dataset,
             eval_dataset=dataset,
@@ -153,6 +161,34 @@ class TestJevaTrainer(TrlTestCase):
         assert prediction.predictions.shape == (len(dataset), 4)
         assert prediction.metrics["test_loss"] == pytest.approx(expected.mean().item(), rel=1e-5)
         assert "eval_holdout_accuracy" in trainer.evaluate({"holdout": dataset})
+        metrics = trainer.evaluate()
+        probs = torch.tensor(np.where(prediction.predictions == -100, 0, prediction.predictions))
+        predicted = probs.argmax(-1)
+        target = batch["labels"].argmax(-1)
+        hard_choice = batch["is_choice"] & (batch["labels"].max(-1).values == 1)
+        predicted_null = (predicted == 0) & hard_choice
+        target_null = (target == 0) & hard_choice
+        true_null = (predicted_null & target_null).sum().item()
+        assert metrics["eval_candidate_loss"] + metrics["eval_coverage_loss"] == pytest.approx(
+            expected.mean().item(), rel=1e-5
+        )
+        assert metrics["eval_choice_accuracy"] == pytest.approx(
+            ((predicted == target) & hard_choice).sum().item() / hard_choice.sum().item()
+        )
+        assert metrics["eval_null_precision"] == pytest.approx(true_null / max(predicted_null.sum().item(), 1))
+        assert metrics["eval_null_recall"] == pytest.approx(true_null / target_null.sum().item())
+        assert metrics["eval_null_rate"] == pytest.approx(
+            ((predicted == 0) & batch["allow_null"]).sum().item() / batch["allow_null"].sum().item()
+        )
+        assert metrics["eval_brier"] == pytest.approx(
+            (probs - batch["labels"]).square().sum(-1).mean().item(), abs=1e-6
+        )
+        assert metrics["eval_null_brier"] == pytest.approx(
+            (probs[:, 0] - batch["labels"][:, 0]).square()[batch["allow_null"]].mean().item(), abs=1e-6
+        )
+        assert metrics["eval_entropy"] == pytest.approx(
+            -(probs * probs.clamp_min(1e-30).log()).sum(-1).mean().item(), abs=1e-6
+        )
 
     @pytest.mark.parametrize("pooling", ["last", "mean", "cls"])
     def test_permutation_and_chunks(self, pooling, tokenizer, dataset):

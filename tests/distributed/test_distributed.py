@@ -102,12 +102,14 @@ class TestDistributed(TrlTestCase):
                 "--model_name_or_path", "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
                 "--mode", "full",
                 "--max_train_samples", "8",
-                "--max_eval_samples", "4",
+                "--max_eval_samples", "5",
                 "--num_options", "3",
                 "--per_device_train_batch_size", "1",
+                "--per_device_eval_batch_size", "1",
                 "--gradient_accumulation_steps", "2",
                 "--option_chunk_size", "2",
                 "--max_steps", "2",
+                "--logging_steps", "1",
                 "--eval_strategy", "steps",
                 "--eval_steps", "2",
                 "--bf16", "true",
@@ -117,6 +119,17 @@ class TestDistributed(TrlTestCase):
             os.environ.copy(),
         )
         # fmt: on
+
+        with open(os.path.join(self.tmp_dir, "eval_results.json")) as f:
+            metrics = json.load(f)
+        assert metrics["eval_candidate_loss"] + metrics["eval_coverage_loss"] == pytest.approx(
+            metrics["eval_loss"], rel=1e-4
+        )
+        for name in ("choice_accuracy", "null_precision", "null_recall", "null_rate"):
+            assert 0 <= metrics[f"eval_{name}"] <= 1
+        for name in ("brier", "null_brier", "entropy"):
+            assert metrics[f"eval_{name}"] >= 0
+        assert metrics["eval_choice_accuracy"] == metrics["eval_accuracy"]
 
     @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file, get_config_path):
