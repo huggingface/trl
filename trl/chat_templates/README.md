@@ -75,11 +75,11 @@ Original GLM-4-MoE chat template.
 
 ### `glm5.jinja`
 
-Original GLM-5 chat template (as shipped by `zai-org/GLM-5`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`. Response parsing uses `glm4moe_template`.
+Original GLM-5 chat template (as shipped by `zai-org/GLM-5`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`, except that with thinking disabled the generation prompt pre-fills `</think>` alone. Response parsing uses `glm4moe_template`.
 
 ### `glm5_1.jinja`
 
-Original GLM-5.1 chat template (as shipped by `zai-org/GLM-5.1`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`; with thinking disabled, the generation prompt pre-fills `</think>` alone. Response parsing uses `glm4moe_template`.
+Original GLM-5.1 chat template (as shipped by `zai-org/GLM-5.1`). Same as `glm5.jinja`, except that it leaves out tools marked `defer_loading`, renders an empty `<think></think>` in the assistant turns after the last user message, and accepts `tool_reference` tool responses. Response parsing uses `glm4moe_template`.
 
 ### `glm5_2.jinja`
 
