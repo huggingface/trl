@@ -35,6 +35,10 @@ from .jeva_config import JevaConfig
 from .modeling_jeva import JevaModel
 
 
+if is_peft_available():
+    from peft import get_peft_model
+
+
 def _coverage_loss(logits, targets):
     return targets * F.softplus(-logits) + (1 - targets) * F.softplus(logits)
 
@@ -120,8 +124,6 @@ class JevaTrainer(_BaseTrainer):
                 raise ImportError("Install `trl[peft]` to use peft_config")
             if args.mode != "lora" or model.config.adapter_config is not None:
                 raise ValueError("peft_config requires mode='lora' and an encoder without an existing adapter")
-            from peft import get_peft_model
-
             model.backbone = get_peft_model(model.backbone, peft_config)
             model.config.adapter_config = peft_config.to_dict()
         model.backbone.requires_grad_(args.mode == "full")

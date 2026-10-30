@@ -18,20 +18,21 @@
 import math
 from contextlib import nullcontext
 from dataclasses import dataclass
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-import yaml
-from huggingface_hub import snapshot_download
 from torch import nn
 from torch.distributed.nn.functional import all_gather, all_reduce
 from transformers import AutoModel, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import ModelOutput
+from transformers.utils import ModelOutput, is_peft_available
 
 from .configuration_jeva import JevaModelConfig
+
+
+if is_peft_available():
+    from peft import get_peft_config, get_peft_model
 
 
 def _log_softmax(logits: torch.Tensor) -> torch.Tensor:
@@ -158,8 +159,8 @@ class JevaModel(PreTrainedModel):
     Shared text encoder with a matrix decision stack for Choice, Noul, and Score tasks.
 
     The encoder is loaded with [`~transformers.AutoModel`]; no vocabulary projection is constructed. Use
-    `from_backbone_pretrained` to initialize a new decision head, `from_jeva_checkpoint` to import a Jeva checkpoint,
-    and [`~transformers.PreTrainedModel.from_pretrained`] to reload a checkpoint saved by this class.
+    `from_backbone_pretrained` to initialize a new decision head and [`~transformers.PreTrainedModel.from_pretrained`]
+    to reload a checkpoint saved by this class.
 
     Args:
         config ([`experimental.jeva.JevaModelConfig`]):
@@ -182,8 +183,8 @@ class JevaModel(PreTrainedModel):
         super().__init__(config)
         self.backbone = backbone if backbone is not None else AutoModel.from_config(config.backbone_config)
         if config.adapter_config is not None:
-            from peft import get_peft_config, get_peft_model
-
+            if not is_peft_available():
+                raise ImportError("Install `trl[peft]` to load an encoder adapter")
             self.backbone = get_peft_model(self.backbone, get_peft_config(config.adapter_config))
         self.context_proj = nn.Linear(config.backbone_config.hidden_size, config.projection_dim, bias=False)
         self.option_proj = nn.Linear(config.backbone_config.hidden_size, config.projection_dim, bias=False)
@@ -238,77 +239,6 @@ class JevaModel(PreTrainedModel):
             **(model_config or {}),
         )
         return cls(config, backbone=backbone)
-
-    @classmethod
-    def from_jeva_checkpoint(cls, checkpoint, *, revision=None, local_files_only=False, **kwargs):
-        """
-        Import a checkpoint containing `config.yaml`, `head.pt`, and an optional encoder adapter.
-
-        Args:
-            checkpoint (`str`):
-                Local directory or Hub model identifier.
-            revision (`str`, *optional*):
-                Hub revision to download.
-            local_files_only (`bool`, *optional*, defaults to `False`):
-                Load only locally available files.
-            **kwargs:
-                Encoder loading arguments forwarded to [`~transformers.AutoModel.from_pretrained`].
-        """
-        directory = Path(checkpoint)
-        if not directory.is_dir():
-            directory = Path(snapshot_download(checkpoint, revision=revision, local_files_only=local_files_only))
-        with (directory / "config.yaml").open() as f:
-            config = yaml.safe_load(f)["model"]
-        if config.get("decision_arch", "matrix_stack") != "matrix_stack":
-            raise ValueError("Jeva requires decision_arch=matrix_stack")
-        backbone_path = config["backbone"]
-        if (directory / backbone_path).exists():
-            backbone_path = str(directory / backbone_path)
-        if (directory / "backbone_full").is_dir():
-            backbone_path = str(directory / "backbone_full")
-        fields = (
-            "projection_dim",
-            "decision_depth",
-            "decision_num_heads",
-            "decision_ffn_ratio",
-            "decision_dropout",
-            "decision_zero_init_ffn",
-            "decision_final_norm",
-            "normalize_state",
-            "pooling",
-            "tau_set_init",
-            "tau_dec_init",
-            "tau_cov_init",
-            "alpha_over_tau_init",
-            "coverage_bias_init",
-            "min_temperature",
-        )
-        model = cls.from_backbone_pretrained(
-            backbone_path,
-            model_config={key: config[key] for key in fields if key in config},
-            local_files_only=local_files_only,
-            **kwargs,
-        )
-        adapter_path = config.get("adapter_path")
-        if (directory / "backbone_adapter").is_dir():
-            adapter_path = str(directory / "backbone_adapter")
-        elif adapter_path and (directory / adapter_path).exists():
-            adapter_path = str(directory / adapter_path)
-        if adapter_path:
-            from peft import PeftModel
-
-            model.backbone = PeftModel.from_pretrained(model.backbone, adapter_path, is_trainable=True)
-            model.config.adapter_config = model.backbone.peft_config["default"].to_dict()
-        head = torch.load(directory / "head.pt", map_location="cpu", weights_only=True)
-        for name, module in (
-            ("context_proj", model.context_proj),
-            ("option_proj", model.option_proj),
-            ("core", model.core),
-        ):
-            module.load_state_dict(
-                {key: value.reshape(1) if value.ndim == 0 else value for key, value in head[name].items()}
-            )
-        return model
 
     def get_input_embeddings(self):
         return self.backbone.get_input_embeddings()

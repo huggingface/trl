@@ -19,7 +19,6 @@ import pytest
 import torch
 import torch.nn.functional as F
 import transformers
-import yaml
 from datasets import Dataset
 from packaging.version import Version
 from transformers import AutoTokenizer, set_seed
@@ -341,32 +340,6 @@ class TestJevaTrainer(TrlTestCase):
         assert np.isfinite(result.training_loss)
         if "Moe" in model_id:
             assert trainer.state.log_history[0]["aux_loss"] > 0
-
-    def test_import_checkpoint(self, tmp_path, tokenizer, dataset):
-        model = make_model().eval()
-        model.backbone.save_pretrained(tmp_path / "backbone")
-        config = model.config.to_dict()
-        config["backbone"] = "backbone"
-        (tmp_path / "config.yaml").write_text(yaml.safe_dump({"model": config}))
-        torch.save(
-            {
-                "decision_arch": "matrix_stack",
-                "context_proj": model.context_proj.state_dict(),
-                "option_proj": model.option_proj.state_dict(),
-                "core": {
-                    key: value.reshape(()) if value.numel() == 1 else value
-                    for key, value in model.core.state_dict().items()
-                },
-            },
-            tmp_path / "head.pt",
-        )
-        imported = JevaModel.from_jeva_checkpoint(str(tmp_path)).eval()
-        batch = DataCollatorForJeva(tokenizer)(list(dataset))
-        inputs = {key: batch[key] for key in ("state_inputs", "option_inputs", "option_counts", "option_mask")}
-        with torch.no_grad():
-            expected, actual = model(**inputs), imported(**inputs)
-        torch.testing.assert_close(actual.log_q, expected.log_q)
-        torch.testing.assert_close(actual.coverage_logit, expected.coverage_logit)
 
 
 @pytest.mark.parametrize(

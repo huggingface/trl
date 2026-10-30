@@ -30,6 +30,7 @@ trainer = JevaTrainer(
 )
 trainer.train()
 trainer.save_model()
+trainer.end()
 ```
 
 For a complete training script, see the [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77).
@@ -38,9 +39,41 @@ For a complete training script, see the [BANKING77 example](https://github.com/h
 train everything, or `mode="lora"` with an existing adapter or `peft_config=LoraConfig(task_type="FEATURE_EXTRACTION",
 ...)`. The encoder uses `AutoModel`, so training does not construct language-model vocabulary logits.
 
-To import `config.yaml`/`head.pt` checkpoints, use `JevaModel.from_jeva_checkpoint("LIQIIIII/Jeva-4B")` and pass the
-checkpoint's tokenizer to the trainer. Trainer outputs use the Transformers format: reload them with
+Trainer outputs use the Transformers format: reload them with
 `JevaModel.from_pretrained("jeva-output")`, or resume with `trainer.train(resume_from_checkpoint=...)`.
+
+## Inference
+
+Reload the saved model and tokenizer, using the same text format as training. This example selects one of two options:
+
+```python
+import torch
+from transformers import AutoTokenizer
+from trl.experimental.jeva import JevaModel
+
+model = JevaModel.from_pretrained("jeva-output").eval()
+tokenizer = AutoTokenizer.from_pretrained("jeva-output")
+tokenizer.padding_side = "right"
+state = "I was charged twice."
+question = "Which team should handle this request?"
+options = ["Billing: payments and refunds", "Engineering: software failures"]
+state_inputs = tokenizer(f"Decision type: choice\nQuestion: {question}\nState:\n{state}", return_tensors="pt")
+option_inputs = tokenizer([f"Option for choice: {option}" for option in options], padding=True, return_tensors="pt")
+
+with torch.inference_mode():
+    outputs = model(
+        state_inputs=state_inputs,
+        option_inputs=option_inputs,
+        option_counts=torch.tensor([len(options)]),
+        option_mask=torch.ones(1, len(options), dtype=torch.bool),
+    )
+probabilities = outputs.log_q.float().softmax(dim=-1)
+print(options[probabilities[0].argmax().item()])
+```
+
+For decisions trained with `allow_null=True`, `coverage = outputs.coverage_logit.float().sigmoid()` gives the
+probability that an option applies. The null probability is `(-outputs.coverage_logit.float()).sigmoid()`; multiply
+the conditional candidate probabilities above by `coverage[:, None]` to obtain the joint distribution.
 
 ## Dataset format
 
