@@ -72,12 +72,13 @@ CHECKPOINTS = "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B"
 _children: list[subprocess.Popen] = []
 
 
-def _spawn(cmd: list[str], log_path: pathlib.Path, env: dict[str, str] | None = None) -> subprocess.Popen:
+def _spawn(cmd: list[str], log_path: pathlib.Path | None, env: dict[str, str] | None = None) -> subprocess.Popen:
     """Start a child in a process group so cleanup also stops its workers."""
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         cmd,
-        stdout=open(log_path, "w", encoding="utf-8"),
+        stdout=open(log_path, "w", encoding="utf-8") if log_path is not None else None,
         stderr=subprocess.STDOUT,
         env={**os.environ, **(env or {})},
         start_new_session=True,
@@ -209,8 +210,7 @@ def main() -> None:
         raise RuntimeError(f"could not download the training script from {args.train_script_url}: {exc}") from exc
 
     print("[launcher] starting training on GPU 3", flush=True)
-    trainer = subprocess.Popen([sys.executable, str(script)], env={**os.environ, "CUDA_VISIBLE_DEVICES": "3"})
-    _children.append(trainer)
+    trainer = _spawn([sys.executable, str(script)], None, env={"CUDA_VISIBLE_DEVICES": "3"})
     rc = trainer.wait()
     print(f"[launcher] training exited {rc}", flush=True)
     raise SystemExit(rc)
