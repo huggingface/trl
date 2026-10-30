@@ -476,7 +476,7 @@ lfm2_2_5_template = {
     # LFM2.5 renders every tool call of a turn into a single `<|tool_call_start|>[...]<|tool_call_end|>` block, as a
     # comma-separated list of Python-style calls: `[get_weather(city='Paris', days=3), ping()]`. The `open_pattern`
     # therefore matches either the opening bracket or the comma separating two calls, and `close_pattern` matches the
-    # closing paren plus, for the last call, the trailing `]<|tool_call_end|>`.
+    # closing paren followed by the next call or, for the last call, by the trailing `]<|tool_call_end|>`.
     #
     # Argument values are rendered by the template's `format_arg_value` macro: strings single-quoted, mappings as JSON,
     # everything else via Jinja's `string` filter. `string_delims` turns the single-quoted strings back into JSON
@@ -496,7 +496,7 @@ lfm2_2_5_template = {
         },
         "tool_calls": {
             "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
-            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>|(?=,\s*\w+\())\s*",
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
@@ -538,7 +538,7 @@ lfm2_2_5_v3_template = {
         },
         "tool_calls": {
             "open_pattern": r"(?:<\|tool_call_start\|>\[|,\s*)(?P<name>\w+)\(",
-            "close_pattern": r"\)(?:\]<\|tool_call_end\|>)?\s*",
+            "close_pattern": r"\)(?:\]<\|tool_call_end\|>|(?=,\s*\w+\())\s*",
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
