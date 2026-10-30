@@ -3023,8 +3023,7 @@ class TestManifestWeightStream:
 
 
 def _start_stop_watcher_and_exit(stop_event):
-    rollout_loop = SimpleNamespace(_loop=asyncio.new_event_loop(), _stop_event=asyncio.Event())
-    _spawn_stop_watcher(rollout_loop, stop_event)
+    _spawn_stop_watcher(_rollout_loop(), stop_event)
     time.sleep(0.5)  # let the watcher start before the process exits
 
 
