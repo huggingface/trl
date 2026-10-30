@@ -50,6 +50,7 @@ from trl.experimental.gold.gold_trainer import (
     XTokenLoss,
     _load_exact_token_map,
     _load_sparse_projection_matrix,
+    build_teacher_inputs_from_completion_ids,
     build_teacher_inputs_from_texts,
 )
 from trl.experimental.utils import (
@@ -2577,6 +2578,193 @@ class TestGOLDTrainerLoss(TrlTestCase):
             assert "input_ids" in next(iter(trainer.eval_dataset["data2"]))
         else:
             assert "input_ids" in next(iter(trainer.eval_dataset))
+
+
+def test_gold_config_validates_privileged_context_scope():
+    config = GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0)
+    assert config.teacher_prompt_template is None
+    assert config.privileged_context_column == "privileged_context"
+
+    with pytest.raises(ValueError, match="requires `lmbda=0`"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True)
+    with pytest.raises(ValueError, match="seq_kd=True"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, seq_kd=True)
+    with pytest.raises(ValueError, match="use_uld_loss=True"):
+        GOLDConfig(output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, use_uld_loss=True)
+    for loss_type in ("p_kl", "h_kl"):
+        with pytest.raises(ValueError, match="X-Token KD"):
+            GOLDConfig(
+                output_dir="test", bf16=False, use_privileged_context=True, lmbda=0.0, xtoken_loss_type=loss_type
+            )
+    with pytest.raises(ValueError, match=r"`\{prompt\}`"):
+        GOLDConfig(
+            output_dir="test",
+            bf16=False,
+            use_privileged_context=True,
+            lmbda=0.0,
+            teacher_prompt_template="Context: {privileged_context}",
+        )
+
+
+def test_privileged_context_rewrites_last_user_turn(llama_tokenizer):
+    prompt = [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "user", "content": "What caused the outage?"},
+    ]
+
+    teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
+        llama_tokenizer,
+        prompt,
+        "The timeout changed immediately before the errors.",
+        "Question: {prompt}\n\nEvidence: {privileged_context}",
+        "privileged_context",
+        {},
+    )
+    expected_messages = prompt[:-1] + [
+        {
+            "role": "user",
+            "content": "Question: What caused the outage?\n\nEvidence: The timeout changed immediately before the errors.",
+        }
+    ]
+    expected = llama_tokenizer.apply_chat_template(expected_messages, add_generation_prompt=True, tokenize=False)
+
+    assert teacher_prompt == expected
+    assert "Earlier answer" in teacher_prompt
+    assert "Evidence: The timeout changed immediately before the errors." in teacher_prompt
+
+
+@pytest.fixture
+def privileged_context_dataset():
+    return Dataset.from_dict(
+        {
+            "prompt": [[{"role": "user", "content": "What caused the outage?"}]],
+            "completion": [[{"role": "assistant", "content": "The timeout change caused it."}]],
+            "privileged_context": ["The deployment changed the timeout immediately before the errors."],
+        }
+    )
+
+
+def test_privileged_context_preparation_preserves_shared_completion_tokens(tmp_path, privileged_context_dataset):
+    context = "private evidence " * 64 + "END_OF_PRIVATE_CONTEXT"
+    dataset = privileged_context_dataset.remove_columns("privileged_context").add_column(
+        "privileged_context", [context]
+    )
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            lmbda=0.0,
+            max_length=32,
+            max_completion_length=8,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=dataset,
+    )
+    row = trainer.train_dataset[0]
+    batch = trainer.data_collator([row])
+    completion_ids = [batch["input_ids"][0][batch["labels"][0] != -100]]
+    teacher_input_ids, teacher_labels, _ = build_teacher_inputs_from_completion_ids(
+        trainer.processing_class,
+        [row["teacher_prompt_text"]],
+        completion_ids,
+    )
+
+    assert "END_OF_PRIVATE_CONTEXT" in row["teacher_prompt_text"]
+    assert len(row["input_ids"]) <= 32
+    assert teacher_input_ids.shape[1] > 32
+    assert batch["teacher_prompt_text"] == [row["teacher_prompt_text"]]
+    assert torch.equal(
+        batch["input_ids"][batch["labels"] != -100],
+        teacher_input_ids[teacher_labels != -100],
+    )
+
+
+def test_privileged_context_preparation_requires_context_column(tmp_path, privileged_context_dataset):
+    with pytest.raises(ValueError, match="missing the `privileged_context` column"):
+        GOLDTrainer(
+            model=_TINY_QWEN2,
+            teacher_model=_TINY_QWEN2,
+            args=GOLDConfig(
+                output_dir=str(tmp_path),
+                use_privileged_context=True,
+                lmbda=0.0,
+                use_cpu=True,
+                bf16=False,
+                report_to="none",
+            ),
+            train_dataset=privileged_context_dataset.remove_columns("privileged_context"),
+        )
+
+
+def test_privileged_context_preparation_custom_column(tmp_path, privileged_context_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            lmbda=0.0,
+            privileged_context_column="my_context",
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=privileged_context_dataset.rename_column("privileged_context", "my_context"),
+    )
+    assert "deployment changed the timeout" in trainer.train_dataset[0]["teacher_prompt_text"]
+
+
+def test_privileged_context_default_behavior_unchanged(tmp_path, privileged_context_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(output_dir=str(tmp_path), use_cpu=True, bf16=False, report_to="none"),
+        train_dataset=privileged_context_dataset.remove_columns("privileged_context"),
+    )
+
+    assert not trainer.use_privileged_context
+    assert "teacher_prompt_text" not in trainer.train_dataset.column_names
+
+
+def test_privileged_context_loss_uses_enriched_teacher_prompt(tmp_path, privileged_context_dataset):
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            lmbda=0.0,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=privileged_context_dataset,
+    )
+    batch = trainer.data_collator([trainer.train_dataset[0]])
+    teacher_inputs = []
+
+    def record_teacher_inputs(model, args, kwargs):
+        teacher_inputs.append(kwargs["input_ids"].clone())
+
+    handle = trainer.teacher_model.register_forward_pre_hook(record_teacher_inputs, with_kwargs=True)
+    trainer.model.eval()
+    try:
+        with torch.no_grad():
+            loss = trainer.compute_loss(trainer.model, batch)
+    finally:
+        handle.remove()
+
+    assert torch.isfinite(loss)
+    assert teacher_inputs[0].shape[1] > batch["input_ids"].shape[1]
+    assert "deployment changed the timeout" in trainer.processing_class.decode(
+        teacher_inputs[0][0], skip_special_tokens=False
+    )
 
 
 class TestXTokenLoss(TrlTestCase):
