@@ -56,6 +56,7 @@ CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF \
 CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code \
     --port 8002 \
     --max-model-len 19520 \
+    --gpu-memory-utilization 0.85 \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
