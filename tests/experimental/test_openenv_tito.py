@@ -32,7 +32,14 @@ from transformers import AutoTokenizer
 
 pytest.importorskip("openenv.core.harness.training")
 
-from openenv.core.harness import HarnessRolloutResult, ToolResult, ToolTraceEntry, TrainingTrace, VerifyResult
+from openenv.core.harness import (
+    HarnessRolloutResult,
+    MCPHarnessAdapter,
+    ToolResult,
+    ToolTraceEntry,
+    TrainingTrace,
+    VerifyResult,
+)
 
 from trl.experimental.async_grpo import openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
@@ -90,34 +97,20 @@ def test_consumer_rejects_invalid_full_masks(mask):
 
 
 @pytest.mark.parametrize(
-    "adapter,lossless,threshold", [(None, True, 0), (None, False, 1024), (SimpleNamespace(), True, 1024)]
+    "adapter,lossless,threshold", [(None, True, 0), (None, False, 1024), (MCPHarnessAdapter(), True, 1024)]
 )
-def test_loop_owning_capture_defaults_to_lossless_reconciliation(monkeypatch, adapter, lossless, threshold):
-    def init(self, **kwargs):
-        self._fork_threshold_tokens = kwargs.get("fork_threshold_tokens", 1024)
-        self.max_tool_calling_iterations = 8
-        self.temperature = 0.8
-        self.top_p = 1.0
-        self.top_k = -1
-        self.min_p = 0.0
-        self.repetition_penalty = 1.0
-        self.max_tokens = 32
-        self.reward_func_names = []
-        self.max_inflight_tasks = 1
-
-    monkeypatch.setattr(openenv_harness._AsyncRolloutLoop, "__init__", init)
-    factory = MagicMock(return_value=SimpleNamespace())
-    loop = openenv_harness._HarnessRolloutLoop(
-        harness_session_factory=factory, harness_adapter=adapter, lossless_capture=lossless
+def test_loop_owning_capture_defaults_to_lossless_reconciliation(make_loop, adapter, lossless, threshold):
+    factory_calls = []
+    loop = make_loop(
+        factory_builder=lambda **kwargs: factory_calls.append(kwargs),
+        harness_adapter=adapter,
+        lossless_capture=lossless,
     )
-    try:
-        assert loop._fork_threshold_tokens == threshold
-        if adapter is not None:
-            factory.assert_called_once_with()
-        else:
-            factory.assert_called_once_with(sampling=openenv_harness.training_sampling({"temperature": 0.8}))
-    finally:
-        loop._session_pool.shutdown()
+    assert loop._fork_threshold_tokens == threshold
+    if adapter is not None:
+        assert factory_calls == [{}]
+    else:
+        assert factory_calls == [{"sampling": openenv_harness.training_sampling({"temperature": 0.8})}]
 
 
 @pytest.fixture
