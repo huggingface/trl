@@ -1752,6 +1752,48 @@ class TestAddFusedLMHead:
 
         torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
 
+    def test_modernbert_decoder_prediction_head(self):
+        """ModernBertDecoder computes logits through an intermediate prediction head `lm_head` before `decoder`."""
+        from transformers import ModernBertDecoderConfig, ModernBertDecoderForCausalLM
+
+        config = ModernBertDecoderConfig(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            max_position_embeddings=32,
+            pad_token_id=0,
+            bos_token_id=1,
+            eos_token_id=2,
+            cls_token_id=1,
+            sep_token_id=2,
+            attn_implementation="eager",
+            use_cache=False,
+        )
+        model_ref = ModernBertDecoderForCausalLM(config).to(torch_device)
+        model_chunked = copy.deepcopy(model_ref)
+
+        input_ids = torch.randint(0, model_ref.config.vocab_size, (2, 8), device=torch_device)
+        labels = input_ids.clone()
+        shifted_labels = labels[:, 1:]
+
+        # Reference forward & backward
+        ref_logits = model_ref(input_ids=input_ids).logits[:, :-1, :].float()
+        ref_log_p = F.log_softmax(ref_logits, dim=-1)
+        ref_logprobs = ref_log_p.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)
+        ref_logprobs.sum().backward()
+        ref_grad = model_ref.lm_head.dense.weight.grad.clone()
+
+        # Fused forward & backward
+        add_fused_lm_head(model_chunked)
+        out = model_chunked(input_ids=input_ids, labels=labels, fused_lm_head=True)
+        out["log_probs"].sum().backward()
+        chunked_grad = model_chunked.lm_head.dense.weight.grad.clone()
+
+        torch.testing.assert_close(out["log_probs"], ref_logprobs, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(chunked_grad, ref_grad, atol=1e-3, rtol=1e-3)
+
 
 _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     pytest.param(
