@@ -83,6 +83,17 @@ jobs:
           source .venv/bin/activate
           make test_experimental
 
+      - name: Test OpenEnv harness with pytest
+        if: ${{ !cancelled() }}
+        run: |
+          source .venv/bin/activate
+          # Separate step: openenv's gradio dependency caps pillow, so it is not installed for the tests above
+          uv pip install openenv
+          # harbor_env.harness is not in the openenv wheel: check out the tag of the installed version
+          OPENENV_VERSION=$(python -c "import importlib.metadata; print(importlib.metadata.version('openenv'))")
+          git clone --depth 1 --branch "v$OPENENV_VERSION" https://github.com/openenv/OpenEnv.git "$RUNNER_TEMP/OpenEnv"
+          PYTHONPATH="$RUNNER_TEMP/OpenEnv/envs" pytest -v tests/experimental/test_openenv_tito.py
+
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
         uses: ./.github/actions/post-slack
