@@ -189,8 +189,8 @@ class DataCollatorForChatML:
         labels = []
 
         for example in examples:
-            formatted_prompt = example.get(self.prompt_key, example.get("original_prompt_text", None))
-            if formatted_prompt is None:
+            formatted_prompt = example.get(self.prompt_key)
+            if formatted_prompt is None and self.messages_key in example:
                 prompt = example[self.messages_key][:-1]
                 formatted_prompt = self.tokenizer.apply_chat_template(
                     prompt, add_generation_prompt=True, tokenize=False
@@ -284,9 +284,9 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
-        # Forward source text for cross-tokenizer ULD, when the dataset has it.
-        if "original_prompt_text" in examples[0]:
-            out["original_prompt_text"] = [ex["original_prompt_text"] for ex in examples]
+        # Forward the teacher's prompt for cross-tokenizer ULD, when the dataset has it.
+        if "teacher_prompt_ids" in examples[0]:
+            out["teacher_prompt_ids"] = [ex["teacher_prompt_ids"] for ex in examples]
         return out
 
 

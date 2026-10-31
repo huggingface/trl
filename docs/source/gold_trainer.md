@@ -150,6 +150,12 @@ P_merged("cool") = 0.1 × 0.9 = 0.09
 
 The merged distribution is unnormalized (sums to 0.81), but this is intentional and correct for ULD loss computation, which uses sorting and L1 distance.
 
+### Chat templates and sequence length
+
+With cross-tokenizer ULD, each model reads the conversation in its own chat template: the teacher gets the prompt rendered with its template, then the text of the student's completion up to the student's end-of-turn token, followed by the teacher's own EOS. The two end-of-turn tokens are aligned with each other.
+
+Because the teacher always reads the whole prompt, rows are not truncated: a row whose prompt and completion exceed `max_length`, or whose prompt leaves fewer than `max_completion_length` tokens to generate, raises an error. Filter out long rows or increase `max_length`.
+
 ## Example script
 
 Use [`examples/gold_chatbot_arena/gold_chatbot_arena.py`](https://github.com/huggingface/trl/blob/main/examples/gold_chatbot_arena/gold_chatbot_arena.py) to launch GOLD training from the command line. The script supports full training and LoRA via the standard `ModelConfig` flags.

@@ -36,7 +36,7 @@ from trl.experimental.gold import gold_trainer as gold_trainer_module
 from trl.experimental.gold.gold_trainer import (
     GOLDTrainer,
     ULDLoss,
-    build_teacher_inputs_from_texts,
+    build_teacher_inputs,
 )
 from trl.experimental.utils import (
     DataCollatorForChatML,
@@ -93,8 +93,8 @@ def _teacher_inputs_from_collator(student_tok, teacher_tok, batch):
         content_len = next((k for k, tok in enumerate(completion_ids) if tok in special_ids), len(completion_ids))
         completion_texts.append(student_tok.decode(completion_ids[:content_len], clean_up_tokenization_spaces=False))
 
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs_from_texts(
-        teacher_tok, prompt_texts, completion_texts
+    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
+        teacher_tok, teacher_tok(prompt_texts)["input_ids"], completion_texts
     )
     return teacher_input_ids, teacher_labels, completion_texts, teacher_spans
 
@@ -404,7 +404,6 @@ def test_generate_on_policy_for_slices_uses_prompt_attention_mask_for_vllm_promp
     assert trainer.vllm_generation.sync_calls == 1
     buffered_inputs = trainer._buffered_inputs[0]
     assert buffered_inputs["input_ids"].tolist() == [[a, pad, b, *completion_ids]]
-    assert buffered_inputs["original_prompt_text"] == ["A<|endoftext|>B"]
 
 
 def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens(monkeypatch, tmp_path):
@@ -432,14 +431,11 @@ def test_generate_on_policy_for_slices_reconstructs_prompt_with_special_tokens(m
     assert buffered_inputs["input_ids"].tolist() == [[a, special, b, *completion_ids]]
     assert buffered_inputs["attention_mask"].tolist() == [[1, 1, 1, 1]]
     assert buffered_inputs["labels"].tolist() == [[-100, -100, -100, *completion_ids]]
-    assert buffered_inputs["original_prompt_text"] == ["A<|im_start|>B"]
     assert trainer._buffered_text_logs[0] == (["A<|im_start|>B"], ["C"])
 
 
-def test_on_policy_prompt_text_reflects_truncated_prompt(monkeypatch, tmp_path):
-    """When the prompt overflows max_length - max_completion_length it is truncated before the student sees it.
-    `original_prompt_text` — which the teacher re-encodes — must reflect that truncated prompt, not the full one, so
-    teacher and student score the completion under the same context."""
+def test_on_policy_truncates_prompt_keeping_its_end(monkeypatch, tmp_path):
+    """When the prompt overflows max_length - max_completion_length it is truncated before the student sees it."""
     trainer = _gold_vllm_trainer(monkeypatch, tmp_path, max_length=3, max_completion_length=1)
     trainer._buffered_inputs = [None]
     trainer._buffered_text_logs = [None]
@@ -464,7 +460,6 @@ def test_on_policy_prompt_text_reflects_truncated_prompt(monkeypatch, tmp_path):
 
     buffered_inputs = trainer._buffered_inputs[0]
     assert buffered_inputs["input_ids"].tolist() == [[special, b, *completion_ids]]
-    assert buffered_inputs["original_prompt_text"] == ["<|im_start|>B"]
     assert buffered_inputs["prompts"].tolist() == [[special, b]]
     assert buffered_inputs["prompt_attention_mask"].tolist() == [[1, 1]]
 
@@ -639,16 +634,6 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(tmp_path, llam
     assert len(row["input_ids"]) == max_length  # truncated, not dropped
     assert 1 in row["completion_mask"]  # completion survived front-truncation
 
-    # original_prompt_text must reflect the truncated ids the student kept, not the pre-truncation string
-    # (otherwise the teacher would read a longer prompt context than the student).
-    completion_start = row["completion_mask"].index(1)
-    decode = partial(
-        llama_tokenizer.decode,
-        skip_special_tokens=False,
-        clean_up_tokenization_spaces=False,
-    )
-    assert row["original_prompt_text"] == decode(row["input_ids"][:completion_start])
-
     collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=max_length)
     batch = collator([row])
 
@@ -657,6 +642,60 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(tmp_path, llam
     supervised = [label for label in batch["labels"][0].tolist() if label != -100]
     assert supervised == completion_ids
     assert assistant in llama_tokenizer.decode(completion_ids)
+
+
+def _uld_trainer(tmp_path, dataset, **config_kwargs):
+    # ChatML student (Qwen2) distilled from a teacher with the Llama-3 chat template
+    return GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_LLAMA,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            report_to="none",
+            use_uld_loss=True,
+            teacher_tokenizer_name_or_path=_TINY_LLAMA,
+            **config_kwargs,
+        ),
+        train_dataset=dataset,
+    )
+
+
+def test_uld_teacher_reads_the_prompt_in_its_own_chat_template(tmp_path, llama_tokenizer):
+    messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there"}]
+    trainer = _uld_trainer(
+        tmp_path, Dataset.from_dict({"messages": [messages]}), max_length=128, max_completion_length=16
+    )
+
+    row = trainer.train_dataset[0]
+
+    teacher_prompt = llama_tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True, tokenize=False)
+    assert row["teacher_prompt_ids"] == llama_tokenizer(teacher_prompt, add_special_tokens=False)["input_ids"]
+    assert row["teacher_prompt_ids"].count(llama_tokenizer.bos_token_id) == 1
+    assert "<|im_start|>" not in llama_tokenizer.decode(row["teacher_prompt_ids"])
+
+
+@pytest.mark.parametrize(
+    "max_length, max_completion_length",
+    [
+        # The prompt is 45 tokens and the whole row 50
+        pytest.param(40, 8, id="row_longer_than_max_length"),
+        pytest.param(64, 30, id="prompt_leaves_no_room_to_generate"),
+    ],
+)
+def test_uld_rejects_rows_that_do_not_fit(tmp_path, max_length, max_completion_length):
+    """Truncating a row would leave the student less context than the teacher, which reads the whole prompt in its
+    own chat template, so cross-tokenizer ULD rejects rows that don't fit instead."""
+    messages = [
+        {"role": "user", "content": "Please summarize: " + "very long context. " * 3},
+        {"role": "assistant", "content": "A summary."},
+    ]
+    with pytest.raises(ValueError, match="does not fit"):
+        _uld_trainer(
+            tmp_path,
+            Dataset.from_dict({"messages": [messages]}),
+            max_length=max_length,
+            max_completion_length=max_completion_length,
+        )
 
 
 def test_prepare_dataset_messages_uses_last_assistant_turn(tmp_path, qwen_tokenizer):
@@ -672,7 +711,8 @@ def test_prepare_dataset_messages_uses_last_assistant_turn(tmp_path, qwen_tokeni
     expected_prompt = qwen_tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
     expected_full = qwen_tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
 
-    assert row["original_prompt_text"] == expected_prompt
+    prompt_ids = [tid for tid, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 0]
+    assert qwen_tokenizer.decode(prompt_ids, skip_special_tokens=False) == expected_prompt
 
     completion_ids = [tid for tid, mask in zip(row["input_ids"], row["completion_mask"], strict=True) if mask == 1]
     decoded_completion = qwen_tokenizer.decode(
@@ -695,8 +735,8 @@ def test_prepare_dataset_keeps_seam_token(tmp_path, qwen_tokenizer):
     assert qwen_tokenizer.decode(completion_ids[:-1]).lstrip() == "Answer."
     assert completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
-    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
-        qwen_tokenizer, [row["original_prompt_text"]], ["Answer."]
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs(
+        qwen_tokenizer, qwen_tokenizer(["Question: "])["input_ids"], ["Answer."]
     )
     teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
     assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
@@ -720,15 +760,17 @@ def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_
     assert completion_ids[-1] == gemma4_tokenizer.eos_token_id
     assert gemma4_tokenizer.decode(completion_ids[:-1]).lstrip() == "Answer."
 
-    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs_from_texts(
-        qwen_tokenizer, [row["original_prompt_text"]], ["Answer."]
+    teacher_input_ids, teacher_labels, _, _ = build_teacher_inputs(
+        qwen_tokenizer, qwen_tokenizer(["Question: "])["input_ids"], ["Answer."]
     )
     teacher_completion_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
     assert qwen_tokenizer.decode(teacher_completion_ids) == "Answer." + qwen_tokenizer.eos_token
 
 
 def test_build_teacher_inputs_supports_sentencepiece(gemma4_tokenizer):
-    input_ids, labels, _, _ = build_teacher_inputs_from_texts(gemma4_tokenizer, ["Question: "], ["Answer."])
+    input_ids, labels, _, _ = build_teacher_inputs(
+        gemma4_tokenizer, gemma4_tokenizer(["Question: "])["input_ids"], ["Answer."]
+    )
 
     completion_ids = input_ids[0][labels[0] != -100].tolist()
     assert completion_ids.count(gemma4_tokenizer.eos_token_id) == 1
@@ -753,7 +795,9 @@ class _NoBackendTokenizer:
 def test_build_teacher_inputs_works_without_backend_tokenizer(gemma4_tokenizer):
     slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
 
-    input_ids, labels, _, _ = build_teacher_inputs_from_texts(slow_tokenizer, ["Question: "], ["Answer."])
+    input_ids, labels, _, _ = build_teacher_inputs(
+        slow_tokenizer, slow_tokenizer(["Question: "])["input_ids"], ["Answer."]
+    )
 
     completion_ids = input_ids[0][labels[0] != -100].tolist()
     assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
@@ -797,8 +841,8 @@ def _paired_texts(loss, student_tokenizer, teacher_tokenizer, student_ids):
     each aligned (student, teacher) group."""
     content_len = next((k for k, tok in enumerate(student_ids) if tok in loss.student_special_ids), len(student_ids))
     completion_text = student_tokenizer.decode(student_ids[:content_len], clean_up_tokenization_spaces=False)
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs_from_texts(
-        teacher_tokenizer, [""], [completion_text]
+    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
+        teacher_tokenizer, [[]], [completion_text]
     )
     teacher_ids = teacher_input_ids[0][teacher_labels[0] != -100].tolist()
 
@@ -1231,8 +1275,8 @@ def test_build_teacher_inputs_pad_equals_eos_keeps_terminating_eos(llama_tokeniz
     assert tokenizer.pad_token_id == tokenizer.eos_token_id
 
     # Different-length completions so one row is right-padded past its terminating EOS.
-    teacher_input_ids, teacher_labels, teacher_attention_mask, _ = build_teacher_inputs_from_texts(
-        tokenizer, ["Hi?", "Explain gravity in detail please"], ["Hello there!", "OK"]
+    teacher_input_ids, teacher_labels, teacher_attention_mask, _ = build_teacher_inputs(
+        tokenizer, tokenizer(["Hi?", "Explain gravity in detail please"])["input_ids"], ["Hello there!", "OK"]
     )
     eos_id = tokenizer.eos_token_id
     for row in range(teacher_input_ids.size(0)):
@@ -1323,8 +1367,8 @@ def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qw
     completion = "Assistant: Llamas are taller while alpacas have softer wool."
 
     student_ids, student_labels = encode_prompt_completion(llama_tokenizer, prompt, completion)
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs_from_texts(
-        qwen_tokenizer, [prompt], [completion]
+    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
+        qwen_tokenizer, qwen_tokenizer([prompt])["input_ids"], [completion]
     )
     teacher_ids, teacher_labels = teacher_input_ids[0].tolist(), teacher_labels[0].tolist()
 
@@ -1376,8 +1420,8 @@ def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, 
     completion = "Assistant: SmolLM3 is a compact yet capable language model."
 
     student_ids, student_labels = encode_prompt_completion(smollm_tokenizer, prompt, completion)
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs_from_texts(
-        qwen_tokenizer, [prompt], [completion]
+    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
+        qwen_tokenizer, qwen_tokenizer([prompt])["input_ids"], [completion]
     )
     teacher_ids, teacher_labels = teacher_input_ids[0].tolist(), teacher_labels[0].tolist()
 
@@ -1438,8 +1482,8 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     completion = "Assistant: GOLD merges aligned subwords and applies hybrid ULD loss."
 
     student_ids, student_labels = encode_prompt_completion(llama_tokenizer, prompt, completion)
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs_from_texts(
-        qwen_tokenizer, [prompt], [completion]
+    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
+        qwen_tokenizer, qwen_tokenizer([prompt])["input_ids"], [completion]
     )
     teacher_ids, teacher_labels = teacher_input_ids[0].tolist(), teacher_labels[0].tolist()
 
@@ -1953,7 +1997,7 @@ def test_vlm_uld_custom_collator_missing_raw_fields_raises_clear_error(tmp_path,
     inputs = {
         "input_ids": torch.ones(1, 2, dtype=torch.long, device=device),
         "attention_mask": torch.ones(1, 2, dtype=torch.long, device=device),
-        "original_prompt_text": ["prompt"],
+        "teacher_prompt_ids": [[1]],
     }
 
     with pytest.raises(ValueError, match="requires `_raw_images` and `_raw_prompts`"):
@@ -2059,7 +2103,7 @@ def test_model_forward_kwargs_preserve_processor_tensor_fields(tmp_path, vlm_dat
         "prompt_attention_mask": torch.ones(1, 1, dtype=torch.long),
         "completion_mask": torch.ones(1, 2, dtype=torch.long),
         "assistant_masks": torch.ones(1, 2, dtype=torch.long),
-        "original_prompt_text": ["prompt"],
+        "teacher_prompt_ids": [[1]],
         "_raw_images": [vlm_dataset[0]["image"]],
         "pixel_values": torch.zeros(1, 3, 2, 2),
         "spatial_shapes": torch.tensor([[2, 2]], dtype=torch.long),

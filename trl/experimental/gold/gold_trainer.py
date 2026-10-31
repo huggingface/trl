@@ -171,13 +171,13 @@ def print_prompt_completions_sample_uld(
     console.print(panel)
 
 
-def build_teacher_inputs_from_texts(
+def build_teacher_inputs(
     tokenizer: PreTrainedTokenizerBase,
-    prompt_texts: list[str],
+    prompt_ids: list[list[int]],
     completion_texts: list[str],
     use_extended_uld: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[list[tuple[int, int]]] | None]:
-    """Tokenize teacher prompts/completions and produce tensors ready for GOLD loss.
+    """Append the teacher's tokenization of each completion to its prompt ids, producing tensors ready for GOLD loss.
 
     Returns ``(input_ids, labels, attention_mask, completion_spans)``. The teacher's own EOS closes each completion.
     With extended ULD, ``completion_spans`` holds the ``(start, end)`` character span in ``completion_texts`` of each
@@ -188,7 +188,6 @@ def build_teacher_inputs_from_texts(
     pad_token_id = tokenizer.pad_token_id
     eos_token_id = tokenizer.eos_token_id
 
-    prompt_token_ids = tokenizer(prompt_texts, add_special_tokens=True)["input_ids"]
     completion_encoding = tokenizer(
         completion_texts, add_special_tokens=False, return_offsets_mapping=use_extended_uld
     )
@@ -197,14 +196,14 @@ def build_teacher_inputs_from_texts(
     labels_list: list[torch.Tensor] = []
     completion_spans = [] if use_extended_uld else None
 
-    for row, (prompt_ids, completion_ids) in enumerate(
-        zip(prompt_token_ids, completion_encoding["input_ids"], strict=True)
+    for row, (teacher_prompt, completion_ids) in enumerate(
+        zip(prompt_ids, completion_encoding["input_ids"], strict=True)
     ):
         # Remove trailing EOS from prompt so completions can extend cleanly
-        if eos_token_id is not None and prompt_ids and prompt_ids[-1] == eos_token_id:
-            prompt_ids = prompt_ids[:-1]
+        if eos_token_id is not None and teacher_prompt and teacher_prompt[-1] == eos_token_id:
+            teacher_prompt = teacher_prompt[:-1]
 
-        sequence = prompt_ids + completion_ids
+        sequence = teacher_prompt + completion_ids
         if eos_token_id is not None:
             sequence.append(eos_token_id)
         if use_extended_uld:
@@ -216,7 +215,7 @@ def build_teacher_inputs_from_texts(
         sequences.append(seq_tensor)
 
         labels = seq_tensor.clone()
-        labels[: len(prompt_ids)] = -100
+        labels[: len(teacher_prompt)] = -100
         labels_list.append(labels)
 
     teacher_input_ids = pad(
@@ -330,7 +329,7 @@ class ULDLoss(nn.Module):
             student_input_ids: Student input token IDs [batch_size, seq_len]
             teacher_input_ids: Teacher input token IDs [batch_size, seq_len]
             teacher_spans: Per sample, the character span of each supervised teacher token in the text of the
-                student's completion, from ``build_teacher_inputs_from_texts``. Required with extended ULD.
+                student's completion, from ``build_teacher_inputs``. Required with extended ULD.
 
         Returns:
             Total loss (cross-entropy + distillation)
@@ -1152,7 +1151,7 @@ class GOLDTrainer(SFTTrainer):
             "messages",
             "chat_template_kwargs",
             "tools",
-            "original_prompt_text",
+            "teacher_prompt_ids",
             "completion_mask",
             "images",
             "image",
@@ -1405,7 +1404,7 @@ class GOLDTrainer(SFTTrainer):
             "prompt_attention_mask",
             "completion_mask",
             "assistant_masks",
-            "original_prompt_text",
+            "teacher_prompt_ids",
         )
     )
 
@@ -1479,11 +1478,11 @@ class GOLDTrainer(SFTTrainer):
                 if (
                     self.use_uld_loss
                     and self.teacher_tokenizer is not None
-                    and "original_prompt_text" not in slice_inputs
+                    and "teacher_prompt_ids" not in slice_inputs
                 ):
                     raise ValueError(
-                        "Off-policy batch missing the 'original_prompt_text' field. Use the default "
-                        "DataCollatorForChatML (or a collator that emits it) so the teacher has the prompt as text."
+                        "Off-policy batch missing the 'teacher_prompt_ids' field. Use the default "
+                        "DataCollatorForChatML (or a collator that forwards it) so the teacher has its prompt."
                     )
                 self._buffered_inputs[i] = slice_inputs
 
@@ -1604,7 +1603,6 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["input_ids"] = new_input_ids
                 updated_slice["attention_mask"] = new_attention_mask
                 updated_slice["labels"] = new_labels
-                updated_slice["original_prompt_text"] = prompt_texts
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1815,15 +1813,6 @@ class GOLDTrainer(SFTTrainer):
             prompt_ids = pad(prompt_tensors, padding_side="left", padding_value=pad_token_id)
             prompt_attention_mask = pad(prompt_attention_masks, padding_side="left", padding_value=0)
 
-            # Decode the prompt (already budgeted by the callers) so the teacher conditions on the same
-            # context the student saw. `clean_up_tokenization_spaces=False` matches the completion decode
-            # below so byte counts stay aligned.
-            prompt_txts_with_special = self.processing_class.batch_decode(
-                [ids.tolist() for ids in prompt_tensors],
-                skip_special_tokens=False,
-                clean_up_tokenization_spaces=False,
-            )
-
             completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids_for_slice]
             completion_ids_for_text: list[list[int]] = []
             padded_completion_ids_list = []
@@ -1899,7 +1888,6 @@ class GOLDTrainer(SFTTrainer):
             # Update prompts to match the new padding width so prompt_length stays consistent
             updated_slice["prompts"] = prompt_ids
             updated_slice["prompt_attention_mask"] = prompt_attention_mask
-            updated_slice["original_prompt_text"] = prompt_txts_with_special
 
             self._buffered_inputs[slice_idx] = updated_slice
             self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
@@ -1924,7 +1912,7 @@ class GOLDTrainer(SFTTrainer):
 
         if packing and self.use_uld_loss and self.teacher_tokenizer is not None:
             raise ValueError(
-                "Packing is not supported with cross-tokenizer ULD because byte-offset alignment is defined per "
+                "Packing is not supported with cross-tokenizer ULD because the alignment is defined per "
                 "prompt/completion example."
             )
 
@@ -1977,12 +1965,17 @@ class GOLDTrainer(SFTTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset (preserving original text)"
 
-            def tokenize_with_original_text(example, processing_class, dataset_text_field, max_length):
-                """Emit input_ids, attention_mask, completion_mask, and the original prompt/completion text."""
+            def tokenize_with_original_text(
+                example, processing_class, dataset_text_field, max_length, max_completion_length, teacher_tokenizer
+            ):
+                """Emit input_ids, attention_mask, completion_mask, and, for cross-tokenizer ULD, the teacher's prompt
+                ids (``teacher_prompt_ids``) rendered with its own chat template."""
                 result = {}
+                prompt_messages = None
 
                 if "prompt" in example:  # prompt-completion case
                     if is_conversational(example):
+                        prompt_messages = example["prompt"]
                         prompt_text = processing_class.apply_chat_template(
                             example["prompt"],
                             add_generation_prompt=True,
@@ -2043,7 +2036,19 @@ class GOLDTrainer(SFTTrainer):
                 else:
                     prompt_text = ""
                     full_text = example.get(dataset_text_field, example.get("text", ""))
-                result["original_prompt_text"] = prompt_text
+
+                if teacher_tokenizer is not None:
+                    if prompt_messages:  # the teacher reads the prompt in its own chat template
+                        teacher_prompt = teacher_tokenizer.apply_chat_template(
+                            prompt_messages,
+                            add_generation_prompt=True,
+                            tokenize=False,
+                            **example.get("chat_template_kwargs", {}),
+                        )
+                        teacher_prompt_ids = teacher_tokenizer(teacher_prompt, add_special_tokens=False)["input_ids"]
+                    else:
+                        teacher_prompt_ids = teacher_tokenizer(prompt_text, add_special_tokens=True)["input_ids"]
+                    result["teacher_prompt_ids"] = teacher_prompt_ids
 
                 encoding = processing_class(full_text, add_special_tokens=False, return_offsets_mapping=True)
                 input_ids = encoding["input_ids"]
@@ -2063,16 +2068,26 @@ class GOLDTrainer(SFTTrainer):
                 if append_eos:
                     input_ids.append(processing_class.eos_token_id)
 
+                # Cross-tokenizer ULD rejects rows that don't fit, like X-Token distillation in NeMo RL: truncating
+                # would leave the student less context than the teacher, which reads the whole prompt.
+                if (
+                    teacher_tokenizer is not None
+                    and max_length is not None
+                    and (len(input_ids) > max_length or completion_start > max_length - max_completion_length)
+                ):
+                    raise ValueError(
+                        f"A row with {completion_start} prompt and {len(input_ids) - completion_start} completion "
+                        f"tokens does not fit in max_length={max_length} with max_completion_length="
+                        f"{max_completion_length}. Cross-tokenizer ULD does not truncate rows, since the teacher "
+                        "reads the whole prompt: filter out long rows or increase `max_length`."
+                    )
+
                 # Keep the last `max_length` tokens (the completion end). `completion_mask` tracks the
                 # boundary so it survives truncation without re-tokenizing the prompt.
                 if max_length is not None and len(input_ids) > max_length:
                     drop = len(input_ids) - max_length
                     input_ids = input_ids[drop:]
                     completion_start = max(0, completion_start - drop)
-                    # Resync the prompt the teacher reads with the ids the student kept.
-                    result["original_prompt_text"] = processing_class.decode(
-                        input_ids[:completion_start], skip_special_tokens=False, clean_up_tokenization_spaces=False
-                    )
 
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
@@ -2085,6 +2100,8 @@ class GOLDTrainer(SFTTrainer):
                     "processing_class": processing_class,
                     "dataset_text_field": args.dataset_text_field,
                     "max_length": args.max_length,
+                    "max_completion_length": args.max_completion_length,
+                    "teacher_tokenizer": self.teacher_tokenizer,
                 },
                 **map_kwargs,
             )
@@ -2098,14 +2115,7 @@ class GOLDTrainer(SFTTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
-                columns_to_keep = [
-                    "input_ids",
-                    "original_prompt_text",
-                ]
-                existing_columns = set(dataset.column_names)
-                columns_to_select = [col for col in columns_to_keep if col in existing_columns]
-
-                dataset = dataset.select_columns(columns_to_select)
+                dataset = dataset.select_columns(["input_ids"])
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
 
         return dataset
@@ -2212,7 +2222,7 @@ class GOLDTrainer(SFTTrainer):
         """Build image-aware teacher inputs for cross-architecture VLM ULD distillation.
 
         The teacher prompt is rendered through the teacher's own processor so image placeholders and pixel tensors
-        match the teacher model. Mirrors ``build_teacher_inputs_from_texts`` but injects the teacher's multimodal
+        match the teacher model. Mirrors ``build_teacher_inputs`` but injects the teacher's multimodal
         prompt and returns the teacher's forward kwargs (``pixel_values``, ...).
 
         Returns ``(input_ids, labels, attention_mask, completion_spans, forward_kwargs)``.
@@ -2326,13 +2336,11 @@ class GOLDTrainer(SFTTrainer):
                 ) = self._build_teacher_vlm_inputs(completion_texts, inputs["_raw_images"], inputs["_raw_prompts"])
             else:
                 teacher_forward_kwargs = {}
-                teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_spans = (
-                    build_teacher_inputs_from_texts(
-                        self.teacher_tokenizer,
-                        inputs["original_prompt_text"],
-                        completion_texts,
-                        self.uld_loss_fn.use_extended_uld,
-                    )
+                teacher_input_ids, teacher_labels, teacher_attention_mask, teacher_spans = build_teacher_inputs(
+                    self.teacher_tokenizer,
+                    inputs["teacher_prompt_ids"],
+                    completion_texts,
+                    self.uld_loss_fn.use_extended_uld,
                 )
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
