@@ -792,6 +792,51 @@ class TestIWOPDTrainer(TrlTestCase):
         assert trainer.model.config.pad_token_id == pad_token_id
         assert trainer.model.generation_config.pad_token_id == pad_token_id
 
+    def test_vllm_sync_on_resume_mid_cycle(self, monkeypatch):
+        # Regression test: `VLLMGeneration` builds its engine before the checkpoint is loaded, so after resuming it
+        # holds the initial model weights until the next `sync_weights()`. That sync must happen on the first step after
+        # resuming, even when the resumed `global_step` is not a multiple of `vllm_sync_frequency`.
+        import trl.experimental.iw_opd.iw_opd_trainer as iw_opd_trainer_module
+
+        events = []
+        eos_token_id = self.tokenizer.eos_token_id
+
+        class FakeVLLMGeneration:
+            def __init__(self, **kwargs):
+                pass
+
+            def sync_weights(self):
+                events.append("sync")
+
+            def generate(self, prompts, images, num_generations):
+                events.append("generate")
+                return None, [[eos_token_id] for _ in prompts], None, None
+
+        # CI does not install vLLM
+        monkeypatch.setattr(iw_opd_trainer_module, "is_vllm_available", lambda: True)
+        monkeypatch.setattr(iw_opd_trainer_module, "VLLMGeneration", FakeVLLMGeneration)
+
+        common = {
+            "use_vllm": True,
+            "lmbda": 1.0,
+            "max_completion_length": 8,
+            "vllm_sync_frequency": 5,
+            "save_strategy": "steps",
+            "save_steps": 3,
+        }
+        # Train up to a checkpoint at step 3, which is not a multiple of `vllm_sync_frequency`
+        self._make_local_trainer(max_steps=3, **common).train()
+        assert os.path.isdir(os.path.join(self.tmp_dir, "checkpoint-3"))
+
+        # Resume from it: the first step after resuming must sync before generating
+        events.clear()
+        trainer = self._make_local_trainer(max_steps=5, **common)
+        trainer.train(resume_from_checkpoint=True)
+
+        assert events[0] == "sync"
+        # Steps 3 and 4 are within one `vllm_sync_frequency` of each other, so only one sync happens
+        assert events.count("sync") == 1
+
 
 class TestIWOPDTrainerServerPath(TrlTestCase):
     @classmethod
