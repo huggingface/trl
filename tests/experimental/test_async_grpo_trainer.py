@@ -1831,6 +1831,23 @@ class TestWorkerMetricPush(TrlTestCase):
         loop._push_metrics({})
         assert loop._metrics_queue.get(timeout=5) == {}
 
+    def test_terminated_lengths_skip_clipped_rollouts(self):
+        loop = _rollout_loop()
+        rollout = {"turns": 1, "sequences": 1, "tally": {"transitions": 0, "drift_max": 0.0}, "duration_s": 1.0}
+        loop._push_rollout_metrics(completion_ids=[5, 6, loop.tokenizer.eos_token_id], loop_exhausted=False, **rollout)
+        terminated = loop._metrics_queue.get(timeout=5)
+        loop._push_rollout_metrics(completion_ids=[5, 6, 7, 8, 9], loop_exhausted=False, **rollout)
+        clipped = loop._metrics_queue.get(timeout=5)
+
+        assert terminated["completions/clipped_ratio"] == (0.0, 1.0)
+        assert terminated["completions/mean_terminated_length"] == (3.0, 1.0)
+        assert terminated["completions/min_terminated_length"] == 3.0
+        assert terminated["completions/max_terminated_length"] == 3.0
+        # A rollout cut off at `max_tokens` counts toward `clipped_ratio` and the overall lengths, but not these.
+        assert clipped["completions/clipped_ratio"] == (1.0, 1.0)
+        assert clipped["completions/max_length"] == 5.0
+        assert not any("terminated" in key for key in clipped)
+
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
         loop = _rollout_loop(metrics_queue=mp.Queue(maxsize=1))
         for _ in range(50):
@@ -2378,6 +2395,26 @@ class TestDropZeroAdvantageGroups(TrlTestCase):
         assert [s.group_id for s in items[1:]] == [1, 1]
         assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
         assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
+
+    def test_group_metrics_classify_each_group(self):
+        # The first token of each completion is its reward, and 0 means the reward func cannot score it.
+        def first_token_reward(completion_ids, **kwargs):
+            return [float(ids[0]) if ids[0] else None for ids in completion_ids]
+
+        loop = _rollout_loop(reward_funcs=[first_token_reward])
+        seqs = [[TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, f"c{i}")] for i in range(2)]
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[1, 10], [2, 10]])))  # active
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[3, 10], [3, 10]])))  # inactive, duplicated
+        asyncio.run(loop._score_group(_group(seqs, completions_ids=[[0, 10], [0, 20]])))  # unscorable
+
+        assert loop._counters["group/scored_total"] == 2
+        assert loop._counters["group/active_total"] == 1
+        assert loop._counters["group/unscorable_total"] == 1
+        assert loop._rates["group/active_frac"] == [1, 2]
+        # Only the inactive group contributes the reward it is stuck at.
+        assert loop._rates["group/inactive_reward_mean"] == [3.0, 1]
+        # One of the six completions repeats an earlier one of its group.
+        assert loop._rates["group/duplicate_frac"] == [1, 6]
 
 
 @pytest.mark.skipif(

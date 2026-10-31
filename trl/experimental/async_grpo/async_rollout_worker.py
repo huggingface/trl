@@ -1006,14 +1006,24 @@ class _AsyncRolloutLoop:
         self._rates["rollout/samples_per_rollout"][1] += 1
         self._rates["rollout/turns_mean"][0] += turns
         self._rates["rollout/turns_mean"][1] += 1
+        terminated_lengths = {}
         if completion_ids:
             # NOTE(@aminediro):
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
-            self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
+            is_truncated = completion_ids[-1] not in eos_and_pad
+            self._rates["completions/clipped_ratio"][0] += is_truncated
             self._rates["completions/clipped_ratio"][1] += 1
+            if not is_truncated:
+                # Lengths of the completions that finished, which a tail cut off at `max_tokens` would otherwise mask
+                self._rates["completions/mean_terminated_length"][0] += completion_tokens
+                self._rates["completions/mean_terminated_length"][1] += 1
+                terminated_lengths = {
+                    "completions/max_terminated_length": float(completion_tokens),
+                    "completions/min_terminated_length": float(completion_tokens),
+                }
         if self.tools:
             # Only meaningful when the model has tools to call: with none, the loop always ends on the first turn and
             # the metric would be a constant 0 cluttering every run that does not use tools.
@@ -1033,6 +1043,7 @@ class _AsyncRolloutLoop:
                 "rollout/drift_tokens_max": tally["drift_max"],
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
+                **terminated_lengths,
             }
         )
 
@@ -1261,8 +1272,26 @@ class _AsyncRolloutLoop:
             advantages[scored_mask] = (scored - scored.mean()) / (scored.std() + 1e-8)
             reward_mean = float(scored.mean())
             reward_std = float(scored.std())
+            # Equal rewards give every completion a zero advantage, so the group adds no gradient. Same test as
+            # `frac_reward_zero_std` in [`GRPOTrainer`].
+            active = not np.isclose(reward_std, 0.0)
+            self._counters["group/scored_total"] += 1
+            self._counters["group/active_total"] += active
+            self._rates["group/active_frac"][0] += active
+            self._rates["group/active_frac"][1] += 1
+            if not active:
+                # The reward an inactive group is stuck at: near the top of its range, the prompts are too easy; near
+                # the bottom, too hard. With 0/1 rewards, this is the share of inactive groups that are all solved.
+                self._rates["group/inactive_reward_mean"][0] += reward_mean
+                self._rates["group/inactive_reward_mean"][1] += 1
         else:
             reward_mean = reward_std = float("nan")
+            self._counters["group/unscorable_total"] += 1
+        # Completions that repeat an earlier one of the group token for token; about 0 when generations are independent
+        num_completions = len(group.completions_ids)
+        num_distinct = len({tuple(ids) for ids in group.completions_ids})
+        self._rates["group/duplicate_frac"][0] += num_completions - num_distinct
+        self._rates["group/duplicate_frac"][1] += num_completions
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
 
         zero_std = bool(np.all(scored == scored[:1]))
