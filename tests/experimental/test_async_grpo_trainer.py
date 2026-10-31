@@ -1738,7 +1738,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
     @pytest.mark.parametrize(
         ("model_id", "match"),
         [
-            pytest.param("trl-internal-testing/tiny-Lfm2ForCausalLM", "conv", id="lfm2"),
             pytest.param("trl-internal-testing/tiny-NemotronHForCausalLM-nano", "linear_attention", id="nemotron-h"),
             pytest.param("trl-internal-testing/tiny-FalconMambaForCausalLM", "linear_attention", id="falcon-mamba"),
             pytest.param("trl-internal-testing/tiny-GptOssForCausalLM", "attention sinks", id="gpt-oss"),

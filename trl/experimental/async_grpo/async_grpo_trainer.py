@@ -59,7 +59,7 @@ from ...trainer.utils import (
 )
 from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
-from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
+from .packing import TREE_ATTENTION, TreeRow, patch_tree_recurrent, register_tree_attention, unpad_tree
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -1132,11 +1132,17 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     "before it, these layers call the functions they stored at init rather than the module-level "
                     "ones tree packing patches, so they would scan across samples."
                 )
-            if layer_types != {"linear_attention"} or not patch_tree_gdn(model):
+            if layer_types == {"conv"} and Version(transformers.__version__) < Version("5.22.0"):
                 raise ValueError(
-                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention and "
-                    "transformers' gated DeltaNet layers along each sample's own path; any other recurrent or "
-                    "convolutional layer would scan across samples."
+                    f"Tree packing of {type(model).__name__}'s short convolution layers requires transformers>=5.22.0: "
+                    "before it, these layers do not pass the forward's keyword arguments down to the module-level "
+                    "function tree packing patches, so they would scan across samples."
+                )
+            if layer_types not in ({"linear_attention"}, {"conv"}) or not patch_tree_recurrent(model, *layer_types):
+                raise ValueError(
+                    f"{type(model).__name__} has {sorted(layer_types)} layers. Tree packing routes attention, "
+                    "transformers' gated DeltaNet layers and LFM2's short convolutions along each sample's own path; "
+                    "any other recurrent or convolutional layer would scan across samples."
                 )
         if any(name.endswith(".sinks") for name, _ in model.named_parameters()):
             raise ValueError(
