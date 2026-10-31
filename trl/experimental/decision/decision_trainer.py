@@ -43,27 +43,6 @@ if is_peft_available():
     from peft import get_peft_model
 
 
-def _get_decision_probabilities(outputs, inputs):
-    logits = outputs.logits.float()
-    mask = inputs.get("option_mask", torch.ones_like(logits, dtype=torch.bool))
-    probabilities = logits.masked_fill(~mask, -torch.inf).softmax(-1)
-    allow_null = inputs.get("allow_null")
-    if allow_null is not None:
-        coverage_logits = outputs.get("coverage_logits")
-        if coverage_logits is None:
-            if allow_null.any():
-                raise ValueError("Nullable decisions require a model that returns coverage_logits")
-            null_probability = torch.zeros_like(probabilities[:, :1])
-        else:
-            coverage_logits = coverage_logits.float()
-            coverage = torch.where(allow_null, coverage_logits.sigmoid(), 1.0)
-            null_probability = torch.where(allow_null, (-coverage_logits).sigmoid(), 0.0)[:, None]
-            probabilities = coverage[:, None] * probabilities
-        probabilities = torch.cat([null_probability, probabilities], -1)
-        mask = F.pad(mask, (1, 0), value=True)
-    return probabilities, mask
-
-
 class DecisionTrainer(_BaseTrainer):
     """
     Trainer for models that return a supervised decision loss.
@@ -215,6 +194,27 @@ class DecisionTrainer(_BaseTrainer):
             self.accelerator.maybe_context_parallel, buffers=buffers, buffer_seq_dims=[1] * len(buffers)
         ), inputs
 
+    @staticmethod
+    def _get_decision_probabilities(outputs, inputs):
+        logits = outputs.logits.float()
+        mask = inputs.get("option_mask", torch.ones_like(logits, dtype=torch.bool))
+        probabilities = logits.masked_fill(~mask, -torch.inf).softmax(-1)
+        allow_null = inputs.get("allow_null")
+        if allow_null is not None:
+            coverage_logits = outputs.get("coverage_logits")
+            if coverage_logits is None:
+                if allow_null.any():
+                    raise ValueError("Nullable decisions require a model that returns coverage_logits")
+                null_probability = torch.zeros_like(probabilities[:, :1])
+            else:
+                coverage_logits = coverage_logits.float()
+                coverage = torch.where(allow_null, coverage_logits.sigmoid(), 1.0)
+                null_probability = torch.where(allow_null, (-coverage_logits).sigmoid(), 0.0)[:, None]
+                probabilities = coverage[:, None] * probabilities
+            probabilities = torch.cat([null_probability, probabilities], -1)
+            mask = F.pad(mask, (1, 0), value=True)
+        return probabilities, mask
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
         model_inputs = {key: value for key, value in inputs.items() if key != "is_choice"}
@@ -233,7 +233,7 @@ class DecisionTrainer(_BaseTrainer):
         if num_items_in_batch is not None:
             loss = loss * inputs["labels"].shape[0] / num_items_in_batch * self.accelerator.num_processes
         with torch.no_grad():
-            probabilities, mask = _get_decision_probabilities(outputs, inputs)
+            probabilities, mask = self._get_decision_probabilities(outputs, inputs)
             labels = inputs["labels"]
             targets = F.one_hot(labels, probabilities.shape[-1]).float() if labels.ndim == 1 else labels.float()
             has_null = "allow_null" in inputs
@@ -314,7 +314,7 @@ class DecisionTrainer(_BaseTrainer):
             loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
         if prediction_loss_only:
             return loss.detach(), None, None
-        probabilities, mask = _get_decision_probabilities(outputs, inputs)
+        probabilities, mask = self._get_decision_probabilities(outputs, inputs)
         labels = inputs["labels"]
         if labels.ndim == 2:
             labels = labels.masked_fill(~mask, -100)
