@@ -463,27 +463,67 @@ class TestDecisionTrainerJeva(TrlTestCase):
             assert trainer.state.log_history[0]["aux_loss"] > 0
 
 
-@pytest.mark.parametrize(
-    "question, label, target",
-    [
-        ({"type": "choice", "criteria": {"a": None, "b": None}}, {"target_index": 1}, [0, 0, 1]),
-        ({"type": "choice", "criteria": {"a": None}, "allow_null": True}, {"target_index": None}, [1, 0]),
-        ({"type": "noul"}, {"p_true": 0.8}, [0, 0.8, 0.2]),
-        ({"type": "score", "criteria": ["bad", "good"], "values": [1, 3]}, {"score": 2}, [0, 0.5, 0.5]),
-    ],
-)
-def test_decision_labels(collator, question, label, target):
-    batch = collator([{"state": "A state", "questions": {"decision": question}, **label}])
-    torch.testing.assert_close(batch["labels"], torch.tensor([target], dtype=torch.float32))
+class TestDataCollatorForJeva(TrlTestCase):
+    def test_batching(self, tokenizer, dataset, collator):
+        rows = list(dataset)
+        rows[0] = {**rows[0], "request": json.loads(rows[0]["request"])}
+        request = json.loads(rows[1].pop("request"))
+        rows[1].update(request)
+        batch = collator(rows, return_tensors="pt")
+        torch.testing.assert_close(batch["num_options"], torch.tensor([2, 1, 2, 3, 2]))
+        torch.testing.assert_close(
+            batch["option_mask"],
+            torch.tensor(
+                [
+                    [True, True, False],
+                    [True, False, False],
+                    [True, True, False],
+                    [True, True, True],
+                    [True, True, False],
+                ]
+            ),
+        )
+        torch.testing.assert_close(
+            batch["labels"],
+            torch.tensor([[0, 1, 0, 0], [1, 0, 0, 0], [0, 0.8, 0.2, 0], [0, 0, 0.5, 0.5], [0.1, 0.7, 0.2, 0]]),
+        )
+        torch.testing.assert_close(batch["allow_null"], torch.tensor([False, True, False, False, True]))
+        torch.testing.assert_close(batch["is_choice"], torch.tensor([True, True, False, False, True]))
+        singles = [collator([row]) for row in rows]
+        for prefix in ("", "option_"):
+            ids, mask = batch[f"{prefix}input_ids"], batch[f"{prefix}attention_mask"]
+            assert ids.shape[0] == (5 if not prefix else 10)
+            assert (ids[mask == 0] == tokenizer.pad_token_id).all()
+            assert (mask[:, 1:] <= mask[:, :-1]).all()
+            expected = torch.cat(
+                [single[f"{prefix}input_ids"][single[f"{prefix}attention_mask"].bool()] for single in singles]
+            )
+            torch.testing.assert_close(ids[mask.bool()], expected)
 
+    @pytest.mark.parametrize(
+        "question, label, target",
+        [
+            ({"type": "choice", "criteria": {"a": None, "b": None}}, {"target_index": 1}, [0, 0, 1]),
+            ({"type": "choice", "criteria": {"a": None}, "allow_null": True}, {"target_index": None}, [1, 0]),
+            ({"type": "noul"}, {"p_true": 0.8}, [0, 0.8, 0.2]),
+            ({"type": "score", "criteria": ["bad", "good"], "values": [1, 3]}, {"score": 2}, [0, 0.5, 0.5]),
+        ],
+    )
+    def test_decision_labels(self, collator, question, label, target):
+        batch = collator([{"state": "A state", "questions": {"decision": question}, **label}])
+        torch.testing.assert_close(batch["labels"], torch.tensor([target], dtype=torch.float32))
 
-def test_truncation(tokenizer, collator):
-    row = {
-        "state": "A long state",
-        "questions": {"decision": {"type": "choice", "instructions": "Decide", "criteria": {"a": None, "b": None}}},
-        "target_index": 0,
-    }
-    with pytest.raises(ValueError, match="token limit"):
-        DataCollatorForJeva(tokenizer, collator.decision_config, max_state_length=2)([row])
-    batch = DataCollatorForJeva(tokenizer, collator.decision_config, max_state_length=2, truncation="truncate")([row])
-    assert batch["input_ids"].shape[1] == 2
+    def test_truncation(self, tokenizer, collator):
+        row = {
+            "state": "A long state",
+            "questions": {
+                "decision": {"type": "choice", "instructions": "Decide", "criteria": {"a": None, "b": None}}
+            },
+            "target_index": 0,
+        }
+        with pytest.raises(ValueError, match="token limit"):
+            DataCollatorForJeva(tokenizer, collator.decision_config, max_state_length=2)([row])
+        batch = DataCollatorForJeva(tokenizer, collator.decision_config, max_state_length=2, truncation="truncate")(
+            [row]
+        )
+        assert batch["input_ids"].shape[1] == 2
