@@ -1153,7 +1153,6 @@ class GOLDTrainer(SFTTrainer):
             "chat_template_kwargs",
             "tools",
             "original_prompt_text",
-            "original_completion_text",
             "completion_mask",
             "images",
             "image",
@@ -1316,11 +1315,6 @@ class GOLDTrainer(SFTTrainer):
                     device=new_input_ids.device,
                 )
                 updated_slice[k] = torch.cat([prompt_part, comp_part], dim=1)
-        if "original_prompt_text" not in updated_slice:
-            updated_slice["original_prompt_text"] = prompt_texts
-        # Keep special tokens (e.g. EOS) so the teacher inputs are built from text covering the same generated
-        # content as the supervised `labels != -100` tokens. The alignment itself remains byte-offset based.
-        updated_slice["original_completion_text"] = completion_texts
         if self._teacher_processor is not None:
             updated_slice["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
             updated_slice["_raw_prompts"] = pending_slice["_gold_vlm_raw_prompts"]
@@ -1333,15 +1327,6 @@ class GOLDTrainer(SFTTrainer):
         slice_inputs = {
             k: (v.to(self.accelerator.device) if isinstance(v, torch.Tensor) else v) for k, v in slice_inputs.items()
         }
-
-        if self.use_uld_loss and self.teacher_tokenizer is not None:
-            slice_inputs = self._ensure_original_text_fields(slice_inputs)
-            if "original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs:
-                raise ValueError(
-                    "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
-                    "When using ULD loss with cross-tokenizer alignment, datasets must be prepared with "
-                    "_prepare_dataset_with_original_text(). Ensure your dataset includes these fields."
-                )
 
         if self._teacher_processor is not None:
             slice_inputs["_raw_images"] = pending_slice["_gold_vlm_raw_images"]
@@ -1393,49 +1378,6 @@ class GOLDTrainer(SFTTrainer):
             ]
         return images, prompts
 
-    def _decode_completion_texts_from_labels(self, slice_inputs: dict[str, torch.Tensor | Any]) -> list[str] | None:
-        """Decode completion text from labels when raw text is absent."""
-        labels = slice_inputs.get("labels")
-        if labels is None or not isinstance(labels, torch.Tensor):
-            return None
-
-        labels_cpu = labels.detach().cpu()
-        decoded_completion_tokens: list[list[int]] = []
-        for row in labels_cpu:
-            token_ids = row[row != -100].tolist()
-            decoded_completion_tokens.append(token_ids)
-
-        return self.processing_class.batch_decode(
-            decoded_completion_tokens,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        )
-
-    def _ensure_original_text_fields(
-        self, slice_inputs: dict[str, torch.Tensor | Any]
-    ) -> dict[str, torch.Tensor | Any]:
-        """Populate original prompt/completion text fields when missing."""
-        if "original_prompt_text" in slice_inputs and "original_completion_text" in slice_inputs:
-            return slice_inputs
-
-        prompts = slice_inputs.get("prompts")
-        if prompts is None or not isinstance(prompts, torch.Tensor):
-            return slice_inputs
-
-        prompt_texts = self.processing_class.batch_decode(
-            prompts,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        )
-        completion_texts = self._decode_completion_texts_from_labels(slice_inputs)
-        if completion_texts is None:
-            return slice_inputs
-
-        updated_slice = dict(slice_inputs)
-        updated_slice["original_prompt_text"] = prompt_texts
-        updated_slice["original_completion_text"] = completion_texts
-        return updated_slice
-
     @staticmethod
     def _get_prompt_sequence_key(inputs: dict[str, torch.Tensor | Any], key: str) -> torch.Tensor:
         """Align a sequence-length-dependent key with the left-padded prompt tensor."""
@@ -1464,7 +1406,6 @@ class GOLDTrainer(SFTTrainer):
             "completion_mask",
             "assistant_masks",
             "original_prompt_text",
-            "original_completion_text",
         )
     )
 
@@ -1538,12 +1479,11 @@ class GOLDTrainer(SFTTrainer):
                 if (
                     self.use_uld_loss
                     and self.teacher_tokenizer is not None
-                    and ("original_prompt_text" not in slice_inputs or "original_completion_text" not in slice_inputs)
+                    and "original_prompt_text" not in slice_inputs
                 ):
                     raise ValueError(
-                        "Off-policy batch missing 'original_prompt_text' or 'original_completion_text' fields. "
-                        "Use the default DataCollatorForChatML (or a collator that emits these fields) so the "
-                        "teacher tokenizer has source text to align against."
+                        "Off-policy batch missing the 'original_prompt_text' field. Use the default "
+                        "DataCollatorForChatML (or a collator that emits it) so the teacher has the prompt as text."
                     )
                 self._buffered_inputs[i] = slice_inputs
 
@@ -1665,7 +1605,6 @@ class GOLDTrainer(SFTTrainer):
                 updated_slice["attention_mask"] = new_attention_mask
                 updated_slice["labels"] = new_labels
                 updated_slice["original_prompt_text"] = prompt_texts
-                updated_slice["original_completion_text"] = completion_texts
 
                 self._buffered_inputs[slice_idx] = updated_slice
                 self._buffered_text_logs[slice_idx] = (prompt_texts, completion_texts)
@@ -1961,7 +1900,6 @@ class GOLDTrainer(SFTTrainer):
             updated_slice["prompts"] = prompt_ids
             updated_slice["prompt_attention_mask"] = prompt_attention_mask
             updated_slice["original_prompt_text"] = prompt_txts_with_special
-            updated_slice["original_completion_text"] = completion_texts
 
             self._buffered_inputs[slice_idx] = updated_slice
             self._buffered_text_logs[slice_idx] = (prompt_txts, completion_texts)
@@ -2063,13 +2001,9 @@ class GOLDTrainer(SFTTrainer):
                                 zip(prompt_text, full_text, strict=False),
                             )
                         )
-                        completion_text = full_text[len(prompt_text) :]
                     else:
                         prompt_text = example["prompt"]
-                        completion_text = example["completion"]
-                        full_text = prompt_text + completion_text
-                    result["original_prompt_text"] = prompt_text
-                    result["original_completion_text"] = completion_text
+                        full_text = prompt_text + example["completion"]
                 elif is_conversational(example):
                     messages = example["messages"]
                     assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
@@ -2099,9 +2033,6 @@ class GOLDTrainer(SFTTrainer):
                                 zip(prompt_text, full_text, strict=False),
                             )
                         )
-                        completion_text = full_text[len(prompt_text) :]
-                        result["original_prompt_text"] = prompt_text
-                        result["original_completion_text"] = completion_text
                     else:
                         full_text = processing_class.apply_chat_template(
                             messages,
@@ -2109,15 +2040,10 @@ class GOLDTrainer(SFTTrainer):
                             **example.get("chat_template_kwargs", {}),
                         )
                         prompt_text = ""
-                        result["original_prompt_text"] = ""
-                        result["original_completion_text"] = full_text
                 else:
-                    text = example.get(dataset_text_field, example.get("text", ""))
                     prompt_text = ""
-                    completion_text = text
-                    full_text = text
-                    result["original_prompt_text"] = ""
-                    result["original_completion_text"] = text
+                    full_text = example.get(dataset_text_field, example.get("text", ""))
+                result["original_prompt_text"] = prompt_text
 
                 encoding = processing_class(full_text, add_special_tokens=False, return_offsets_mapping=True)
                 input_ids = encoding["input_ids"]
@@ -2143,17 +2069,10 @@ class GOLDTrainer(SFTTrainer):
                     drop = len(input_ids) - max_length
                     input_ids = input_ids[drop:]
                     completion_start = max(0, completion_start - drop)
-                    # Resync the strings the teacher will re-encode with the ids the student kept.
-                    decode = partial(
-                        processing_class.decode,
-                        skip_special_tokens=False,
-                        clean_up_tokenization_spaces=False,
+                    # Resync the prompt the teacher reads with the ids the student kept.
+                    result["original_prompt_text"] = processing_class.decode(
+                        input_ids[:completion_start], skip_special_tokens=False, clean_up_tokenization_spaces=False
                     )
-                    result["original_prompt_text"] = decode(input_ids[:completion_start])
-                    completion_ids = input_ids[completion_start:]
-                    if append_eos:
-                        completion_ids = completion_ids[:-1]
-                    result["original_completion_text"] = decode(completion_ids)
 
                 result["input_ids"] = input_ids
                 result["attention_mask"] = [1] * len(input_ids)
@@ -2182,7 +2101,6 @@ class GOLDTrainer(SFTTrainer):
                 columns_to_keep = [
                     "input_ids",
                     "original_prompt_text",
-                    "original_completion_text",
                 ]
                 existing_columns = set(dataset.column_names)
                 columns_to_select = [col for col in columns_to_keep if col in existing_columns]

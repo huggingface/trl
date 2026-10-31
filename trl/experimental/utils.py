@@ -285,9 +285,8 @@ class DataCollatorForChatML:
             "prompt_attention_mask": prompt_attention_mask,
         }
         # Forward source text for cross-tokenizer ULD, when the dataset has it.
-        if "original_prompt_text" in examples[0] and "original_completion_text" in examples[0]:
+        if "original_prompt_text" in examples[0]:
             out["original_prompt_text"] = [ex["original_prompt_text"] for ex in examples]
-            out["original_completion_text"] = [ex["original_completion_text"] for ex in examples]
         return out
 
 
@@ -308,8 +307,6 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
     - `"labels"`: Tensor for training labels (prompt tokens masked with -100).
     - `"prompts"`: Tensor of prompt-only token IDs (left-padded), used for on-policy generation.
     - `"prompt_attention_mask"`: Attention mask for prompts.
-    - `"original_prompt_text"`: List of raw prompt text strings, used for ULD cross-tokenizer distillation.
-    - `"original_completion_text"`: List of raw completion text strings, used for ULD cross-tokenizer distillation.
     - `"pixel_values"`: Tensor representing image pixel values.
 
     Additional keys may be present depending on the processor, such as `"image_grid_thw"` or `"image_position_ids"`.
@@ -344,31 +341,6 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
             images = None
 
         # Capture raw prompt/completion text before `apply_chat_template` mutates the examples.
-        def _raw_text_from_messages(messages_or_str: Any) -> str:
-            if isinstance(messages_or_str, str):
-                return messages_or_str
-            parts: list[str] = []
-            for turn in messages_or_str:
-                content = turn.get("content", "")
-                if isinstance(content, str):
-                    if content:
-                        parts.append(content)
-                    continue
-                turn_parts: list[str] = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = block.get("text", "")
-                        if text:
-                            turn_parts.append(text)
-                    elif isinstance(block, str):
-                        turn_parts.append(block)
-                if turn_parts:
-                    parts.append("\n".join(turn_parts))
-            return "\n".join(parts)
-
-        raw_prompt_texts = [_raw_text_from_messages(example["prompt"]) for example in examples]
-        raw_completion_texts = [_raw_text_from_messages(example["completion"]) for example in examples]
-
         # Apply chat template for conversational data
         if is_conversational(examples[0]):
             for example in examples:
@@ -485,13 +457,6 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         # GOLD-specific: separate prompt tensors for on-policy generation
         output["prompts"] = prompt_ids
         output["prompt_attention_mask"] = prompt_mask
-
-        # GOLD-specific: raw text for ULD cross-tokenizer distillation.
-        # These must be the untemplated text (no student chat-template markers) so the
-        # teacher can re-render the prompt through its own chat template and tokenize the
-        # completion cleanly.
-        output["original_prompt_text"] = raw_prompt_texts
-        output["original_completion_text"] = raw_completion_texts
 
         return output
 
