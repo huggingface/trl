@@ -26,7 +26,7 @@ from datasets import IterableDataset
 from packaging.version import Version
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.testing_utils import torch_device
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_triton_available
 
 import trl.trainer.utils as trainer_utils
 from trl import ModelConfig
@@ -61,6 +61,9 @@ from trl.trainer.utils import (
 
 from .testing_utils import TrlTestCase, require_kernels, require_peft, require_rich, require_torch_accelerator
 
+
+if is_triton_available():
+    import triton
 
 if is_peft_available():
     import peft
@@ -1974,7 +1977,11 @@ class TestAddFusedLMHeadLoss:
                 "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
                 marks=[
                     require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
-                    pytest.mark.xfail(reason="FP8 grouped matmul kernel fails to compile in CI (see #8020)"),
+                    pytest.mark.xfail(
+                        is_triton_available() and Version(triton.__version__) >= Version("3.9.0"),
+                        reason="finegrained-fp8 grouped matmul kernel fails to compile with triton>=3.9 (see #8020)",
+                        strict=True,
+                    ),
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.22.0"),
                         reason="Mistral Large 4 was introduced in transformers-5.22.0",
