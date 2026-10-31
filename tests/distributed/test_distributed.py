@@ -15,8 +15,10 @@
 import json
 import os
 import subprocess
+from importlib.util import find_spec
 from pathlib import Path
 
+import accelerate
 import pytest
 import torch
 import transformers
@@ -82,17 +84,24 @@ class TestDistributed(TrlTestCase):
                     reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
                 ),
             ),
-            "fsdp2",
             pytest.param(
-                "jeva_cp",
+                "fsdp2",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.22.1"),
-                    reason="Jeva context parallelism requires transformers>=5.22.1",
+                    Version(accelerate.__version__) < Version("1.16.0.dev0"),
+                    reason="FSDP2 FP32 loss outputs require Accelerate #4403",
+                ),
+            ),
+            pytest.param(
+                "decision_cp",
+                marks=pytest.mark.skipif(
+                    Version(accelerate.__version__) < Version("1.16.0.dev0"),
+                    reason="FSDP2 FP32 loss outputs require Accelerate #4403",
                 ),
             ),
         ],
     )
-    def test_jeva(self, config, get_config_path):
+    @pytest.mark.skipif(find_spec("transformers.models.jeva") is None, reason="Requires Transformers decision models")
+    def test_decision(self, config, get_config_path):
         # fmt: off
         run_command(
             [

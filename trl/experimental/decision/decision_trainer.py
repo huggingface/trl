@@ -26,13 +26,18 @@ import transformers
 from accelerate.utils import recursively_apply
 from datasets import Dataset, IterableDataset
 from packaging.version import Version
-from transformers import AutoTokenizer, PreTrainedTokenizerBase, TrainerCallback, set_seed
+from transformers import (
+    AutoModelForDecision,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    TrainerCallback,
+    set_seed,
+)
 from transformers.utils import is_peft_available
 
 from ...trainer.base_trainer import _BaseTrainer
-from .data import DataCollatorForJeva
-from .jeva_config import JevaConfig
-from .modeling_jeva import JevaModel
+from .decision_config import DecisionConfig
 
 
 if is_peft_available():
@@ -43,24 +48,22 @@ def _coverage_loss(logits, targets):
     return targets * F.softplus(-logits) + (1 - targets) * F.softplus(logits)
 
 
-class JevaTrainer(_BaseTrainer):
+class DecisionTrainer(_BaseTrainer):
     """
-    Trainer for [Jeva: System One Models from First Principles](https://huggingface.co/papers/2610.18773).
+    Trainer for models that return a supervised decision loss.
 
-    Trains candidate distributions and a separate coverage estimate from typed decisions. The shared encoder never
-    constructs language-model vocabulary logits. Optimization, distributed wrapping, checkpointing, and callbacks use
-    [`~transformers.Trainer`].
+    Uses the model's loss and logs candidate and coverage metrics for typed decisions. Optimization, distributed
+    wrapping, checkpointing, and callbacks use [`~transformers.Trainer`]. Jeva is the first supported model.
 
     Args:
-        model ([`experimental.jeva.JevaModel`] or `str`):
-            Model to train, or identifier of a saved JevaModel checkpoint.
-        args ([`experimental.jeva.JevaConfig`], *optional*):
+        model ([`~transformers.PreTrainedModel`] or `str`):
+            Model to train, or identifier of a saved decision checkpoint.
+        args ([`experimental.decision.DecisionConfig`], *optional*):
             Training configuration.
         data_collator (`Callable`, *optional*):
-            Decision collator. Defaults to `DataCollatorForJeva`.
+            Collator producing model inputs and decision labels. Use `DataCollatorForJeva` for Jeva requests.
         train_dataset (`Dataset` or `IterableDataset`, *optional*):
-            Dataset with `state`, `question`, `options`, and one of `target_index`, `target_probs`, `p_true`, or
-            `score`. `decision_type` defaults to `"choice"`.
+            Dataset of decision requests with one of `target_index`, `target_probs`, `p_true`, or `score`.
         eval_dataset (`Dataset` or `IterableDataset` or `dict`, *optional*):
             Evaluation dataset or named evaluation datasets.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
@@ -81,14 +84,14 @@ class JevaTrainer(_BaseTrainer):
     """
 
     loss_is_scaled_for_ga = True
-    _tag_names = ["trl", "jeva"]
-    _name = "Jeva"
+    _tag_names = ["trl", "decision"]
+    _name = "Decision"
     _paper = {"title": "Jeva: System One Models from First Principles", "id": "2610.18773"}
 
     def __init__(
         self,
-        model: JevaModel | str,
-        args: JevaConfig | None = None,
+        model: PreTrainedModel | str,
+        args: DecisionConfig | None = None,
         data_collator: Callable | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
@@ -101,13 +104,17 @@ class JevaTrainer(_BaseTrainer):
         peft_config: Any | None = None,
     ):
         if args is None:
-            args = JevaConfig(output_dir="Jeva")
+            args = DecisionConfig(output_dir="Decision")
         if train_dataset is None:
             raise ValueError("`train_dataset` is required")
         set_seed(args.seed)
-        model_id = model if isinstance(model, str) else model.config.backbone_name_or_path
+        model_id = (
+            model
+            if isinstance(model, str)
+            else model.config._name_or_path or model.config.get_text_config()._name_or_path
+        )
         if isinstance(model, str):
-            model = JevaModel.from_pretrained(model, **(args.model_init_kwargs or {}))
+            model = AutoModelForDecision.from_pretrained(model, **(args.model_init_kwargs or {}))
         if Version(transformers.__version__) >= Version("5.21.0.dev0"):
             if model.is_distributed_loading_by_transformers and "ep_dispatch_experts" in model.ep_plan.values():
                 raise ValueError(
@@ -118,24 +125,25 @@ class JevaTrainer(_BaseTrainer):
         if processing_class.pad_token_id is None:
             processing_class.pad_token = processing_class.eos_token
         if args.n_gpu > 1:
-            raise ValueError("Use accelerate launch or torchrun for multi-GPU Jeva training instead of DataParallel")
+            raise ValueError(
+                "Use accelerate launch or torchrun for multi-GPU decision training instead of DataParallel"
+            )
         if peft_config is not None:
             if not is_peft_available():
                 raise ImportError("Install `trl[peft]` to use peft_config")
-            if args.mode != "lora" or model.config.adapter_config is not None:
+            if args.mode != "lora" or model.config.to_dict().get("adapter_config") is not None:
                 raise ValueError("peft_config requires mode='lora' and an encoder without an existing adapter")
-            model.backbone = get_peft_model(model.backbone, peft_config)
-            model.config.adapter_config = peft_config.to_dict()
-        model.backbone.requires_grad_(args.mode == "full")
+            model.model = get_peft_model(model.base_model, peft_config)
+            model.config.adapter_config = {
+                key: list(value) if isinstance(value, set) else value for key, value in peft_config.to_dict().items()
+            }
+        model.requires_grad_(True)
+        model.base_model.requires_grad_(args.mode == "full")
         if args.mode == "lora":
-            if model.config.adapter_config is None:
+            if model.config.to_dict().get("adapter_config") is None:
                 raise ValueError("mode='lora' requires an existing adapter or peft_config")
-            model.backbone.set_adapter("default")
-            model.backbone.enable_input_require_grads()
-        model.freeze_backbone = args.mode == "head"
-        model.context_proj.requires_grad_(True)
-        model.option_proj.requires_grad_(True)
-        model.core.requires_grad_(True)
+            model.base_model.set_adapter("default")
+            model.base_model.enable_input_require_grads()
 
         text_config = model.config.get_text_config()
         text_config_dict = text_config.to_dict()
@@ -143,14 +151,14 @@ class JevaTrainer(_BaseTrainer):
         self.router_aux_loss_coef = text_config_dict.get("router_aux_loss_coef", 0.0) if coef is None else coef
         if self.router_aux_loss_coef and "output_router_logits" not in text_config_dict:
             raise ValueError("router_aux_loss_coef requires an MoE encoder that returns router logits")
-        model.router_aux_loss_coef = 0.0 if model.freeze_backbone else self.router_aux_loss_coef
+        model.router_aux_loss_coef = 0.0 if args.mode == "head" else self.router_aux_loss_coef
+        model.config.router_aux_loss_coef = model.router_aux_loss_coef
         self.aux_loss_enabled = model.router_aux_loss_coef != 0.0
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator
-            or DataCollatorForJeva(processing_class, args.max_state_length, args.max_option_length, args.truncation),
+            data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
@@ -164,11 +172,9 @@ class JevaTrainer(_BaseTrainer):
         self._cp_group = None
         parallelism_config = self.accelerator.parallelism_config
         if parallelism_config is not None and parallelism_config.cp_enabled:
-            if Version(transformers.__version__) < Version("5.22.1"):
-                raise ValueError("Jeva context parallelism requires transformers>=5.22.1")
             if parallelism_config.cp_backend != "torch":
-                raise ValueError("Jeva context parallelism requires the torch backend with FSDP2")
-            if not model.backbone.supports_context_parallel:
+                raise ValueError("Decision context parallelism requires the torch backend with FSDP2")
+            if not model.base_model.supports_context_parallel:
                 raise ValueError(
                     "Context parallelism requires a full causal attention encoder without recurrent layers"
                 )
@@ -180,7 +186,9 @@ class JevaTrainer(_BaseTrainer):
             and parallelism_config is not None
             and parallelism_config.sp_enabled
         ):
-            raise ValueError("Jeva does not support DeepSpeed sequence parallelism; use torch context parallelism")
+            raise ValueError(
+                "DecisionTrainer does not support DeepSpeed sequence parallelism; use torch context parallelism"
+            )
 
     def _get_num_items_in_batch(self, batch_samples, device):
         count = torch.tensor(sum(batch["labels"].shape[0] for batch in batch_samples), device=device)
@@ -190,62 +198,62 @@ class JevaTrainer(_BaseTrainer):
         if self._cp_group is None:
             return contextlib.nullcontext, inputs
         cp_size = self.accelerator.parallelism_config.cp_size
-        length = max(inputs[name]["input_ids"].shape[1] for name in ("state_inputs", "option_inputs"))
+        length = max(inputs[f"{prefix}input_ids"].shape[1] for prefix in ("", "option_"))
         padded_length = length + (-length) % (2 * cp_size)
         buffers = []
-        for name in ("state_inputs", "option_inputs"):
-            values = dict(inputs[name])
-            values["sequence_lengths"] = values["attention_mask"].sum(-1)
-            length = values["input_ids"].shape[1]
+        for prefix in ("", "option_"):
+            inputs[f"{prefix}sequence_lengths"] = inputs[f"{prefix}attention_mask"].sum(-1)
+            length = inputs[f"{prefix}input_ids"].shape[1]
             pad_length = padded_length - length
-            values["input_ids"] = F.pad(values["input_ids"], (0, pad_length), value=self.processing_class.pad_token_id)
-            values["attention_mask"] = F.pad(values["attention_mask"], (0, pad_length))
-            values["position_ids"] = (
-                torch.arange(length + pad_length, device=values["input_ids"].device)[None, :]
-                .expand(values["input_ids"].shape[0], -1)
+            inputs[f"{prefix}input_ids"] = F.pad(
+                inputs[f"{prefix}input_ids"], (0, pad_length), value=self.processing_class.pad_token_id
+            )
+            inputs[f"{prefix}attention_mask"] = F.pad(inputs[f"{prefix}attention_mask"], (0, pad_length))
+            inputs[f"{prefix}position_ids"] = (
+                torch.arange(padded_length, device=inputs[f"{prefix}input_ids"].device)[None, :]
+                .expand(inputs[f"{prefix}input_ids"].shape[0], -1)
                 .clone()
             )
-            inputs[name] = values
-            buffers.extend(values[key] for key in ("input_ids", "attention_mask", "position_ids"))
+            buffers.extend(inputs[f"{prefix}{key}"] for key in ("input_ids", "attention_mask", "position_ids"))
         return partial(
             self.accelerator.maybe_context_parallel, buffers=buffers, buffer_seq_dims=[1] * len(buffers)
         ), inputs
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         mode = "train" if self.model.training else "eval"
-        option_inputs = inputs["option_inputs"]
+        model_inputs = {key: value for key, value in inputs.items() if key != "is_choice"}
         # Sharded encoders must execute the same number of option chunks on every rank.
         if self.accelerator.num_processes > 1 and self.args.option_chunk_size is not None:
-            count = option_inputs["input_ids"].new_tensor([option_inputs["input_ids"].shape[0]])
+            count = inputs["option_input_ids"].new_tensor([inputs["option_input_ids"].shape[0]])
             padding = self.accelerator.gather(count).max().item() - count.item()
-            option_inputs = {
-                key: torch.cat([value, value[:1].expand(padding, *value.shape[1:])])
-                for key, value in option_inputs.items()
-            }
+            for key in ("option_input_ids", "option_attention_mask", "option_position_ids", "option_sequence_lengths"):
+                if key in model_inputs:
+                    value = model_inputs[key]
+                    model_inputs[key] = torch.cat([value, value[:1].expand(padding, *value.shape[1:])])
+        if self.args.mode == "head":
+            self.accelerator.unwrap_model(model).base_model.eval()
         outputs = model(
-            state_inputs=inputs["state_inputs"],
-            option_inputs=option_inputs,
-            option_counts=inputs["option_counts"],
-            option_mask=inputs["option_mask"],
+            **model_inputs,
             option_chunk_size=self.args.option_chunk_size,
             cp_group=self._cp_group,
+            num_items_in_batch=num_items_in_batch,
         )
-        candidates = inputs["labels"][:, 1:].float()
-        log_q = outputs.log_q.float().masked_fill(~inputs["option_mask"], 0.0)
-        candidate_loss = -(candidates * log_q).sum(-1)
-        coverage_loss = _coverage_loss(outputs.coverage_logit.float(), candidates.sum(-1))
-        per_example_loss = candidate_loss + coverage_loss * inputs["allow_null"]
-        count = len(per_example_loss) if num_items_in_batch is None else num_items_in_batch
-        loss = per_example_loss.sum() / count
+        loss = outputs.loss
+        if self.aux_loss_enabled:
+            loss = loss - self.router_aux_loss_coef * outputs.aux_loss
         if num_items_in_batch is not None:
             loss = loss * self.accelerator.num_processes
         if self.aux_loss_enabled:
             steps = self.current_gradient_accumulation_steps if num_items_in_batch is not None else 1
             loss = loss + self.router_aux_loss_coef * outputs.aux_loss / steps
         with torch.no_grad():
-            coverage = torch.where(inputs["allow_null"], outputs.coverage_logit.float().sigmoid(), 1.0)
+            candidates = inputs["labels"][:, 1:].float()
+            log_q = outputs.logits.float().log_softmax(-1).masked_fill(~inputs["option_mask"], 0.0)
+            candidate_loss = -(candidates * log_q).sum(-1)
+            coverage_loss = _coverage_loss(outputs.coverage_logits.float(), candidates.sum(-1))
+            coverage = torch.where(inputs["allow_null"], outputs.coverage_logits.float().sigmoid(), 1.0)
             probabilities = torch.cat(
-                [(1 - coverage)[:, None], coverage[:, None] * outputs.log_q.float().softmax(-1)], -1
+                [(1 - coverage)[:, None], coverage[:, None] * outputs.logits.float().softmax(-1)], -1
             )
             predicted = probabilities.argmax(-1)
             target = inputs["labels"].argmax(-1)
@@ -259,7 +267,7 @@ class JevaTrainer(_BaseTrainer):
                 "candidate_loss": (candidate_loss.detach(), ones),
                 "coverage_loss": (coverage_loss.detach() * inputs["allow_null"], ones),
                 "choice_accuracy": ((predicted == target) & hard_choice, hard_choice),
-                "candidate_accuracy": ((outputs.log_q.argmax(-1) + 1 == target) & present, present),
+                "candidate_accuracy": ((outputs.logits.argmax(-1) + 1 == target) & present, present),
                 "null_precision": (true_null, predicted_null),
                 "null_recall": (true_null, target_null),
                 "null_rate": ((predicted == 0) & inputs["allow_null"], inputs["allow_null"]),
@@ -310,9 +318,9 @@ class JevaTrainer(_BaseTrainer):
             loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
         if prediction_loss_only:
             return loss.detach(), None, None
-        coverage = torch.where(inputs["allow_null"], outputs.coverage_logit.float().sigmoid(), 1.0)
+        coverage = torch.where(inputs["allow_null"], outputs.coverage_logits.float().sigmoid(), 1.0)
         probabilities = torch.cat(
-            [(1 - coverage)[:, None], coverage[:, None] * outputs.log_q.float().softmax(-1)], dim=-1
+            [(1 - coverage)[:, None], coverage[:, None] * outputs.logits.float().softmax(-1)], dim=-1
         )
         mask = F.pad(inputs["option_mask"], (1, 0), value=True)
         return (

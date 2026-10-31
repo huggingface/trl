@@ -22,18 +22,7 @@ from typing import Any
 
 import torch
 from transformers import PreTrainedTokenizerBase
-
-
-@dataclass(frozen=True)
-class TrainingRecord:
-    state: str
-    question: str
-    decision_type: str
-    options: tuple[str, ...]
-    target_probs: tuple[float, ...]
-    allow_null: bool = False
-    values: tuple[float, ...] | None = None
-    positive_index: int | None = None
+from transformers.decision import DecisionConfig, Question, read_marks
 
 
 def _finite(value: Any, name: str) -> float:
@@ -45,24 +34,10 @@ def _finite(value: Any, name: str) -> float:
     return value
 
 
-def normalize_record(row: Mapping[str, Any]) -> TrainingRecord:
-    kind = "choice" if row.get("decision_type") is None else row["decision_type"]
-    if kind not in {"choice", "noul", "score"}:
-        raise ValueError("decision_type must be choice, noul, or score")
-    state, question = row.get("state"), row.get("question")
-    if not isinstance(state, str) or not isinstance(question, str) or not question.strip():
-        raise ValueError("state and nonempty question must be strings")
-    options = row.get("options") or (["false", "true"] if kind == "noul" else None)
-    if not isinstance(options, (list, tuple)) or not options:
-        raise ValueError("options must be a nonempty list of strings")
-    if any(not isinstance(option, str) or not option.strip() for option in options):
-        raise ValueError("every option must be a nonempty string")
-    k = len(options)
-    allow_null = False if row.get("allow_null") is None else row["allow_null"]
-    if not isinstance(allow_null, bool):
-        raise ValueError("allow_null must be a boolean")
-    if kind != "choice" and allow_null:
-        raise ValueError("allow_null is supported only for choice records")
+def normalize_target(row: Mapping[str, Any], question: Question) -> tuple[float, ...]:
+    kind = question.type
+    k = len(question.options)
+    allow_null = question.allow_null
     supplied = [
         name
         for name in ("target_index", "target_probs", "p_true", "score")
@@ -75,18 +50,9 @@ def normalize_record(row: Mapping[str, Any]) -> TrainingRecord:
     label = supplied[0]
     values, positive_index = None, None
     if kind == "noul":
-        if k != 2:
-            raise ValueError("noul requires exactly two options")
-        positive_index = 1 if row.get("positive_index") is None else row["positive_index"]
-        if type(positive_index) is not int or positive_index not in (0, 1):
-            raise ValueError("positive_index must be 0 or 1")
+        positive_index = question.options.index("true")
     if kind == "score":
-        raw_values = row.get("values") if row.get("values") is not None else list(range(k))
-        if not isinstance(raw_values, (list, tuple)) or len(raw_values) != k or k < 2:
-            raise ValueError("score requires at least two options and one value per option")
-        values = tuple(_finite(value, "values") for value in raw_values)
-        if any(b <= a for a, b in zip(values, values[1:], strict=False)):
-            raise ValueError("score values must be strictly increasing in option order")
+        values = tuple(range(k)) if question.values is None else tuple(question.values)
     probs = [0.0] * (k + 1)
     if label == "target_probs":
         raw_probs = row[label]
@@ -132,7 +98,7 @@ def normalize_record(row: Mapping[str, Any]) -> TrainingRecord:
                 break
     if not allow_null and probs[0] != 0:
         raise ValueError("null target mass requires allow_null=true")
-    return TrainingRecord(state, question, kind, tuple(options), tuple(probs), allow_null, values, positive_index)
+    return tuple(probs)
 
 
 @dataclass
@@ -143,6 +109,8 @@ class DataCollatorForJeva:
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer used by the shared encoder. Padding is applied on the right.
+        decision_config ([`~transformers.DecisionConfig`]):
+            Decision settings and template from the model.
         max_state_length (`int`, *optional*, defaults to `9000`):
             Maximum length of the state and question text.
         max_option_length (`int`, *optional*, defaults to `8192`):
@@ -152,35 +120,61 @@ class DataCollatorForJeva:
     """
 
     tokenizer: PreTrainedTokenizerBase
+    decision_config: DecisionConfig
     max_state_length: int = 9000
     max_option_length: int = 8192
     truncation: str = "error"
 
+    def __post_init__(self):
+        if self.max_state_length < 1 or self.max_option_length < 1:
+            raise ValueError("max_state_length and max_option_length must be positive")
+        if self.truncation not in {"error", "truncate"}:
+            raise ValueError("truncation must be error or truncate")
+
     def __call__(self, features):
-        rows = [normalize_record(row) for row in features]
-        states = [f"Decision type: {r.decision_type}\nQuestion: {r.question}\nState:\n{r.state}" for r in rows]
-        options = [f"Option for {r.decision_type}: {option}" for r in rows for option in r.options]
+        states, options, targets, questions = [], [], [], []
+        for row in features:
+            request = row["request"] if "request" in row else {"state": row["state"], "questions": row["questions"]}
+            prompts = self.decision_config.chat_template_kwargs(request, self.tokenizer)
+            if len(prompts) != 1 or len(prompts[0]["decision_questions"]) != 1:
+                raise ValueError("Each training row must contain exactly one decision question")
+            kwargs = prompts[0]
+            question = kwargs.pop("decision_questions")[0]
+            inputs = self.tokenizer.apply_chat_template(**kwargs, tokenize=True, return_dict=True, return_tensors="pt")
+            inputs, marks = read_marks(dict(inputs), self.decision_config._sentinel_ids)
+            if len(marks) != len(question.options) + 1:
+                raise ValueError("The Jeva template must mark one state span and one span per option")
+            segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
+            states.append(segments[0].tolist())
+            options.extend(segment.tolist() for segment in segments[1:])
+            targets.append(normalize_target(row, question))
+            questions.append(question)
         encoded = []
-        for texts, limit in ((states, self.max_state_length), (options, self.max_option_length)):
-            inputs = self.tokenizer(texts, padding=False, truncation=False)
-            if self.truncation == "error" and any(len(ids) > limit for ids in inputs["input_ids"]):
+        for sequences, limit in ((states, self.max_state_length), (options, self.max_option_length)):
+            if self.truncation == "error" and any(len(ids) > limit for ids in sequences):
                 raise ValueError(
                     f"Input exceeds its {limit} token limit; increase the limit or set truncation='truncate'"
                 )
             if self.truncation == "truncate":
-                inputs = self.tokenizer(texts, padding=False, truncation=True, max_length=limit)
-            encoded.append(dict(self.tokenizer.pad(inputs, padding=True, return_tensors="pt", padding_side="right")))
-        counts = torch.tensor([len(r.options) for r in rows])
+                sequences = [ids[:limit] for ids in sequences]
+            encoded.append(
+                dict(
+                    self.tokenizer.pad(
+                        {"input_ids": sequences}, padding=True, return_tensors="pt", padding_side="right"
+                    )
+                )
+            )
+        counts = torch.tensor([len(question.options) for question in questions])
         option_mask = torch.arange(counts.max())[None, :] < counts[:, None]
-        labels = torch.zeros(len(rows), option_mask.shape[1] + 1)
-        for i, row in enumerate(rows):
-            labels[i, : len(row.target_probs)] = torch.tensor(row.target_probs)
+        labels = torch.zeros(len(questions), option_mask.shape[1] + 1)
+        for index, target in enumerate(targets):
+            labels[index, : len(target)] = torch.tensor(target)
         return {
-            "state_inputs": encoded[0],
-            "option_inputs": encoded[1],
-            "option_counts": counts,
+            **encoded[0],
+            **{f"option_{key}": value for key, value in encoded[1].items()},
+            "num_options": counts,
             "option_mask": option_mask,
             "labels": labels,
-            "allow_null": torch.tensor([r.allow_null for r in rows]),
-            "is_choice": torch.tensor([r.decision_type == "choice" for r in rows]),
+            "allow_null": torch.tensor([question.allow_null for question in questions]),
+            "is_choice": torch.tensor([question.type == "choice" for question in questions]),
         }

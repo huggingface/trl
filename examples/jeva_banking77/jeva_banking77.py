@@ -13,7 +13,11 @@
 # limitations under the License.
 
 # /// script
-# dependencies = ["trl[peft]", "transformers>=5.22.1"]
+# dependencies = [
+#     "trl[peft]",
+#     "transformers @ git+https://github.com/huggingface/transformers.git@refs/pull/50203/head",
+#     "accelerate @ git+https://github.com/huggingface/accelerate.git",
+# ]
 # ///
 
 """
@@ -25,15 +29,16 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
     examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
 """
 
+import json
 import random
 from dataclasses import dataclass, field
 
 import numpy as np
 from datasets import load_dataset
-from transformers import AutoTokenizer, set_seed
+from transformers import AutoModel, AutoTokenizer, JevaConfig, JevaForDecision, set_seed
 
 from trl import ModelConfig, ScriptArguments, TrlParser, get_peft_config
-from trl.experimental.jeva import JevaConfig, JevaModel, JevaTrainer
+from trl.experimental.decision import DataCollatorForJeva, DecisionConfig, DecisionTrainer
 
 
 @dataclass
@@ -68,13 +73,18 @@ def prepare_dataset(dataset, num_options, null_fraction, seed):
         if present:
             candidates.append(label)
         rng.shuffle(candidates)
-        return {
+        request = {
             "state": example["text"],
-            "question": "Which banking intent best matches this request?",
-            "options": [intents[i].replace("_", " ") for i in candidates],
-            "allow_null": True,
-            "target_index": candidates.index(label) if present else None,
+            "questions": {
+                "intent": {
+                    "type": "choice",
+                    "instructions": "Which banking intent best matches this request?",
+                    "criteria": {intents[i].replace("_", " "): None for i in candidates},
+                    "allow_null": True,
+                }
+            },
         }
+        return {"request": json.dumps(request), "target_index": candidates.index(label) if present else None}
 
     return dataset.map(format_example, with_indices=True, remove_columns=dataset.column_names)
 
@@ -90,8 +100,11 @@ def main(script_args, training_args, model_args):
     model_kwargs.setdefault("dtype", model_args.dtype)
     if model_args.attn_implementation is not None:
         model_kwargs["attn_implementation"] = model_args.attn_implementation
-    model = JevaModel.from_backbone_pretrained(
-        model_args.model_name_or_path, model_config={"projection_dim": script_args.projection_dim}, **model_kwargs
+    encoder = AutoModel.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    if encoder.config.model_type in {"qwen3_5", "qwen3_5_moe"}:
+        encoder = encoder.language_model
+    model = JevaForDecision(
+        JevaConfig(text_config=encoder.config, projection_dim=script_args.projection_dim), model=encoder
     )
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
@@ -111,12 +124,19 @@ def main(script_args, training_args, model_args):
     eval_dataset = prepare_dataset(
         eval_dataset, script_args.num_options, script_args.null_fraction, training_args.seed + 1
     )
-    trainer = JevaTrainer(
+    trainer = DecisionTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
+        data_collator=DataCollatorForJeva(
+            tokenizer,
+            model.decision_config,
+            training_args.max_state_length,
+            training_args.max_option_length,
+            training_args.truncation,
+        ),
         peft_config=get_peft_config(model_args),
         compute_metrics=compute_metrics,
     )
@@ -133,5 +153,5 @@ def main(script_args, training_args, model_args):
 
 
 if __name__ == "__main__":
-    parser = TrlParser((JevaScriptArguments, JevaConfig, JevaModelArguments))
+    parser = TrlParser((JevaScriptArguments, DecisionConfig, JevaModelArguments))
     main(*parser.parse_args_and_config())

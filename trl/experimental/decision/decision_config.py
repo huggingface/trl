@@ -19,15 +19,15 @@ from ...trainer.base_config import _BaseConfig
 
 
 @dataclass
-class JevaConfig(_BaseConfig):
+class DecisionConfig(_BaseConfig):
     """
-    Configuration for [`experimental.jeva.JevaTrainer`].
+    Configuration for [`experimental.decision.DecisionTrainer`].
 
     All standard [`~transformers.TrainingArguments`] are available.
 
     Args:
         model_init_kwargs (`dict[str, Any]`, *optional*):
-            Arguments passed to [`experimental.jeva.JevaModel.from_pretrained`] for a model identifier.
+            Arguments passed to [`~transformers.AutoModelForDecision.from_pretrained`] for a model identifier.
         mode (`str`, *optional*, defaults to `"head"`):
             Train the projections and decision stack (`"head"`), also train the encoder's adapter (`"lora"`), or train
             the complete model (`"full"`).
@@ -68,7 +68,7 @@ class JevaConfig(_BaseConfig):
         if self.option_chunk_size is not None and self.option_chunk_size < 1:
             raise ValueError("option_chunk_size must be positive or None")
         if self.remove_unused_columns:
-            raise ValueError("Jeva's collator requires remove_unused_columns=False")
+            raise ValueError("The decision collator requires remove_unused_columns=False")
         # Flattened options have a different leading dimension from states. Shard examples before collation.
         self.accelerator_config.dispatch_batches = False
         self.accelerator_config.split_batches = False

@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .configuration_jeva import JevaModelConfig
-from .jeva_config import JevaConfig
-from .jeva_trainer import JevaTrainer
-from .modeling_jeva import JevaModel
+from .data import DataCollatorForJeva
+from .decision_config import DecisionConfig
+from .decision_trainer import DecisionTrainer
 
 
-__all__ = ["JevaConfig", "JevaModel", "JevaModelConfig", "JevaTrainer"]
+__all__ = ["DataCollatorForJeva", "DecisionConfig", "DecisionTrainer"]
