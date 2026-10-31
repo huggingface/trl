@@ -19,6 +19,7 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import time
 from collections import OrderedDict, defaultdict
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -55,6 +56,7 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     RolloutSample,
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
+    _spawn_stop_watcher,
 )
 from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
 from trl.experimental.server_distillation.server_distillation_trainer import (
@@ -1602,3 +1604,26 @@ class TestManifestWeightStream:
         ]
         for (_, sent_tensor), (_, original_tensor) in zip(sent, original, strict=True):
             assert torch.equal(sent_tensor, original_tensor)
+
+
+def _start_stop_watcher_and_exit(stop_event):
+    _spawn_stop_watcher(_rollout_loop(teacher_server_urls=ONE_TEACHER), stop_event)
+    time.sleep(0.5)  # let the watcher start before the process exits
+
+
+class TestStopWatcher:
+    def test_stop_event_can_be_set_after_the_worker_exited(self):
+        # A worker that dies (e.g. on an exception) leaves its stop watcher behind, and the trainer's `stop()` then
+        # sets the stop event
+        ctx = mp.get_context("spawn")
+        stop_event = ctx.Event()
+        worker = ctx.Process(target=_start_stop_watcher_and_exit, args=(stop_event,))
+        worker.start()
+        worker.join(timeout=60)
+        # In a process rather than a thread, so a hanging `set()` can be killed and the test fails instead of hanging
+        setter = ctx.Process(target=stop_event.set)
+        setter.start()
+        setter.join(timeout=10)
+        hung = setter.is_alive()
+        setter.kill()
+        assert not hung
