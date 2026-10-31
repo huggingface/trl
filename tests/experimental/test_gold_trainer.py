@@ -698,6 +698,35 @@ def test_uld_rejects_rows_that_do_not_fit(tmp_path, max_length, max_completion_l
         )
 
 
+def test_uld_teacher_does_not_see_the_student_template_inside_the_assistant_turn(tmp_path, llama_tokenizer):
+    """Qwen3's template opens every assistant turn with an empty think block. That is the student's template, not the
+    completion, so the teacher must read only the content after it, then close the turn with its own EOS."""
+    messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there"}]
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+        teacher_model=_TINY_LLAMA,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            report_to="none",
+            use_uld_loss=True,
+            teacher_tokenizer_name_or_path=_TINY_LLAMA,
+            max_length=128,
+            max_completion_length=16,
+        ),
+        train_dataset=Dataset.from_dict({"messages": [messages]}),
+    )
+    teacher_inputs = []
+    trainer.teacher_model.register_forward_hook(
+        lambda module, args, kwargs, output: teacher_inputs.append(kwargs["input_ids"]), with_kwargs=True
+    )
+
+    trainer.compute_loss(trainer.model, trainer.data_collator([trainer.train_dataset[0]]))
+
+    teacher_text = llama_tokenizer.decode(teacher_inputs[0][0])
+    assert "<think>" not in teacher_text
+    assert teacher_text.endswith("<|start_header_id|>assistant<|end_header_id|>\n\nHello there<|eot_id|>")
+
+
 def test_prepare_dataset_messages_uses_last_assistant_turn(tmp_path, qwen_tokenizer):
     messages = [
         {"role": "system", "content": "Be terse."},

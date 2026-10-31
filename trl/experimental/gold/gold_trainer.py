@@ -1067,6 +1067,18 @@ class GOLDTrainer(SFTTrainer):
                 teacher_tokenizer=self.teacher_tokenizer,
                 device=self.accelerator.device,
             )
+            # The markup the student's chat template puts before the assistant's content (e.g. Qwen3's empty think
+            # block), found by rendering a probe message: the teacher reads the content only. Whitespace is not
+            # markup, and stripping it would split the student's first content token.
+            self._student_turn_prefix = ""
+            if processing_class.chat_template is not None:
+                marker = "GOLD_CONTENT_PROBE"
+                content = [{"type": "text", "text": marker}] if self._is_vlm else marker
+                probe = [{"role": "user", "content": content}, {"role": "assistant", "content": content}]
+                prompt = processing_class.apply_chat_template(probe[:1], add_generation_prompt=True, tokenize=False)
+                full = processing_class.apply_chat_template(probe, tokenize=False)
+                prefix = full[: full.rindex(marker)].removeprefix(prompt)
+                self._student_turn_prefix = prefix if prefix.strip() else ""
 
         generation_kwargs = {
             "max_new_tokens": args.max_completion_length,
@@ -2068,8 +2080,8 @@ class GOLDTrainer(SFTTrainer):
                 if append_eos:
                     input_ids.append(processing_class.eos_token_id)
 
-                # Cross-tokenizer ULD rejects rows that don't fit, like X-Token distillation in NeMo RL: truncating
-                # would leave the student less context than the teacher, which reads the whole prompt.
+                # Cross-tokenizer ULD rejects rows that don't fit: truncating would leave the student less context
+                # than the teacher, which reads the whole prompt.
                 if (
                     teacher_tokenizer is not None
                     and max_length is not None
@@ -2312,17 +2324,21 @@ class GOLDTrainer(SFTTrainer):
                 )
 
             # The teacher continues from the text of the student's completion, up to its first special token (e.g.
-            # its end-of-turn): the teacher closes the turn with its own EOS, which the alignment pairs with it.
-            completion_texts = []
+            # its end-of-turn): the teacher closes the turn with its own EOS, which the alignment pairs with it. The
+            # teacher reads only the content, not the markup the student's template puts before it (e.g. Qwen3's empty
+            # think block).
+            completion_texts, prefix_lens = [], []
             special_ids = self.uld_loss_fn.student_special_ids
+            prefix = self._student_turn_prefix
             for ids, labels in zip(inputs["input_ids"].tolist(), inputs["labels"].tolist(), strict=True):
                 completion_ids = [token_id for token_id, label in zip(ids, labels, strict=True) if label != -100]
                 content_len = next(
                     (k for k, token_id in enumerate(completion_ids) if token_id in special_ids), len(completion_ids)
                 )
-                completion_texts.append(
-                    self._tokenizer.decode(completion_ids[:content_len], clean_up_tokenization_spaces=False)
-                )
+                text = self._tokenizer.decode(completion_ids[:content_len], clean_up_tokenization_spaces=False)
+                prefix_len = len(prefix) if text.startswith(prefix) else 0
+                completion_texts.append(text[prefix_len:])
+                prefix_lens.append(prefix_len)
 
             if self._teacher_processor is not None:
                 # VLM teacher: render the prompt through the teacher's own processor so image
@@ -2342,6 +2358,13 @@ class GOLDTrainer(SFTTrainer):
                     completion_texts,
                     self.uld_loss_fn.use_extended_uld,
                 )
+
+            if teacher_spans is not None:
+                # Index the student's text, so its markup tokens have no teacher counterpart and get no KD loss.
+                teacher_spans = [
+                    [(start + prefix_len, end + prefix_len) for start, end in spans]
+                    for spans, prefix_len in zip(teacher_spans, prefix_lens, strict=True)
+                ]
 
             teacher_input_ids = teacher_input_ids.to(self.accelerator.device)
             teacher_labels = teacher_labels.to(self.accelerator.device)
