@@ -635,7 +635,10 @@ def test_uld_teacher_does_not_see_the_student_template_inside_the_assistant_turn
         lambda module, args, kwargs, output: teacher_inputs.append(kwargs["input_ids"]), with_kwargs=True
     )
 
-    trainer.compute_loss(trainer.model, trainer.data_collator([trainer.train_dataset[0]]))
+    batch = trainer.data_collator([trainer.train_dataset[0]])
+    device = trainer.accelerator.device
+    batch = {key: value.to(device) if isinstance(value, torch.Tensor) else value for key, value in batch.items()}
+    trainer.compute_loss(trainer.model, batch)
 
     teacher_text = llama_tokenizer.decode(teacher_inputs[0][0])
     assert "<think>" not in teacher_text
