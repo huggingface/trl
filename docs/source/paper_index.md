@@ -1988,7 +1988,6 @@ from peft import LoraConfig
 from trl.experimental.decision import DecisionConfig
 
 training_args = DecisionConfig(
-    mode="lora",
     output_dir="jeva-output",
     max_grad_norm=1.0,  # "configured threshold 1.0"
 )

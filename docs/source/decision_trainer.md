@@ -1,86 +1,76 @@
 # DecisionTrainer
 
-`DecisionTrainer` trains models that return a supervised decision loss. [Jeva](https://huggingface.co/papers/2610.18773) is the first supported model: it predicts candidate probabilities and whether any candidate applies, without producing vocabulary logits. Transformers owns the model and loss; TRL handles data, metrics, and distributed training.
-
-> [!TIP]
-> This trainer currently requires [Transformers #50203](https://github.com/huggingface/transformers/pull/50203).
-
-```bash
-pip install 'git+https://github.com/huggingface/transformers.git@refs/pull/50203/head'
-```
+`DecisionTrainer` trains decision models using their supervised loss. Transformers owns the architecture, checkpoint format, and objective; TRL handles optimization, distributed training, and metrics. The model returns a mean `loss` and candidate `logits`. Tokenization and batching belong to the model's collator.
 
 ## Usage
 
-```python
-import json
-from datasets import Dataset
-from transformers import AutoModel, AutoTokenizer, JevaConfig, JevaForDecision
-from trl.experimental.decision import DataCollatorForJeva, DecisionConfig, DecisionTrainer
+Pass a configured model and a collator matching its forward inputs:
 
-encoder = AutoModel.from_pretrained("Qwen/Qwen3-0.6B")
-model = JevaForDecision(JevaConfig(text_config=encoder.config, projection_dim=128), model=encoder)
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
-request = {
-    "state": "My card was charged twice.",
-    "questions": {"intent": {
-        "type": "choice", "instructions": "Which intent?",
-        "criteria": {"refund": None, "delivery": None}, "allow_null": True,
-    }},
-}
-dataset = Dataset.from_list([{"request": json.dumps(request), "target_index": 0}])
+```python
+from trl.experimental.decision import DecisionConfig, DecisionTrainer
+
 trainer = DecisionTrainer(
     model=model,
-    args=DecisionConfig(output_dir="jeva-output"),
+    args=DecisionConfig(output_dir="decision-output"),
     train_dataset=dataset,
     processing_class=tokenizer,
-    data_collator=DataCollatorForJeva(tokenizer, model.decision_config),
+    data_collator=collator,
 )
 trainer.train()
 trainer.save_model()
 trainer.end()
 ```
 
-`mode="head"` trains the decision head, `"lora"` also trains encoder adapters, and `"full"` trains the whole model. Pass a PEFT configuration with `mode="lora"`, or load a checkpoint with an existing adapter. Set `option_chunk_size` to limit options per encoder forward.
+The trainer preserves which parameters are trainable. Freeze the backbone or prepare adapters before constructing it. Alternatively, pass `peft_config` to wrap the whole model through PEFT; configure `modules_to_save` for any head that should remain trainable. Resume with the same model and adapter setup.
 
-The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77) includes a 1,000-step LoRA configuration, a stratified validation split, and evaluation metrics.
+## Jeva example
 
-## Dataset format
+The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77) provides Jeva's model construction, collator, and a 1,000-step LoRA configuration with a stratified validation split:
 
-Requests use Transformers' `state` / `questions` schema. Each training row contains one question. Store the request as a JSON string in a `request` column to preserve candidate names and order in Arrow datasets. The collator also accepts separate `state` and `questions` fields.
+```bash
+python examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
+```
 
-Targets are separate from the request. Supply exactly one:
+> [!TIP]
+> This example currently requires [Transformers #50203](https://github.com/huggingface/transformers/pull/50203). Other decision heads need supervised-loss support before they can train through this API.
+
+Jeva's `--mode` selects head, LoRA, or full training. Its token limits, truncation policy, and option chunk size are example arguments, rather than trainer settings.
+
+Requests use Transformers' `state` / `questions` schema, with one question per training row. The example stores requests as JSON strings to preserve candidate names and order in Arrow datasets. Targets are separate:
 
 | Field | Meaning |
 |---|---|
 | `target_index` | Zero-based option index, or `None` for a nullable choice. |
-| `target_probs` | Probability of null, then one probability per option. |
+| `target_probs` | Null probability, then one probability per option. |
 | `p_true` | Probability of true for a `noul` question. |
 | `score` | Numeric score, interpolated between rubric levels. |
 
-Choice questions use a `criteria` mapping and may set `allow_null=True`. Noul questions use `type="noul"`. Score questions use a `criteria` list and may supply strictly increasing numeric `values`. The model's decision config determines option order. `target_probs` must sum to one, with zero null mass unless null is enabled.
+Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The collator renders the model's decision template and converts targets to tensors.
 
-`DataCollatorForJeva` uses the model's decision template. It right-pads states and options separately and rejects inputs exceeding its token limits unless `truncation="truncate"` is set.
+## Labels and metrics
+
+Collators may return integer class labels or soft target distributions. Pass `option_mask` when padding candidate sets. With `allow_null`, target distributions contain null first and the model may return `coverage_logits`. Nullable decisions require a coverage output. `is_choice` can exclude binary and score rows from choice accuracy.
+
+The trainer logs candidate loss, choice and candidate accuracy, Brier score, and entropy. Null and coverage metrics are logged when present; MoE auxiliary loss is logged when returned by the model. Metrics aggregate across ranks and accumulation steps, and evaluation removes padded examples. `compute_metrics` receives predicted probabilities and the original labels, with `-100` marking padded candidate columns.
+
+## Distributed training
+
+DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. Use Accelerate main for FSDP2 until the [FP32 output fix](https://github.com/huggingface/accelerate/pull/4403) is released. Context parallelism also requires a model readout that supports sharded sequences; the Jeva example is tested with full causal encoders, FSDP2, and SDPA. Recurrent encoders and DeepSpeed Ulysses are unsupported.
+
+Tensor and masked expert parallelism use Transformers' `distributed_config` when loading a complete checkpoint. Token-dispatch expert parallelism is not supported by Trainer. Models compute their own auxiliary loss; the trainer normalizes the total mean loss by the number of decisions across ranks and accumulation steps.
 
 ## Inference
 
-Saved checkpoints load through Transformers:
+Use the model's Transformers inference API. Saved Jeva checkpoints work with the decision pipeline:
 
 ```python
 from transformers import AutoModelForDecision, AutoTokenizer, pipeline
 
-model = AutoModelForDecision.from_pretrained("jeva-output")
-tokenizer = AutoTokenizer.from_pretrained("jeva-output")
+model = AutoModelForDecision.from_pretrained("decision-output")
+tokenizer = AutoTokenizer.from_pretrained("decision-output")
 decide = pipeline("decision", model=model, tokenizer=tokenizer)
 answers = decide(request)
 ```
-
-Nullable choices return `null_probability` and can return `choice=None`. Direct forward outputs expose conditional candidate log probabilities as `logits` and coverage logits as `coverage_logits`.
-
-## Metrics and distributed training
-
-The trainer logs candidate and coverage losses, choice and candidate accuracy, null precision and recall, null rate, Brier scores, and entropy. Candidate accuracy considers decisions with a hard choice target that is present. MoE models also log their auxiliary loss. Metrics aggregate across ranks and accumulation steps; evaluation removes padded examples.
-
-DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. Use Accelerate main for FSDP2 until the [FP32 output fix](https://github.com/huggingface/accelerate/pull/4403) is released. Torch context parallelism requires FSDP2, SDPA, and a full causal attention encoder; pooled representations are reduced across context ranks. Recurrent encoders and DeepSpeed Ulysses are unsupported. Tensor and masked expert parallelism use Transformers' `distributed_config` when loading a complete saved checkpoint. Token-dispatch expert parallelism is not supported by Trainer.
 
 ## DecisionConfig
 
@@ -89,7 +79,3 @@ DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. Use Accelera
 ## DecisionTrainer
 
 [[autodoc]] experimental.decision.DecisionTrainer
-
-## DataCollatorForJeva
-
-[[autodoc]] experimental.decision.DataCollatorForJeva

@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .data import DataCollatorForJeva
 from .decision_config import DecisionConfig
 from .decision_trainer import DecisionTrainer
 
 
-__all__ = ["DataCollatorForJeva", "DecisionConfig", "DecisionTrainer"]
+__all__ = ["DecisionConfig", "DecisionTrainer"]
