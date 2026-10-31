@@ -55,7 +55,7 @@ The trainer logs candidate loss, choice and candidate accuracy, Brier score, and
 
 ## Distributed training
 
-DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. Use Accelerate main for FSDP2 until the [FP32 output fix](https://github.com/huggingface/accelerate/pull/4403) is released. Context parallelism also requires a model readout that supports sharded sequences; the Jeva example is tested with full causal encoders, FSDP2, and SDPA. Recurrent encoders and DeepSpeed Ulysses are unsupported.
+DDP, DeepSpeed ZeRO, and FSDP2 use the usual Trainer configuration. FSDP2 currently requires Accelerate main, included in the example script dependencies. Context parallelism also requires a model readout that supports sharded sequences; the Jeva example is tested with full causal encoders, FSDP2, and SDPA. Recurrent encoders and DeepSpeed Ulysses are unsupported.
 
 Tensor and masked expert parallelism use Transformers' `distributed_config` when loading a complete checkpoint. Token-dispatch expert parallelism is not supported by Trainer. Models compute their own auxiliary loss; the trainer normalizes the total mean loss by the number of decisions across ranks and accumulation steps.
 
