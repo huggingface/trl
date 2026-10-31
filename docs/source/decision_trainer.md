@@ -25,7 +25,7 @@ The trainer preserves which parameters are trainable. Freeze the backbone or pre
 
 ## Jeva example
 
-The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77) provides Jeva's model construction, collator, and a 1,000-step LoRA configuration with a stratified validation split:
+The [BANKING77 example](https://github.com/huggingface/trl/tree/main/examples/jeva_banking77) provides Jeva's model construction and a 1,000-step LoRA configuration with a stratified validation split:
 
 ```bash
 python examples/jeva_banking77/jeva_banking77.py --config examples/jeva_banking77/config.yaml
@@ -45,7 +45,7 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 | `p_true` | Probability of true for a `noul` question. |
 | `score` | Numeric score, interpolated between rubric levels. |
 
-Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The collator renders the model's decision template and converts targets to tensors.
+Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The library's `DataCollatorForJeva` renders the model's decision template, splits state and option spans, and converts targets to tensors. Import it from `trl.experimental.decision` and pass `tokenizer` and `model.decision_config`. Models using the same input layout can reuse it; other layouts need their own collator.
 
 ## Labels and metrics
 
@@ -79,3 +79,7 @@ answers = decide(request)
 ## DecisionTrainer
 
 [[autodoc]] experimental.decision.DecisionTrainer
+
+## DataCollatorForJeva
+
+[[autodoc]] experimental.decision.DataCollatorForJeva

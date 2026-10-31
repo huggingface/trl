@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .decision_config import DecisionConfig
-from .decision_trainer import DecisionTrainer
+from .decision_trainer import DataCollatorForJeva, DecisionTrainer
 
 
-__all__ = ["DecisionConfig", "DecisionTrainer"]
+__all__ = ["DataCollatorForJeva", "DecisionConfig", "DecisionTrainer"]

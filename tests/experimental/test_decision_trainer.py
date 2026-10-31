@@ -31,11 +31,10 @@ from transformers import (
 
 pytest.importorskip("transformers.models.jeva")
 
-from examples.jeva_banking77.jeva_banking77 import DataCollatorForJeva
 from transformers import AutoModelForDecision, JevaForDecision
 from transformers import JevaConfig as JevaModelConfig
 
-from trl.experimental.decision import DecisionConfig, DecisionTrainer
+from trl.experimental.decision import DataCollatorForJeva, DecisionConfig, DecisionTrainer
 
 from ..testing_utils import TrlTestCase, require_peft
 
