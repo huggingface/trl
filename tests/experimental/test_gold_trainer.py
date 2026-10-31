@@ -47,6 +47,14 @@ from trl.trainer.utils import RepeatSampler, identity
 from ..testing_utils import TrlTestCase
 
 
+_TINY_QWEN3_VL = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
+_TINY_SMOLVLM = "trl-internal-testing/tiny-SmolVLMForConditionalGeneration"
+_TINY_LFM2_VL = "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5"
+_TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
+_TINY_QWEN2 = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+_TINY_QWEN2_REVISION = "8913f5819566"
+
+
 @pytest.fixture(scope="module")
 def openr1_examples():
     try:
@@ -109,139 +117,52 @@ def _assert_alignment_covers_completion(loss_fn, batch, teacher_spans):
         assert sorted(k for group in teacher_groups for k in group) == list(range(len(teacher_spans[idx])))
 
 
-def test_chatml_collator_preserves_completion_llama(llama_tokenizer, qwen_tokenizer, openr1_examples):
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
-    batch = collator(openr1_examples)
-
-    assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
-    decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
-    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
-        assert assistant.strip() in decoded
-
+def _check_uld_on_batch(batch, student_tokenizer, teacher_tokenizer, assistant_texts):
+    """The teacher's completions hold the assistant text, the alignment covers them, and the hybrid ULD loss on random
+    logits is finite."""
     teacher_input_ids, teacher_labels, completion_texts, teacher_spans = _teacher_inputs_from_collator(
-        llama_tokenizer, qwen_tokenizer, batch
+        student_tokenizer, teacher_tokenizer, batch
     )
     for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
         assert assistant.strip() in completion
-        assert completion.strip()
 
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.6,
-        uld_hybrid_unmatched_weight=0.4,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
+    config = build_config(uld_use_hybrid_loss=True, uld_hybrid_matched_weight=0.5, uld_hybrid_unmatched_weight=0.5)
+    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
     _assert_alignment_covers_completion(loss_fn, batch, teacher_spans)
 
     torch.manual_seed(0)
-    student_vocab = len(llama_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
     batch_size, seq_len = batch["input_ids"].shape
-    student_logits = torch.randn(batch_size, seq_len, student_vocab)
-    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
-
     loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
+        student_logits=torch.randn(batch_size, seq_len, len(student_tokenizer)),
+        teacher_logits=torch.randn(batch_size, teacher_input_ids.shape[1], len(teacher_tokenizer)),
         student_labels=batch["labels"],
         teacher_labels=teacher_labels,
         student_input_ids=batch["input_ids"],
         teacher_input_ids=teacher_input_ids,
         teacher_spans=teacher_spans,
     )
-
     assert torch.isfinite(loss)
 
 
-def test_chatml_collator_preserves_completion_llama_countdown(llama_tokenizer, qwen_tokenizer, countdown_examples):
-    collator = DataCollatorForChatML(tokenizer=llama_tokenizer, max_length=512)
-    batch = collator(countdown_examples)
+@pytest.mark.parametrize(
+    "student, examples",
+    [
+        ("llama_tokenizer", "openr1_examples"),
+        ("llama_tokenizer", "countdown_examples"),
+        ("smollm_tokenizer", "openr1_examples"),
+    ],
+)
+def test_chatml_collator_preserves_completion(request, qwen_tokenizer, student, examples):
+    student_tokenizer = request.getfixturevalue(student)
+    examples = request.getfixturevalue(examples)
+    batch = DataCollatorForChatML(tokenizer=student_tokenizer, max_length=512)(examples)
 
-    assistant_texts = [example["messages"][-1]["content"] for example in countdown_examples]
-    decoded_batch = llama_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    assistant_texts = [example["messages"][-1]["content"] for example in examples]
+    decoded_batch = student_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
     for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
         assert assistant.strip() in decoded
 
-    teacher_input_ids, teacher_labels, completion_texts, teacher_spans = _teacher_inputs_from_collator(
-        llama_tokenizer, qwen_tokenizer, batch
-    )
-    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
-        assert assistant.strip() in completion
-        assert completion.strip()
-
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.6,
-        uld_hybrid_unmatched_weight=0.4,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    _assert_alignment_covers_completion(loss_fn, batch, teacher_spans)
-
-    torch.manual_seed(2)
-    student_vocab = len(llama_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-    batch_size, seq_len = batch["input_ids"].shape
-    student_logits = torch.randn(batch_size, seq_len, student_vocab)
-    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=batch["labels"],
-        teacher_labels=teacher_labels,
-        student_input_ids=batch["input_ids"],
-        teacher_input_ids=teacher_input_ids,
-        teacher_spans=teacher_spans,
-    )
-
-    assert torch.isfinite(loss)
-
-
-def test_chatml_collator_preserves_completion_smollm(smollm_tokenizer, qwen_tokenizer, openr1_examples):
-    collator = DataCollatorForChatML(tokenizer=smollm_tokenizer, max_length=512)
-    batch = collator(openr1_examples)
-
-    assistant_texts = [example["messages"][-1]["content"] for example in openr1_examples]
-    decoded_batch = smollm_tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
-    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
-        assert assistant.strip() in decoded
-
-    teacher_input_ids, teacher_labels, completion_texts, teacher_spans = _teacher_inputs_from_collator(
-        smollm_tokenizer, qwen_tokenizer, batch
-    )
-    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
-        assert assistant.strip() in completion
-        assert completion.strip()
-
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.5,
-        uld_hybrid_unmatched_weight=0.5,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=smollm_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    _assert_alignment_covers_completion(loss_fn, batch, teacher_spans)
-
-    torch.manual_seed(1)
-    student_vocab = len(smollm_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-    batch_size, seq_len = batch["input_ids"].shape
-    student_logits = torch.randn(batch_size, seq_len, student_vocab)
-    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=batch["labels"],
-        teacher_labels=teacher_labels,
-        student_input_ids=batch["input_ids"],
-        teacher_input_ids=teacher_input_ids,
-        teacher_spans=teacher_spans,
-    )
-
-    assert torch.isfinite(loss)
+    _check_uld_on_batch(batch, student_tokenizer, qwen_tokenizer, assistant_texts)
 
 
 def build_config(**overrides):
@@ -644,10 +565,10 @@ def test_prepared_tokenized_rows_keep_completion_after_truncation(tmp_path, llam
     assert assistant in llama_tokenizer.decode(completion_ids)
 
 
-def _uld_trainer(tmp_path, dataset, **config_kwargs):
-    # ChatML student (Qwen2) distilled from a teacher with the Llama-3 chat template
+def _uld_trainer(tmp_path, dataset, model=_TINY_QWEN2, **config_kwargs):
+    # A ChatML student (Qwen2 by default) distilled from a teacher with the Llama-3 chat template
     return GOLDTrainer(
-        model=_TINY_QWEN2,
+        model=model,
         teacher_model=_TINY_LLAMA,
         args=GOLDConfig(
             output_dir=str(tmp_path),
@@ -702,18 +623,12 @@ def test_uld_teacher_does_not_see_the_student_template_inside_the_assistant_turn
     """Qwen3's template opens every assistant turn with an empty think block. That is the student's template, not the
     completion, so the teacher must read only the content after it, then close the turn with its own EOS."""
     messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello there"}]
-    trainer = GOLDTrainer(
+    trainer = _uld_trainer(
+        tmp_path,
+        Dataset.from_dict({"messages": [messages]}),
         model="trl-internal-testing/tiny-Qwen3ForCausalLM",
-        teacher_model=_TINY_LLAMA,
-        args=GOLDConfig(
-            output_dir=str(tmp_path),
-            report_to="none",
-            use_uld_loss=True,
-            teacher_tokenizer_name_or_path=_TINY_LLAMA,
-            max_length=128,
-            max_completion_length=16,
-        ),
-        train_dataset=Dataset.from_dict({"messages": [messages]}),
+        max_length=128,
+        max_completion_length=16,
     )
     teacher_inputs = []
     trainer.teacher_model.register_forward_hook(
@@ -1384,104 +1299,38 @@ def test_generalized_jsd_loss_accepts_probability_inputs():
     torch.testing.assert_close(loss, expected)
 
 
-def test_uldloss_handles_llama_student_qwen_teacher_sequence(llama_tokenizer, qwen_tokenizer):
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.6,
-        uld_hybrid_unmatched_weight=0.4,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    prompt = "User: Summarize the difference between llamas and alpacas."
-    completion = "Assistant: Llamas are taller while alpacas have softer wool."
-
-    student_ids, student_labels = encode_prompt_completion(llama_tokenizer, prompt, completion)
+def _uld_loss_on_text(loss_fn, student_tokenizer, teacher_tokenizer, prompt, completion):
+    """ULD loss on random logits for one (prompt, completion), tokenized by each side as the trainer does."""
+    student_ids, student_labels = encode_prompt_completion(student_tokenizer, prompt, completion)
     teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
-        qwen_tokenizer, qwen_tokenizer([prompt])["input_ids"], [completion]
+        teacher_tokenizer, teacher_tokenizer([prompt])["input_ids"], [completion]
     )
-    teacher_ids, teacher_labels = teacher_input_ids[0].tolist(), teacher_labels[0].tolist()
-
-    pad_id_student = llama_tokenizer.pad_token_id
-    pad_id_teacher = qwen_tokenizer.pad_token_id
-    max_length = max(len(student_ids), len(teacher_ids))
-
-    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
-    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
-    student_labels = pad_labels(student_labels, max_length)
-    teacher_labels = pad_labels(teacher_labels, max_length)
-
-    student_input_ids = torch.tensor([student_ids])
-    teacher_input_ids = torch.tensor([teacher_ids])
-    student_labels = torch.tensor([student_labels])
-    teacher_labels = torch.tensor([teacher_labels])
-
-    student_vocab = len(llama_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-
-    student_logits = torch.randn(1, max_length, student_vocab)
-    teacher_logits = torch.randn(1, max_length, teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
+    max_length = max(len(student_ids), teacher_input_ids.shape[1])
+    teacher_input_ids = pad_tokens(teacher_input_ids[0].tolist(), teacher_tokenizer.pad_token_id, max_length)
+    teacher_labels = pad_labels(teacher_labels[0].tolist(), max_length)
+    return loss_fn(
+        student_logits=torch.randn(1, max_length, len(student_tokenizer)),
+        teacher_logits=torch.randn(1, max_length, len(teacher_tokenizer)),
+        student_labels=torch.tensor([pad_labels(student_labels, max_length)]),
+        teacher_labels=torch.tensor([teacher_labels]),
+        student_input_ids=torch.tensor([pad_tokens(student_ids, student_tokenizer.pad_token_id, max_length)]),
+        teacher_input_ids=torch.tensor([teacher_input_ids]),
         teacher_spans=teacher_spans,
     )
 
-    assert torch.isfinite(loss)
-    assert loss.dim() == 0
-    assert loss_fn.last_matched_loss is not None
-    assert loss_fn.last_unmatched_loss is not None
 
+@pytest.mark.parametrize("student", ["llama_tokenizer", "smollm_tokenizer"])
+def test_uldloss_handles_cross_tokenizer_sequence(request, qwen_tokenizer, student):
+    student_tokenizer = request.getfixturevalue(student)
+    config = build_config(uld_use_hybrid_loss=True, uld_hybrid_matched_weight=0.6, uld_hybrid_unmatched_weight=0.4)
+    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-def test_uldloss_handles_smollm_student_qwen_teacher_sequence(smollm_tokenizer, qwen_tokenizer):
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.5,
-        uld_hybrid_unmatched_weight=0.5,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=smollm_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    prompt = "User: Describe SmolLM3 in a sentence."
-    completion = "Assistant: SmolLM3 is a compact yet capable language model."
-
-    student_ids, student_labels = encode_prompt_completion(smollm_tokenizer, prompt, completion)
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
-        qwen_tokenizer, qwen_tokenizer([prompt])["input_ids"], [completion]
-    )
-    teacher_ids, teacher_labels = teacher_input_ids[0].tolist(), teacher_labels[0].tolist()
-
-    pad_id_student = smollm_tokenizer.pad_token_id
-    pad_id_teacher = qwen_tokenizer.pad_token_id
-    max_length = max(len(student_ids), len(teacher_ids))
-
-    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
-    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
-    student_labels = pad_labels(student_labels, max_length)
-    teacher_labels = pad_labels(teacher_labels, max_length)
-
-    student_input_ids = torch.tensor([student_ids])
-    teacher_input_ids = torch.tensor([teacher_ids])
-    student_labels = torch.tensor([student_labels])
-    teacher_labels = torch.tensor([teacher_labels])
-
-    student_vocab = len(smollm_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
-
-    student_logits = torch.randn(1, max_length, student_vocab)
-    teacher_logits = torch.randn(1, max_length, teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
-        teacher_spans=teacher_spans,
+    loss = _uld_loss_on_text(
+        loss_fn,
+        student_tokenizer,
+        qwen_tokenizer,
+        "User: Summarize the difference between llamas and alpacas.",
+        "Assistant: Llamas are taller while alpacas have softer wool.",
     )
 
     assert torch.isfinite(loss)
@@ -1496,78 +1345,21 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
         uld_hybrid_matched_weight=0.0,
         uld_hybrid_unmatched_weight=1.0,
         uld_crossentropy_weight=0.0,
-        uld_distillation_weight=1.0,
-        uld_student_temperature=1.0,
-        uld_teacher_temperature=1.0,
-        temperature=1.0,
-        top_p=0.95,
-        top_k=0,
-        lmbda=1.0,
         beta=0.0,
     )
     loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
 
-    prompt = "User: Explain how GOLD handles tokenizer mismatches."
-    completion = "Assistant: GOLD merges aligned subwords and applies hybrid ULD loss."
-
-    student_ids, student_labels = encode_prompt_completion(llama_tokenizer, prompt, completion)
-    teacher_input_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
-        qwen_tokenizer, qwen_tokenizer([prompt])["input_ids"], [completion]
-    )
-    teacher_ids, teacher_labels = teacher_input_ids[0].tolist(), teacher_labels[0].tolist()
-
-    pad_id_student = llama_tokenizer.pad_token_id
-    pad_id_teacher = qwen_tokenizer.pad_token_id
-    max_length = max(len(student_ids), len(teacher_ids))
-
-    student_ids = pad_tokens(student_ids, pad_id_student, max_length)
-    teacher_ids = pad_tokens(teacher_ids, pad_id_teacher, max_length)
-    student_labels = pad_labels(student_labels, max_length)
-    teacher_labels = pad_labels(teacher_labels, max_length)
-
-    student_input_ids = torch.tensor([student_ids])
-    teacher_input_ids = torch.tensor([teacher_ids])
-    student_labels = torch.tensor([student_labels])
-    teacher_labels = torch.tensor([teacher_labels])
-
-    student_vocab = len(llama_tokenizer)
-    teacher_vocab = len(qwen_tokenizer)
     torch.manual_seed(0)
-    student_logits = torch.randn(1, max_length, student_vocab)
-    teacher_logits = torch.randn(1, max_length, teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=student_labels,
-        teacher_labels=teacher_labels,
-        student_input_ids=student_input_ids,
-        teacher_input_ids=teacher_input_ids,
-        teacher_spans=teacher_spans,
+    loss = _uld_loss_on_text(
+        loss_fn,
+        llama_tokenizer,
+        qwen_tokenizer,
+        "User: Explain how GOLD handles tokenizer mismatches.",
+        "Assistant: GOLD merges aligned subwords and applies hybrid ULD loss.",
     )
 
-    assert torch.isfinite(loss)
-    assert loss.dim() == 0
-    assert loss_fn.last_matched_loss is not None
-    assert loss_fn.last_unmatched_loss is not None
-
-    expected = config.uld_hybrid_unmatched_weight * loss_fn.last_unmatched_loss
-    torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
-
-
-def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
-    student_tokenizer = smolvlm_processor.tokenizer
-    teacher_tokenizer = qwen3_vl_processor.tokenizer
-
-    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
-    batch = collator(vlm_examples)
-
-    config = build_config()
-    loss = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
-
-    _, _, _, teacher_spans = _teacher_inputs_from_collator(student_tokenizer, teacher_tokenizer, batch)
-
-    _assert_alignment_covers_completion(loss, batch, teacher_spans)
+    # With no weight on matched tokens, the loss is the unmatched part alone
+    torch.testing.assert_close(loss, loss_fn.last_unmatched_loss, atol=1e-6, rtol=1e-5)
 
 
 def test_build_teacher_vlm_inputs_feeds_images_and_completion(tmp_path, vlm_dataset, vlm_examples):
@@ -1624,118 +1416,23 @@ def _get_assistant_texts(examples):
     return texts
 
 
-def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwen3_vl_processor, vlm_examples):
+@pytest.mark.parametrize(
+    "student, teacher", [("smolvlm_processor", "qwen3_vl_processor"), ("qwen3_vl_processor", "smolvlm_processor")]
+)
+def test_vlm_chatml_collator_preserves_completion(request, vlm_examples, student, teacher):
+    student_processor = request.getfixturevalue(student)
+    teacher_processor = request.getfixturevalue(teacher)
     # 2048 to not truncate the completion tokens
-    collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
-    batch = collator(vlm_examples)
+    batch = DataCollatorForVisionLanguageChatML(processor=student_processor, max_length=2048)(vlm_examples)
+    for key in ("input_ids", "labels", "prompts", "prompt_attention_mask", "pixel_values"):
+        assert key in batch
 
-    # Verify basic batch structure
-    assert "input_ids" in batch
-    assert "labels" in batch
-    assert "prompts" in batch
-    assert "prompt_attention_mask" in batch
-    assert "pixel_values" in batch
-
-    # Verify completions are preserved in decoded output
     assistant_texts = _get_assistant_texts(vlm_examples)
-    decoded_batch = smolvlm_processor.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
+    decoded_batch = student_processor.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
     for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
         assert assistant in decoded
 
-    # Verify ULD cross-tokenizer distillation with teacher inputs
-    student_tokenizer = smolvlm_processor.tokenizer
-    teacher_tokenizer = qwen3_vl_processor.tokenizer
-
-    teacher_input_ids, teacher_labels, completion_texts, teacher_spans = _teacher_inputs_from_collator(
-        student_tokenizer, teacher_tokenizer, batch
-    )
-    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
-        assert assistant.strip() in completion
-        assert completion.strip()
-
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.6,
-        uld_hybrid_unmatched_weight=0.4,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
-
-    _assert_alignment_covers_completion(loss_fn, batch, teacher_spans)
-
-    torch.manual_seed(42)
-    student_vocab = len(student_tokenizer)
-    teacher_vocab = len(teacher_tokenizer)
-    batch_size, seq_len = batch["input_ids"].shape
-    student_logits = torch.randn(batch_size, seq_len, student_vocab)
-    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=batch["labels"],
-        teacher_labels=teacher_labels,
-        student_input_ids=batch["input_ids"],
-        teacher_input_ids=teacher_input_ids,
-        teacher_spans=teacher_spans,
-    )
-
-    assert torch.isfinite(loss)
-
-
-def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
-    collator = DataCollatorForVisionLanguageChatML(processor=qwen3_vl_processor, max_length=2048)
-    batch = collator(vlm_examples)
-
-    # Verify basic batch structure
-    assert "input_ids" in batch
-    assert "labels" in batch
-    assert "prompts" in batch
-    assert "pixel_values" in batch
-
-    # Verify completions are preserved in decoded output
-    assistant_texts = _get_assistant_texts(vlm_examples)
-    decoded_batch = qwen3_vl_processor.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
-    for decoded, assistant in zip(decoded_batch, assistant_texts, strict=True):
-        assert assistant in decoded
-
-    # Verify ULD cross-tokenizer distillation with teacher inputs
-    student_tokenizer = qwen3_vl_processor.tokenizer
-    teacher_tokenizer = smolvlm_processor.tokenizer
-
-    teacher_input_ids, teacher_labels, completion_texts, teacher_spans = _teacher_inputs_from_collator(
-        student_tokenizer, teacher_tokenizer, batch
-    )
-    for completion, assistant in zip(completion_texts, assistant_texts, strict=True):
-        assert assistant.strip() in completion
-        assert completion.strip()
-
-    config = build_config(
-        uld_use_hybrid_loss=True,
-        uld_hybrid_matched_weight=0.6,
-        uld_hybrid_unmatched_weight=0.4,
-    )
-    loss_fn = ULDLoss(config, student_tokenizer=student_tokenizer, teacher_tokenizer=teacher_tokenizer)
-
-    _assert_alignment_covers_completion(loss_fn, batch, teacher_spans)
-
-    torch.manual_seed(43)
-    student_vocab = len(student_tokenizer)
-    teacher_vocab = len(teacher_tokenizer)
-    batch_size, seq_len = batch["input_ids"].shape
-    student_logits = torch.randn(batch_size, seq_len, student_vocab)
-    teacher_logits = torch.randn(batch_size, teacher_input_ids.shape[1], teacher_vocab)
-
-    loss = loss_fn(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        student_labels=batch["labels"],
-        teacher_labels=teacher_labels,
-        student_input_ids=batch["input_ids"],
-        teacher_input_ids=teacher_input_ids,
-        teacher_spans=teacher_spans,
-    )
-
-    assert torch.isfinite(loss)
+    _check_uld_on_batch(batch, student_processor.tokenizer, teacher_processor.tokenizer, assistant_texts)
 
 
 def test_vlm_collator_label_masking_and_prompt_truncation(smolvlm_processor, vlm_examples):
@@ -2158,9 +1855,6 @@ def test_model_forward_kwargs_preserve_processor_tensor_fields(tmp_path, vlm_dat
 # End-to-end smoke tests: load tiny real VLMs from trl-internal-testing and run a single
 # off-policy training step (use_vllm=False, lmbda=0.0 → deterministic gold-completion path).
 
-_TINY_QWEN3_VL = "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration"
-_TINY_SMOLVLM = "trl-internal-testing/tiny-SmolVLMForConditionalGeneration"
-_TINY_LFM2_VL = "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5"
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
@@ -2220,9 +1914,6 @@ def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
     assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
 
-_TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
-
-
 @pytest.mark.xfail(
     condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0.dev0"),
     reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
@@ -2277,10 +1968,6 @@ def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
         )
     train_output = trainer.train()
     assert torch.isfinite(torch.tensor(train_output.training_loss))
-
-
-_TINY_QWEN2 = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-_TINY_QWEN2_REVISION = "8913f5819566"
 
 
 def _uld_revision_trainer(tmp_path, teacher_tokenizer_name_or_path):
