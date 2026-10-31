@@ -372,7 +372,7 @@ qwen3_5_template = {
     "fields": {
         "reasoning_content": {
             "open": "<think>",
-            "close_pattern": r"</think>\s*",
+            "close_pattern": r"</think>\s*|(?=<tool_call>)",
             "content": "text",
         },
         "tool_calls": {

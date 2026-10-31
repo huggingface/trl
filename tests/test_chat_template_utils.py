@@ -1949,6 +1949,57 @@ class TestParseResponse:
 
         assert parsed == expected
 
+    def test_parse_response_qwen3_5_tool_call_without_closing_think(self, model_name):
+        if model_name != "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think":
+            pytest.skip("Test specifically covers Qwen3.5 think template where <think> is prefilled.")
+        # Qwen3.5 generation prompt prefills <think>\n. If the model outputs a tool call without emitting </think>,
+        # the reasoning region should close at <tool_call> and parse tool_calls properly (fixes #8050).
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think")
+        tokenizer = add_response_schema(tokenizer)
+        prefix = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "What is 3*4?"}],
+            tools=[multiply],
+            add_generation_prompt=True,
+            return_dict=False,
+        )
+        # Case 1: Model emits reasoning text followed directly by <tool_call> without </think>
+        completion = (
+            "Let me check the tools.\n\n"
+            "<tool_call>\n"
+            "<function=multiply>\n"
+            "<parameter=a>\n3\n</parameter>\n"
+            "<parameter=b>\n4\n</parameter>\n"
+            "</function>\n"
+            "</tool_call><|im_end|>"
+        )
+        response_ids = tokenizer.encode(completion, add_special_tokens=False)
+        parsed = parse_response(tokenizer, response_ids, prefix=prefix, tools=[multiply])
+        expected = {
+            "role": "assistant",
+            "reasoning_content": "Let me check the tools.",
+            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+            "content": "",
+        }
+        assert parsed == expected
+
+        # Case 2: Direct tool call with no reasoning text
+        completion_direct = (
+            "<tool_call>\n"
+            "<function=multiply>\n"
+            "<parameter=a>\n3\n</parameter>\n"
+            "<parameter=b>\n4\n</parameter>\n"
+            "</function>\n"
+            "</tool_call><|im_end|>"
+        )
+        response_direct_ids = tokenizer.encode(completion_direct, add_special_tokens=False)
+        parsed_direct = parse_response(tokenizer, response_direct_ids, prefix=prefix, tools=[multiply])
+        expected_direct = {
+            "role": "assistant",
+            "tool_calls": [{"type": "function", "function": {"name": "multiply", "arguments": {"a": 3, "b": 4}}}],
+            "content": "",
+        }
+        assert parsed_direct == expected_direct
+
     def test_parse_response_truncated(self, model_name):
         processing_class = self._load(model_name)
         # Here we use 2 tool calls as it seems to be a more common source of failure when truncated.
