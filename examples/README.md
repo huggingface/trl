@@ -2,6 +2,10 @@
 
 Each example lives in its own self-contained folder. The full index and layout conventions are documented at https://huggingface.co/docs/trl/example_overview.
 
+For a small decision-model training run, see [`jeva_banking77`](jeva_banking77). It trains Qwen to choose a banking
+intent from candidate descriptions, including requests where none of the candidates apply.
+Its [training config](jeva_banking77/config.yaml) runs 1,000 LoRA steps with a stratified validation holdout.
+
 ## Adding a new example
 
 - **Name the folder** after the method and what makes the example distinctive: the task (`grpo_wordle`), the model (`sft_gpt_oss`), or the technique (`grpo_qlora`). Load folder-local assets relative to the script (`Path(__file__).parent / ...`), not the working directory.

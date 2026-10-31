@@ -1939,6 +1939,8 @@ Identifies softmax collapse at high-confidence predictions and cancellation when
 agree. TRL's chunked log-probability and distillation heads use target-excluding normalization and log-space
 probability differences to preserve small gradients. The numerical fixes apply automatically, including to forward
 KL, reverse KL, and generalized JSD in [`DistillationTrainer`].
+Jeva's Transformers model uses stable log-softmax and signed softplus coverage loss to preserve gradients for
+confident decisions when training with [`experimental.decision.DecisionTrainer`].
 
 Appendix B.4 of [Entropy-preserving reinforcement learning](https://huggingface.co/papers/2603.11682) previously
 identified the high-confidence policy-gradient failure and proposed selectively recomputing gradients in FP64.
@@ -1965,6 +1967,35 @@ training_args = DistillationConfig(
     weight_decay=0.0,  # "lambda=0"
     adam_epsilon=1e-8,  # "epsilon=10^-8"
     max_steps=2000,  # "2,000 steps of Adam"
+)
+```
+
+## Decision models
+
+Papers relating to [`experimental.decision.DecisionTrainer`].
+
+### Jeva: System One Models from First Principles
+
+**📜 Paper**: https://huggingface.co/papers/2610.18773
+
+Jeva independently encodes a state and its options, then refines the state against immutable option representations.
+Its decision stack separates conditional candidate preferences from answer availability, allowing explicit null
+outcomes and variable-size candidate sets. The trainer fits Choice, Noul, and Score target distributions with
+candidate cross entropy and an optional coverage objective.
+
+```python
+from peft import LoraConfig
+from trl.experimental.decision import DecisionConfig
+
+training_args = DecisionConfig(
+    output_dir="jeva-output",
+    max_grad_norm=1.0,  # "configured threshold 1.0"
+)
+peft_config = LoraConfig(
+    r=64,  # "LoRA uses rank 64"
+    lora_alpha=128,  # "scaling parameter 128"
+    lora_dropout=0.05,  # "training dropout 0.05"
+    task_type="FEATURE_EXTRACTION",
 )
 ```
 

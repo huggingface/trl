@@ -15,8 +15,10 @@
 import json
 import os
 import subprocess
+from importlib.util import find_spec
 from pathlib import Path
 
+import accelerate
 import pytest
 import torch
 import transformers
@@ -64,6 +66,80 @@ def get_config_path(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "ddp",
+            pytest.param(
+                "zero2",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "zero3",
+                marks=pytest.mark.xfail(
+                    Version(transformers.__version__) == Version("5.1.0"),
+                    reason="Upstream incompatibility: deepspeed and transformers==5.1.0 (see transformers#43780)",
+                ),
+            ),
+            pytest.param(
+                "fsdp2",
+                marks=pytest.mark.skipif(
+                    Version(accelerate.__version__) < Version("1.16.0.dev0"),
+                    reason="FSDP2 FP32 loss outputs require Accelerate #4403",
+                ),
+            ),
+            pytest.param(
+                "decision_cp",
+                marks=pytest.mark.skipif(
+                    Version(accelerate.__version__) < Version("1.16.0.dev0"),
+                    reason="FSDP2 FP32 loss outputs require Accelerate #4403",
+                ),
+            ),
+        ],
+    )
+    @pytest.mark.skipif(find_spec("transformers.models.jeva") is None, reason="Requires Transformers decision models")
+    def test_decision(self, config, get_config_path):
+        # fmt: off
+        run_command(
+            [
+                "accelerate", "launch", "--config_file", get_config_path(config),
+                "examples/jeva_banking77/jeva_banking77.py",
+                "--output_dir", self.tmp_dir,
+                "--model_name_or_path", "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
+                "--mode", "full",
+                "--max_train_samples", "8",
+                "--max_eval_samples", "5",
+                "--num_options", "3",
+                "--per_device_train_batch_size", "1",
+                "--per_device_eval_batch_size", "1",
+                "--gradient_accumulation_steps", "2",
+                "--option_chunk_size", "2",
+                "--max_steps", "2",
+                "--logging_steps", "1",
+                "--eval_strategy", "steps",
+                "--eval_steps", "2",
+                "--bf16", "true",
+                "--attn_implementation", "sdpa",
+                "--report_to", "none",
+            ],
+            os.environ.copy(),
+        )
+        # fmt: on
+
+        with open(os.path.join(self.tmp_dir, "eval_results.json")) as f:
+            metrics = json.load(f)
+        assert metrics["eval_candidate_loss"] + metrics["eval_coverage_loss"] == pytest.approx(
+            metrics["eval_loss"], rel=1e-4
+        )
+        for name in ("choice_accuracy", "null_precision", "null_recall", "null_rate"):
+            assert 0 <= metrics[f"eval_{name}"] <= 1
+        for name in ("brier", "null_brier", "entropy"):
+            assert metrics[f"eval_{name}"] >= 0
+        assert metrics["eval_choice_accuracy"] == metrics["eval_accuracy"]
+
     @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
     def test_async_checkpoint_saved_in_compute_dtype(self, test_file, get_config_path):
         run_command(
