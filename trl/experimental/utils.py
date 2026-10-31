@@ -134,29 +134,10 @@ class DPODataCollatorWithPadding:
         return padded_batch
 
 
-def pad_byte_offsets(offsets: list[tuple[int, int]], target_length: int, padding_side: str) -> torch.Tensor:
-    """Build a ``[target_length, 2]`` long tensor from ``(start, end)`` byte-offset tuples,
-    padding with ``(0, 0)`` on the requested side."""
-    offs = torch.tensor(offsets, dtype=torch.long).reshape(-1, 2)
-    pad_len = target_length - offs.size(0)
-    if pad_len <= 0:
-        return offs
-    pad_block = torch.zeros(pad_len, 2, dtype=torch.long)
-    return torch.cat([pad_block, offs], dim=0) if padding_side == "left" else torch.cat([offs, pad_block], dim=0)
-
-
 def is_byte_level_tokenizer(backend) -> bool:
     """Whether ``backend`` is a ByteLevel BPE tokenizer (Llama-3 family, SmolLM, Qwen, \u2026) \u2014 its pieces are in
     byte\u2192unicode space, one char per source byte. Detected via the pre-tokenizer / decoder repr."""
     return "ByteLevel" in repr(backend.pre_tokenizer) or "ByteLevel" in repr(backend.decoder)
-
-
-def piece_byte_len(piece: str) -> int:
-    """UTF-8 byte length of a ByteLevel BPE token piece \u2014 each char maps 1:1 to one source byte.
-
-    Cross-tokenizer ULD targets ByteLevel BPE pairs (Llama-3, Qwen, SmolLM, Phi, Mistral v0.3+, \u2026); SentencePiece
-    students are out of scope here and would need the loss-level projection from X-Token to align."""
-    return len(piece)
 
 
 def _bytes_to_unicode() -> dict[int, str]:
@@ -175,94 +156,10 @@ def _bytes_to_unicode() -> dict[int, str]:
 _BYTE_LEVEL_DECODER = {ch: b for b, ch in _bytes_to_unicode().items()}
 
 
-def _byte_level_piece_len(piece: str, text_bytes: bytes, start: int) -> int | None:
-    piece_bytes = []
-    for ch in piece:
-        if ch not in _BYTE_LEVEL_DECODER:
-            return None
-        piece_bytes.append(_BYTE_LEVEL_DECODER[ch])
-    if piece_bytes and piece_bytes[0] == ord(" ") and text_bytes[start : start + 1] != b" ":
-        piece_bytes = piece_bytes[1:]
-    return len(piece_bytes)
-
-
-def _split_repeated_byte_offsets(byte_offsets: list[tuple[int, int]], tokens: list[str]) -> list[tuple[int, int]]:
-    """Split repeated char-derived spans for byte-fallback or byte-level tokens."""
-    normalized = list(byte_offsets)
-    i = 0
-    while i < len(byte_offsets):
-        j = i + 1
-        while j < len(byte_offsets) and byte_offsets[j] == byte_offsets[i]:
-            j += 1
-
-        if j - i > 1:
-            start, end = byte_offsets[i]
-            piece_lengths = [piece_byte_len(token) for token in tokens[i:j]]
-            if sum(piece_lengths) == end - start:
-                cursor = start
-                for offset_idx, length in enumerate(piece_lengths, start=i):
-                    normalized[offset_idx] = (cursor, cursor + length)
-                    cursor += length
-
-        i = j
-    return normalized
-
-
-def _normalize_byte_offsets(
-    byte_offsets: list[tuple[int, int]], tokens: list[str], text_bytes: bytes
-) -> list[tuple[int, int]]:
-    byte_offsets = _split_repeated_byte_offsets(byte_offsets, tokens)
-    normalized = []
-    cursor = 0
-
-    for idx, (start, end) in enumerate(byte_offsets):
-        if start == end:
-            normalized.append((cursor, cursor))
-            continue
-
-        piece_len = _byte_level_piece_len(tokens[idx], text_bytes, start)
-        next_start = byte_offsets[idx + 1][0] if idx + 1 < len(byte_offsets) else None
-        has_overlap = start < cursor or (next_start is not None and next_start < end)
-
-        if piece_len is not None and (has_overlap or piece_len == end - start):
-            candidate_start = max(start, cursor)
-            candidate_end = candidate_start + piece_len
-            if candidate_end <= end:
-                start = candidate_start
-                end = candidate_end
-
-        if start < cursor or end < start:
-            raise ValueError(
-                "Tokenizer produced overlapping byte offsets that could not be normalized. "
-                "Cross-tokenizer ULD requires monotonic byte offsets."
-            )
-
-        normalized.append((start, end))
-        cursor = end
-
-    return normalized
-
-
-def encode_with_byte_offsets(backend, texts: list[str], add_special_tokens: bool = False):
-    """Encode ``texts`` and return per-text ``(ids, byte_offsets)`` pairs.
-
-    Byte offsets are derived from the fast tokenizer's character offsets via an O(N) char-to-byte cumulative table.
-    Overlapping spans from byte-level and byte-fallback tokens are split across their byte pieces."""
-    if not is_byte_level_tokenizer(backend):
-        raise NotImplementedError(
-            "Cross-tokenizer ULD currently supports only ByteLevel BPE tokenizers "
-            "(Llama-3, Qwen, SmolLM, Phi, Mistral v0.3+, …). The given tokenizer is not ByteLevel."
-        )
-    encs = backend.encode_batch(texts, add_special_tokens=add_special_tokens)
-    out = []
-    for text, enc in zip(texts, encs, strict=True):
-        char_to_byte = [0]
-        for ch in text:
-            char_to_byte.append(char_to_byte[-1] + len(ch.encode("utf-8")))
-        byte_offsets = [(char_to_byte[s], char_to_byte[e]) for s, e in enc.offsets]
-        byte_offsets = _normalize_byte_offsets(byte_offsets, enc.tokens, text.encode("utf-8"))
-        out.append((list(enc.ids), byte_offsets))
-    return out
+def piece_bytes(piece: str) -> bytes:
+    """Raw bytes of a ByteLevel BPE token piece: each char stands for one byte. Like the `tokenizers` ByteLevel
+    decoder, a char outside that mapping (only possible in an added token) is kept as its own UTF-8."""
+    return b"".join(bytes([_BYTE_LEVEL_DECODER[ch]]) if ch in _BYTE_LEVEL_DECODER else ch.encode() for ch in piece)
 
 
 @dataclass
@@ -290,7 +187,6 @@ class DataCollatorForChatML:
         prompts_input_ids = []
         prompt_attention_mask = []
         labels = []
-        byte_offsets: list[list[tuple[int, int]]] = []
 
         for example in examples:
             formatted_prompt = example.get(self.prompt_key, example.get("original_prompt_text", None))
@@ -305,55 +201,29 @@ class DataCollatorForChatML:
                 formatted_message = self.tokenizer.apply_chat_template(
                     message, add_generation_prompt=False, tokenize=False
                 )
-                if is_byte_level_tokenizer(self.tokenizer.backend_tokenizer):
-                    [(message_input_ids_full, full_offs)] = encode_with_byte_offsets(
-                        self.tokenizer.backend_tokenizer, [formatted_message], add_special_tokens=False
-                    )
-                    prompt_byte_len = len(formatted_prompt.encode("utf-8"))
-                    completion_start_idx_full = next(
-                        (idx for idx, (start, _) in enumerate(full_offs) if start >= prompt_byte_len),
-                        len(message_input_ids_full),
-                    )
-                else:
-                    # Non-ByteLevel tokenizer: byte offsets are unnecessary (cross-tokenizer ULD requires ByteLevel
-                    # anyway). Fall back to plain tokenization so GKD / non-ULD trainers with SentencePiece or
-                    # Unigram tokenizers still work through this collator.
-                    message_input_ids_full = self.tokenizer(
-                        formatted_message, add_special_tokens=False, return_tensors=None
-                    )["input_ids"]
-                    completion_start_idx_full = len(
-                        self.tokenizer(formatted_prompt, add_special_tokens=False, return_tensors=None)["input_ids"]
-                    )
-                    full_offs = [(0, 0)] * len(message_input_ids_full)
-                    prompt_byte_len = 0
+                encoding = self.tokenizer(formatted_message, add_special_tokens=False, return_offsets_mapping=True)
+                message_input_ids_full = encoding["input_ids"]
+                # The completion starts at the first token reaching past the prompt text, so a token straddling the
+                # seam stays in the completion.
+                completion_start_idx_full = next(
+                    (idx for idx, (_, end) in enumerate(encoding["offset_mapping"]) if end > len(formatted_prompt)),
+                    len(message_input_ids_full),
+                )
 
                 # Keep the last max_length tokens — drops oldest prompt context first,
                 # never drops from the END (the model's recent context).
                 if self.max_length is not None and len(message_input_ids_full) > self.max_length:
                     sample_ids = message_input_ids_full[-self.max_length :]
-                    sample_offs = full_offs[-self.max_length :]
                     current_prompt_len = max(
                         0, completion_start_idx_full - (len(message_input_ids_full) - self.max_length)
                     )
                 else:
                     sample_ids = message_input_ids_full
-                    sample_offs = full_offs
                     current_prompt_len = completion_start_idx_full
-
-                # Make completion-relative: prompt positions zeroed, completion offsets shifted. If truncation
-                # ate into the completion (no prompt tokens kept and the first kept token is mid-completion),
-                # rebase to byte 0 of the kept completion so teacher/student share the same coordinate system.
-                kept_completion_offs = sample_offs[current_prompt_len:]
-                base = (
-                    kept_completion_offs[0][0] if kept_completion_offs and current_prompt_len == 0 else prompt_byte_len
-                )
-                completion_offs = [(s - base, e - base) for s, e in kept_completion_offs]
-                sample_offs = [(0, 0)] * current_prompt_len + completion_offs
 
                 input_ids.append(sample_ids)
                 attention_mask.append([1] * len(sample_ids))
                 current_prompt_ids = sample_ids[:current_prompt_len]
-                byte_offsets.append(sample_offs)
             else:
                 sample_ids = example["input_ids"]
                 input_ids.append(sample_ids)
@@ -364,8 +234,7 @@ class DataCollatorForChatML:
                     prompt_len = completion_mask.index(1) if 1 in completion_mask else len(sample_ids)
                     current_prompt_ids = sample_ids[:prompt_len]
                 else:
-                    # No tracked boundary: tokenize the prompt and cap with a slice (avoid `truncation=True`,
-                    # which would persist on the shared backend used by `encode_with_byte_offsets`).
+                    # No tracked boundary: tokenize the prompt and cap with a slice.
                     tokenized_prompt = self.tokenizer(
                         formatted_prompt,
                         padding=False,
@@ -373,7 +242,6 @@ class DataCollatorForChatML:
                         add_special_tokens=False,
                     )
                     current_prompt_ids = tokenized_prompt["input_ids"][: len(sample_ids)]
-                byte_offsets.append(example.get("byte_offsets", [(0, 0)] * len(sample_ids)))
 
             if len(current_prompt_ids) == 0:
                 raise ValueError(
@@ -409,18 +277,12 @@ class DataCollatorForChatML:
             [torch.tensor(x, dtype=torch.long) for x in prompt_attention_mask], padding_side="left", padding_value=0
         )
 
-        target_len = input_ids.size(1)
-        byte_offsets_tensor = torch.stack(
-            [pad_byte_offsets(offs, target_len, padding_side="left") for offs in byte_offsets], dim=0
-        )
-
         out = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
-            "byte_offsets": byte_offsets_tensor,
         }
         # Forward source text for cross-tokenizer ULD, when the dataset has it.
         if "original_prompt_text" in examples[0] and "original_completion_text" in examples[0]:
@@ -604,26 +466,6 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         labels[attention_mask == 0] = -100
         labels[completion_mask == 0] = -100
 
-        # Completion-relative byte offsets for cross-tokenizer ULD. Computed from the final input_ids/labels
-        # via per-token piece byte length (the same primitive the on-policy / teacher path uses), so it is
-        # layout-agnostic after flush_left/truncation and shares the teacher's byte coordinate system.
-        tokenizer = self.processor.tokenizer
-        piece_len_cache: dict[int, int] = {}
-        byte_offset_rows: list[list[tuple[int, int]]] = []
-        for row_ids, row_labels in zip(input_ids.tolist(), labels.tolist(), strict=True):
-            offs: list[tuple[int, int]] = [(0, 0)] * len(row_ids)
-            cumulative = 0
-            for pos, (tid, label) in enumerate(zip(row_ids, row_labels, strict=True)):
-                if label == -100:
-                    continue
-                if tid not in piece_len_cache:
-                    piece_len_cache[tid] = piece_byte_len(tokenizer.convert_ids_to_tokens([tid])[0])
-                nb = piece_len_cache[tid]
-                offs[pos] = (cumulative, cumulative + nb)
-                cumulative += nb
-            byte_offset_rows.append(offs)
-        byte_offsets = torch.tensor(byte_offset_rows, dtype=torch.long)
-
         # Build output with non-sequence vision keys from processed_prompts (pixel_values, image_grid_thw, etc.).
         output = {
             k: v
@@ -633,7 +475,6 @@ class DataCollatorForVisionLanguageChatML(DataCollatorMixin):
         output["input_ids"] = input_ids
         output["attention_mask"] = attention_mask
         output["labels"] = labels
-        output["byte_offsets"] = byte_offsets
         if "token_type_ids" in processed_prompts:
             output["token_type_ids"] = token_type_ids
         if (
