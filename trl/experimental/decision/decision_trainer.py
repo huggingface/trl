@@ -136,6 +136,9 @@ class DataCollatorForJeva(DataCollatorMixin):
     Supply one of `target_index`, `target_probs`, `p_true`, or `score` as the target. The collator returns padded state
     inputs, flattened option inputs, an option mask, and target distributions with null probability first.
 
+    For repeated training or evaluation, preprocess once with `dataset.map(collator.tokenize)`. The collator also
+    accepts these prepared examples and only pads them when building batches.
+
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer used by the shared encoder. Padding is applied on the right.
@@ -169,44 +172,53 @@ class DataCollatorForJeva(DataCollatorMixin):
         if self.truncation not in {"error", "truncate"}:
             raise ValueError("truncation must be error or truncate")
 
-    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
-        states, options, targets, questions = [], [], [], []
-        for row in features:
-            request = row["request"] if "request" in row else {"state": row["state"], "questions": row["questions"]}
-            prompts = self.decision_config.chat_template_kwargs(request, self.tokenizer)
-            if len(prompts) != 1 or len(prompts[0]["decision_questions"]) != 1:
-                raise ValueError("Each training row must contain exactly one decision question")
-            kwargs = prompts[0]
-            question = kwargs.pop("decision_questions")[0]
-            inputs = self.tokenizer.apply_chat_template(**kwargs, tokenize=True, return_dict=True, return_tensors="pt")
-            inputs, marks = read_marks(dict(inputs), self.decision_config._sentinel_ids)
-            if len(marks) != len(question.options) + 1:
-                raise ValueError("The Jeva template must mark one state span and one span per option")
-            segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
-            states.append(segments[0].tolist())
-            options.extend(segment.tolist() for segment in segments[1:])
-            targets.append(normalize_target(row, question))
-            questions.append(question)
-        encoded = []
-        for sequences, limit in ((states, self.max_state_length), (options, self.max_option_length)):
-            if self.truncation == "error" and any(len(ids) > limit for ids in sequences):
+    def tokenize(self, example: dict[str, Any]) -> dict[str, Any]:
+        """Render one decision and prepare unpadded inputs and targets for dataset preprocessing."""
+        request = (
+            example["request"]
+            if "request" in example
+            else {"state": example["state"], "questions": example["questions"]}
+        )
+        prompts = self.decision_config.chat_template_kwargs(request, self.tokenizer)
+        if len(prompts) != 1 or len(prompts[0]["decision_questions"]) != 1:
+            raise ValueError("Each training row must contain exactly one decision question")
+        kwargs = prompts[0]
+        question = kwargs.pop("decision_questions")[0]
+        inputs = self.tokenizer.apply_chat_template(**kwargs, tokenize=True, return_dict=True, return_tensors="pt")
+        inputs, marks = read_marks(dict(inputs), self.decision_config._sentinel_ids)
+        if len(marks) != len(question.options) + 1:
+            raise ValueError("The Jeva template must mark one state span and one span per option")
+        segments = inputs["input_ids"][0].split(torch.diff(marks, prepend=marks.new_zeros(1)).tolist())
+        sequences = []
+        for index, segment in enumerate(segments):
+            limit = self.max_state_length if index == 0 else self.max_option_length
+            if self.truncation == "error" and len(segment) > limit:
                 raise ValueError(
                     f"Input exceeds its {limit} token limit; increase the limit or set truncation='truncate'"
                 )
-            if self.truncation == "truncate":
-                sequences = [ids[:limit] for ids in sequences]
-            encoded.append(
-                dict(
-                    self.tokenizer.pad(
-                        {"input_ids": sequences}, padding=True, return_tensors="pt", padding_side="right"
-                    )
-                )
-            )
-        counts = torch.tensor([len(question.options) for question in questions])
+            sequences.append(segment[:limit].tolist())
+        return {
+            "input_ids": sequences[0],
+            "option_input_ids": sequences[1:],
+            "labels": list(normalize_target(example, question)),
+            "allow_null": question.allow_null,
+            "is_choice": question.type == "choice",
+        }
+
+    def torch_call(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+        if "input_ids" not in features[0]:
+            features = [self.tokenize(example) for example in features]
+        states = [example["input_ids"] for example in features]
+        options = [option for example in features for option in example["option_input_ids"]]
+        encoded = [
+            dict(self.tokenizer.pad({"input_ids": sequences}, padding=True, return_tensors="pt", padding_side="right"))
+            for sequences in (states, options)
+        ]
+        counts = torch.tensor([len(example["option_input_ids"]) for example in features])
         option_mask = torch.arange(counts.max())[None, :] < counts[:, None]
-        labels = torch.zeros(len(questions), option_mask.shape[1] + 1)
-        for index, target in enumerate(targets):
-            labels[index, : len(target)] = torch.tensor(target)
+        labels = torch.zeros(len(features), option_mask.shape[1] + 1)
+        for index, example in enumerate(features):
+            labels[index, : len(example["labels"])] = torch.tensor(example["labels"])
         return {
             "option_chunk_size": self.option_chunk_size,
             **encoded[0],
@@ -214,8 +226,8 @@ class DataCollatorForJeva(DataCollatorMixin):
             "num_options": counts,
             "option_mask": option_mask,
             "labels": labels,
-            "allow_null": torch.tensor([question.allow_null for question in questions]),
-            "is_choice": torch.tensor([question.type == "choice" for question in questions]),
+            "allow_null": torch.tensor([example["allow_null"] for example in features]),
+            "is_choice": torch.tensor([example["is_choice"] for example in features]),
         }
 
 

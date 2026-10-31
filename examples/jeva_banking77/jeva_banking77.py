@@ -161,20 +161,28 @@ def main(script_args, training_args, model_args):
     eval_dataset = prepare_dataset(
         eval_dataset, script_args.num_options, script_args.null_fraction, training_args.seed + 1
     )
+    collator = DataCollatorForJeva(
+        tokenizer,
+        model.decision_config,
+        script_args.max_state_length,
+        script_args.max_option_length,
+        script_args.truncation,
+        script_args.option_chunk_size,
+    )
+    with training_args.main_process_first(desc="Tokenizing datasets"):
+        train_dataset = train_dataset.map(
+            collator.tokenize, remove_columns=train_dataset.column_names, desc="Tokenizing train dataset"
+        )
+        eval_dataset = eval_dataset.map(
+            collator.tokenize, remove_columns=eval_dataset.column_names, desc="Tokenizing eval dataset"
+        )
     trainer = DecisionTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        data_collator=DataCollatorForJeva(
-            tokenizer,
-            model.decision_config,
-            script_args.max_state_length,
-            script_args.max_option_length,
-            script_args.truncation,
-            script_args.option_chunk_size,
-        ),
+        data_collator=collator,
         compute_metrics=compute_metrics,
     )
     result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)

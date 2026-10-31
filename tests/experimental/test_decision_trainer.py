@@ -203,6 +203,7 @@ def collator(tokenizer):
 class TestDecisionTrainerJeva(TrlTestCase):
     @pytest.mark.parametrize("mode", ["head", "full", pytest.param("lora", marks=require_peft)])
     def test_train(self, mode, tokenizer, dataset, collator):
+        dataset = dataset.map(collator.tokenize, remove_columns=dataset.column_names)
         model = make_model(mode=mode)
         trainer = DecisionTrainer(
             model=model,
@@ -464,12 +465,21 @@ class TestDecisionTrainerJeva(TrlTestCase):
 
 
 class TestDataCollatorForJeva(TrlTestCase):
-    def test_batching(self, tokenizer, dataset, collator):
+    @pytest.mark.parametrize("pretokenized", [False, True])
+    def test_batching(self, tokenizer, dataset, collator, pretokenized):
         rows = list(dataset)
         rows[0] = {**rows[0], "request": json.loads(rows[0]["request"])}
         request = json.loads(rows[1].pop("request"))
         rows[1].update(request)
+        expected_batch = collator(rows)
+        if pretokenized:
+            rows = list(dataset.map(collator.tokenize, remove_columns=dataset.column_names))
         batch = collator(rows, return_tensors="pt")
+        for key, value in expected_batch.items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(batch[key], value)
+            else:
+                assert batch[key] == value
         torch.testing.assert_close(batch["num_options"], torch.tensor([2, 1, 2, 3, 2]))
         torch.testing.assert_close(
             batch["option_mask"],

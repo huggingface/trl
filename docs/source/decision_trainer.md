@@ -45,7 +45,7 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 | `p_true` | Probability of true for a `noul` question. |
 | `score` | Numeric score, interpolated between rubric levels. |
 
-Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The library's `DataCollatorForJeva` renders the model's decision template, splits state and option spans, and converts targets to tensors. Import it from `trl.experimental.decision` and pass `tokenizer` and `model.decision_config`. Models using the same input layout can reuse it; other layouts need their own collator.
+Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The library's `DataCollatorForJeva` renders the model's decision template, splits state and option spans, and converts targets to tensors. Import it from `trl.experimental.decision` and pass `tokenizer` and `model.decision_config`. Models using the same input layout can reuse it; other layouts need their own collator. Preprocess once with `dataset.map(collator.tokenize, remove_columns=dataset.column_names)` so training and evaluation batches only need padding, as in the example.
 
 ## Labels and metrics
 
