@@ -59,7 +59,13 @@ class JevaScriptArguments(ScriptArguments):
     null_fraction: float = field(
         default=0.2, metadata={"help": "Fraction of decisions with the correct intent withheld."}
     )
-    projection_dim: int = field(default=128, metadata={"help": "Width of the decision head."})
+    projection_dim: int = field(default=768, metadata={"help": "Width of the decision head."})
+    decision_depth: int = field(default=1, metadata={"help": "Number of decision blocks."})
+    decision_num_heads: int = field(default=8, metadata={"help": "Attention heads per decision block."})
+    decision_ffn_ratio: float = field(default=4.0, metadata={"help": "Decision feed-forward expansion ratio."})
+    head_learning_rate: float | None = field(
+        default=None, metadata={"help": "Projection and decision-core learning rate. Defaults to learning_rate."}
+    )
     max_train_samples: int | None = field(default=None, metadata={"help": "Limit training examples for a short run."})
     max_eval_samples: int | None = field(default=None, metadata={"help": "Limit evaluation examples."})
 
@@ -73,7 +79,7 @@ class JevaScriptArguments(ScriptArguments):
 
 @dataclass
 class JevaModelArguments(ModelConfig):
-    model_name_or_path: str = field(default="Qwen/Qwen3-0.6B", metadata={"help": "Text encoder checkpoint."})
+    model_name_or_path: str = field(default="Qwen/Qwen3.5-4B", metadata={"help": "Text encoder checkpoint."})
     lora_task_type: str = field(default="FEATURE_EXTRACTION", metadata={"help": "PEFT task type for the encoder."})
 
 
@@ -123,7 +129,14 @@ def main(script_args, training_args, model_args):
     if encoder.config.model_type in {"qwen3_5", "qwen3_5_moe"}:
         encoder = encoder.language_model
     model = JevaForDecision(
-        JevaConfig(text_config=encoder.config, projection_dim=script_args.projection_dim), model=encoder
+        JevaConfig(
+            text_config=encoder.config,
+            projection_dim=script_args.projection_dim,
+            decision_depth=script_args.decision_depth,
+            decision_num_heads=script_args.decision_num_heads,
+            decision_ffn_ratio=script_args.decision_ffn_ratio,
+        ),
+        model=encoder,
     )
     model.base_model.requires_grad_(script_args.mode == "full")
     model.freeze_backbone = script_args.mode == "head"
@@ -185,6 +198,33 @@ def main(script_args, training_args, model_args):
         data_collator=collator,
         compute_metrics=compute_metrics,
     )
+    # Keep encoder adapters separate from the fully trainable projections and decision core.
+    # Trainer creates the optimizer after distributed setup and clips all groups together.
+    decay_parameters = trainer.get_decay_parameter_names(model)
+    head_learning_rate = script_args.head_learning_rate
+    if head_learning_rate is None:
+        head_learning_rate = training_args.learning_rate
+    parameter_groups = []
+    for backbone in (True, False):
+        for decay in (True, False):
+            parameters = [
+                parameter
+                for name, parameter in model.named_parameters()
+                if parameter.requires_grad
+                and name.startswith("model.") == backbone
+                and (name in decay_parameters) == decay
+            ]
+            if parameters:
+                parameter_groups.append(
+                    {
+                        "params": parameters,
+                        "lr": training_args.learning_rate if backbone else head_learning_rate,
+                        "weight_decay": training_args.weight_decay if decay else 0.0,
+                    }
+                )
+    optimizer_cls, optimizer_kwargs = trainer.get_optimizer_cls_and_kwargs(training_args, model)
+    optimizer_kwargs["params"] = parameter_groups
+    trainer.optimizer_cls_and_kwargs = (optimizer_cls, optimizer_kwargs)
     result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
     trainer.save_model(training_args.output_dir)
     trainer.save_metrics("train", result.metrics)

@@ -1,16 +1,31 @@
-model_name_or_path: Qwen/Qwen3-0.6B
+# Match Jeva-4B's architecture and adapter configuration. This BANKING77 run
+# does not reproduce the paper's multi-stage training curriculum.
+model_name_or_path: Qwen/Qwen3.5-4B
 dataset_name: PolyAI/banking77
 output_dir: output/jeva-banking77
-dtype: float32
+dtype: bfloat16
 mode: lora
 use_peft: true
-lora_r: 8
-lora_alpha: 16
-lora_dropout: 0.0
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.05
 lora_target_modules:
   - q_proj
+  - k_proj
   - v_proj
-projection_dim: 128
+  - o_proj
+  - in_proj_qkv
+  - in_proj_z
+  - in_proj_a
+  - in_proj_b
+  - out_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+projection_dim: 768
+decision_depth: 1
+decision_num_heads: 8
+decision_ffn_ratio: 4.0
 num_options: 8
 null_fraction: 0.2
 max_state_length: 128
@@ -20,7 +35,16 @@ per_device_train_batch_size: 2
 per_device_eval_batch_size: 8
 gradient_accumulation_steps: 2
 max_steps: 1000
+# Use the official fine-tuner's 1e-4 default for both groups; the paper does
+# not specify per-group learning rates.
 learning_rate: 0.0001
+head_learning_rate: 0.0001
+optim: adamw_torch
+weight_decay: 0.0
+max_grad_norm: 1.0
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
 lr_scheduler_type: constant
 logging_steps: 10
 eval_strategy: steps
