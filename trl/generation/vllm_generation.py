@@ -210,6 +210,9 @@ class VLLMGeneration:
             Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
             `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will
             override them.
+        return_sampling_mask (`bool`, *optional*, defaults to `False`):
+            Whether to also return, for every sampled token, the set of tokens it was sampled from after top-k, top-p
+            and min-p filtering. Colocate mode only. Requires vLLM >= 0.28 and `top_k > 0`.
 
     """
 
@@ -244,6 +247,7 @@ class VLLMGeneration:
         max_completion_length: int = 16,
         logprobs: int | None = 0,
         generation_kwargs: dict | None = None,
+        return_sampling_mask: bool = False,
     ):
         self.model = model
         self.accelerator = accelerator
@@ -283,6 +287,7 @@ class VLLMGeneration:
             # A sampled image token would mismatch the image features; -100 is the lowest bias vLLM accepts
             self.generation_kwargs["logit_bias"] = {model.config.image_token_id: -100}
         self.generation_kwargs.update(generation_kwargs or {})
+        self.return_sampling_mask = return_sampling_mask
 
         # Tensor names, dtypes and shapes streamed to the server on each weight sync. Collected on the first sync, as
         # it requires gathering the parameters, and constant afterwards.
@@ -365,6 +370,8 @@ class VLLMGeneration:
                 logprobs_mode="processed_logprobs",
                 quantization=quantization,
                 trust_remote_code=self.trust_remote_code,
+                # Not passed otherwise: vLLM < 0.28 doesn't accept it
+                **({"return_sampling_mask": True} if self.return_sampling_mask else {}),
             )
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
@@ -568,12 +575,14 @@ class VLLMGeneration:
             profiler: Optional profiler for performance tracking.
 
         Returns:
-            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids).
+            Tuple of (prompt_ids, completion_ids, logprobs, logprob_token_ids, sampling_mask).
 
             - `prompt_ids`: `list[list[int]]` of shape `(batch_size, prompt_len)`.
             - `completion_ids`: `list[list[int]]` of shape `(batch_size, completion_len)`.
             - `logprobs`: `list[list[list[float | None]]]` of shape `(batch_size, completion_len, num_logprobs)`.
             - `logprob_token_ids`: `list[list[list[int]]]` of shape `(batch_size, completion_len, num_logprobs)`.
+            - `sampling_mask`: `list[list[list[int]]]` of shape `(batch_size, completion_len, set_size)`, the tokens
+              each completion token was sampled from, or `None` unless `return_sampling_mask=True`.
 
             `num_logprobs` is 1 when `logprobs=0`, or up to N+1 when `logprobs=N` (the sampled token is always included
             and may fall outside the top-N).
@@ -660,6 +669,7 @@ class VLLMGeneration:
             completion_ids = all_completion_ids[process_slice]
             logprobs = all_logprobs[process_slice] if all_logprobs is not None else None
             logprob_token_ids = all_logprob_token_ids[process_slice] if all_logprob_token_ids is not None else None
+            sampling_mask = None
 
         # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
         elif self.mode == "colocate":
@@ -735,6 +745,11 @@ class VLLMGeneration:
             all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
             all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
             all_logprobs, all_logprob_token_ids = extract_logprobs(all_outputs)
+            all_sampling_mask = None
+            if self.return_sampling_mask:
+                all_sampling_mask = [
+                    output.sampling_mask.token_ids for outputs in all_outputs for output in outputs.outputs
+                ]
 
             if self.tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
@@ -745,14 +760,16 @@ class VLLMGeneration:
                 completion_ids = all_completion_ids[tp_slice]
                 logprobs = all_logprobs[tp_slice] if all_logprobs is not None else None
                 logprob_token_ids = all_logprob_token_ids[tp_slice] if all_logprob_token_ids is not None else None
+                sampling_mask = all_sampling_mask[tp_slice] if all_sampling_mask is not None else None
             else:
                 prompt_ids = all_prompt_ids
                 completion_ids = all_completion_ids
                 logprobs = all_logprobs
                 logprob_token_ids = all_logprob_token_ids
+                sampling_mask = all_sampling_mask
 
             if self.enable_sleep_mode:
                 self.llm.sleep(level=2)
                 self._llm_weights_sleeping = True
 
-        return prompt_ids, completion_ids, logprobs, logprob_token_ids
+        return prompt_ids, completion_ids, logprobs, logprob_token_ids, sampling_mask

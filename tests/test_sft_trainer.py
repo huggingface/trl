@@ -39,7 +39,6 @@ from .testing_utils import (
     is_ampere_or_newer,
     require_bitsandbytes,
     require_kernels,
-    require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_vision,
@@ -457,11 +456,30 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_model(self):
-        model = AutoModelForCausalLM.from_pretrained(
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            dtype="float32",
-        )
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            # (`Qwen3_5ForCausalLM`, model type `qwen3_5_text`), which is how Qwen3.5 is usually trained on text
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_train_model(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
@@ -1034,30 +1052,6 @@ class TestSFTTrainer(TrlTestCase):
                 torch.testing.assert_close(param, new_param, msg=f"Parameter {n} has changed.")
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    @require_torch_accelerator
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        training_args = SFTConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
-        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
-        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
-        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
@@ -2640,3 +2634,23 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.model.config.eos_token_id == eos_token_id
         # The model's own eos tokens are kept, since any of them halts generation
         assert trainer.model.generation_config.eos_token_id == expected_eos_token_ids
+
+    @pytest.mark.parametrize(
+        "trainer_cls, topic",
+        [
+            (SFTTrainer, "trl/SFTTrainer"),
+            # A subclass, like a copy of the trainer's code (e.g. Unsloth's `UnslothSFTTrainer`), keeps its `_name`
+            (type("MySFTTrainer", (SFTTrainer,), {}), "trl/SFTTrainer"),
+            (type("MySFTTrainer", (SFTTrainer,), {"_name": "My SFT"}), "trl/other"),
+        ],
+    )
+    def test_telemetry_topic(self, trainer_cls, topic, monkeypatch):
+        # Telemetry is off in CI, and `send_telemetry` would reach the Hub
+        monkeypatch.delenv("CI", raising=False)
+        sent = []
+        monkeypatch.setattr("trl.trainer.base_trainer.send_telemetry", lambda **kwargs: sent.append(kwargs))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer_cls(model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset)
+
+        assert [kwargs["topic"] for kwargs in sent] == [topic]

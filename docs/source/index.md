@@ -12,6 +12,8 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
+**🔥 Mistral Large 4:** Fine-tune [Mistral Large 4](https://huggingface.co/mistralai/Mistral-Large-4-1T-A52B) with [`SFTTrainer`] on a single node of 8 B300s, on top of its FP8 weights. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_mistral_large_4).
+
 **🚀 Training on AMD GPUs:** TRL's trainers now run on [AMD Instinct GPUs](amd_gpus) through PyTorch's ROCm build.
 
 **🔥 Beam:** Fine-tune [Beam](https://huggingface.co/reflection/Beam-1.0-501B-A23B) with [`SFTTrainer`] on a single node of 8 B300s. See the [LoRA example](https://github.com/huggingface/trl/tree/main/examples/sft_beam).
@@ -72,7 +74,6 @@ Below is an overview of TRL trainers, organized by maturity and method type.
 - [BEMA for Reference Model](bema_for_reference_model)
 - [`CPOTrainer`](cpo_trainer)
 - [`ORPOTrainer`](orpo_trainer)
-- [`TPOTrainer`](tpo_trainer)
 
 #### Knowledge distillation
 

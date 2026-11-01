@@ -6,12 +6,12 @@ logprobs, and loss masks, then updates the same vLLM instance.
 ## Local setup
 
 Use Python 3.12 and this TRL checkout. The typed capture API was merged in
-[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install the pinned upstream revision:
+[OpenEnv #1280](https://github.com/openenv/OpenEnv/pull/1280). Install the pinned upstream revision:
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git OpenEnv
+git clone https://github.com/openenv/OpenEnv.git OpenEnv
 git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
-pip install -e . trackio datasets ./OpenEnv
+pip install -e . trackio datasets ./OpenEnv[harbor] kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
@@ -36,6 +36,14 @@ as job secrets. A bucket mounted at `/data` preserves checkpoints and logs.
 Use `--train-script-url` with the raw URL of the TRL revision being tested before the example is merged.
 Use `--tunnel-check-s 0` to disable tunnel supervision. A server restart interrupts existing sessions;
 subsequent sessions receive the new proxy URL.
+
+You can also use HF sandbox for the sandboxes, by passing `--sandbox hf-sandbox` to the launcher script. 
+
+HF sandboxes refuse the ownership changes Harbor's upload untar makes, so every verifier upload fails and all rewards are `None` (loss 0). The launcher patches Harbor for this; when running `openenv harbor serve` yourself, apply the same patch to the server's environment first:
+
+```sh
+python -c "import pathlib, harbor.environments.tar_transfer as t; p = pathlib.Path(t.__file__); p.write_text(p.read_text().replace('tar -xzf ', 'tar --no-same-owner -xzf '))"
+```
 
 ## Capture contract
 

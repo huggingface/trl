@@ -64,6 +64,7 @@ class GMPOTrainer(GRPOTrainer):
             token_type_ids=inputs.get("token_type_ids"),
             mm_token_type_ids=inputs.get("mm_token_type_ids"),
             image_position_ids=inputs.get("image_position_ids"),
+            sampling_mask=inputs.get("sampling_mask"),
         )
 
         if self.top_entropy_quantile < 1.0:

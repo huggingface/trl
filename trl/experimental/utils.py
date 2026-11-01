@@ -25,6 +25,7 @@ import pyarrow.types
 import torch
 from accelerate.utils import is_peft_model
 from pyarrow import compute as pc
+from tokenizers.models import BPE
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainingArguments
@@ -140,6 +141,13 @@ def is_byte_level_tokenizer(backend) -> bool:
     return "ByteLevel" in repr(backend.pre_tokenizer) or "ByteLevel" in repr(backend.decoder)
 
 
+def supports_byte_offsets(backend) -> bool:
+    """Whether token pieces preserve decoded bytes, including byte-fallback BPE without a Strip decoder."""
+    return is_byte_level_tokenizer(backend) or (
+        isinstance(backend.model, BPE) and backend.model.byte_fallback and "Strip" not in repr(backend.decoder)
+    )
+
+
 def _bytes_to_unicode() -> dict[int, str]:
     bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("\u00a1"), ord("\u00ac") + 1))
     bs += list(range(ord("\u00ae"), ord("\u00ff") + 1))
@@ -156,9 +164,12 @@ def _bytes_to_unicode() -> dict[int, str]:
 _BYTE_LEVEL_DECODER = {ch: b for b, ch in _bytes_to_unicode().items()}
 
 
-def piece_bytes(piece: str) -> bytes:
-    """Raw bytes of a ByteLevel BPE token piece: each char stands for one byte. Like the `tokenizers` ByteLevel
-    decoder, a char outside that mapping (only possible in an added token) is kept as its own UTF-8."""
+def piece_bytes(piece: str, byte_level: bool = True) -> bytes:
+    """Return the decoded bytes of a ByteLevel or byte-fallback BPE piece."""
+    if not byte_level:
+        if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
+            return bytes([int(piece[3:5], 16)])
+        return piece.replace("\u2581", " ").encode("utf-8")
     return b"".join(bytes([_BYTE_LEVEL_DECODER[ch]]) if ch in _BYTE_LEVEL_DECODER else ch.encode() for ch in piece)
 
 
