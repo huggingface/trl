@@ -31,6 +31,8 @@ Each script:
 6. Runs `print_config_diff` — prints every flat-key difference between the reference Hub config and the tiny model's config (for debugging scale-downs).
 7. Pushes the model, tokenizer/processor, generation config, and model card to the Hub in a single commit.
 
+When the reference checkpoint is quantized (DeepSeek-R1 in FP8, gpt-oss in MXFP4), the script quantizes the random weights the same way, writes the checkpoint itself in the reference's layout, loads it back for the smoke test, and pushes the directory with `push_dir_to_hub`. Loading these tiny models needs a GPU with FP8 support, or the `kernels` package for MXFP4 (transformers dequantizes to bf16 without it).
+
 If the repo already exists on the Hub, the push is skipped by default. Pass `--create-pr` to open a PR against the existing repo instead:
 
 ```bash

@@ -168,7 +168,10 @@ def check_dtype_pattern(reference_id, model):
 
     Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
     like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
+
+    `model` can also be the state dict that gets saved, when it differs from the loaded model's (quantized weights).
     """
+    state_dict = model.state_dict() if isinstance(model, nn.Module) else model
     try:
         metadata = api.get_safetensors_metadata(reference_id)
     except NotASafetensorsRepoError:
@@ -177,7 +180,7 @@ def check_dtype_pattern(reference_id, model):
     ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
     mismatches = []
-    for name, tensor in model.state_dict().items():
+    for name, tensor in state_dict.items():
         ref_dtype = ref_dtypes.get(name)
         if ref_dtype is None:
             continue  # tensor has no counterpart in the reference (e.g. scale-down, PEFT wrapper, tying)
@@ -245,6 +248,13 @@ def _parse_args():
 
 
 def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model.save_pretrained(tmpdir)
+        push_dir_to_hub(tmpdir, model, tokenizer, generation_config, prefix, suffix, create_pr)
+
+
+def push_dir_to_hub(save_dir, model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
+    """Push the model files saved in `save_dir`, with the tokenizer, generation config and model card, in one commit."""
     if create_pr is None:
         create_pr = _parse_args().create_pr
 
@@ -265,31 +275,29 @@ def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, c
     if not exists:
         api.create_repo(repo_id, exist_ok=True)
 
-    # Save all artifacts to a temp dir and upload them in a single commit, so --create-pr opens one PR.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model.save_pretrained(tmpdir)
-        if tokenizer is not None:
-            tokenizer.save_pretrained(tmpdir)
-        if generation_config is not None:
-            generation_config.save_pretrained(tmpdir)
-        model_card.save(os.path.join(tmpdir, "README.md"))
+    # Upload all artifacts in a single commit, so --create-pr opens one PR.
+    if tokenizer is not None:
+        tokenizer.save_pretrained(save_dir)
+    if generation_config is not None:
+        generation_config.save_pretrained(save_dir)
+    model_card.save(os.path.join(save_dir, "README.md"))
 
-        operations = [
-            CommitOperationAdd(
-                path_in_repo=os.path.relpath(os.path.join(root, name), tmpdir),
-                path_or_fileobj=os.path.join(root, name),
-            )
-            for root, _, files in os.walk(tmpdir)
-            for name in files
-        ]
-        commit_info = api.create_commit(
-            repo_id=repo_id,
-            operations=operations,
-            commit_message=f"Upload {model.__class__.__name__}",
-            create_pr=exists and create_pr,
+    operations = [
+        CommitOperationAdd(
+            path_in_repo=os.path.relpath(os.path.join(root, name), save_dir),
+            path_or_fileobj=os.path.join(root, name),
         )
-        if commit_info.pr_url:
-            print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
+        for root, _, files in os.walk(save_dir)
+        for name in files
+    ]
+    commit_info = api.create_commit(
+        repo_id=repo_id,
+        operations=operations,
+        commit_message=f"Upload {model.__class__.__name__}",
+        create_pr=exists and create_pr,
+    )
+    if commit_info.pr_url:
+        print(f"[push_to_hub] PR opened: {commit_info.pr_url}")
 
 
 def init_weights_tiny_model(model):

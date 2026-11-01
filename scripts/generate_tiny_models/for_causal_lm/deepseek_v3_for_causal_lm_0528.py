@@ -14,7 +14,13 @@
 
 # Note: R1-0528 is kept in addition to R1 because it has a different chat template.
 
+import math
+import os
+import tempfile
+
 import torch
+from safetensors.torch import save_file
+from torch import nn
 from transformers import AutoTokenizer, DeepseekV3Config, DeepseekV3ForCausalLM, GenerationConfig
 
 from .._common import (
@@ -22,7 +28,7 @@ from .._common import (
     check_transformers_version,
     init_weights_tiny_model,
     print_config_diff,
-    push_to_hub,
+    push_dir_to_hub,
     set_seed,
     smoke_test,
 )
@@ -38,7 +44,8 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
     vocab_size=129280,
-    hidden_size=8,
+    # 128, not 8: the FP8 kernel quantizes each linear's input in blocks of 128 along its last dimension
+    hidden_size=128,
     # DeepSeek-V3 uses MLA, not GQA: kv_b_proj always reconstructs K/V with the full
     # num_attention_heads, so num_key_value_heads must equal num_attention_heads (i.e.
     # num_key_value_groups == 1). A mismatch (e.g. 4/2) is silently ignored by the KV
@@ -47,7 +54,7 @@ config = DeepseekV3Config(
     num_attention_heads=2,
     num_key_value_heads=2,
     num_hidden_layers=2,
-    intermediate_size=32,
+    intermediate_size=128,
     max_position_embeddings=163840,
     rope_scaling={
         "beta_fast": 32.0,
@@ -66,7 +73,35 @@ config = DeepseekV3Config(
 )
 model = DeepseekV3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
-smoke_test(model, tokenizer)
-check_dtype_pattern(MODEL_ID, model)
+
+# FP8 weights, like the reference checkpoint: quantize every linear but lm_head in 128x128 blocks, each block scaled to
+# the e4m3 range, with the scale of each block stored in `weight_scale_inv` (needs a GPU with FP8 support to load)
+config.quantization_config = {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "quant_method": "fp8",
+    "weight_block_size": [128, 128],
+}
+config.dtype = torch.bfloat16
+state_dict = model.state_dict()
+for name, module in model.named_modules():
+    if isinstance(module, nn.Linear) and name != "lm_head":
+        weight = module.weight.float()
+        rows, cols = weight.shape
+        # The last blocks are partial where a dimension is not a multiple of 128 (kv_a_proj_with_mqa's 576 rows)
+        padded = torch.zeros(math.ceil(rows / 128) * 128, math.ceil(cols / 128) * 128)
+        padded[:rows, :cols] = weight
+        blocks = padded.view(padded.shape[0] // 128, 128, padded.shape[1] // 128, 128)
+        scale = blocks.abs().amax(dim=(1, 3)) / torch.finfo(torch.float8_e4m3fn).max
+        quantized = (blocks / scale[:, None, :, None]).view(padded.shape)[:rows, :cols]
+        state_dict[f"{name}.weight"] = quantized.to(torch.float8_e4m3fn).contiguous()
+        state_dict[f"{name}.weight_scale_inv"] = scale
+
+check_dtype_pattern(MODEL_ID, state_dict)
 print_config_diff(MODEL_ID, model)
-push_to_hub(model, tokenizer, generation_config, "tiny", "0528")
+with tempfile.TemporaryDirectory() as tmp_dir:
+    config.save_pretrained(tmp_dir)
+    save_file(state_dict, os.path.join(tmp_dir, "model.safetensors"), metadata={"format": "pt"})
+    model = DeepseekV3ForCausalLM.from_pretrained(tmp_dir, dtype=torch.bfloat16, device_map="cuda")
+    smoke_test(model, tokenizer)
+    push_dir_to_hub(tmp_dir, model, tokenizer, generation_config, "tiny", "0528")
