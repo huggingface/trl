@@ -767,7 +767,7 @@ def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path
     )
 
     # The trainer only accepts real tokenizer classes, so the wrapper goes straight to the dataset preparation
-    row = trainer._prepare_dataset_with_original_text(
+    row = trainer._prepare_dataset(
         dataset,
         _NoBackendTokenizer(gemma4_tokenizer),
         trainer.args,
@@ -998,27 +998,48 @@ def test_compute_distillation_loss_bayesian_zero_loss_when_only_token_dropped():
     torch.testing.assert_close(result, torch.zeros_like(result))
 
 
-def test_compute_distillation_loss_bayesian_skips_zero_start_span_extended(llama_tokenizer, qwen_tokenizer):
-    # Same zero-start scenario on the extended path: the first aligned group pair is dropped instead of wrapping
-    # around, so the loss is finite.
-    config = build_config(use_extended_uld=True, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=llama_tokenizer, teacher_tokenizer=qwen_tokenizer)
-
-    student_ids = llama_tokenizer("Hello world again", add_special_tokens=False)["input_ids"]
-    teacher_encoding = qwen_tokenizer("Hello world again", add_special_tokens=False, return_offsets_mapping=True)
-    teacher_ids = teacher_encoding["input_ids"]
+@pytest.mark.parametrize("student_prompt, teacher_prompt", [(False, False), (False, True), (True, False)])
+@pytest.mark.parametrize("first", ["Hello", "\U0001f60a", ""])
+def test_bayesian_zero_start_keeps_remaining_targets(llama_tokenizer, student_prompt, teacher_prompt, first):
+    tokenizer = llama_tokenizer
+    config = build_config(uld_token_merge_strategy="bayesian", uld_crossentropy_weight=0.0)
+    loss_fn = ULDLoss(config, student_tokenizer=tokenizer, teacher_tokenizer=tokenizer)
+    text = first + " world again" if first else ""
+    prompt_ids = tokenizer("Question", add_special_tokens=False)["input_ids"]
+    completion_ids = tokenizer(text, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
+    student_start = len(prompt_ids) if student_prompt else 0
+    student_ids = torch.tensor([(prompt_ids if student_prompt else []) + completion_ids])
+    student_labels = student_ids.clone()
+    student_labels[:, :student_start] = -100
+    teacher_ids, teacher_labels, _, teacher_spans = build_teacher_inputs(
+        tokenizer, [prompt_ids if teacher_prompt else []], [text]
+    )
+    teacher_start = len(prompt_ids) if teacher_prompt else 0
     torch.manual_seed(0)
-    result = loss_fn._compute_distillation_loss(
-        torch.randn(1, len(student_ids), len(llama_tokenizer)),
-        torch.randn(1, len(teacher_ids), len(qwen_tokenizer)),
-        torch.tensor([student_ids]),  # no prompt: the answer span starts at 0
-        torch.tensor([teacher_ids]),
-        torch.tensor([student_ids]),
-        torch.tensor([teacher_ids]),
-        teacher_spans=[teacher_encoding["offset_mapping"]],
+    student_logits = torch.randn(*student_ids.shape, len(tokenizer), requires_grad=True)
+    teacher_logits = torch.randn(*teacher_ids.shape, len(tokenizer))
+    result = loss_fn(
+        student_logits, teacher_logits, student_labels, teacher_labels, student_ids, teacher_ids, teacher_spans
     )
 
-    assert torch.isfinite(result)
+    drop = len(tokenizer(first, add_special_tokens=False)["input_ids"]) if first else 1
+    if first:
+        student_probs = student_logits[0, student_start + drop - 1 : -1].softmax(dim=-1)
+        teacher_probs = teacher_logits[0, teacher_start + drop - 1 : -1].softmax(dim=-1)
+        expected = (
+            (student_probs.sort(descending=True).values - teacher_probs.sort(descending=True).values)
+            .abs()
+            .sum(dim=-1)
+            .mean()
+        )
+        torch.testing.assert_close(result, expected)
+        assert result > 0
+    else:
+        torch.testing.assert_close(result, torch.zeros_like(result))
+    result.backward()
+    assert torch.isfinite(student_logits.grad).all()
+    if first:
+        assert student_logits.grad.abs().sum() > 0
 
 
 def test_uldloss_positional_mode_does_not_require_tokenizers():
@@ -1235,6 +1256,37 @@ def test_build_teacher_inputs_pad_equals_eos_keeps_terminating_eos(llama_tokeniz
         assert teacher_attention_mask[row, last]
 
 
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("with_eos", [False, True])
+def test_build_teacher_inputs_empty_and_ragged_completions(llama_tokenizer, extended, with_eos):
+    tokenizer = copy.deepcopy(llama_tokenizer)
+    if not with_eos:
+        tokenizer.eos_token = None
+    texts = ["", "\U0001f60a cafe\u0301", "A longer completion with several words."]
+    prompts = tokenizer(["Question", "A longer question", "Hi"], add_special_tokens=False)["input_ids"]
+    if with_eos:
+        prompts = [ids + [tokenizer.eos_token_id] for ids in prompts]
+    original_prompts = copy.deepcopy(prompts)
+    ids, labels, mask, spans = build_teacher_inputs(tokenizer, prompts, texts, extended)
+
+    assert prompts == original_prompts
+    assert ids.shape == labels.shape == mask.shape
+    assert mask.dtype == torch.bool
+    assert (labels[~mask] == -100).all()
+    assert (spans is not None) == extended
+    for row, text in enumerate(texts):
+        prompt = prompts[row][:-1] if with_eos else prompts[row]
+        encoding = tokenizer(text, add_special_tokens=False, return_offsets_mapping=extended)
+        expected = encoding["input_ids"] + ([tokenizer.eos_token_id] if with_eos else [])
+        assert ids[row, : len(prompt)].tolist() == prompt
+        assert (labels[row, : len(prompt)] == -100).all()
+        assert ids[row][labels[row] != -100].tolist() == expected
+        assert mask[row].sum() == len(prompt) + len(expected)
+        if extended:
+            expected_spans = [tuple(span) for span in encoding["offset_mapping"]]
+            assert spans[row] == expected_spans + ([(len(text), len(text))] if with_eos else [])
+
+
 def test_generate_on_policy_outputs_masks_prompt_smollm(tmp_path, smollm_tokenizer, openr1_examples):
     # There is no tiny SmolLM3 model; tiny Llama 3.2 shares SmolLM3's 128k vocabulary, so it pairs with its tokenizer
     trainer = _llama_trainer(tmp_path, smollm_tokenizer)
@@ -1386,6 +1438,11 @@ def test_build_teacher_vlm_inputs_feeds_images_and_completion(tmp_path, vlm_data
     assert teacher_input_ids.shape == teacher_labels.shape == teacher_attention_mask.shape
     # The teacher actually receives the image, not just text.
     assert "pixel_values" in teacher_forward_kwargs
+    for key in trainer._SEQUENCE_KEYS:
+        if key in teacher_forward_kwargs:
+            assert teacher_forward_kwargs[key].shape == teacher_input_ids.shape
+            assert (teacher_forward_kwargs[key].cpu()[teacher_labels != -100] == 0).all()
+            assert (teacher_forward_kwargs[key].cpu()[~teacher_attention_mask] == 0).all()
 
     teacher_tokenizer = trainer._teacher_processor.tokenizer
     for row, completion_text in enumerate(completion_texts):
