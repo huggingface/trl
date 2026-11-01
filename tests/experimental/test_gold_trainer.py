@@ -949,60 +949,12 @@ def test_compute_distillation_loss_bayesian_shifts_answer_logits():
     assert not torch.allclose(observed, expected)
 
 
-def test_compute_distillation_loss_bayesian_skips_zero_start_span_positional():
-    # Front-truncation can drop the whole prompt, leaving an answer span that starts at index 0. The first token has
-    # no preceding predictor logit for the shift, so it must be skipped (start += 1, size -= 1) rather than wrapping
-    # around with negative indexing.
-    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    torch.manual_seed(0)
-    student_logits = torch.randn(1, 3, 4)
-    teacher_logits = torch.randn(1, 3, 4)
-    # No -100 prefix: the answer span starts at index 0 with size 3.
-    student_labels = torch.tensor([[1, 2, 3]])
-    teacher_labels = torch.tensor([[1, 2, 3]])
-    student_input_ids = torch.tensor([[1, 2, 3]])
-    teacher_input_ids = torch.tensor([[1, 2, 3]])
-
-    result = loss_fn._compute_distillation_loss(
-        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
-    )
-
-    # After skipping the leading token: start=1, size=2 -> the shifted slice covers positions [0, 1].
-    student_probs = torch.softmax(student_logits[0, 0:2], dim=-1)
-    teacher_probs = torch.softmax(teacher_logits[0, 0:2], dim=-1)
-    student_sorted = student_probs.sort(dim=-1, descending=True).values
-    teacher_sorted = teacher_probs.sort(dim=-1, descending=True).values
-    expected = (student_sorted - teacher_sorted).abs().sum() / student_probs.size(0)
-
-    torch.testing.assert_close(result, expected)
-
-
-def test_compute_distillation_loss_bayesian_zero_loss_when_only_token_dropped():
-    # If the answer span is a single token at index 0, skipping it leaves nothing to score -> zero loss, no crash.
-    config = build_config(use_extended_uld=False, uld_token_merge_strategy="bayesian")
-    loss_fn = ULDLoss(config, student_tokenizer=None, teacher_tokenizer=None)
-
-    student_logits = torch.randn(1, 2, 4)
-    teacher_logits = torch.randn(1, 2, 4)
-    student_labels = torch.tensor([[5, -100]])  # start 0, size 1
-    teacher_labels = torch.tensor([[5, -100]])
-    student_input_ids = torch.tensor([[5, 0]])
-    teacher_input_ids = torch.tensor([[5, 0]])
-
-    result = loss_fn._compute_distillation_loss(
-        student_logits, teacher_logits, student_labels, teacher_labels, student_input_ids, teacher_input_ids
-    )
-
-    torch.testing.assert_close(result, torch.zeros_like(result))
-
-
 @pytest.mark.parametrize("student_prompt, teacher_prompt", [(False, False), (False, True), (True, False)])
 @pytest.mark.parametrize("first", ["Hello", "\U0001f60a", ""])
-def test_bayesian_zero_start_keeps_remaining_targets(llama_tokenizer, student_prompt, teacher_prompt, first):
+@pytest.mark.parametrize("extended", [False, True])
+def test_bayesian_zero_start_keeps_remaining_targets(llama_tokenizer, student_prompt, teacher_prompt, first, extended):
     tokenizer = llama_tokenizer
-    config = build_config(uld_token_merge_strategy="bayesian", uld_crossentropy_weight=0.0)
+    config = build_config(use_extended_uld=extended, uld_token_merge_strategy="bayesian", uld_crossentropy_weight=0.0)
     loss_fn = ULDLoss(config, student_tokenizer=tokenizer, teacher_tokenizer=tokenizer)
     text = first + " world again" if first else ""
     prompt_ids = tokenizer("Question", add_special_tokens=False)["input_ids"]
@@ -1022,7 +974,7 @@ def test_bayesian_zero_start_keeps_remaining_targets(llama_tokenizer, student_pr
         student_logits, teacher_logits, student_labels, teacher_labels, student_ids, teacher_ids, teacher_spans
     )
 
-    drop = len(tokenizer(first, add_special_tokens=False)["input_ids"]) if first else 1
+    drop = len(tokenizer(first, add_special_tokens=False)["input_ids"]) if first and extended else 1
     if first:
         student_probs = student_logits[0, student_start + drop - 1 : -1].softmax(dim=-1)
         teacher_probs = teacher_logits[0, teacher_start + drop - 1 : -1].softmax(dim=-1)
@@ -1235,33 +1187,15 @@ def test_generate_on_policy_outputs_without_eos_id_keeps_full_completion(tmp_pat
     assert torch.all(new_labels[:, prompt_width:] != -100)
 
 
-def test_build_teacher_inputs_pad_equals_eos_keeps_terminating_eos(llama_tokenizer):
-    # A teacher tokenizer with no pad token ties pad to eos; the old pad-id label strip and attention
-    # loop then dropped the appended terminating EOS from both supervision and attention.
-    tokenizer = copy.deepcopy(llama_tokenizer)
-    tokenizer.pad_token = tokenizer.eos_token
-    assert tokenizer.pad_token_id == tokenizer.eos_token_id
-
-    # Different-length completions so one row is right-padded past its terminating EOS.
-    teacher_input_ids, teacher_labels, teacher_attention_mask, _ = build_teacher_inputs(
-        tokenizer, tokenizer(["Hi?", "Explain gravity in detail please"])["input_ids"], ["Hello there!", "OK"]
-    )
-    eos_id = tokenizer.eos_token_id
-    for row in range(teacher_input_ids.size(0)):
-        supervised = (teacher_labels[row] != -100).nonzero(as_tuple=True)[0]
-        last = supervised[-1]
-        # The appended terminating EOS is the last supervised token and stays attended
-        assert teacher_input_ids[row, last] == eos_id
-        assert teacher_labels[row, last] == eos_id
-        assert teacher_attention_mask[row, last]
-
-
 @pytest.mark.parametrize("extended", [False, True])
-@pytest.mark.parametrize("with_eos", [False, True])
-def test_build_teacher_inputs_empty_and_ragged_completions(llama_tokenizer, extended, with_eos):
+@pytest.mark.parametrize("eos_mode", ["none", "distinct_pad", "shared_pad"])
+def test_build_teacher_inputs_empty_and_ragged_completions(llama_tokenizer, extended, eos_mode):
     tokenizer = copy.deepcopy(llama_tokenizer)
+    with_eos = eos_mode != "none"
     if not with_eos:
         tokenizer.eos_token = None
+    else:
+        tokenizer.pad_token = tokenizer.eos_token if eos_mode == "shared_pad" else tokenizer.bos_token
     texts = ["", "\U0001f60a cafe\u0301", "A longer completion with several words."]
     prompts = tokenizer(["Question", "A longer question", "Hi"], add_special_tokens=False)["input_ids"]
     if with_eos:
@@ -1281,7 +1215,9 @@ def test_build_teacher_inputs_empty_and_ragged_completions(llama_tokenizer, exte
         assert ids[row, : len(prompt)].tolist() == prompt
         assert (labels[row, : len(prompt)] == -100).all()
         assert ids[row][labels[row] != -100].tolist() == expected
-        assert mask[row].sum() == len(prompt) + len(expected)
+        length = len(prompt) + len(expected)
+        assert mask[row, :length].all()
+        assert not mask[row, length:].any()
         if extended:
             expected_spans = [tuple(span) for span in encoding["offset_mapping"]]
             assert spans[row] == expected_spans + ([(len(text), len(text))] if with_eos else [])

@@ -181,8 +181,8 @@ def build_teacher_inputs(
 
     Returns ``(input_ids, labels, attention_mask, completion_spans)``. The teacher's own EOS closes each completion.
     With extended ULD, ``completion_spans`` holds the ``(start, end)`` character span in ``completion_texts`` of each
-    supervised token (the EOS gets an empty span at the end); positional ULD returns ``None`` and works with slow
-    (e.g. SentencePiece) tokenizers that have no offset mapping.
+    supervised token (the EOS gets an empty span at the end); positional ULD returns ``None`` and works with slow (e.g.
+    SentencePiece) tokenizers that have no offset mapping.
     """
 
     pad_token_id = tokenizer.pad_token_id
@@ -234,8 +234,8 @@ def decode_char_spans(
 ) -> list[tuple[int, int]]:
     """Return the ``(start, end)`` character span of each of ``token_ids`` (ByteLevel BPE) in their decoded text.
 
-    Decoding follows ``tokenizer.decode``: an invalid byte sequence becomes a U+FFFD. The pieces of one character
-    share that character's span. Special tokens add no text, so their span is empty.
+    Decoding follows ``tokenizer.decode``: an invalid byte sequence becomes a U+FFFD. The pieces of one character share
+    that character's span. Special tokens add no text, so their span is empty.
     """
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     length = 0
@@ -2182,8 +2182,8 @@ class GOLDTrainer(SFTTrainer):
         """Build image-aware teacher inputs for cross-architecture VLM ULD distillation.
 
         The teacher prompt is rendered through the teacher's own processor so image placeholders and pixel tensors
-        match the teacher model. ``build_teacher_inputs`` appends the completions for both text and VLM teachers;
-        this method also returns the teacher's forward kwargs (``pixel_values``, ...).
+        match the teacher model. ``build_teacher_inputs`` appends the completions for both text and VLM teachers; this
+        method also returns the teacher's forward kwargs (``pixel_values``, ...).
 
         Returns ``(input_ids, labels, attention_mask, completion_spans, forward_kwargs)``.
         """
