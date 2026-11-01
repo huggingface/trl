@@ -44,7 +44,6 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = DeepseekV3Config(
     vocab_size=129280,
-    # 128, not 8: the FP8 kernel quantizes each linear's input in blocks of 128 along its last dimension
     hidden_size=128,
     # DeepSeek-V3 uses MLA, not GQA: kv_b_proj always reconstructs K/V with the full
     # num_attention_heads, so num_key_value_heads must equal num_attention_heads (i.e.
