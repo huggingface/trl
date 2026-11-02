@@ -1333,13 +1333,8 @@ def create_model_from_path(
     # A quantized checkpoint is a serving artifact: neither MXFP4 nor FP8 weights train in place, so the checkpoint is
     # loaded dequantized, unless the caller chose how to load it with `quantization_config`
     dequantizers = {"mxfp4": Mxfp4Config, "fp8": FineGrainedFP8Config}
-    quantization_config = config.to_dict().get("quantization_config")
-    if (
-        quantization_config is not None
-        and quantization_config.get("quant_method") in dequantizers
-        and "quantization_config" not in kwargs
-    ):
-        quant_method = quantization_config["quant_method"]
+    quant_method = config.to_dict().get("quantization_config", {}).get("quant_method")
+    if quant_method in dequantizers and "quantization_config" not in kwargs:
         if quant_method == "fp8" and Version(transformers.__version__) < Version("5.0.0"):
             raise ValueError(f"`{model_id}` is quantized in FP8, and dequantizing it needs transformers>=5.0.0.")
         kwargs["quantization_config"] = dequantizers[quant_method](dequantize=True)
