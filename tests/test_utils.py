@@ -1676,7 +1676,9 @@ class TestAddFusedLMHead:
         "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
     )
     def test_aux_loss(self, model_id):
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        model = create_model_from_path(model_id, architecture=AutoModelForCausalLM, dtype=torch.float32)
+        model = model.to(torch_device)
         input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
         attention_mask = torch.ones_like(input_ids)
         attention_mask[1, 8:] = 0
@@ -1730,7 +1732,9 @@ class TestAddFusedLMHead:
         # assertion: every untied model lands on the same ~1.6e-2 bf16 quantum, and the tied ones range up to ~4e-1,
         # which no useful tolerance can separate from a real bug. float32 drops the worst case to ~3e-5 and makes the
         # test sensitive to the thing it is meant to check: that the chunked gradient matches the reference.
-        model_ref = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        model_ref = create_model_from_path(model_id, architecture=AutoModelForCausalLM, dtype=torch.float32)
+        model_ref = model_ref.to(torch_device)
         model_chunked = copy.deepcopy(model_ref)
 
         B, S = 2, 8
@@ -1882,7 +1886,10 @@ class TestAddFusedLMHeadLoss:
     """Patched `forward` must be numerically equivalent to the standard HF causal-LM loss path."""
 
     def _setup(self, model_id):
-        ref_model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32, device_map=torch_device)
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        ref_model = create_model_from_path(
+            model_id, architecture=AutoModelForCausalLM, dtype=torch.float32, device_map=torch_device
+        )
         chunked_model = copy.deepcopy(ref_model)
         add_fused_lm_head(chunked_model)
 
@@ -1926,8 +1933,13 @@ class TestAddFusedLMHeadLoss:
     def test_forward_matches_reference_with_aux_loss(self, model_id):
         """MoE models with `output_router_logits=True` add `router_aux_loss_coef * load_balancing_loss`
         to the main loss. The chunked path must match the reference loss and expose `aux_loss`."""
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_id, dtype=torch.float32, output_router_logits=True, device_map=torch_device
+        # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
+        ref_model = create_model_from_path(
+            model_id,
+            architecture=AutoModelForCausalLM,
+            dtype=torch.float32,
+            output_router_logits=True,
+            device_map=torch_device,
         )
         chunked_model = copy.deepcopy(ref_model)
         add_fused_lm_head(chunked_model)

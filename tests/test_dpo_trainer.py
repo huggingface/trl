@@ -17,7 +17,7 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, Mxfp4Config
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -873,7 +873,9 @@ class TestDPOTrainer(TrlTestCase):
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
         # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
         model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, dtype="float32", quantization_config=Mxfp4Config(dequantize=True)
+        )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
 
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
