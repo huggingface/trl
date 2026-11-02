@@ -81,6 +81,7 @@ config.quantization_config = {
     "quant_method": "fp8",
     "weight_block_size": [128, 128],
 }
+config.architectures = [model.__class__.__name__]
 config.dtype = torch.bfloat16
 state_dict = model.state_dict()
 for name, module in model.named_modules():

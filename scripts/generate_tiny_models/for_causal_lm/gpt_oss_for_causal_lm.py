@@ -75,6 +75,7 @@ config.quantization_config = {
     ],
     "quant_method": "mxfp4",
 }
+config.architectures = [model.__class__.__name__]
 config.dtype = torch.bfloat16
 triton_kernels = get_kernel("kernels-community/triton_kernels")
 state_dict = model.state_dict()
