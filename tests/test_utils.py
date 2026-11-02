@@ -1433,17 +1433,23 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Cohere2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
@@ -1786,17 +1792,23 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-CohereForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     pytest.param(
         "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
-        marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.0.0"),
-            reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
-        ),
+        marks=[
+            pytest.mark.skipif(
+                Version(transformers.__version__) < Version("5.0.0"),
+                reason="DeepseekV3 SDPA attention is broken in transformers < 5.0.0",
+            ),
+            pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"),
+        ],
     ),
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",

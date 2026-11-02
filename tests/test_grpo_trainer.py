@@ -5202,6 +5202,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         not _SUPPORTS_RESPONSE_TEMPLATE,
         reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
+    @pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)")
     @require_response_parsing
     def test_train_with_tools_deepseekv3(self):
         # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one

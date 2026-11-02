@@ -887,7 +887,14 @@ class TestSFTTrainer(TrlTestCase):
             # MoE whose forward returns an auxiliary loss: the architecture's own coefficient is applied
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", 0.001, True),
             # MoE that balances its experts with a router bias: it declares no coefficient, so the term stays off
-            ("trl-internal-testing/tiny-DeepseekV3ForCausalLM", 0.0, False),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                0.0,
+                False,
+                marks=pytest.mark.xfail(
+                    reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)"
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
                 0.0,
