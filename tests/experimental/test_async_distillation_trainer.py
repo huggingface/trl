@@ -40,7 +40,6 @@ from trl.experimental.async_distillation import weight_transfer as weight_transf
 from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
-    RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _add_tail_bucket,
     _balance_by_squared_length,
@@ -99,15 +98,14 @@ def _make_teacher_topk(
 class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation, bypassing real vLLM/network."""
 
-    def __init__(self, tokenizer, dataset, vocab_size: int, samples_per_weight_sync: int = 10):
+    def __init__(self, *, dataset, processing_class, samples_per_weight_sync: int = 10, **kwargs):
         self.rollout_buffer = queue.Queue()
-        # What a real worker forwards to its child; the trainer writes the adapter name here under adapter sync
-        self._loop_kwargs = {}
+        self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
-        self._vocab_size = vocab_size
-        self._sample_iter = self._make_sample_iter(tokenizer, dataset)
+        self._vocab_size = len(processing_class)
+        self._sample_iter = self._make_sample_iter(processing_class, dataset)
 
     def _make_sample_iter(self, tokenizer, dataset):
         for idx, row in enumerate(itertools.cycle(dataset)):
@@ -333,6 +331,11 @@ def stub_weight_transfer(monkeypatch):
     monkeypatch.setattr(async_distillation_trainer_module, "WeightTransferClient", _StubWeightTransfer)
 
 
+@pytest.fixture(autouse=True)
+def stub_rollout_worker(monkeypatch):
+    monkeypatch.setattr(async_distillation_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
+
+
 def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
     # First token is a prompt token (completion_mask 0, empty teacher candidates); the rest are completion tokens.
     teacher_topk_ids = np.full((length, top_k + 1), -1, dtype=np.int64)
@@ -463,13 +466,6 @@ class TestMetricReduction:
 
     def test_rate_with_zero_denominator_is_nan(self):
         assert math.isnan(_reduce_metric("perf/forwarded_tok_s_wall_clock", [(0.0, 0.0)]))
-
-
-class TestRolloutWorkerProtocol:
-    def test_stub_worker_exposes_every_protocol_attribute(self):
-        # A stub that falls behind the protocol breaks training, and only the GPU-gated trainer test would notice.
-        stub = _StubRolloutWorker(tokenizer=None, dataset=[], vocab_size=8)
-        assert not [name for name in RolloutWorkerProtocol.__annotations__ if not hasattr(stub, name)]
 
 
 def _position(*entries):
@@ -966,17 +962,14 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     def test_init_minimal(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
         AsyncDistillationTrainer(
             model=model_id,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
         )
 
     def _train_one_step_and_save(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         training_args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -993,7 +986,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
         )
         trainer.train()
         return trainer
@@ -1025,7 +1017,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     )
     def test_train(self, model_id, instantiated):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = model_id
         if instantiated:
             model = AutoModelForCausalLM.from_pretrained(
@@ -1047,7 +1038,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
         )
         if instantiated:
             assert trainer.model is model
@@ -1070,13 +1060,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
     def test_router_aux_loss_coef_on_a_dense_model_raises(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
         with pytest.raises(ValueError, match="not a Mixture-of-Experts model"):
             AsyncDistillationTrainer(
                 model=model_id,
                 args=AsyncDistillationConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.01, report_to="none"),
                 train_dataset=dataset,
-                rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             )
 
     def test_resume_from_checkpoint(self):
@@ -1087,7 +1075,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
         model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         def build_trainer(**overrides):
             args = AsyncDistillationConfig(
@@ -1104,7 +1091,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 model=model_id,
                 args=args,
                 train_dataset=dataset,
-                rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
             )
 
         # First run: train for 2 steps, which saves a checkpoint at step 1.
@@ -1125,7 +1111,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         # checking grad_norm/loss stay finite throughout, not just that training completes.
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         training_args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -1142,7 +1127,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model_id,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
         )
         trainer.train()
 
@@ -1156,14 +1140,11 @@ class TestAsyncDistillationTrainer(TrlTestCase):
 def _checkpoint_trainer(output_dir, dataset_start_index=0):
     model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
     trainer = AsyncDistillationTrainer(
         model=model_id,
         args=AsyncDistillationConfig(output_dir=output_dir, report_to="none"),
         train_dataset=dataset,
-        rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
     )
-    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
     return trainer
@@ -1347,19 +1328,18 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         lora_config=None,
         data_parallel_size=1,
         weight_transfer=_StubWeightTransfer,
-        rollout_worker="stub",
+        rollout_worker=_StubRolloutWorker,
         **config_kwargs,
     ):
         """Build a trainer against `fake`, configured to look like a server started with the given flags.
 
-        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker="stub"` injects
-        `_StubRolloutWorker`; `None` lets the trainer build the real `AsyncRolloutWorker`, which is cheap until
-        `start()` and useful for reading what it was told.
+        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker` is the class the trainer
+        builds as its worker: the real `AsyncRolloutWorker` is cheap until `start()` and useful for reading what it was
+        told.
         """
         fake.lora_config = lora_config
         fake.data_parallel_size = data_parallel_size
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         config_kwargs.setdefault("max_staleness", 1)
         args = AsyncDistillationConfig(
             output_dir=self.tmp_dir,
@@ -1373,15 +1353,12 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             report_to="none",
             **config_kwargs,
         )
-        if rollout_worker == "stub":
-            rollout_worker = _StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer))
-        with patch.object(async_distillation_trainer_module, "WeightTransferClient", weight_transfer):
+        with (
+            patch.object(async_distillation_trainer_module, "WeightTransferClient", weight_transfer),
+            patch.object(async_distillation_trainer_module, "AsyncRolloutWorker", rollout_worker),
+        ):
             return AsyncDistillationTrainer(
-                model=self.model_id,
-                args=args,
-                train_dataset=dataset,
-                peft_config=peft_config,
-                rollout_worker=rollout_worker,
+                model=self.model_id, args=args, train_dataset=dataset, peft_config=peft_config
             )
 
     def test_train_peft_config(self, fake_vllm):
@@ -1418,15 +1395,14 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
-    @pytest.mark.parametrize("injected", [False, True])
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected, injected):
+    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, and distilled against the teacher as if it were the student. The real worker is built here
-        # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it. A worker the caller injects
-        # exists before the trainer probes the server, so it cannot have been given the adapter name at construction.
-        rollout_worker = AsyncRolloutWorker() if injected else None
-        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=rollout_worker)
+        # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it.
+        trainer = self._build(
+            fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=AsyncRolloutWorker
+        )
         assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 
     # --- adapter sync, as the server sees it -----------------------------------------------------------------------
