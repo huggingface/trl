@@ -1452,7 +1452,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     pytest.param(
         "trl-internal-testing/tiny-GptOssForCausalLM",
         marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.23.0.dev0"),
+            Version(transformers.__version__) < Version("5.23.0"),
             reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
         ),
     ),
@@ -1685,7 +1685,7 @@ class TestAddFusedLMHead:
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.23.0.dev0"),
+                    Version(transformers.__version__) < Version("5.23.0"),
                     reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
                 ),
             ),
@@ -1804,7 +1804,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     pytest.param(
         "trl-internal-testing/tiny-GptOssForCausalLM",
         marks=pytest.mark.skipif(
-            Version(transformers.__version__) < Version("5.23.0.dev0"),
+            Version(transformers.__version__) < Version("5.23.0"),
             reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
         ),
     ),
@@ -1952,7 +1952,7 @@ class TestAddFusedLMHeadLoss:
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
                 marks=pytest.mark.skipif(
-                    Version(transformers.__version__) < Version("5.23.0.dev0"),
+                    Version(transformers.__version__) < Version("5.23.0"),
                     reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
                 ),
             ),
