@@ -30,7 +30,6 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     BitsAndBytesConfig,
-    Mxfp4Config,
 )
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
@@ -1102,19 +1101,15 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.ref_model.config._attn_implementation == "eager"
 
     @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.23.0.dev0"),
-        reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
     )
     @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
         # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
-        model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/tiny-GptOssForCausalLM",
-            dtype="float32",
-            quantization_config=Mxfp4Config(dequantize=True),
-        )
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
         model = get_peft_model(model, lora_config)
