@@ -329,6 +329,7 @@ class TestSFTTrainer(TrlTestCase):
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
     )
+    @require_vision
     def test_init_dequantizes_fp8_checkpoint(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         trainer = SFTTrainer(
