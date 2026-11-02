@@ -1648,6 +1648,81 @@ class TestGetTrainingChatTemplate:
         assert region_starts == 2
 
 
+class TestQwen3TrainingChatTemplates:
+    @pytest.mark.parametrize("enable_thinking", [None, False, True])
+    @pytest.mark.parametrize(
+        "tokenizer_name",
+        [
+            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
+            pytest.param(
+                ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
+                id="qwen3_thinking_2507",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                id="qwen35-nothink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                id="qwen35-think",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                id="qwen36",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+                id="qwen38",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+        ],
+    )
+    def test_assistant_masks_exclude_generation_prompt(self, tokenizer_name, enable_thinking):
+        # The generation prompt may pre-fill the thinking block (`<think>\n`, or `<think>\n\n</think>\n\n` with
+        # thinking off), so the model never generates it and it must stay out of the assistant mask
+        tokenizer_name, chat_template = tokenizer_name if isinstance(tokenizer_name, tuple) else (tokenizer_name, None)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if chat_template is not None:
+            tokenizer.chat_template = chat_template
+        kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **kwargs)
+        prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        # With thinking off, the prompt pre-fills an empty thinking block, so the assistant turn has no reasoning
+        if prompt.endswith("</think>\n\n"):
+            messages.append({"role": "assistant", "content": "It is blue."})
+        else:
+            messages.append(
+                {"role": "assistant", "reasoning_content": "Rayleigh scattering.", "content": "It is blue."}
+            )
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=get_training_chat_template(tokenizer),
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+            **kwargs,
+        )
+        assert result["input_ids"][: len(prompt_ids)] == prompt_ids
+        # The assistant mask starts right after the generation prompt
+        assert result["assistant_masks"].index(1) == len(prompt_ids)
+
+
 class TestNamedChatTemplateVariants:
     # A chat template shipped as named variants loads as a dict, e.g. {"default": ..., "tool_use": ..., "rag": ...}
     def test_has_generation_markers(self):

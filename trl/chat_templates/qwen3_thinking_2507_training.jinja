@@ -4,6 +4,8 @@
       This makes the template prefix-preserving for the [user, assistant] → [user, assistant, tool] transition.
     - Added {% generation %} / {% endgeneration %} around assistant message output to support
       assistant-only loss masking in SFT training.
+    - Emitted the part of the thinking block that the generation prompt pre-fills before {% generation %},
+      so that assistant-only loss doesn't train it.
 -#}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -47,9 +49,9 @@
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
-        {{- '<|im_start|>' + message.role + '\n' }}
+        {{- '<|im_start|>' + message.role + '\n<think>\n' }}
         {%- generation %}
-        {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {{- reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}
