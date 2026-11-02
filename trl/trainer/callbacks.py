@@ -440,7 +440,6 @@ class WeaveCallback(TrainerCallback):
         self.model_name = model_name
         self._last_logged_step = -1
         self._weave_initialized = False
-        self._eval_logger = None
 
         if self.trainer.eval_dataset is None:
             raise ValueError("Trainer must have an evaluation dataset to use the WeaveCallback.")
