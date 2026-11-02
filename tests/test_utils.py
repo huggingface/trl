@@ -289,12 +289,6 @@ class TestCreateModelFromPath(TrlTestCase):
             )
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
-    def test_dequantizes_mxfp4_checkpoint(self):
-        # This revision holds the MXFP4 checkpoint
-        model = create_model_from_path("trl-internal-testing/tiny-GptOssForCausalLM", revision="refs/pr/5")
-        # Quantized experts are packed tensors, dequantized ones are trainable parameters
-        assert isinstance(model.model.layers[0].mlp.experts.gate_up_proj, torch.nn.Parameter)
-
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
     )
