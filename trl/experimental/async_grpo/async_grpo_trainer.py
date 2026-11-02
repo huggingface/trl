@@ -1411,6 +1411,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
             else:
                 self.rollout_worker = AsyncRolloutWorker(
+                    self.args,
                     model_name=get_config_model_id(model.config),
                     lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,
@@ -1419,23 +1420,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
-                    num_generations=self.args.num_generations,
-                    max_concurrent_rollouts=self.args.max_concurrent_rollouts,
-                    queue_maxsize=self.args.queue_maxsize,
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    max_tokens=self.args.max_completion_length,
-                    temperature=self.args.temperature,
-                    top_p=self.args.top_p,
-                    top_k=self.args.top_k,
-                    num_sampler_logprobs=self.args.num_sampler_logprobs if self.args.score_centering else 0,
-                    min_p=self.args.min_p,
-                    repetition_penalty=self.args.repetition_penalty,
-                    vllm_server_timeout=self.args.vllm_server_timeout,
-                    chat_template_kwargs=self.args.chat_template_kwargs,
-                    max_tool_calling_iterations=self.args.max_tool_calling_iterations,
-                    log_completions=self.args.log_completions,
-                    num_completions_to_print=self.args.num_completions_to_print,
-                    fork_threshold_tokens=self.args.fork_threshold_tokens,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer

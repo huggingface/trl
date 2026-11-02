@@ -14,6 +14,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import itertools
 import json
 import math
@@ -58,6 +59,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
     DriftKind,
+    Rollout,
     RolloutGroup,
     RolloutSample,
     TrainingSequence,
@@ -911,6 +913,12 @@ def _rollout_loop(**kwargs):
     # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
     model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config_fields = {f.name for f in dataclasses.fields(AsyncGRPOConfig)}
+    config_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in config_fields}
+    config_kwargs.setdefault("max_completion_length", 32)
+    config_kwargs.setdefault("max_concurrent_rollouts", 128)
+    config_kwargs.setdefault("score_centering", "num_sampler_logprobs" in config_kwargs)
+    config = AsyncGRPOConfig(report_to="none", **config_kwargs)
     kwargs = {
         "model_name": model_id,
         "dataset": load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train"),
@@ -925,7 +933,7 @@ def _rollout_loop(**kwargs):
         "metrics_queue": mp.Queue(),
         **kwargs,
     }
-    return _AsyncRolloutLoop(**kwargs)
+    return _AsyncRolloutLoop(config, **kwargs)
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
@@ -1055,9 +1063,9 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 sampler_logprobs=[{}, {}, {}],
                 rollout_id="r",
             )
-            return [{"role": "assistant", "content": "x"}], [2, 3], [sequence], 0, 0, None
+            return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [sequence])
 
-        loop._generate_one = fake_generate_one
+        loop.generate_one = fake_generate_one
 
         async def wait_until(condition):
             deadline = time.monotonic() + 5
@@ -1128,11 +1136,11 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         tool_call = loop.tokenizer.encode(_TOOL_CALL.replace('"t"', '"step"'), add_special_tokens=False)
         final = loop.tokenizer.encode(_FINAL, add_special_tokens=False)
 
-        async def _generate_one_turn(prompt_ids):
+        async def generate_one_turn(prompt_ids):
             ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
-            return ids, [-0.1] * len(ids), None, None
+            return TurnRecord(prompt_ids, ids, [-0.1] * len(ids))
 
-        loop._generate_one_turn = _generate_one_turn
+        loop.generate_one_turn = generate_one_turn
         PartialState()
         try:
             loop._loop.run_until_complete(loop._run_loops(stop_event=loop._stop_event))
@@ -2027,20 +2035,18 @@ def t() -> str:
 
 def _run(*, turns, max_iters=None):
     """
-    Drive `_AsyncRolloutLoop._generate_one` with the real tokenizer, chat template and response parser, scripting only
+    Drive `_AsyncRolloutLoop.generate_one` with the real tokenizer, chat template and response parser, scripting only
     the vLLM server, which generates the text of `turns` one turn after the other.
     """
     loop = _rollout_loop(tools=[t], max_tool_calling_iterations=max_iters)
     outputs = [loop.tokenizer.encode(text, add_special_tokens=False) for text in turns]
 
-    async def _generate_one_turn(prompt_ids):
+    async def generate_one_turn(prompt_ids):
         ids = outputs.pop(0)
-        return ids, [-0.1] * len(ids), None, None
+        return TurnRecord(prompt_ids, ids, [-0.1] * len(ids))
 
-    loop._generate_one_turn = _generate_one_turn
-
-    # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
-    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
+    loop.generate_one_turn = generate_one_turn
+    return asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
 
 
 class TestGenerateOneTurn(TrlTestCase):
@@ -2052,15 +2058,15 @@ class TestGenerateOneTurn(TrlTestCase):
             return response
 
         loop._post = fake_post
-        return requests, asyncio.run(loop._generate_one_turn([1, 2, 3]))
+        return requests, asyncio.run(loop.generate_one_turn([1, 2, 3]))
 
     def test_full_vocabulary_sampling_uses_the_completions_endpoint(self):
         loop = _rollout_loop()
         response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
-        requests, (ids, logprobs, sampling_mask, sampling_log_probs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["prompt"] == [1, 2, 3]
-        assert (ids, logprobs, sampling_mask, sampling_log_probs) == ([4, 5], [-0.1, -0.2], None, None)
+        assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2])
 
     def test_truncated_sampling_returns_the_candidate_sets(self):
         loop = _rollout_loop(top_p=0.9, top_k=4)
@@ -2075,13 +2081,13 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask, sampling_log_probs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][0] == "/inference/v1/generate"
         assert requests[0][1]["token_ids"] == [1, 2, 3]
         assert requests[0][1]["sampling_params"]["top_p"] == 0.9
         assert requests[0][1]["sampling_params"]["top_k"] == 4
         assert requests[0][1]["sampling_params"]["logprobs"] == 0
-        assert (ids, logprobs, sampling_mask, sampling_log_probs) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]], None)
+        assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2], output_sampling_mask=[[4, 7], [5]])
 
     def test_sampler_logprobs_from_the_completions_endpoint(self):
         # Each token's top log-probs come back keyed `token_id:<id>`, the sampled token among them
@@ -2097,11 +2103,11 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask, sampler_logprobs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][1]["logprobs"] == 2
         assert requests[0][1]["return_tokens_as_token_ids"] is True
-        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], None)
-        assert sampler_logprobs == [{7: -0.05, 4: -0.1}, {5: -0.2}]
+        assert (turn.output_ids, turn.output_log_probs, turn.output_sampling_mask) == ([4, 5], [-0.1, -0.2], None)
+        assert turn.output_sampler_logprobs == [{7: -0.05, 4: -0.1}, {5: -0.2}]
 
     def test_sampler_logprobs_from_the_candidate_set_endpoint(self):
         loop = _rollout_loop(top_p=0.9, top_k=4, num_sampler_logprobs=2)
@@ -2121,10 +2127,14 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask, sampler_logprobs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][1]["sampling_params"]["logprobs"] == 2
-        assert (ids, logprobs, sampling_mask) == ([4, 5], [-1.0, 0.0], [[4, 7, 6], [5]])
-        assert sampler_logprobs == [{7: -0.5, 4: -1.0}, {5: 0.0, 8: -9999.0}]
+        assert (turn.output_ids, turn.output_log_probs, turn.output_sampling_mask) == (
+            [4, 5],
+            [-1.0, 0.0],
+            [[4, 7, 6], [5]],
+        )
+        assert turn.output_sampler_logprobs == [{7: -0.5, 4: -1.0}, {5: 0.0, 8: -9999.0}]
 
     def _check(self, loop, model_config, paths, version="0.31.0"):
         class FakeSession:
@@ -2175,10 +2185,10 @@ class TestGenerateOneTurn(TrlTestCase):
             self._check(loop, {}, {"/v1/completions": {}}, version="0.27.1")
         assert "vLLM 0.27.1" in caplog.text
         response = {"choices": [{"token_ids": [4], "logprobs": {"token_logprobs": [-0.1]}}]}
-        requests, (ids, logprobs, sampling_mask, _) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["top_p"] == 0.9
-        assert sampling_mask is None
+        assert turn.output_sampling_mask is None
 
     @pytest.mark.parametrize("sampling_kwargs", [{"top_p": 0.9}, {"min_p": 0.05}])
     def test_top_p_and_min_p_require_top_k(self, sampling_kwargs):
@@ -2189,30 +2199,32 @@ class TestGenerateOneTurn(TrlTestCase):
 @require_response_parsing
 class TestRolloutLoop(TrlTestCase):
     def test_single_turn_no_tool_call(self):
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_FINAL])
-        assert len(sequences) == 1
-        n = len(completion_ids)
-        assert sequences[0].input_ids[-n:] == completion_ids
-        assert sequences[0].completion_mask == [0] * (len(sequences[0].input_ids) - n) + [1] * n
-        assert sequences[0].old_log_probs[-n:] == [-0.1] * n
-        assert [m["role"] for m in completion] == ["assistant"]
-        assert n_calls == 0 and n_failures == 0
+        rollout = _run(turns=[_FINAL])
+        assert len(rollout.sequences) == 1
+        n = len(rollout.completion_ids)
+        assert rollout.sequences[0].input_ids[-n:] == rollout.completion_ids
+        assert rollout.sequences[0].completion_mask == [0] * (len(rollout.sequences[0].input_ids) - n) + [1] * n
+        assert rollout.sequences[0].old_log_probs[-n:] == [-0.1] * n
+        assert [m["role"] for m in rollout.completion] == ["assistant"]
+        assert rollout.tool_call_count == 0 and rollout.tool_failure_count == 0
 
     def test_clean_two_turns_stay_one_row(self):
         # The training chat template is prefix-preserving, so turn 2's re-tokenized prompt extends turn 1 -> one row
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_TOOL_CALL, _FINAL])
-        assert len(sequences) == 1
-        assert sum(sequences[0].completion_mask) == len(completion_ids)  # every generated token is trained once
-        assert [m["role"] for m in completion] == ["assistant", "tool", "assistant"]
-        assert completion[1]["content"] == "ok"
-        assert n_calls == 1 and n_failures == 0
+        rollout = _run(turns=[_TOOL_CALL, _FINAL])
+        assert len(rollout.sequences) == 1
+        assert sum(rollout.sequences[0].completion_mask) == len(
+            rollout.completion_ids
+        )  # every generated token is trained once
+        assert [m["role"] for m in rollout.completion] == ["assistant", "tool", "assistant"]
+        assert rollout.completion[1]["content"] == "ok"
+        assert rollout.tool_call_count == 1 and rollout.tool_failure_count == 0
 
     def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
-        completion, _, sequences, n_calls, _, _ = _run(turns=[_TOOL_CALL], max_iters=0)
-        assert len(sequences) == 1
-        assert [m["role"] for m in completion] == ["assistant"]  # no tool message appended
-        assert n_calls == 0
+        rollout = _run(turns=[_TOOL_CALL], max_iters=0)
+        assert len(rollout.sequences) == 1
+        assert [m["role"] for m in rollout.completion] == ["assistant"]  # no tool message appended
+        assert rollout.tool_call_count == 0
 
 
 def two_reward(completions, **kwargs):
@@ -2833,7 +2845,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
     def test_an_injected_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # A worker the caller builds, like the harness worker of examples/async_grpo_harbor, exists before the trainer
         # probes the server, so it cannot have been given the adapter name at construction.
-        worker = AsyncRolloutWorker(model_name=self.model_id)
+        worker = AsyncRolloutWorker(AsyncGRPOConfig(report_to="none"), model_name=self.model_id)
         trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=worker)
         assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 

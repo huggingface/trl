@@ -41,6 +41,7 @@ from openenv.core.llm_client import LLMResponse, ToolCall
 from ...chat_template_utils import parse_response
 from .async_rollout_worker import (
     AsyncRolloutWorker,
+    Rollout,
     TurnRecord,
     _AsyncRolloutLoop,
     _chain_to_sequences,
@@ -96,12 +97,12 @@ def _msg_to_llm_response(msg: Message) -> LLMResponse:
 
 
 class _HarnessRolloutLoop(_AsyncRolloutLoop):
-    """`_AsyncRolloutLoop` whose `_generate_one` drives an OpenEnv session instead of TRL's own turn loop."""
+    """`_AsyncRolloutLoop` whose `generate_one` drives an OpenEnv session instead of TRL's own turn loop."""
 
     _provides_rollout_reward = True
 
     # Unscorable rollouts are excluded from the group baseline.
-    _EMPTY_ROLLOUT = ([], [], [], 0, 0, None)
+    _EMPTY_ROLLOUT = Rollout([], [], [])
 
     def __init__(
         self,
@@ -114,45 +115,47 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
+        super().__init__(**loop_kwargs)
         # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
         if harness_adapter is None and lossless_capture:
-            loop_kwargs["fork_threshold_tokens"] = 0
-        super().__init__(**loop_kwargs)
+            self._fork_threshold_tokens = 0
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
-        if harness_adapter is None and (self.top_p < 1.0 or self.top_k > 0):
+        if harness_adapter is None and (self.config.top_p < 1.0 or self.config.top_k > 0):
             raise ValueError(
                 "`top_p < 1.0` or `top_k > 0` needs the candidate set of every sampled token, which an agent-owned "
                 "loop does not record. Pass a `harness_adapter` so TRL samples each turn, or sample the full vocabulary."
             )
         if harness_adapter is None:
             sampling_kwargs = {
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "top_k": self.top_k,
-                "min_p": self.min_p,
-                "repetition_penalty": self.repetition_penalty,
+                "temperature": self.config.temperature,
+                "top_p": self.config.top_p,
+                "top_k": self.config.top_k,
+                "min_p": self.config.min_p,
+                "repetition_penalty": self.config.repetition_penalty,
             }
             sampling_kwargs = {key: value for key, value in sampling_kwargs.items() if value is not None}
             self._factory = harness_session_factory(sampling=training_sampling(sampling_kwargs))
         else:
             self._factory = harness_session_factory()
         self._limits = HarnessRunLimits(
-            max_turns=self.max_tool_calling_iterations if self.max_tool_calling_iterations is not None else 8,
-            sampling={"temperature": self.temperature, "max_tokens": self.max_tokens},
+            max_turns=self.config.max_tool_calling_iterations
+            if self.config.max_tool_calling_iterations is not None
+            else 8,
+            sampling={"temperature": self.config.temperature, "max_tokens": self.config.max_completion_length},
         )
         self._rollout_reward_fn = rollout_reward_fn
         self.reward_func_names.append("harness_reward")
 
         self._session_pool = ThreadPoolExecutor(
-            max_workers=max(1, self.max_concurrent_rollouts), thread_name_prefix="harness-session"
+            max_workers=max(1, self.config.max_concurrent_rollouts), thread_name_prefix="harness-session"
         )
         self._live_sessions: set = set()
         self._max_session_failures_per_slot = max_session_failures_per_slot
         self._max_session_backoff_s = max_session_backoff_s
         self._consecutive_session_failures = 0
 
-    async def _generate_one(self, prompt, tool_dict, tools, group_id=0):
+    async def generate_one(self, prompt, tool_dict, tools, group_id=0):
         # OpenEnv sessions are synchronous; metrics stay on the event loop.
         loop = asyncio.get_running_loop()
         result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
@@ -178,7 +181,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             self._consecutive_session_failures += 1
             if (
                 self._consecutive_session_failures
-                >= self._max_session_failures_per_slot * self.max_concurrent_rollouts
+                >= self._max_session_failures_per_slot * self.config.max_concurrent_rollouts
             ):
                 raise RuntimeError(
                     f"{self._consecutive_session_failures} harness sessions in a row were unscorable; see the "
@@ -317,7 +320,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
-            return (completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward), metrics
+            return Rollout(completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward), metrics
         except CaptureContractError:
             raise
         except Exception:
@@ -349,21 +352,18 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             **self.chat_template_kwargs,
         )
         # ModelStep is sync on a pool thread; bridge the async vLLM POST onto the loop's event loop.
-        turn_ids, logprobs, sampling_mask, sampler_logprobs = asyncio.run_coroutine_threadsafe(
-            self._generate_one_turn(prompt_ids), self._loop
-        ).result()
-        turns.append(
-            TurnRecord(
-                prompt_ids,
-                turn_ids,
-                logprobs,
-                output_sampling_mask=sampling_mask,
-                output_sampler_logprobs=sampler_logprobs,
-            )
+        turn = asyncio.run_coroutine_threadsafe(self.generate_one_turn(prompt_ids), self._loop).result()
+        turns.append(turn)
+        response = _msg_to_llm_response(
+            parse_response(self.tokenizer, turn.output_ids, prefix=prompt_ids, tools=tools)
         )
-        response = _msg_to_llm_response(parse_response(self.tokenizer, turn_ids, prefix=prompt_ids, tools=tools))
         turn_times.append((t_request, time.monotonic(), [tc.name for tc in response.tool_calls]))
-        return ModelStepResult(response=response, prompt_ids=prompt_ids, completion_ids=turn_ids, logprobs=logprobs)
+        return ModelStepResult(
+            response=response,
+            prompt_ids=prompt_ids,
+            completion_ids=turn.output_ids,
+            logprobs=turn.output_log_probs,
+        )
 
 
 def _turns_from_training_trace(trace: TrainingTrace) -> list[TurnRecord]:

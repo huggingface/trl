@@ -679,7 +679,9 @@ factory = partial(
     llm_url=vllm_url,
     model=model,
 )
+config = AsyncGRPOConfig(num_generations=8, max_concurrent_rollouts=8, vllm_server_base_url=vllm_url)
 worker = HarnessRolloutWorker(
+    config,                           # the worker reads its sampling and server settings from the config
     harness_session_factory=factory,  # called by the worker with its sampling policy
     harness_adapter=None,             # loop-owning: the agent runs its own loop
     rollout_reward_fn=my_reward,      # outcome -> float | None
@@ -687,9 +689,7 @@ worker = HarnessRolloutWorker(
     dataset=dataset,
     reward_funcs=[],
     processing_class=tokenizer,
-    num_generations=8,
-    max_concurrent_rollouts=8,
-    vllm_server_url=vllm_url,
+    eos_token_ids=[tokenizer.eos_token_id],
 )
 trainer = AsyncGRPOTrainer(model=model, args=config, train_dataset=dataset, rollout_worker=worker)
 trainer.train()
