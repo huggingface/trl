@@ -179,7 +179,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-tasks", type=int, default=32)
     p.add_argument("--task-indices", default="", help="comma-separated indices, or @path to a file of them")
     p.add_argument("--num-generations", type=int, default=8)
-    p.add_argument("--max-inflight", type=int, default=8)
+    p.add_argument("--max-concurrent-rollouts", type=int, default=8)
     p.add_argument("--max-completion-length", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=20)
     p.add_argument("--save-steps", type=int, default=50)
@@ -235,7 +235,7 @@ def main() -> None:
 
     print(f"server    {args.server}")
     print(f"vllm      {args.vllm_url}   model {args.model}")
-    print(f"rollouts  {args.harness} on {args.sandbox}, {args.num_generations}x{args.max_inflight}")
+    print(f"rollouts  {args.harness} on {args.sandbox}, {args.num_generations}x{args.max_concurrent_rollouts}")
     print(f"tasks     {len(dataset)} from {args.split}")
     print(f"output    {output_dir}")
 
@@ -283,7 +283,7 @@ def main() -> None:
         processing_class=tokenizer,
         chat_template_kwargs={"enable_thinking": False},
         num_generations=args.num_generations,
-        max_concurrent_rollouts=args.max_inflight,
+        max_concurrent_rollouts=args.max_concurrent_rollouts,
         vllm_server_url=args.vllm_url,
         max_tokens=args.max_completion_length,
         temperature=args.temperature,

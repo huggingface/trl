@@ -1398,7 +1398,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
         # loop's own scheduling capacity and hang the trainer forever on an empty queue.
         if self.args.max_concurrent_rollouts is None:
             self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step

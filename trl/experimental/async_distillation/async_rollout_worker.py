@@ -347,7 +347,7 @@ class _AsyncRolloutLoop:
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
-        inflight_tasks: dict[asyncio.Task, int] = {}
+        rollout_tasks: dict[asyncio.Task, int] = {}
         free_slots = set(range(self.max_concurrent_rollouts))
         work_iter = self._repeat_iterator()
 
@@ -358,20 +358,20 @@ class _AsyncRolloutLoop:
                     prompt_id, row = next(work_iter)
                     slot = free_slots.pop()
                     task = asyncio.create_task(self._generate_and_score_one(prompt_id, row))
-                    inflight_tasks[task] = slot
+                    rollout_tasks[task] = slot
 
-                if not inflight_tasks:
+                if not rollout_tasks:
                     if stop_event.is_set():
                         return
                     await asyncio.sleep(0.01)
                     continue
 
-                done, _ = await asyncio.wait(inflight_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
+                done, _ = await asyncio.wait(rollout_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
                 if not done:
                     continue
 
                 for task in done:
-                    slot = inflight_tasks.pop(task)
+                    slot = rollout_tasks.pop(task)
                     free_slots.add(slot)
                     if task.exception() is not None:
                         raise task.exception()
@@ -381,7 +381,7 @@ class _AsyncRolloutLoop:
                     now = time.monotonic()
                     self._push_metrics(
                         {
-                            "rollout/concurrency": float(len(inflight_tasks)),
+                            "rollout/concurrency": float(len(rollout_tasks)),
                             # Windowed, not cumulative. A cumulative average cannot show a generation stall.
                             "rollout/generated_tok_s": (
                                 float(self._total_completion_tokens - self._pushed_completion_tokens),
@@ -424,10 +424,10 @@ class _AsyncRolloutLoop:
                     if t_blocked is not None:
                         self._push_metrics({"rollout/backpressure_s": time.monotonic() - t_blocked})
         finally:
-            for task in inflight_tasks:
+            for task in rollout_tasks:
                 task.cancel()
-            if inflight_tasks:
-                await asyncio.gather(*inflight_tasks, return_exceptions=True)
+            if rollout_tasks:
+                await asyncio.gather(*rollout_tasks, return_exceptions=True)
 
     async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
         """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.

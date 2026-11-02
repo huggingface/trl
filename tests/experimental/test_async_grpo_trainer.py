@@ -1010,8 +1010,8 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         finally:
             loop._loop.close()
 
-    def test_inflight_cap_follows_vllm_load(self):
-        # The in-flight cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
+    def test_concurrency_cap_follows_vllm_load(self):
+        # The concurrency cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
         # when KV usage passes 0.8 and holds until the pool has drained below it.
         import aiohttp
         from aiohttp import web
@@ -1040,13 +1040,13 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         app.router.add_get("/v1/models", models)
         loop = _rollout_loop(num_generations=2, max_concurrent_rollouts=8, score_queue_maxsize=1000)
         loop._metrics_poll_s = 0.02
-        inflight = {"now": 0, "peak": 0}
+        running = {"now": 0, "peak": 0}
 
         async def fake_generate_one(prompt, tool_dict, tools, group_id=0):
-            inflight["now"] += 1
-            inflight["peak"] = max(inflight["peak"], inflight["now"])
+            running["now"] += 1
+            running["peak"] = max(running["peak"], running["now"])
             await asyncio.sleep(0.05)
-            inflight["now"] -= 1
+            running["now"] -= 1
             sequence = TrainingSequence(
                 input_ids=[1, 2, 3],
                 completion_mask=[0, 1, 1],
@@ -1069,26 +1069,26 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             async with TestServer(app) as server, aiohttp.ClientSession() as session:
                 loop.vllm_server_url = str(server.make_url("")).rstrip("/")
                 loop.session = session
-                await loop._init_inflight_cap()
-                assert loop._inflight_cap == 4
+                await loop._init_concurrency_cap()
+                assert loop._concurrency_cap == 4
                 stop_event = asyncio.Event()
                 tasks = [
                     asyncio.create_task(loop._generate_loop(stop_event)),
                     asyncio.create_task(loop._control_loop(stop_event)),
                 ]
-                await wait_until(lambda: loop._inflight_cap == 8)
-                await wait_until(lambda: inflight["peak"] == 8 and load["polls"] >= 2)
+                await wait_until(lambda: loop._concurrency_cap == 8)
+                await wait_until(lambda: running["peak"] == 8 and load["polls"] >= 2)
                 load["usage"] = 0.7
                 load["spike"] = 0.9
-                await wait_until(lambda: loop._inflight_cap < 8)
-                assert loop._inflight_cap == 5
-                await wait_until(lambda: inflight["now"] <= 5)
-                inflight["peak"] = 0
+                await wait_until(lambda: loop._concurrency_cap < 8)
+                assert loop._concurrency_cap == 5
+                await wait_until(lambda: running["now"] <= 5)
+                running["peak"] = 0
                 await asyncio.sleep(0.3)
-                assert inflight["peak"] <= 5
-                assert loop._inflight_cap == 5
+                assert running["peak"] <= 5
+                assert loop._concurrency_cap == 5
                 load["usage"] = 0.1
-                await wait_until(lambda: loop._inflight_cap == 8)
+                await wait_until(lambda: loop._concurrency_cap == 8)
                 stop_event.set()
                 await asyncio.gather(*tasks)
 

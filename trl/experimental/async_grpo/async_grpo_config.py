@@ -143,11 +143,11 @@ class AsyncGRPOConfig(_BaseConfig):
         max_concurrent_rollouts (`int`, *optional*):
             Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to `max_staleness *
             per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
-            this is wasteful, since they are discarded as stale before the trainer can consume them. If using tool-use
+            this is wasteful, since they are dropped as stale before the trainer can consume them. If using tool-use
             environments, you may want to set this manually based on how many parallel environments you can run.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being discarded.
+            being dropped.
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
@@ -392,7 +392,7 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to "
             "`max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating "
-            "more samples than this is wasteful, since they are discarded as stale before the trainer can consume "
+            "more samples than this is wasteful, since they are dropped as stale before the trainer can consume "
             "them. If using tool-use environments, you may want to set this manually based on how many parallel "
             "environments you can run."
         },
@@ -401,7 +401,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
-            "before being discarded."
+            "before being dropped."
         },
     )
     queue_maxsize: int = field(

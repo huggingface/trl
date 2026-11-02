@@ -429,7 +429,7 @@ class _AsyncRolloutLoop:
         # Metric accumulators
         self._counters: dict[str, float] = defaultdict(float)
         self._rates: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
-        self._inflight = 0  # set by the generate loop, reported by the score loop
+        self._concurrency = 0  # set by the generate loop, reported by the score loop
         self._pushed_completion_tokens = 0
         self._pushed_at = time.monotonic()
 
@@ -519,7 +519,7 @@ class _AsyncRolloutLoop:
             max_workers=max(1, max_concurrent_rollouts), thread_name_prefix="grpo-tool"
         )
 
-        self._inflight_cap = max_concurrent_rollouts
+        self._concurrency_cap = max_concurrent_rollouts
         self._total_rollouts = 0
         self._metrics_poll_s = 5.0
 
@@ -609,10 +609,10 @@ class _AsyncRolloutLoop:
         async with aiohttp.ClientSession(connector=connector) as session:
             self.session = session
             await self._check_sampling_replay()
-            await self._init_inflight_cap()
+            await self._init_concurrency_cap()
             logger.info(
                 f"vllm worker started: num_generations={self.num_generations}, "
-                f"max_concurrent_rollouts={self.max_concurrent_rollouts}, inflight_cap={self._inflight_cap}, "
+                f"max_concurrent_rollouts={self.max_concurrent_rollouts}, concurrency_cap={self._concurrency_cap}, "
                 f"temperature={self.temperature}, top_p={self.top_p}, top_k={self.top_k}, min_p={self.min_p}, "
                 f"repetition_penalty={self.repetition_penalty}"
             )
@@ -622,7 +622,7 @@ class _AsyncRolloutLoop:
                 asyncio.create_task(self._control_loop(stop_event=stop_event)),
             )
 
-    async def _init_inflight_cap(self) -> None:
+    async def _init_concurrency_cap(self) -> None:
         """Start the cap at `KV cache tokens / max_model_len`: as many requests as fit at full length."""
         try:
             async with self.session.get(f"{self.vllm_server_url}/metrics") as response:
@@ -640,10 +640,10 @@ class _AsyncRolloutLoop:
             return
         kv_tokens = sum(map(int, kv_matches))
         max_model_len = max(model["max_model_len"] for model in models["data"] if model["max_model_len"])
-        self._inflight_cap = max(1, min(self.max_concurrent_rollouts, kv_tokens // max_model_len))
+        self._concurrency_cap = max(1, min(self.max_concurrent_rollouts, kv_tokens // max_model_len))
 
     async def _control_loop(self, stop_event: asyncio.Event) -> None:
-        """Size the in-flight cap from the vLLM server's load, polled from `/metrics`.
+        """Size the concurrency cap from the vLLM server's load, polled from `/metrics`.
 
         Cut the cap by 30% when the server's KV cache usage passes 0.8, once the pool has drained below the previous
         cut. Nothing is cancelled; admissions stop until enough rollouts finish. Grow it by 25% while usage stays under
@@ -664,7 +664,7 @@ class _AsyncRolloutLoop:
                     response.raise_for_status()
                     text = await response.text()
             except Exception as e:
-                logger.warning(f"vLLM /metrics poll failed, in-flight cap unchanged: {e!r}")
+                logger.warning(f"vLLM /metrics poll failed, concurrency cap unchanged: {e!r}")
                 continue
             usage_matches = re.findall(r"^vllm:kv_cache_usage_perc\{.*\} (\S+)", text, re.M)
             queued_matches = re.findall(r"^vllm:num_requests_waiting\{.*\} (\S+)", text, re.M)
@@ -672,22 +672,22 @@ class _AsyncRolloutLoop:
                 # An empty match looks identical to a genuinely idle server (usage=0.0, queued=0), which is exactly
                 # the condition that grows the cap -- so a metrics rename/reformat must not fall through to that
                 # arithmetic silently.
-                logger.warning("vLLM /metrics missing KV usage or queue depth, in-flight cap unchanged")
+                logger.warning("vLLM /metrics missing KV usage or queue depth, concurrency cap unchanged")
                 continue
             usage = max(map(float, usage_matches))
             running = sum(map(float, re.findall(r"^vllm:num_requests_running\{.*\} (\S+)", text, re.M)))
             queued = sum(map(float, queued_matches))
             preemptions = sum(map(float, re.findall(r"^vllm:num_preemptions_total\{.*\} (\S+)", text, re.M)))
-            if usage > 0.8 and self._inflight <= self._inflight_cap:
-                self._inflight_cap = max(1, int(self._inflight_cap * 0.7))
+            if usage > 0.8 and self._concurrency <= self._concurrency_cap:
+                self._concurrency_cap = max(1, int(self._concurrency_cap * 0.7))
                 rollouts_at_change = self._total_rollouts
-                logger.info(f"[control] cut in-flight cap to {self._inflight_cap} (kv cache usage {usage:.2f})")
-            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._inflight_cap:
-                self._inflight_cap = min(math.ceil(self._inflight_cap * 1.25), self.max_concurrent_rollouts)
+                logger.info(f"[control] cut concurrency cap to {self._concurrency_cap} (kv cache usage {usage:.2f})")
+            elif usage < 0.6 and queued == 0 and self._total_rollouts - rollouts_at_change >= self._concurrency_cap:
+                self._concurrency_cap = min(math.ceil(self._concurrency_cap * 1.25), self.max_concurrent_rollouts)
                 rollouts_at_change = self._total_rollouts
             self._push_metrics(
                 {
-                    "rollout/concurrency_cap": float(self._inflight_cap),
+                    "rollout/concurrency_cap": float(self._concurrency_cap),
                     "rollout/kv_cache_usage": usage,
                     "rollout/vllm_running_requests": running,
                     "rollout/vllm_queued_requests": queued,
@@ -699,7 +699,7 @@ class _AsyncRolloutLoop:
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
         pending_groups: dict[int, RolloutGroup] = {}
         pending_completed: dict[int, int] = {}
-        inflight_tasks: dict[asyncio.Task, tuple[int, Any, object, Messages]] = {}
+        rollout_tasks: dict[asyncio.Task, tuple[int, Any, object, Messages]] = {}
         work_iter = self._repeat_iterator()
         loop = asyncio.get_running_loop()
 
@@ -707,7 +707,7 @@ class _AsyncRolloutLoop:
             while True:
                 # Wall-clock for cross-process comparison; parent uses time.time() in check_health.
                 self._heartbeat_value.value = time.time()
-                while len(inflight_tasks) < self._inflight_cap and not stop_event.is_set():
+                while len(rollout_tasks) < self._concurrency_cap and not stop_event.is_set():
                     group_id, row = next(work_iter)
                     # The environment is selected per example via its `environment` field (multi-env); only its tools
                     # are exposed in the example's prompt. When there are no environments, every example shares the
@@ -793,21 +793,21 @@ class _AsyncRolloutLoop:
                     task = asyncio.create_task(
                         self._generate_one(prompt, tool_dict=tool_dict, tools=tools, group_id=group_id)
                     )
-                    inflight_tasks[task] = (group_id, name, environment, prompt)
+                    rollout_tasks[task] = (group_id, name, environment, prompt)
 
-                self._inflight = len(inflight_tasks)  # gauge, reported by the score loop's push
-                if not inflight_tasks:
+                self._concurrency = len(rollout_tasks)  # gauge, reported by the score loop's push
+                if not rollout_tasks:
                     if stop_event.is_set():
                         return
                     await asyncio.sleep(0.01)
                     continue
 
-                done, _ = await asyncio.wait(inflight_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
+                done, _ = await asyncio.wait(rollout_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.1)
                 if not done:
                     continue
 
                 for task in done:
-                    group_id, name, environment, prompt = inflight_tasks.pop(task)
+                    group_id, name, environment, prompt = rollout_tasks.pop(task)
                     if task.exception() is not None:
                         raise task.exception()
                     self._total_rollouts += 1
@@ -830,7 +830,7 @@ class _AsyncRolloutLoop:
                     group.rollout_rewards.append(rollout_reward)
                     # The environment owns the reward: score it now, while this rollout's environment still holds its
                     # final state and before returning it to the pool. `get_reward` may be async awaiting yields to
-                    # inflight requests instead of halting them. The env is returned to the pool only after scoring, so
+                    # in-flight requests instead of halting them. The env is returned to the pool only after scoring, so
                     # a concurrent rollout can't draw and reset it during the await. Record `(env class, reward)` so
                     # `_score_group` can place it in the matching env's reward column; rollouts whose env owns no reward
                     # record `None` (turned into NaN and ignored) to stay aligned with the group's other per-rollout lists.
@@ -872,10 +872,10 @@ class _AsyncRolloutLoop:
                         del pending_groups[group_id]
                         del pending_completed[group_id]
         finally:
-            for task in inflight_tasks:
+            for task in rollout_tasks:
                 task.cancel()
-            if inflight_tasks:
-                await asyncio.gather(*inflight_tasks, return_exceptions=True)
+            if rollout_tasks:
+                await asyncio.gather(*rollout_tasks, return_exceptions=True)
             try:
                 self._groups_to_score.put_nowait(None)
             except asyncio.QueueFull:
@@ -911,7 +911,7 @@ class _AsyncRolloutLoop:
                     "rollout/score_s": scoring_time,
                     "rollout/score_wait_s": wait_scoring,
                     "rollout/score_queue_size": float(self._groups_to_score.qsize()),
-                    "rollout/concurrency": float(self._inflight),
+                    "rollout/concurrency": float(self._concurrency),
                     # Windowed, not cumulative.  A cumulative average cannot show a generation stall.
                     "rollout/generated_tok_s": (
                         float(self._total_completion_tokens - self._pushed_completion_tokens),
