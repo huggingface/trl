@@ -926,19 +926,20 @@ class _AsyncRolloutLoop:
                 print_prompt_completions_sample(
                     prompts=[s.prompt for s in samples],
                     completions=[s.completion for s in samples],
-                    rewards={"reward": [s.metrics["reward"] for s in samples]},
+                    rewards={"reward": [s.metrics["reward_kept"] for s in samples]},
                     advantages=[s.advantage for s in samples],
                     step=self._total_groups_scored,
                     num_samples=self.num_completions_to_print,
                 )
             self._total_groups_scored += 1
 
-            for sample in samples:
+            for item in samples or [group.group_id]:
                 t_blocked = None
                 while True:
                     try:
-                        sample.enqueued_at = time.time()
-                        self.rollout_buffer.put_nowait(sample)
+                        if isinstance(item, RolloutSample):
+                            item.enqueued_at = time.time()
+                        self.rollout_buffer.put_nowait(item)
                         break
                     except queue.Full:
                         if stop_event.is_set():
@@ -1253,16 +1254,24 @@ class _AsyncRolloutLoop:
         rewards[all_nan_mask] = np.nan
 
         scored_mask = ~np.isnan(rewards)
+        scored = rewards[scored_mask]
         # NOTE: for NaN reward we set advantage to 0 !
         advantages = np.zeros_like(rewards)
         if scored_mask.any():
-            scored = rewards[scored_mask]
             advantages[scored_mask] = (scored - scored.mean()) / (scored.std() + 1e-8)
             reward_mean = float(scored.mean())
             reward_std = float(scored.std())
         else:
             reward_mean = reward_std = float("nan")
         logger.info(f"Rollout metrics: reward_mean={reward_mean:.4f}, reward_std={reward_std:.4f}")
+
+        zero_std = bool(np.all(scored == scored[:1]))
+        self._rates["reward"][0] += float(scored.sum())
+        self._rates["reward"][1] += len(scored)
+        self._rates["frac_reward_zero_std"][0] += zero_std
+        self._rates["frac_reward_zero_std"][1] += 1
+        if zero_std:
+            return []
 
         total_calls = sum(group.tool_call_counts)
         tool_metrics = (
@@ -1294,7 +1303,7 @@ class _AsyncRolloutLoop:
             )
         ):
             metrics = {
-                "reward": float(reward),
+                "reward_kept": float(reward),
                 "reward_std": reward_std,
                 **{
                     f"rewards/{name}": float(func_reward)
