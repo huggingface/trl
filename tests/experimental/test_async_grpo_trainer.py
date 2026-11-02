@@ -2830,7 +2830,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
 
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_an_injected_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected):
+    def test_an_injected_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # A worker the caller builds, like the harness worker of examples/async_grpo_harbor, exists before the trainer
         # probes the server, so it cannot have been given the adapter name at construction.
         worker = AsyncRolloutWorker(model_name=self.model_id)
