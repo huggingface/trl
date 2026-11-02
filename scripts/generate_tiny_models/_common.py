@@ -239,6 +239,10 @@ def _parse_args():
         help="If the repo already exists, open a PR instead of skipping.",
     )
     parser.add_argument(
+        "--revision",
+        help="Push to this existing PR of the repo (e.g. refs/pr/3) instead of skipping.",
+    )
+    parser.add_argument(
         "--full-diff",
         action="store_true",
         help="Print untruncated values in the config diff.",
@@ -247,16 +251,20 @@ def _parse_args():
     return args
 
 
-def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
+def push_to_hub(model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None):
     with tempfile.TemporaryDirectory() as tmpdir:
         model.save_pretrained(tmpdir)
-        push_dir_to_hub(tmpdir, model, tokenizer, generation_config, prefix, suffix, create_pr)
+        push_dir_to_hub(tmpdir, model, tokenizer, generation_config, prefix, suffix, create_pr, revision)
 
 
-def push_dir_to_hub(save_dir, model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None):
+def push_dir_to_hub(
+    save_dir, model, tokenizer, generation_config, prefix=None, suffix=None, create_pr=None, revision=None
+):
     """Push the model files saved in `save_dir`, with the tokenizer, generation config and model card, in one commit."""
     if create_pr is None:
         create_pr = _parse_args().create_pr
+    if revision is None:
+        revision = _parse_args().revision
 
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
@@ -268,8 +276,8 @@ def push_dir_to_hub(save_dir, model, tokenizer, generation_config, prefix=None, 
         repo_id += f"-{suffix}"
 
     exists = api.repo_exists(repo_id)
-    if exists and not create_pr:
-        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR)")
+    if exists and not create_pr and revision is None:
+        print(f"Model {repo_id} already exists, skipping (pass --create-pr to open a PR, or --revision to update one)")
         return
 
     if not exists:
@@ -295,6 +303,7 @@ def push_dir_to_hub(save_dir, model, tokenizer, generation_config, prefix=None, 
         operations=operations,
         commit_message=f"Upload {model.__class__.__name__}",
         create_pr=exists and create_pr,
+        revision=revision,
     )
     if commit_info.pr_url:
         print(f"[push_to_hub] PR opened: {commit_info.pr_url}")

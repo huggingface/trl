@@ -39,7 +39,7 @@ If the repo already exists on the Hub, the push is skipped by default. Pass `--c
 python -m scripts.generate_tiny_models.for_causal_lm.qwen3_for_causal_lm --create-pr
 ```
 
-Direct overwrites of `main` aren't supported — update via `--create-pr` and merge the PR on the Hub.
+Direct overwrites of `main` aren't supported — update via `--create-pr` and merge the PR on the Hub. To add a commit to that PR, pass its ref instead: `--revision refs/pr/3`.
 
 ## Version pinning
 
