@@ -94,6 +94,10 @@ jobs:
           source .venv/bin/activate
           # A hung NCCL transfer otherwise runs until the runner drops the step and reports it as passed
           timeout 45m pytest -v -rs tests/test_vllm_client_server.py
+          touch .pytest-completed-client-server
+
+      - name: Check that pytest completed for the vLLM client and server
+        run: test -f .pytest-completed-client-server  # The runner can report a cut-off test step as passed: #8004
 
       - name: Test the trainers with vLLM
         if: ${{ !cancelled() }}
@@ -109,6 +113,11 @@ jobs:
           fi
           # One process per test, since colocated vLLM engines keep their GPU memory until the process exits
           pytest --collect-only -q -k "vllm" $files | grep "::" | xargs -d '\n' -I{} timeout 30m pytest -v -rsx {}
+          touch .pytest-completed-trainers
+
+      - name: Check that pytest completed for the trainers
+        if: ${{ !cancelled() }}
+        run: test -f .pytest-completed-trainers  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()
