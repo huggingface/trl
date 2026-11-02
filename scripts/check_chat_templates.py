@@ -37,6 +37,8 @@ REPOS = [
     "CohereLabs/aya-expanse-8b",
     "CohereLabs/tiny-aya-earth",
     "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-R1-0528",
+    "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     "google/diffusiongemma-26B-A4B-it",
