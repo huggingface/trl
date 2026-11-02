@@ -44,7 +44,6 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 config = GptOssConfig(
     vocab_size=201088,
-    # 32, not 8: MXFP4 quantizes the expert weights in blocks of 32 along their input dimension
     hidden_size=32,
     num_attention_heads=4,
     num_key_value_heads=2,
