@@ -59,7 +59,7 @@ from trl.trainer.utils import (
     use_adapter,
 )
 
-from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
+from .testing_utils import TrlTestCase, require_kernels, require_peft, require_rich, require_torch_accelerator
 
 
 if is_peft_available():
@@ -1450,6 +1450,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GPT2LMHeadModel",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1780,6 +1781,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1965,7 +1967,24 @@ class TestAddFusedLMHeadLoss:
                     chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
                 )
 
-    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            *_FUSED_LM_HEAD_VLM_MODEL_IDS,
+            # Forward only: its weights are FP8, and FP8 layers have no backward yet (huggingface/transformers#50031)
+            pytest.param(
+                "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
+                marks=[
+                    require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                    pytest.mark.xfail(reason="FP8 grouped matmul kernel fails to compile in CI (see #8020)"),
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.22.0"),
+                        reason="Mistral Large 4 was introduced in transformers-5.22.0",
+                    ),
+                ],
+            ),
+        ],
+    )
     def test_forward_matches_reference_vlm(self, model_id):
         ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
 

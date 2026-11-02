@@ -20,7 +20,7 @@ TRL ships patched templates under [`trl/chat_templates/`](https://github.com/hug
 
 ## Supported model families
 
-TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3, DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4, GLM-4-MoE, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Muse Glimmer, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 variant), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolVLM (including SmolVLM2).
+TRL stores reference copies of the original templates so it can identify supported models at init and swap in a training template when needed. The following families are recognized: Cohere, Cohere2, DeepSeek-V3 (including DeepSeek-R1, DeepSeek-R1-0528 and DeepSeek-V3-0324), DeepSeek-R1-Distill, DiffusionGemma, Gemma, Gemma3, Gemma4, GLM-4-MoE (4.5, 4.6, 4.7), GLM-5, GLM-5.1, GLM-5.2, GLM-5.3, GLM-5.3-Flash, GPT-OSS, Idefics3, LFM2, LFM2.5 (including LFM2.5-1.2B-Instruct, LFM2.5-2.6B and LFM2.5-24B-A2B), LFM2.5-VL (including LFM2.5-VL-450M), Llama 3 / 3.1 / 3.2, Llava-Next, Mistral Large 4, Mistral Medium 3.5, Muse Glimmer, Nemotron 3 (Nano, Super, Ultra), Nemotron 3.5 Lightning, Phi-3, Phi-3.5, Qwen2-VL, Qwen2.5, Qwen2.5-VL, Qwen3 (including the Instruct-2507 and Thinking-2507 variants), Qwen3-Coder (including Qwen3-Coder-Next), Qwen3-VL, Qwen3.5, Qwen3.6, Qwen3.8, SmolVLM (including SmolVLM2).
 
 ## Training templates
 
@@ -51,6 +51,22 @@ Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
 - Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+
+### `deepseekv3_v2_training.jinja`
+
+Patched DeepSeek-R1-0528 template. Diff vs `deepseekv3_v2.jinja`:
+
+- Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict`, as in `deepseekv3_training.jinja`.
+- Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
+- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss. The `<｜tool▁outputs▁end｜>` that opens an assistant turn after tool outputs stays outside the markers, since the prompt already ends with it.
+
+### `deepseekv3_v3_training.jinja`
+
+Patched DeepSeek-V3 template (used by `deepseek-ai/DeepSeek-V3`). Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja`: `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers around assistant message output for SFT assistant-only loss.
+
+### `deepseekv3_v4_training.jinja`
+
+Patched DeepSeek-V3-0324 template (used by `deepseek-ai/DeepSeek-V3-0324`). Same diff as `deepseekv3_v2_training.jinja`, applied to `deepseekv3_v4.jinja`: `| tojson` on tool-call arguments, and `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers around the assistant output.
 
 ### `diffusion_gemma_training.jinja`
 
@@ -152,6 +168,14 @@ Patched Llava-Next template. Diff vs `llava_next.jinja`:
 - Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
 - Keeps the space that follows `</s>` outside the generation block. The tokenizer merges it into the next turn's first token (`▁[`), which would otherwise be masked as assistant output and hide the `</s>` stop token from the end of the masked span.
 
+### `mistral_large_4_training.jinja`
+
+Patched Mistral Large 4 template. Diff vs `mistral_large_4.jinja`: same change as `mistral_medium_3_5_training.jinja`, wrapping the assistant turn (content, tool calls and the end-of-turn token) with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `mistral_medium_3_5_training.jinja`
+
+Patched Mistral Medium 3.5 template. Diff vs `mistral_medium_3_5.jinja`: the original is already prefix-preserving, so the only change is wrapping the assistant turn (content, tool calls and the end-of-turn token) with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
 ### `muse_glimmer_training.jinja`
 
 Patched Muse Glimmer template. Diff vs `muse_glimmer.jinja`: wrap the whole assistant branch — every ATEM channel of the turn — with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
@@ -201,6 +225,10 @@ Split the assistant message into its own branch so the `&#123;% generation %&#12
 Patched Qwen3-Instruct-2507 template (used by models like `Qwen3-4B-Instruct-2507`, which ship a simpler Qwen3 variant without `reasoning_content` / `<think>` parsing, `multi_step_tool` tracking, or the `enable_thinking` flag). Diff vs `qwen3_instruct_2507.jinja`:
 
 Wrap assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+
+### `qwen3_thinking_2507_training.jinja`
+
+Patched Qwen3-Thinking-2507 template (used by models like `Qwen3-4B-Thinking-2507`, which pre-fill `<think>\n` in the generation prompt). Diff vs `qwen3_thinking_2507.jinja`: same set of changes as `qwen3_training.jinja`, which drops the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation) and wraps assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
 
 ### `qwen3_5_think_training.jinja` / `qwen3_5_nothink_training.jinja`
 

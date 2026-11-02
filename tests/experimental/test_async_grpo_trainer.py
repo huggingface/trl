@@ -34,6 +34,7 @@ import torch
 from accelerate import PartialState
 from datasets import Dataset, load_dataset
 from requests.adapters import BaseAdapter
+from safetensors import safe_open
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, PreTrainedModel
 from transformers.testing_utils import torch_device
 
@@ -73,6 +74,7 @@ from trl.trainer.base_trainer import _BaseTrainer
 from ..testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
+    is_bf16_supported,
     require_peft,
     require_response_parsing,
     require_torch_accelerator,
@@ -419,6 +421,64 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def _train_one_step_and_save(self, peft_config=None):
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,
+            save_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            token_budget=64,
+            vllm_server_timeout=5.0,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
+            weight_transfer=_StubWeightTransfer(),
+            peft_config=peft_config,
+        )
+        trainer.train()
+        return trainer
+
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_checkpoint_keeps_master_dtype_without_fsdp(self):
+        trainer = self._train_one_step_and_save()
+
+        assert trainer.model.dtype == torch.float32
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
+        with open(os.path.join(checkpoint, "config.json")) as f:
+            assert json.load(f)["dtype"] == "float32"
+        reloaded = AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto")
+        for name, param in trainer.model.named_parameters():
+            assert torch.equal(reloaded.get_parameter(name).to(param.device), param)
+
+    @require_peft
+    @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
+    def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self):
+        from peft import LoraConfig
+
+        self._train_one_step_and_save(peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
+
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "adapter_model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"F32"}
+
+    @pytest.mark.skipif("TRL_TEST_FSDP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_fsdp_checkpoint_body(self):
+        self.tmp_dir = os.environ["TRL_TEST_FSDP_OUTPUT_DIR"]
+        trainer = self._train_one_step_and_save()
+        assert trainer.is_fsdp_enabled
 
     def test_train_model(self):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
