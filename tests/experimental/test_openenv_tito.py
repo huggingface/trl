@@ -42,7 +42,7 @@ from openenv.core.harness import (
     VerifyResult,
 )
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, openenv_harness
+from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import TurnRecord, _chain_to_sequences, _SampleBuilder
 
 
@@ -219,7 +219,7 @@ def test_invalid_capture_reaches_worker_failure_channel(make_loop, field, value)
     session = Session(row)
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     with pytest.raises(openenv_harness.CaptureContractError):
-        loop.run()
+        loop._run()
     assert loop._failed_event.is_set()
     name, message, traceback = loop._exception_info_queue.get_nowait()
     assert name == "CaptureContractError" and message and "fetch_training_trace" in traceback
@@ -256,7 +256,7 @@ def test_persistent_session_failures_stop_the_worker(make_loop):
 
     loop = make_loop(SimpleNamespace(create=create), max_session_backoff_s=0)
     with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
-        loop.run()
+        loop._run()
     assert loop._failed_event.is_set()
     # Only the ids of dropped groups, no samples
     assert all(isinstance(item, int) for item in loop.rollout_buffer.queue)
@@ -266,11 +266,11 @@ def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session = Session(captured_entry())
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
-    result, metrics = loop._run_session([])
+    result, _ = loop._run_session([])
+    rows, _ = _chain_to_sequences(result.turns, "rollout", 0)
     assert result.reward == 0.25
-    assert result.sequences[0].input_ids == [1, 2, 3]
-    assert result.sequences[0].completion_mask == [0, 1, 0]
-    assert metrics["loop_exhausted"]
+    assert rows[0].input_ids == [1, 2, 3]
+    assert rows[0].completion_mask == [0, 1, 0]
 
 
 def test_capture_error_closes_other_inflight_sessions(make_loop):
@@ -295,7 +295,7 @@ def test_capture_error_closes_other_inflight_sessions(make_loop):
     sessions = iter([blocking, broken])
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: next(sessions)))
     with pytest.raises(openenv_harness.CaptureContractError):
-        loop.run()
+        loop._run()
     assert blocking.closed.is_set() and broken.closed.is_set()
     assert released == [True]
     assert loop._stop_event.is_set()
@@ -316,11 +316,12 @@ def test_concurrent_correctness_metrics_stay_on_event_loop(make_loop):
     loop._rates = Rates(lambda: [0.0, 0.0])
 
     async def run():
-        return await asyncio.gather(*(loop.generate_one([], {}, [], group_id=i) for i in range(32)))
+        return await asyncio.gather(*(loop.generate_one([], [], group_id=i) for i in range(32)))
 
     results = asyncio.run(run())
-    assert all(result.reward == 0.55 and result.sequences for result in results)
-    metrics = [loop._metrics_queue.get_nowait() for _ in results]
+    assert all(result.reward == 0.55 and result.turns for result in results)
+    loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
+    metrics = [loop._metrics_queue.get_nowait()]
     assert sum(item["rollout/correctness_mean"][0] for item in metrics) == 8.0
     assert sum(item["rollout/correctness_mean"][1] for item in metrics) == 32
 
@@ -348,8 +349,9 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
         return TurnRecord(prompt_ids, [2, 3], [-0.1, -0.2])
 
     loop.generate_one_turn = generate_one_turn
-    result = loop._loop.run_until_complete(loop.generate_one([], {}, [], group_id=0))
+    result = loop._loop.run_until_complete(loop.generate_one([], [], group_id=0))
     assert (result.tool_call_count, result.tool_failure_count) == (2, 1)
+    loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
     payload = loop._metrics_queue.get_nowait()
     assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
     assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
@@ -371,8 +373,9 @@ def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
     ]
     row["response"]["choices"][0]["message"]["tool_calls"] = [{"id": "c", "function": {"name": "bash"}}]
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: Session(row)))
-    result = loop._loop.run_until_complete(loop.generate_one([], {}, [], group_id=0))
+    result = loop._loop.run_until_complete(loop.generate_one([], [], group_id=0))
     assert (result.tool_call_count, result.tool_failure_count) == (1, 1)
+    loop._push_metrics({})  # in a run, the generate loop pushes after each rollout
     payload = loop._metrics_queue.get_nowait()
     assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
     assert "tools/latency_s" not in payload
@@ -448,10 +451,10 @@ def test_reconciliation_error_reaches_worker_failure_channel(make_loop, monkeypa
     session = Session(captured_entry())
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     monkeypatch.setattr(
-        openenv_harness, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
+        async_rollout_worker, "_chain_to_sequences", MagicMock(side_effect=ValueError("invalid training sequence"))
     )
-    with pytest.raises(openenv_harness.CaptureContractError, match="invalid training sequence"):
-        loop.run()
+    with pytest.raises(ValueError, match="invalid training sequence"):
+        loop._run()
     assert loop._failed_event.is_set()
     assert session.closed.is_set()
     assert loop.rollout_buffer.empty()
@@ -505,10 +508,11 @@ def test_harbor_session_to_worker_preserves_masks_and_outcome(make_loop, reward)
     actual, _ = loop._run_session([])
     assert actual.reward == reward
     assert actual.tool_call_count == 2  # Usage includes the zero-masked agent call.
-    assert len(actual.sequences) == 1
-    assert actual.sequences[0].input_ids == [10, 11, 12]
-    assert actual.sequences[0].completion_mask == [0, 1, 0]
-    assert actual.sequences[0].old_log_probs == [0.0, -0.1, -0.2]
+    rows, _ = _chain_to_sequences(actual.turns, "rollout", 0)
+    assert len(rows) == 1
+    assert rows[0].input_ids == [10, 11, 12]
+    assert rows[0].completion_mask == [0, 1, 0]
+    assert rows[0].old_log_probs == [0.0, -0.1, -0.2]
     env.close.assert_called_once()
 
 
