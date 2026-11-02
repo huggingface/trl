@@ -1338,11 +1338,6 @@ def create_model_from_path(
         if quant_method == "fp8" and Version(transformers.__version__) < Version("5.0.0"):
             raise ValueError(f"`{model_id}` is quantized in FP8, and dequantizing it needs transformers>=5.0.0.")
         kwargs["quantization_config"] = dequantizers[quant_method](dequantize=True)
-        logger.warning(
-            f"`{model_id}` is quantized ({quant_method}), and {quant_method} weights can't be trained in place, so the "
-            "model is loaded dequantized: expect its memory footprint to grow accordingly. Pass `quantization_config` "
-            "in `model_init_kwargs` to load it another way."
-        )
     dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
