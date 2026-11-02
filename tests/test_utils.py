@@ -1449,7 +1449,13 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GPT2LMHeadModel",
-    "trl-internal-testing/tiny-GptOssForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-GptOssForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.23.0.dev0"),
+            reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        ),
+    ),
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
@@ -1673,7 +1679,17 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
     @pytest.mark.parametrize(
-        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0.dev0"),
+                    reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+                ),
+            ),
+        ],
     )
     def test_aux_loss(self, model_id):
         # Loaded like the trainers load it, so the MXFP4 gpt-oss checkpoint comes back dequantized
@@ -1785,7 +1801,13 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-    "trl-internal-testing/tiny-GptOssForCausalLM",
+    pytest.param(
+        "trl-internal-testing/tiny-GptOssForCausalLM",
+        marks=pytest.mark.skipif(
+            Version(transformers.__version__) < Version("5.23.0.dev0"),
+            reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+        ),
+    ),
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
@@ -1927,7 +1949,13 @@ class TestAddFusedLMHeadLoss:
         "model_id",
         [
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-            "trl-internal-testing/tiny-GptOssForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.23.0.dev0"),
+                    reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+                ),
+            ),
         ],
     )
     def test_forward_matches_reference_with_aux_loss(self, model_id):
