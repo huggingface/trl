@@ -322,6 +322,9 @@ class TestAddResponseSchema:
                 qwen3_training_chat_template,
                 id="qwen3-training",
             ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template, id="qwen2.5-base"
+            ),
         ],
     )
     def test_add_response_schema_template_revision(self, tokenizer_name, chat_template):
