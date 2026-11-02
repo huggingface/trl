@@ -55,6 +55,7 @@ from trl.chat_template_utils import (
     parse_response,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
+    qwen3_thinking_2507_chat_template,
     qwen3_training_chat_template,
     supports_tool_calling,
 )
@@ -534,6 +535,44 @@ class TestAddResponseSchema:
         ).input_ids
         expected = {"role": "assistant", "reasoning_content": "Hmmm.", "content": "It is sunny."}
         assert parse_response(tokenizer, response, prefix=prefix) == expected
+
+    @pytest.mark.parametrize(
+        "completion, expected",
+        [
+            pytest.param("\n</think>\n\n12<|im_end|>", {"role": "assistant", "content": "12"}, id="content"),
+            pytest.param(
+                "Hmmm.\n</think>\n\n12<|im_end|>",
+                {"role": "assistant", "reasoning_content": "Hmmm.", "content": "12"},
+                id="reasoning",
+            ),
+            pytest.param(
+                'Hmmm.\n</think>\n\n<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call><|im_end|>',
+                {
+                    "role": "assistant",
+                    "reasoning_content": "Hmmm.",
+                    "content": "",
+                    "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}}
+                    ],
+                },
+                id="tool_calls",
+            ),
+        ],
+    )
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Qwen3-Thinking-2507 only gets a new-style response template, which requires transformers>=5.13",
+    )
+    def test_add_response_schema_qwen3_thinking_2507(self, completion, expected):
+        # The generation prompt pre-fills `<think>\n`, which rendered turns without reasoning lack, so the completion
+        # can't be sliced off a rendered conversation.
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        tokenizer.chat_template = qwen3_thinking_2507_chat_template
+        tokenizer = add_response_schema(tokenizer)
+        messages = [{"role": "user", "content": "What is 3*4?"}]
+        prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        response = tokenizer(completion, add_special_tokens=False).input_ids
+        assert parse_response(tokenizer, response, prefix=prefix.input_ids) == expected
 
     @pytest.mark.parametrize(
         "processor_name",
@@ -1225,6 +1264,10 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
+            id="qwen3_thinking_2507",
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             id="qwen3_vl",

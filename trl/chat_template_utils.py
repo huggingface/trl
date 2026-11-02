@@ -764,6 +764,8 @@ qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text(encoding="
 
 qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text(encoding="utf-8")
 
+qwen3_thinking_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507.jinja").read_text(encoding="utf-8")
+
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text(encoding="utf-8")
 
 qwen3_5_nothink_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink.jinja").read_text(encoding="utf-8")
@@ -855,6 +857,9 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         qwen3_vl_chat_template,
     ]:
         schema, template = qwen3_schema, qwen3_template
+    elif chat_template == qwen3_thinking_2507_chat_template:
+        # Only the new-style template: the legacy `qwen3_schema` does not handle the `<think>` pre-fill
+        schema, template = None, qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
         qwen3_5_think_chat_template,
@@ -1203,6 +1208,10 @@ qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instr
     encoding="utf-8"
 )
 
+qwen3_thinking_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 qwen3_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl_training.jinja").read_text(encoding="utf-8")
 
 qwen3_5_nothink_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_nothink_training.jinja").read_text(
@@ -1389,6 +1398,9 @@ def get_training_chat_template(
 
     if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
+
+    if chat_template == qwen3_thinking_2507_chat_template:
+        return qwen3_thinking_2507_training_chat_template
 
     if chat_template == qwen3_vl_chat_template:
         return qwen3_vl_training_chat_template
