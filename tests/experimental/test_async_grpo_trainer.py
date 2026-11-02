@@ -43,6 +43,7 @@ from transformers.testing_utils import torch_device
 pytest.importorskip("transformers", minversion="5.2.0")
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
+from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
 from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
@@ -207,6 +208,9 @@ class _StubRolloutWorker:
 
 class _StubWeightTransfer:
     """No-op weight transfer for testing the trainer without a real vLLM server."""
+
+    def __init__(self, **kwargs):
+        pass
 
     def init_weight_transfer(self):
         pass
@@ -373,6 +377,11 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
     return server
 
 
+@pytest.fixture(autouse=True)
+def stub_weight_transfer(monkeypatch):
+    monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
+
+
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
@@ -387,7 +396,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
 
     def test_train(self):
@@ -410,7 +418,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -437,6 +444,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             token_budget=64,
             vllm_server_timeout=5.0,
+            vllm_server_base_url=FakeVLLMServer.url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -445,7 +453,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
             peft_config=peft_config,
         )
         trainer.train()
@@ -467,7 +474,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     @require_peft
     @pytest.mark.skipif(not is_bf16_supported(), reason="test requires bf16 support")
-    def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self):
+    def test_adapter_checkpoint_keeps_master_dtype_without_fsdp(self, fake_vllm):
         from peft import LoraConfig
 
         self._train_one_step_and_save(peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
@@ -508,7 +515,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
         assert trainer.model is model
         assert trainer.model.config._attn_implementation == TREE_ATTENTION
@@ -540,6 +546,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,
             token_budget=64,
             vllm_server_timeout=5.0,
+            vllm_server_base_url=FakeVLLMServer.url,
             report_to="none",
             **correction,
         )
@@ -551,7 +558,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             rollout_worker=_StubRolloutWorker(
                 tokenizer, dataset, num_generations=3, candidate_sets=training_args.top_k > 0
             ),
-            weight_transfer=_StubWeightTransfer(),
             peft_config=peft_config,
         )
         previous_trainable_params = {
@@ -571,7 +577,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
-    def test_train_score_centering_with_lora(self):
+    def test_train_score_centering_with_lora(self, fake_vllm):
         from peft import LoraConfig
 
         self.test_train_off_policy_correction({}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
@@ -603,7 +609,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
         assert trainer.args.ignore_data_skip is True
         trainer.train()
@@ -628,7 +633,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             args=training_args2,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
         assert trainer2.args.ignore_data_skip is True
         trainer2.train(resume_from_checkpoint=checkpoint_dir)
@@ -642,7 +646,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=training_args,
-                weight_transfer=_StubWeightTransfer(),
             )
 
     def test_environment_owned_data_requires_max_steps(self):
@@ -659,7 +662,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory=DummyEnvironment,
-                weight_transfer=_StubWeightTransfer(),
             )
 
     def test_multiple_environments_without_dataset_raises(self):
@@ -678,7 +680,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=args,
                 environment_factory={"a": EnvA, "b": EnvB},
-                weight_transfer=_StubWeightTransfer(),
             )
 
 
@@ -734,7 +735,6 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
 
     def test_vision_tower_is_frozen(self, model_id):
@@ -794,7 +794,6 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
         args=AsyncGRPOConfig(output_dir=output_dir, report_to="none"),
         train_dataset=dataset,
         rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-        weight_transfer=_StubWeightTransfer(),
     )
     # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
@@ -1696,7 +1695,6 @@ class TestTreePackingParity(TrlTestCase):
             ),
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
         trainer.current_gradient_accumulation_steps = 1
         model = trainer.model.to(torch_device)
@@ -1762,7 +1760,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-                weight_transfer=_StubWeightTransfer(),
             )
 
     def test_init_raises_on_gated_deltanet_before_transformers_5_15(self):
@@ -1775,7 +1772,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
                 rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-                weight_transfer=_StubWeightTransfer(),
             )
 
 
@@ -2427,7 +2423,6 @@ class TestEpochStop(TrlTestCase):
             args=args,
             train_dataset=dataset,
             rollout_worker=worker,
-            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
         return trainer, len(dataset)
@@ -2749,16 +2744,15 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         peft_config,
         lora_config=None,
         data_parallel_size=1,
-        weight_transfer=None,
+        weight_transfer=_StubWeightTransfer,
         rollout_worker="stub",
         **config_kwargs,
     ):
         """Build a trainer against `fake`, configured to look like a server started with the given flags.
 
-        With `weight_transfer=None` the trainer owns weight sync, which is what makes it probe the server and pick a
-        mode. Pass a `weight_transfer` to exercise the send itself — an injected backend deliberately keeps adapter
-        sync off. `rollout_worker="stub"` injects `_StubRolloutWorker`; `None` lets the trainer build the real
-        `AsyncRolloutWorker`, which is cheap until `start()` and useful for reading what it was told.
+        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker="stub"` injects
+        `_StubRolloutWorker`; `None` lets the trainer build the real `AsyncRolloutWorker`, which is cheap until
+        `start()` and useful for reading what it was told.
         """
         fake.lora_config = lora_config
         fake.data_parallel_size = data_parallel_size
@@ -2779,18 +2773,18 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         )
         if rollout_worker == "stub":
             rollout_worker = _StubRolloutWorker(tokenizer, dataset, num_generations=3)
-        return AsyncGRPOTrainer(
-            model=self.model_id,
-            reward_funcs=dummy_reward_func,
-            args=args,
-            train_dataset=dataset,
-            peft_config=peft_config,
-            rollout_worker=rollout_worker,
-            weight_transfer=weight_transfer,
-        )
+        with patch.object(async_grpo_trainer_module, "WeightTransferClient", weight_transfer):
+            return AsyncGRPOTrainer(
+                model=self.model_id,
+                reward_funcs=dummy_reward_func,
+                args=args,
+                train_dataset=dataset,
+                peft_config=peft_config,
+                rollout_worker=rollout_worker,
+            )
 
     def test_train_peft_config(self, fake_vllm):
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_StubWeightTransfer())
+        trainer = self._build(fake_vllm, self._lora_config())
         previous_params = {n: p.clone() for n, p in trainer.model.named_parameters()}
 
         trainer.train()
@@ -2815,15 +2809,6 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # on the module and not on `target_modules` — that string never contains "lm_head".
         with pytest.raises(ValueError, match="lm_head"):
             self._build(fake_vllm, self._lora_config(target_modules=target_modules), lora_config=SERVER_LORA_CONFIG)
-
-    def test_an_injected_weight_transfer_keeps_adapter_sync_off(self, fake_vllm):
-        # An injected backend owns weight sync and may be a no-op that disables it; adapter sync must not run behind
-        # its back, and the server is not consulted.
-        trainer = self._build(
-            fake_vllm, self._lora_config(), lora_config=SERVER_LORA_CONFIG, weight_transfer=_StubWeightTransfer()
-        )
-        assert trainer._lora_sync is False
-        assert fake_vllm.requests == []
 
     def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
         # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
@@ -2911,7 +2896,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                 sent.extend(name for name, _ in iterator)
 
         trainer = self._build(
-            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer()
+            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer
         )
         trainer._sync_weight()
 
@@ -2935,7 +2920,12 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
         # `init_weight_transfer`, which is not called.
-        trainer = self._build(fake_vllm, self._lora_config(modules_to_save=["lm_head"]), lora_config=None)
+        trainer = self._build(
+            fake_vllm,
+            self._lora_config(modules_to_save=["lm_head"]),
+            lora_config=None,
+            weight_transfer=WeightTransferClient,
+        )
         manifest = trainer.weight_transfer._weight_update_info
 
         assert manifest["names"] == [name for name, _ in trainer._streaming_iter()]
@@ -2950,7 +2940,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
                 merged_during_send.append(_any_adapter_merged(trainer.model))
                 raise RuntimeError("transfer blew up")
 
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer())
+        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
         with pytest.raises(RuntimeError, match="transfer blew up"):
             trainer._sync_weight()
 
