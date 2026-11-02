@@ -2399,7 +2399,7 @@ class TestGRPOTrainer(TrlTestCase):
     @require_peft
     @require_vllm
     @pytest.mark.xfail(
-        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises",
+        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
         strict=True,
     )
     def test_train_vllm_and_peft(self):
@@ -2449,7 +2449,7 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_vllm
     @pytest.mark.xfail(
-        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes",
+        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes (see #7954)",
         strict=True,
     )
     def test_train_vllm_structured_outputs(self):

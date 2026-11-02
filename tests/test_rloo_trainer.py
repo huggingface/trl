@@ -1417,7 +1417,7 @@ class TestRLOOTrainer(TrlTestCase):
     @require_vllm
     @pytest.mark.xfail(
         condition=is_vllm_available(min_version="0.29.0"),
-        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM>=0.29 raises",
+        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM>=0.29 raises (see #7955)",
         strict=True,
     )
     def test_train_vllm_and_peft(self):
