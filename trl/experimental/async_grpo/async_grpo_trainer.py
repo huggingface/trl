@@ -58,7 +58,7 @@ from ...trainer.utils import (
     pad,
 )
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
+from .async_rollout_worker import AsyncRolloutLoop, AsyncRolloutWorker, RolloutSample
 from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
@@ -1049,8 +1049,18 @@ class AsyncGRPOTrainer(_BaseTrainer):
             [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
             NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
             implementation to disable trainer-side weight sync.
+
+    To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
+    [`experimental.async_grpo.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
+    rollout process:
+
+    ```python
+    >>> class CurriculumTrainer(AsyncGRPOTrainer):
+    ...     loop_cls = CurriculumRolloutLoop
+    ```
     """
 
+    loop_cls: type[AsyncRolloutLoop] = AsyncRolloutLoop
     loss_is_scaled_for_ga = True
 
     _tag_names = ["trl", "async-grpo"]
@@ -1412,6 +1422,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     self.args,
+                    loop_cls=self.loop_cls,
                     model_name=get_config_model_id(model.config),
                     lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,

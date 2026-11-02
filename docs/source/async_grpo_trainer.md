@@ -174,6 +174,53 @@ vLLM loads adapters from disk rather than over the network, so the trainer write
 > [!TIP]
 > Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
+## Customizing the rollout loop
+
+Generation, rewards, advantages and filtering run in the rollout process, in [`experimental.async_grpo.AsyncRolloutLoop`]. To change one of them, subclass the loop, override the method for that step, and set the subclass as `loop_cls` on a trainer subclass. The trainer's constructor doesn't change.
+
+| Method | Called | Default |
+|---|---|---|
+| `filter_prompt(row_index, row, epoch)` | once per prompt, before generation | admits every prompt |
+| `generate_one(prompt, tools, group_id)` | once per rollout | the multi-turn tool loop |
+| `generate_one_turn(prompt_ids)` | once per sampling request | one vLLM request with the config's sampling settings |
+| `compute_advantages(group)` | once per group, after `reward_funcs` set `group.rewards` | reward standardized within the group |
+| `setup()`, `close()` | when the loops start and stop | nothing |
+
+For example, a curriculum that stops sampling prompts the policy already solves, with its threshold in a config subclass:
+
+```python
+from dataclasses import dataclass
+
+import numpy as np
+
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer, AsyncRolloutLoop
+
+
+@dataclass
+class CurriculumConfig(AsyncGRPOConfig):
+    pass_rate_cap: float = 0.9
+
+
+class CurriculumRolloutLoop(AsyncRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return self.pass_rates.get(row_index, 0.0) < self.config.pass_rate_cap
+
+    async def setup(self):
+        self.pass_rates = {}
+
+    def compute_advantages(self, group):
+        scored = group.rewards[~np.isnan(group.rewards)]
+        if len(scored):
+            self.pass_rates[group.row_index] = float(np.mean(scored > 0))
+        return super().compute_advantages(group)
+
+
+class CurriculumTrainer(AsyncGRPOTrainer):
+    loop_cls = CurriculumRolloutLoop
+```
+
+Rewards always come from `reward_funcs`: to score with a judge, pass an async reward function. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group.
+
 ## Design philosophy
 
 This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
@@ -452,6 +499,20 @@ MFU is reported only when peak compute capacity is known for the local training 
 ## AsyncGRPOTrainer
 
 [[autodoc]] trl.experimental.async_grpo.AsyncGRPOTrainer
+
+## AsyncRolloutLoop
+
+[[autodoc]] trl.experimental.async_grpo.AsyncRolloutLoop
+    - filter_prompt
+    - generate_one
+    - generate_one_turn
+    - compute_advantages
+    - setup
+    - close
+
+## Rollout
+
+[[autodoc]] trl.experimental.async_grpo.Rollout
 
 ## RolloutWorkerProtocol
 
