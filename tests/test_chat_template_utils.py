@@ -55,6 +55,7 @@ from trl.chat_template_utils import (
     parse_response,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
+    qwen3_thinking_2507_chat_template,
     qwen3_training_chat_template,
     supports_tool_calling,
 )
@@ -1225,6 +1226,10 @@ class TestIsChatTemplateStopTokenTrained:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
         pytest.param("trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507", id="qwen3_instruct_2507"),
+        pytest.param(
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template),
+            id="qwen3_thinking_2507",
+        ),
         pytest.param(
             "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
             id="qwen3_vl",
