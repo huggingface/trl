@@ -276,7 +276,6 @@ class _AsyncRolloutLoop:
 
         self._total_completion_tokens = 0
         self._total_samples_scored = 0
-        self._generation_start_time: float | None = None
         self.session: aiohttp.ClientSession | None = None
 
         self._loop = asyncio.new_event_loop()
@@ -345,7 +344,6 @@ class _AsyncRolloutLoop:
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
-        self._generation_start_time = time.monotonic()
         try:
             while True:
                 self._heartbeat_value.value = time.time()
