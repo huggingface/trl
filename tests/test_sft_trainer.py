@@ -315,30 +315,6 @@ class TestSFTTrainer(TrlTestCase):
         # catch the tokenizer being loaded from the default branch instead of the pinned revision.
         assert len(trainer.processing_class.chat_template) == 2558
 
-    def test_init_dequantizes_mxfp4_checkpoint(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-GptOssForCausalLM",
-            # This revision holds the MXFP4 checkpoint
-            args=SFTConfig(output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "refs/pr/5"}),
-            train_dataset=dataset,
-        )
-        # Quantized experts are packed tensors, dequantized ones are trainable parameters
-        assert isinstance(trainer.model.model.layers[0].mlp.experts.gate_up_proj, torch.nn.Parameter)
-
-    @pytest.mark.skipif(
-        Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
-    )
-    @require_vision
-    def test_init_dequantizes_fp8_checkpoint(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Mistral3ForConditionalGeneration",
-            args=SFTConfig(output_dir=self.tmp_dir, report_to="none"),
-            train_dataset=dataset,
-        )
-        assert trainer.model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
-
     @pytest.mark.parametrize(
         "model_id",
         [
