@@ -65,9 +65,29 @@ Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [905e84b](https:/
 
 Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https://huggingface.co/google/gemma-4-E2B-it/commit/899537982545a3e55ce64d34462b2efa5af85232): the current revision. Unlike the earlier ones, it also renders the reasoning of a final assistant turn. Response parsing reuses `gemma4_template`.
 
+### `glm4_7.jinja`
+
+Original GLM-4.7 chat template (as shipped by `zai-org/GLM-4.7` and `zai-org/GLM-4.7-Flash`). Same as `glm5.jinja`, except for the whitespace control around the message loop. Response parsing uses `glm4moe_template`.
+
 ### `glm4moe.jinja`
 
 Original GLM-4-MoE chat template.
+
+### `glm5.jinja`
+
+Original GLM-5 chat template (as shipped by `zai-org/GLM-5`). Same tool-call format and `<think>` pre-fill as `glm5_3_flash.jinja`, except that with thinking disabled the generation prompt pre-fills `</think>` alone. Response parsing uses `glm4moe_template`.
+
+### `glm5_1.jinja`
+
+Original GLM-5.1 chat template (as shipped by `zai-org/GLM-5.1`). Same as `glm5.jinja`, except that it leaves out tools marked `defer_loading`, renders an empty `<think></think>` in the assistant turns after the last user message, and accepts `tool_reference` tool responses. Response parsing uses `glm4moe_template`.
+
+### `glm5_2.jinja`
+
+Original GLM-5.2 chat template (as shipped by `zai-org/GLM-5.2`). Same as `glm5_1.jinja`, plus a reasoning-effort system line, and with thinking disabled the generation prompt pre-fills `<think></think>`. Response parsing uses `glm4moe_template`.
+
+### `glm5_3.jinja`
+
+Original GLM-5.3 chat template (as shipped by `zai-org/GLM-5.3`). Same as `glm5_3_flash.jinja`, except that it is text-only: image, video and audio items render as a notice that the model cannot process them. Response parsing uses `glm4moe_template`.
 
 ### `glm5_3_flash.jinja`
 
