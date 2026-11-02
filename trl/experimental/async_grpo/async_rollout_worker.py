@@ -1465,6 +1465,7 @@ class AsyncRolloutLoop:
         # reward) is not logged, rather than logged as NaN.
         used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
 
+        per_func_std = [float(np.nanstd(r)) if not np.isnan(r).all() else float("nan") for r in per_func_rewards]
         # Option 3 advantage: one advantage per conversation, stamped on every training row it produced.
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
@@ -1484,10 +1485,15 @@ class AsyncRolloutLoop:
                 "reward_kept": float(reward),
                 "reward_std": reward_std,
                 **{
-                    f"rewards/{name}": float(func_reward)
+                    f"rewards/{name}/mean": float(func_reward)
                     for name, func_reward, used in zip(
                         self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
                     )
+                    if used
+                },
+                **{
+                    f"rewards/{name}/std": std
+                    for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
                 **tm,

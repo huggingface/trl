@@ -417,7 +417,7 @@ A group whose rollouts all received the same reward (or fewer than two of which 
 
 ### Tools
 
-Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
+Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>/*` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
 
 | metric                                                  | path                       | meaning                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -447,8 +447,8 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
 | `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
-| `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `ratio` and `kl` show the _effect_ of off-policyness on the loss; this shows the cause                 |
-| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                     |
+| `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` show the _effect_ of off-policyness on the loss; this shows the cause                 |
+| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |
 
 ### Batches
 

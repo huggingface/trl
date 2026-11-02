@@ -426,6 +426,16 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        logged = trainer.state.log_history[0]
+        for key in [
+            "sampling/importance_sampling_ratio/min",
+            "sampling/importance_sampling_ratio/mean",
+            "sampling/importance_sampling_ratio/max",
+            "sampling/sampling_logp_difference/mean",
+            "sampling/sampling_logp_difference/max",
+        ]:
+            assert key in logged
+        assert logged["num_tokens"] > 0
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -2312,7 +2322,7 @@ class TestCustomRolloutLoop(TrlTestCase):
         )
         loop.calls = 0
         samples = [item for item in self._run(loop, 4) if isinstance(item, RolloutSample)]
-        assert {sample.metrics["rewards/rollout"] for sample in samples} == {0.0, 1.0}
+        assert {sample.metrics["rewards/rollout/mean"] for sample in samples} == {0.0, 1.0}
         assert {round(sample.advantage, 4) for sample in samples} == {-1.0, 1.0}
 
     def test_setup_runs_before_generation_and_close_after(self):
@@ -2480,8 +2490,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
 
         # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
-        assert samples[0].metrics["rewards/AsyncTwoReward"] == 1.0
-        assert samples[1].metrics["rewards/AsyncTwoReward"] == 3.0
+        assert samples[0].metrics["rewards/AsyncTwoReward/mean"] == 1.0
+        assert samples[1].metrics["rewards/AsyncTwoReward/mean"] == 3.0
         assert samples[0].advantage == pytest.approx(-1.0)
         assert samples[1].advantage == pytest.approx(1.0)
 
@@ -2496,7 +2506,8 @@ class TestScoreGroupOptionThree(TrlTestCase):
         assert samples[0].metrics["reward_kept"] == 1.0
         assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
         assert samples[0].metrics["reward_std"] == pytest.approx(1.0)
-        assert samples[1].metrics["rewards/two_reward"] == 3.0
+        assert samples[1].metrics["rewards/two_reward/mean"] == 3.0
+        assert samples[1].metrics["rewards/two_reward/std"] == pytest.approx(1.0)
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
         assert samples[1].metrics is not samples[2].metrics
 
