@@ -49,30 +49,25 @@ accelerate launch \
 """
 
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, Mxfp4Config
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
 
 def main(script_args, training_args, model_args):
-    # Load model
-    quantization_config = Mxfp4Config(dequantize=True)
-    model_kwargs = dict(
+    # The trainer loads the model, dequantizing its MXFP4 experts
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        quantization_config=quantization_config,
     )
-
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     # Train model
     trainer = SFTTrainer(
-        model=model,
+        model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
