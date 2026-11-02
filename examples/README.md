@@ -6,6 +6,9 @@ For a small decision-model training run, see [`jeva_banking77`](jeva_banking77).
 intent from candidate descriptions, including requests where none of the candidates apply.
 Its [training config](jeva_banking77/config.yaml) runs 1,000 LoRA steps with a stratified validation holdout.
 
+For a small contrastive decision-model run, see [`clm_typed_decisions`](clm_typed_decisions). It trains CLM heads
+on a frozen SmolLM2-135M encoder with soft targets from typed decisions.
+
 ## Adding a new example
 
 - **Name the folder** after the method and what makes the example distinctive: the task (`grpo_wordle`), the model (`sft_gpt_oss`), or the technique (`grpo_qlora`). Load folder-local assets relative to the script (`Path(__file__).parent / ...`), not the working directory.

@@ -1999,6 +1999,21 @@ peft_config = LoraConfig(
 )
 ```
 
+### Contrastive Language Models: A System One Model for Fast and Generalizable Decision-Making
+
+**📜 Paper**: https://contrastive-lm.notion.site
+
+CLM scores independently encoded states and candidates using two projection heads and scaled cosine similarity.
+Its Transformers model provides a bidirectional contrastive loss. The typed-decisions example trains new heads
+on a frozen 135M encoder with soft targets and a holdout split by source-row ID.
+
+```python
+from trl.experimental.decision import DecisionConfig
+
+# The publication does not specify this small-encoder training setup.
+training_args = DecisionConfig(output_dir="clm-output")
+```
+
 ## Distributed Training
 
 ### ZeRO: Memory Optimizations Toward Training Trillion Parameter Models

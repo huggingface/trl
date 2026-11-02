@@ -34,7 +34,7 @@ pytest.importorskip("transformers.models.jeva")
 from transformers import AutoModelForDecision, JevaForDecision
 from transformers import JevaConfig as JevaModelConfig
 
-from trl.experimental.decision import DataCollatorForJeva, DecisionConfig, DecisionTrainer
+from trl.experimental.decision import DataCollatorForClm, DataCollatorForJeva, DecisionConfig, DecisionTrainer
 
 from ..testing_utils import TrlTestCase, require_peft
 
@@ -537,3 +537,75 @@ class TestDataCollatorForJeva(TrlTestCase):
             [row]
         )
         assert batch["input_ids"].shape[1] == 2
+        tokenizer.truncation_side = "left"
+        truncated = DataCollatorForJeva(
+            tokenizer, collator.decision_config, max_state_length=2, truncation="truncate"
+        )([row])
+        torch.testing.assert_close(truncated["input_ids"], collator([row])["input_ids"][:, -2:])
+
+
+class TestDataCollatorForClm(TrlTestCase):
+    def test_contrastive_training(self, tokenizer):
+        pytest.importorskip("transformers.models.clm")
+        from transformers import ClmConfig, ClmForDecision
+
+        encoder = AutoModel.from_pretrained(MODEL_ID, dtype=torch.float32)
+        model = ClmForDecision(
+            ClmConfig(text_config=encoder.config, hidden_size=24, projection_dim=8, num_hidden_layers=3), model=encoder
+        )
+        model.base_model.requires_grad_(False)
+        collator = DataCollatorForClm(tokenizer, model.decision_config)
+        records = [
+            ("An invoice", {"billing": None, "delivery": None}, [0, 0.75, 0.25]),
+            ("A different request", {"delivery": None, "other": None}, [0, 0.2, 0.8]),
+            ("Another invoice", {"billing": None, "delivery": None}, [0, 1, 0]),
+        ]
+        dataset = Dataset.from_list(
+            [
+                {
+                    "request": json.dumps(
+                        {"state": state, "questions": {"intent": {"type": "choice", "criteria": criteria}}}
+                    ),
+                    "target_probs": target,
+                }
+                for state, criteria, target in records
+            ]
+        )
+        prepared = dataset.map(collator.tokenize, remove_columns=dataset.column_names)
+        batch = collator(list(prepared))
+        torch.testing.assert_close(batch["num_options"], torch.tensor([[2, 1, 0]]))
+        targets = torch.tensor([[0.75, 0.25, 0], [0, 0.2, 0.8], [1, 0, 0]])
+        torch.testing.assert_close(batch["labels"], targets)
+        torch.testing.assert_close(
+            batch["option_mask"], torch.tensor([[True, True, False], [False, True, True], [True, True, False]])
+        )
+        output = model(**{key: value for key, value in batch.items() if key != "is_choice"})
+        reverse = targets.T / targets.sum(0)[:, None]
+        expected = (F.cross_entropy(output.logits, targets) + F.cross_entropy(output.logits.T, reverse)) / 2
+        torch.testing.assert_close(output.loss, expected)
+        before = model.state_head.input_projection.weight.detach().clone()
+        trainer = DecisionTrainer(
+            model,
+            args=DecisionConfig(
+                output_dir=self.tmp_dir,
+                use_cpu=True,
+                bf16=False,
+                max_steps=2,
+                per_device_train_batch_size=3,
+                per_device_eval_batch_size=3,
+                report_to="none",
+            ),
+            train_dataset=prepared,
+            eval_dataset=prepared,
+            processing_class=tokenizer,
+            data_collator=collator,
+        )
+        result = trainer.train()
+        assert np.isfinite(result.training_loss)
+        assert not torch.equal(before, model.state_head.input_projection.weight)
+        assert all(parameter.grad is None for parameter in model.base_model.parameters())
+        prediction = trainer.predict(prepared)
+        assert prediction.predictions.shape == (3, 3)
+        np.testing.assert_allclose(
+            np.where(prediction.predictions == -100, 0, prediction.predictions).sum(-1), 1, atol=1e-6
+        )

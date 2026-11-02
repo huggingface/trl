@@ -47,6 +47,20 @@ Requests use Transformers' `state` / `questions` schema, with one question per t
 
 Choice questions use a `criteria` mapping and may set `allow_null=True`. Score questions use a `criteria` list and may supply numeric `values`. The library's `DataCollatorForJeva` renders the model's decision template, splits state and option spans, and converts targets to tensors. Import it from `trl.experimental.decision` and pass `tokenizer` and `model.decision_config`. Models using the same input layout can reuse it; other layouts need their own collator. Preprocess once with `dataset.map(collator.tokenize, remove_columns=dataset.column_names)` so training and evaluation batches only need padding, as in the example.
 
+## CLM example
+
+The [typed-decisions example](https://github.com/huggingface/trl/tree/main/examples/clm_typed_decisions) trains
+CLM projection heads on a frozen SmolLM2-135M encoder. It requires [Transformers #50246](https://github.com/huggingface/transformers/pull/50246).
+
+```bash
+python examples/clm_typed_decisions/clm_typed_decisions.py --config examples/clm_typed_decisions/config.yaml
+```
+
+`DataCollatorForClm` reuses the request schema above and packs each batch into one prompt with a pool of distinct
+candidates. Soft targets supervise a bidirectional contrastive loss. Validation holds out source-row IDs before
+expanding their questions. `eval_accuracy` uses each question's own candidates; contrastive negatives are local
+to each device's batch. Context parallelism is unsupported for this example.
+
 ## Labels and metrics
 
 Collators may return integer class labels or soft target distributions. Pass `option_mask` when padding candidate sets. With `allow_null`, target distributions contain null first and the model may return `coverage_logits`. Nullable decisions require a coverage output. `is_choice` can exclude binary and score rows from choice accuracy.
@@ -83,3 +97,7 @@ answers = decide(request)
 ## DataCollatorForJeva
 
 [[autodoc]] experimental.decision.DataCollatorForJeva
+
+## DataCollatorForClm
+
+[[autodoc]] experimental.decision.DataCollatorForClm
