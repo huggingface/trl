@@ -325,8 +325,9 @@ class GRPOConfig(_BaseConfig):
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
             and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
             the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
-            later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1` and
-            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`).
+            later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1`,
+            `min_p > 0` and structured outputs, which restrict it to the tokens the grammar allows, require `top_k > 0`
+            (e.g. `top_k=512`).
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
@@ -933,7 +934,8 @@ class GRPOConfig(_BaseConfig):
             "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
             "logprobs are normalized over the candidate set each token was sampled from, which requires "
             '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
-            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`)."
+            "candidate set with `top_k`, so `top_p < 1`, `min_p > 0` and structured outputs, which restrict it to the "
+            "tokens the grammar allows, require `top_k > 0` (e.g. `top_k=512`)."
         },
     )
     vllm_importance_sampling_mode: str = field(
@@ -1080,15 +1082,18 @@ class GRPOConfig(_BaseConfig):
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
             )
 
+        structured_outputs = self.vllm_structured_outputs_regex is not None or "structured_outputs" in (
+            self.generation_kwargs or {}
+        )
         if (
             self.use_vllm
             and self.vllm_importance_sampling_correction
             and self.top_k == 0
-            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0)
+            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0 or structured_outputs)
         ):
             raise ValueError(
-                "`top_p < 1.0` or `min_p > 0.0` needs `top_k > 0`: vLLM bounds the candidate set it returns for each "
-                "sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
+                "`top_p < 1.0`, `min_p > 0.0` or structured outputs need `top_k > 0`: vLLM bounds the candidate set "
+                "it returns for each sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
                 "`vllm_importance_sampling_correction=False`."
             )
 
