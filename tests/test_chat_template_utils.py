@@ -451,6 +451,7 @@ class TestAddResponseSchema:
         prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
         response = tokenizer(completion, add_special_tokens=False).input_ids
         parsed = parse_response(tokenizer, response, prefix=prefix.input_ids, tools=[multiply])
+        assert parsed == expected
 
     @pytest.mark.parametrize(
         "chat_template",
