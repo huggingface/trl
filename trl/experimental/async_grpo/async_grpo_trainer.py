@@ -27,7 +27,6 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from multiprocessing.queues import Queue as MPQueue
 from typing import Any, Protocol
 
 import torch
@@ -113,48 +112,6 @@ class _SupportsReset(Protocol):
 
 
 EnvironmentFactory = Callable[[], _SupportsReset]
-
-
-class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to
-    [`experimental.async_grpo.AsyncGRPOTrainer`].
-
-    The default [`AsyncRolloutWorker`] spawns a CUDA-free child process and scores completions with the trainer's
-    `reward_funcs`. Implement this protocol to plug in a custom rollout/scoring backend instead — for example, one that
-    runs reward models on their own GPUs.
-
-    Attributes:
-        rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it, or the bare `int` group id of
-            a group with nothing to train on (all its scored rewards equal) or of a prompt `filter_prompt` rejected, so
-            the prompt still counts as consumed for epochs and checkpoint resume. The two queue types are structurally
-            identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default
-            [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while an
-            in-process worker uses `queue.Queue`.
-        metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
-            like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
-            for a rate — so draining it is an append. A worker that measures nothing exposes an empty queue.
-    """
-
-    rollout_buffer: queue.Queue | MPQueue
-    metrics_queue: queue.Queue | MPQueue
-
-    def start(self) -> None:
-        """Begin producing rollouts. Called once on train begin, after the initial weight sync."""
-        ...
-
-    def stop(self) -> None:
-        """Stop the worker and release its resources. Called on train end."""
-        ...
-
-    def update_model_version(self, model_version: int) -> None:
-        """Tell the worker which policy version is now live, so it can tag or drop stale samples."""
-        ...
-
-    def check_health(self, stale_after_s: float) -> None:
-        """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
-        ...
 
 
 class StepIntervalCallback(TrainerCallback):
@@ -1009,11 +966,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             environment by name, and only that environment's tools are exposed in its prompt — letting a single run mix
             tasks (e.g. a coding environment and a game). This feature is experimental and may change or be removed at
             any time without prior notice.
-        rollout_worker (`RolloutWorkerProtocol`, *optional*):
-            Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
-            is created, which spawns a CUDA-free child process and scores completions with the trainer's
-            `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
-            one that runs reward models on their own GPUs. A custom worker ignores the trainer's `loop_cls`.
 
     To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
     [`experimental.async_grpo.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
@@ -1056,7 +1008,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         peft_config: "PeftConfig | None" = None,
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
-        rollout_worker: RolloutWorkerProtocol | None = None,
     ):
         # Args
         if args is None:
@@ -1372,27 +1323,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                 )
 
-            if rollout_worker is not None:
-                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
-                self.rollout_worker = rollout_worker
-                if self._lora_sync:
-                    # The worker was built before the server was probed, so it does not know the adapter name yet.
-                    # Without it, its requests name the base model and keep sampling the base policy.
-                    self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
-            else:
-                self.rollout_worker = AsyncRolloutWorker(
-                    self.args,
-                    loop_cls=self.loop_cls,
-                    model_name=get_config_model_id(model.config),
-                    lora_name=self._lora_name if self._lora_sync else None,
-                    dataset=train_dataset,
-                    reward_funcs=reward_funcs,
-                    processing_class=processing_class,
-                    eos_token_ids=self.eos_token_ids,
-                    tools=tools,
-                    environment_factory=environment_factory,
-                    **self._rollout_loop_kwargs,
-                )
+            self.rollout_worker = AsyncRolloutWorker(
+                self.args,
+                loop_cls=self.loop_cls,
+                model_name=get_config_model_id(model.config),
+                lora_name=self._lora_name if self._lora_sync else None,
+                dataset=train_dataset,
+                reward_funcs=reward_funcs,
+                processing_class=processing_class,
+                eos_token_ids=self.eos_token_ids,
+                tools=tools,
+                environment_factory=environment_factory,
+                **self._rollout_loop_kwargs,
+            )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
@@ -1920,7 +1863,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             config.save_pretrained(output_dir)
 
     def _save_checkpoint(self, model, trial):
-        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+        if self.accelerator.is_main_process:
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1938,7 +1881,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
         # Always reset first so a stale value from a prior train() call is never carried over.
-        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+        if self.accelerator.is_main_process:
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
             self._groups_before_resume = 0
             resume_from_checkpoint = kwargs.get("resume_from_checkpoint")
