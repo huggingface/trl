@@ -161,3 +161,9 @@ The MXFP4 model loads like the original, in vLLM or transformers:
 ```sh
 vllm serve gpt-oss-20b-chess-mxfp4
 ```
+
+The model from the run above is on the Hub as [trl-lib/gpt-oss-20b-chess](https://huggingface.co/trl-lib/gpt-oss-20b-chess), to try it without training:
+
+```sh
+vllm serve trl-lib/gpt-oss-20b-chess
+```
