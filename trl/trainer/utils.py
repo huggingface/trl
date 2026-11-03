@@ -1802,19 +1802,13 @@ def compute_flops_per_token(config: PretrainedConfig, seq_len: int) -> int:
         mlp_flops = 2 * 3 * h * config.intermediate_size
         total_layer_flops = L * (attn_flops + mlp_flops)
     else:
-        # Routed experts (gate + up + down, 3 matmuls each) + router. LFM2-MoE keeps `num_experts` on every version, and
-        # opens with `num_dense_layers` dense layers where Qwen-style MoE spaces them by `decoder_sparse_step`.
-        if config.model_type == "lfm2_moe":
-            num_experts = config.num_experts
-            is_sparse = [layer_idx >= config.num_dense_layers for layer_idx in range(L)]
-        else:
-            if Version(transformers.__version__) >= Version("5.1.0"):
-                num_experts = config.num_local_experts
-            else:
-                num_experts = config.num_experts
-            is_sparse = [layer_idx % config.decoder_sparse_step == 0 for layer_idx in range(L)]
+        # Routed experts (gate + up + down, 3 matmuls each) + router. Dense layers sit every `decoder_sparse_step`
+        # layers (Qwen-style MoE) or lead the stack (`num_dense_layers`, LFM2-MoE).
+        sparse_step = getattr(config, "decoder_sparse_step", 1)
+        num_dense_layers = getattr(config, "num_dense_layers", 0)
+        is_sparse = [layer_idx >= num_dense_layers and layer_idx % sparse_step == 0 for layer_idx in range(L)]
         moe_mlp_flops = num_experts_per_tok * 2 * 3 * h * config.moe_intermediate_size
-        moe_mlp_flops += 2 * h * num_experts
+        moe_mlp_flops += 2 * h * config.num_experts
         dense_mlp_flops = 2 * 3 * h * config.intermediate_size  # interspersed dense layers
         total_layer_flops = sum(attn_flops + (moe_mlp_flops if sparse else dense_mlp_flops) for sparse in is_sparse)
 
