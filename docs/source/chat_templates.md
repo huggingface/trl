@@ -43,14 +43,14 @@ Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `&#123;% 
 Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 
 - Removes the `'</think>'` split on assistant content. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
-- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
 
 ### `deepseekv3_training.jinja`
 
 Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
-- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+- Wraps assistant message output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
 
 ### `deepseekv3_v2_training.jinja`
 
@@ -62,7 +62,7 @@ Patched DeepSeek-R1-0528 template. Diff vs `deepseekv3_v2.jinja`:
 
 ### `deepseekv3_v3_training.jinja`
 
-Patched DeepSeek-V3 template (used by `deepseek-ai/DeepSeek-V3`). Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja`: `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers around assistant message output for SFT assistant-only loss.
+Patched DeepSeek-V3 template (used by `deepseek-ai/DeepSeek-V3`). Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja`: `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers around assistant message output for SFT assistant-only loss, with the `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn left outside them.
 
 ### `deepseekv3_v4_training.jinja`
 
