@@ -28,7 +28,7 @@ FSDP2 shards the model across the GPUs of one node, and the fine-tuned experts a
 model is served like the original. About 2 hours on 4xH200; see README.md for the results.
 
     accelerate launch --config_file examples/accelerate_configs/fsdp2.yaml --num_processes 4 \
-        examples/sft_gpt_oss/sft_gpt_oss.py
+        examples/sft_gpt_oss_chess/sft_gpt_oss_chess.py
 """
 
 import torch

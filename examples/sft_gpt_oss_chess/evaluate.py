@@ -24,12 +24,12 @@
 Share of the 1,000 test puzzles a model solves: its move must be the first move of the solution, or any move that
 mates, as Lichess accepts. One GPU.
 
-    python examples/sft_gpt_oss/evaluate.py gpt-oss-20b-chess-mxfp4
+    python examples/sft_gpt_oss_chess/evaluate.py gpt-oss-20b-chess-mxfp4
 
 The original model reasons before it answers. At its default reasoning effort, most of its answers do not finish
 within the 8k-token budget, so evaluate it with a low effort:
 
-    python examples/sft_gpt_oss/evaluate.py openai/gpt-oss-20b --reasoning_effort low
+    python examples/sft_gpt_oss_chess/evaluate.py openai/gpt-oss-20b --reasoning_effort low
 """
 
 import argparse

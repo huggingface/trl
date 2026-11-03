@@ -36,14 +36,14 @@ Fine-tune on one node, about 2 hours on 4xH200:
 
 ```sh
 accelerate launch --config_file examples/accelerate_configs/fsdp2.yaml --num_processes 4 \
-    examples/sft_gpt_oss/sft_gpt_oss.py
+    examples/sft_gpt_oss_chess/sft_gpt_oss_chess.py
 ```
 
 This writes two models: `gpt-oss-20b-chess`, the fine-tuned model in float32 (84 GB), and `gpt-oss-20b-chess-mxfp4`, the same model with its experts in MXFP4 again (14 GB, the size of the original). Count the puzzles each one solves, on one GPU:
 
 ```sh
-python examples/sft_gpt_oss/evaluate.py gpt-oss-20b-chess-mxfp4
-python examples/sft_gpt_oss/evaluate.py openai/gpt-oss-20b --reasoning_effort low
+python examples/sft_gpt_oss_chess/evaluate.py gpt-oss-20b-chess-mxfp4
+python examples/sft_gpt_oss_chess/evaluate.py openai/gpt-oss-20b --reasoning_effort low
 ```
 
 And serve it like the original:
@@ -62,11 +62,11 @@ vllm serve gpt-oss-20b-chess-mxfp4
 
 The fine-tuned model answers right away, without reasoning, and solves 6 times more puzzles than the original model does after reasoning. Back in MXFP4, it loses 1.9 points, and the runs on 50k and 200k puzzles lose 4.3 and 4.4. Each number is one training run on the same 1,000 test puzzles, and in our runs the same settings trained twice differed by 3 points.
 
-![Puzzles solved against the number of training puzzles](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss/puzzles_solved.png)
+![Puzzles solved against the number of training puzzles](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss_chess/puzzles_solved.png)
 
 Training with the MXFP4 rounding in the forward pass, quantization-aware training, is the way to remove that loss: see [#6567](https://github.com/huggingface/trl/issues/6567).
 
-![Token accuracy during training](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss/token_accuracy.png)
+![Token accuracy during training](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss_chess/token_accuracy.png)
 
 The logged loss stays above 3.6 even at this accuracy. gpt-oss weights the load-balancing loss of its router by 0.9 (`router_aux_loss_coef` in its config), and that loss sits near 4 when the experts are balanced, so it accounts for about 3.6 of the logged loss.
 
@@ -76,9 +76,9 @@ Three test puzzles that the original model misses (red arrow) and the fine-tuned
 
 <table>
   <tr>
-    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss/puzzle-stVYb.png" width="240" alt="White to move: Nxf6+"></td>
-    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss/puzzle-fBl2f.png" width="240" alt="Black to move: Nxf3+"></td>
-    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss/puzzle-rsjTA.png" width="240" alt="Black to move: Rxg2+"></td>
+    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss_chess/puzzle-stVYb.png" width="240" alt="White to move: Nxf6+"></td>
+    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss_chess/puzzle-fBl2f.png" width="240" alt="Black to move: Nxf3+"></td>
+    <td><img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_gpt_oss_chess/puzzle-rsjTA.png" width="240" alt="Black to move: Rxg2+"></td>
   </tr>
   <tr>
     <td><a href="https://lichess.org/training/stVYb">White to move</a>, rated 1419. 11. Nxf6+ Qxf6 12. Qxg4: the capture with check removes the knight that guards the bishop on g4, and the queen takes it. The original model plays Qg3.</td>
