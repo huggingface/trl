@@ -1,6 +1,6 @@
 # Teach gpt-oss-20b chess
 
-Say you want [gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) to be good at chess. This example follows what you would do: measure how good it is, build a dataset, fine-tune it, and measure again. One step is specific to gpt-oss: its weights ship in MXFP4, a 4-bit format, and the fine-tuned model should too.
+Say you want [gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) to be good at chess. This example follows what you would do: measure how good it is, build a dataset, fine-tune it, and measure again.
 
 ## 1. Is gpt-oss-20b good at chess?
 
