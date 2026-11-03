@@ -140,9 +140,8 @@ second copy of Adam's moments. The parameters stay whole everywhere, which is wh
 
 Two consequences to know about. The vocabulary projection is replicated rather than split, which
 costs one copy of that matrix per process and removes a gather from every forward. And the engine
-decodes through a second view of the model, sharing every parameter, because continuous batching
-switches a model to a paged attention implementation that cannot serve the training forward; that
-view costs no extra memory.
+decodes from the training parameters themselves, with the attention implementation the trainer
+chose, so a weight update is visible to the next decoding step without any copy.
 
 Which knob to turn depends on whether generation or training takes the step's time, and
 `generation_wait_s` says which: it logs how long each step waited for the engine after resuming it.
