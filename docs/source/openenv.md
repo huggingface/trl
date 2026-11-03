@@ -196,7 +196,7 @@ For more information on reward functions, see the [GRPO - Custom Reward Function
 
 A few things we've found helpful when working with OpenEnv environments and GRPO:
 
-- **Simple rewards work well.** In our experiments with Wordle and Sudoku, binary rewards (1.0 for success, 0.0 otherwise) gave cleaner training signals than shaped rewards with partial credit. GRPO compares completions within a group, so the relative ranking matters more than the absolute values.
+- **Make sure groups differ.** GRPO compares completions within a group, so the relative ranking matters more than the absolute values, and a group where every completion gets the same reward gives no signal. A binary reward (1.0 for success, 0.0 otherwise) is clean when the model succeeds some of the time. When it rarely does, add partial credit: the Sudoku example adds the fraction of cells filled to the solved reward, the Wordle example the greens of the best guess.
 - **Check the final state, not the path.** When possible, let the environment judge the outcome (e.g., "did the model solve the puzzle?") rather than checking if it followed a specific sequence of actions. This gives the model freedom to discover its own strategies.
 - **Test your reward before training.** Run a few episodes manually (see the [Wordle example notebook](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb)) to confirm the environment returns sensible rewards. If a capable model can't score higher than a random baseline, the reward signal may need adjustment.
 
@@ -212,6 +212,18 @@ args = GRPOConfig(
 ```
 
 If episodes are being cut short (model stops mid-game), this is likely the cause.
+
+### Long runs against a Space
+
+A Space can close WebSockets that stay open for hours (we saw it about every 2 hours). OpenEnv clients up to 0.11.0 then reconnect to a new environment session, and if a game was in progress, the next `step()` runs on a game the client never reset, with no error. Newer clients raise `SessionLostError` instead, so the game fails. To keep the drops away from training, open a new client in `reset()`, so each connection lasts one episode, and set `MAX_CONCURRENT_ENVS` a bit above the number of games played at once, since the old sessions are released asynchronously:
+
+```python
+def reset(self, **kwargs) -> str | None:
+    self.client.close()
+    self.client = TextArenaEnv(base_url=env_url)
+    result = self.client.reset()
+    ...
+```
 
 ## Advanced example: Wordle
 
