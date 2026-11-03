@@ -700,7 +700,8 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         if is_peft and model.prefix in name:
             continue
         # When module to save, remove its prefix and discard the original module
-        if "original_module" in name:
+        # and the other adapters' copies (e.g. a "ref" adapter)
+        if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
             continue
         name = name.replace("modules_to_save.default.", "")
         yield name, param
