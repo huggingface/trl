@@ -14,7 +14,7 @@ Greedy decoding on the same 30 words. GRPO ran 150 steps on one A100 80GB, in ab
 
 ## SFT warmup
 
-This example starts from the published SFT model. To train your own, the OpenEnv repo has the two scripts: [`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/generate_sft_data.py) plays 1,000 games with a solver and writes them as tool-calling conversations ([`openenv/wordle-tool-calls-sft`](https://huggingface.co/datasets/openenv/wordle-tool-calls-sft)), and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/sft.py) trains on them with `SFTTrainer`, in 7 minutes on one A100. Then pass your model with `--model`.
+This example starts from the published SFT model. To train your own, follow the SFT steps of the [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo#3-generate-the-sft-data). They use two scripts: [`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/generate_sft_data.py) plays 1,000 games with a solver and writes them as tool-calling conversations ([`openenv/wordle-tool-calls-sft`](https://huggingface.co/datasets/openenv/wordle-tool-calls-sft)), and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/sft.py) trains on them with `SFTTrainer`, in 7 minutes on one A100. Then pass your model with `--model`.
 
 ## Run GRPO
 
