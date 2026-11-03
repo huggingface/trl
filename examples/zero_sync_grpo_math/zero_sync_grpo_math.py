@@ -22,8 +22,8 @@
 """
 Zero-sync GRPO on GSM8K with long thinking completions, tuned for throughput.
 
-Training and generation share one weight copy: the continuous batching engine decodes through a
-view of the training model, so there is no inference server and no weight sync. The engine
+Training and generation share one weight copy: the continuous batching engine decodes from the
+tensors the optimizer updates, so there is no inference server and no weight sync. The engine
 generates between optimizer steps, and every completion is produced by the current policy (at
 most `rollouts_in_flight` rollouts behind the policy).
 
