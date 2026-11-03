@@ -428,6 +428,10 @@ class VLLMGeneration:
             # When module to save, remove its prefix and discard the original module
             if "original_module" in name:
                 continue
+            # Skip modules_to_save from non-default adapters (e.g. the "ref" adapter
+            # added by GRPO/RLOO); only the active adapter's copy should reach vLLM.
+            if "modules_to_save." in name and "modules_to_save.default." not in name:
+                continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
             if param.is_cpu:
@@ -472,6 +476,10 @@ class VLLMGeneration:
                             continue
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
+                            continue
+                        # Skip modules_to_save from non-default adapters (e.g. the "ref" adapter
+                        # added by GRPO/RLOO); only the active adapter's copy should reach vLLM.
+                        if "modules_to_save." in name and "modules_to_save.default." not in name:
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
