@@ -38,11 +38,8 @@ def main():
     train_dataset = load_dataset("open-r1/codeforces-cots", split="train")
     train_dataset = train_dataset.remove_columns("prompt")
 
-    # Load model
+    # Created before the model, so that DeepSpeed ZeRO-3 partitions the weights while they load
     model_id = "google/gemma-3-12b-it"
-    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager", use_kernels=True)
-
-    # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
         bf16=True,
@@ -54,6 +51,10 @@ def main():
         deepspeed="examples/deepspeed_configs/zero3.json",
     )
 
+    # Load model
+    model = AutoModelForImageTextToText.from_pretrained(model_id, attn_implementation="eager", use_kernels=True)
+
+    # Train model
     trainer = SFTTrainer(
         args=training_args,
         model=model,
