@@ -960,7 +960,11 @@ class TestSFTTrainer(TrlTestCase):
         # Regression test for https://github.com/huggingface/trl/issues/8102
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
         training_args = SFTConfig(
-            output_dir=self.tmp_dir, router_aux_loss_coef=0.5, max_steps=1, logging_steps=1, report_to="none"
+            output_dir=self.tmp_dir,
+            router_aux_loss_coef=0.5,
+            max_steps=1,  # running the training loop once is enough
+            logging_steps=1,
+            report_to="none",
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset

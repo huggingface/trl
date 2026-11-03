@@ -326,7 +326,7 @@ class TestGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             router_aux_loss_coef=0.5,
-            max_steps=1,
+            max_steps=1,  # running the training loop once is enough
             logging_steps=1,
             report_to="none",
         )

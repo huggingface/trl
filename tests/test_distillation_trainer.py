@@ -419,7 +419,7 @@ class TestDistillationTrainer(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            max_steps=1,
+            max_steps=1,  # running the training loop once is enough
             report_to="none",
         )
         trainer = DistillationTrainer(

@@ -155,7 +155,11 @@ class TestRewardTrainer(TrlTestCase):
     def test_saved_model_keeps_its_router_config(self):
         # Regression test for https://github.com/huggingface/trl/issues/8102
         dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
-        training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        training_args = RewardConfig(
+            output_dir=self.tmp_dir,
+            max_steps=1,  # running the training loop once is enough
+            report_to="none",
+        )
         trainer = RewardTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
         )
