@@ -31,6 +31,10 @@ from trl.chat_template_utils import (
     cohere2_chat_template,
     cohere_chat_template,
     cohere_training_chat_template,
+    deepseek_r1_distill_chat_template,
+    deepseek_r1_distill_training_chat_template,
+    deepseekv3_chat_template,
+    deepseekv3_training_chat_template,
     deepseekv3_v3_chat_template,
     deepseekv3_v4_chat_template,
     gemma4_v2_chat_template,
@@ -39,11 +43,15 @@ from trl.chat_template_utils import (
     gemma4_v5_chat_template,
     get_training_chat_template,
     glm4_7_chat_template,
+    glm4moe_chat_template,
+    glm4moe_training_chat_template,
     glm5_1_chat_template,
     glm5_2_chat_template,
     glm5_3_chat_template,
     glm5_3_flash_chat_template,
     glm5_chat_template,
+    gptoss_chat_template,
+    gptoss_training_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
     is_chat_template_stop_token_trained,
@@ -52,13 +60,40 @@ from trl.chat_template_utils import (
     lfm2_2_5_vl_v2_chat_template,
     lfm2_chat_template,
     lfm2_v2_chat_template,
+    lfm2_v2_training_chat_template,
+    nemotron_3_5_lightning_chat_template,
+    nemotron_3_5_lightning_training_chat_template,
+    nemotron_3_nano_chat_template,
+    nemotron_3_nano_training_chat_template,
+    nemotron_3_super_chat_template,
+    nemotron_3_super_training_chat_template,
+    nemotron_3_ultra_chat_template,
+    nemotron_3_ultra_training_chat_template,
     parse_response,
     qwen2_5_base_chat_template,
+    qwen2_5_base_training_chat_template,
+    qwen2_5_chat_template,
+    qwen2_5_training_chat_template,
+    qwen3_5_nothink_chat_template,
+    qwen3_5_nothink_training_chat_template,
+    qwen3_5_think_chat_template,
+    qwen3_5_think_training_chat_template,
+    qwen3_6_chat_template,
+    qwen3_6_training_chat_template,
+    qwen3_8_chat_template,
+    qwen3_8_training_chat_template,
+    qwen3_chat_template,
     qwen3_coder_chat_template,
     qwen3_coder_next_chat_template,
+    qwen3_instruct_2507_chat_template,
+    qwen3_instruct_2507_training_chat_template,
     qwen3_thinking_2507_chat_template,
+    qwen3_thinking_2507_training_chat_template,
     qwen3_training_chat_template,
     qwen3_v2_chat_template,
+    qwen3_v2_training_chat_template,
+    qwen3_vl_chat_template,
+    qwen3_vl_training_chat_template,
     supports_tool_calling,
 )
 from trl.data_utils import prepare_multimodal_messages
@@ -317,11 +352,6 @@ class TestAddResponseSchema:
                     not _SUPPORTS_RESPONSE_TEMPLATE,
                     reason="LFM2.5 only ships a new-style response template, which requires transformers>=5.13",
                 ),
-            ),
-            pytest.param(
-                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
-                qwen3_training_chat_template,
-                id="qwen3-training",
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template, id="qwen2.5-base"
@@ -701,6 +731,194 @@ class TestAddResponseSchema:
         text = processor.apply_chat_template(messages, tokenize=True, return_dict=True).input_ids[0]
         parsed = parse_response(processor.tokenizer, text[len(prefix) :], prefix=prefix)
         assert parsed == expected
+
+
+class TestAddResponseSchemaTrainingTemplate:
+    @pytest.mark.parametrize(
+        "tokenizer_name, chat_template, training_chat_template",
+        [
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
+                deepseek_r1_distill_chat_template,
+                deepseek_r1_distill_training_chat_template,
+                id="deepseek-r1-distill",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="DeepSeek-R1-Distill only ships a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+                deepseekv3_chat_template,
+                deepseekv3_training_chat_template,
+                id="deepseekv3",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Glm4MoeForCausalLM",
+                glm4moe_chat_template,
+                glm4moe_training_chat_template,
+                id="glm4moe",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-GptOssForCausalLM",
+                gptoss_chat_template,
+                gptoss_training_chat_template,
+                id="gptoss",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Lfm2ForCausalLM",
+                lfm2_v2_chat_template,
+                lfm2_v2_training_chat_template,
+                id="lfm2-v2",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="LFM2 reuses the new-style response template of LFM2.5, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
+                nemotron_3_nano_chat_template,
+                nemotron_3_nano_training_chat_template,
+                id="nemotron-3-nano",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-super",
+                nemotron_3_super_chat_template,
+                nemotron_3_super_training_chat_template,
+                id="nemotron-3-super",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-ultra",
+                nemotron_3_ultra_chat_template,
+                nemotron_3_ultra_training_chat_template,
+                id="nemotron-3-ultra",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning",
+                nemotron_3_5_lightning_chat_template,
+                nemotron_3_5_lightning_training_chat_template,
+                id="nemotron-3.5-lightning",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.3.0"),
+                    reason="Nemotron 3.5 tokenizer requires transformers>=5.3.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                qwen2_5_chat_template,
+                qwen2_5_training_chat_template,
+                id="qwen2.5",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                qwen2_5_base_chat_template,
+                qwen2_5_base_training_chat_template,
+                id="qwen2.5-base",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                qwen3_chat_template,
+                qwen3_training_chat_template,
+                id="qwen3",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                qwen3_v2_chat_template,
+                qwen3_v2_training_chat_template,
+                id="qwen3-v2",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
+                qwen3_instruct_2507_chat_template,
+                qwen3_instruct_2507_training_chat_template,
+                id="qwen3-instruct-2507",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                qwen3_thinking_2507_chat_template,
+                qwen3_thinking_2507_training_chat_template,
+                id="qwen3-thinking-2507",
+                marks=pytest.mark.skipif(
+                    not _SUPPORTS_RESPONSE_TEMPLATE,
+                    reason="Qwen3-Thinking-2507 only gets a new-style response template, which requires transformers>=5.13",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                qwen3_vl_chat_template,
+                qwen3_vl_training_chat_template,
+                id="qwen3-vl",
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                qwen3_5_nothink_chat_template,
+                qwen3_5_nothink_training_chat_template,
+                id="qwen3.5-nothink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think",
+                qwen3_5_think_chat_template,
+                qwen3_5_think_training_chat_template,
+                id="qwen3.5-think",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                qwen3_6_chat_template,
+                qwen3_6_training_chat_template,
+                id="qwen3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8",
+                qwen3_8_chat_template,
+                qwen3_8_training_chat_template,
+                id="qwen3.8",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.0.0"),
+                    reason="Qwen3.5 tokenizer requires transformers>=5.0.0",
+                ),
+            ),
+        ],
+    )
+    def test_add_response_schema_training_template(self, tokenizer_name, chat_template, training_chat_template):
+        # The training variant renders a generated turn like the original, so it gets the same parser
+        original = AutoTokenizer.from_pretrained(tokenizer_name)
+        original.chat_template = chat_template
+        original = add_response_schema(original)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        tokenizer.chat_template = training_chat_template
+        tokenizer = add_response_schema(tokenizer)
+        if _SUPPORTS_RESPONSE_TEMPLATE:
+            assert tokenizer.response_template == original.response_template
+        else:
+            assert tokenizer.response_schema == original.response_schema
 
 
 class TestSupportsToolCalling:
@@ -1780,10 +1998,6 @@ class TestNamedChatTemplateVariants:
         ),
         pytest.param("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", id="qwen2.5"),
         pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", id="qwen3"),
-        pytest.param(
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_training_chat_template),
-            id="qwen3-training",
-        ),
         pytest.param(
             # Same model as `qwen3`, but shipping the response template itself instead of relying on
             # `add_response_schema` to supply it — so `_load` must leave it alone.
