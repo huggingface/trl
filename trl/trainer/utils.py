@@ -1327,7 +1327,9 @@ def create_model_from_path(
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
-    config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
+    # The config decides how the weights load, so it comes from the revision they load from
+    revision = {"revision": kwargs["revision"]} if "revision" in kwargs else {}
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False), **revision)
     # A quantized checkpoint is a serving artifact: neither MXFP4 nor FP8 weights train in place, so the checkpoint is
     # loaded dequantized, unless the caller chose how to load it with `quantization_config`
     dequantizers = {"mxfp4": Mxfp4Config, "fp8": FineGrainedFP8Config}
