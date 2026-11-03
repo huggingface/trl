@@ -46,7 +46,7 @@ from transformers import (
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
+from transformers.utils import is_peft_available
 
 from ...data_utils import (
     apply_chat_template,
@@ -74,15 +74,6 @@ if is_bitsandbytes_available():
 
 if is_peft_available():
     from peft import PeftConfig
-
-
-if is_sagemaker_mp_enabled():
-    from smdistributed.modelparallel import __version__ as SMP_VERSION
-
-    IS_SAGEMAKER_MP_POST_1_10 = Version(SMP_VERSION) >= Version("1.10")
-
-else:
-    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 if is_vllm_available():
