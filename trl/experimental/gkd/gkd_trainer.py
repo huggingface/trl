@@ -413,6 +413,7 @@ class GKDTrainer(SFTTrainer):
         `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
         the original inputs.
         """
+        generated = False
         if random.random() <= self.lmbda:
             with (
                 unwrap_model_for_generation(
@@ -428,6 +429,7 @@ class GKDTrainer(SFTTrainer):
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
+            generated = True
         elif self.seq_kd:
             with (
                 unwrap_model_for_generation(
@@ -442,6 +444,10 @@ class GKDTrainer(SFTTrainer):
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
+            generated = True
+
+        if generated and num_items_in_batch is not None:
+            num_items_in_batch = inputs["labels"][:, 1:].ne(-100).sum()
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
