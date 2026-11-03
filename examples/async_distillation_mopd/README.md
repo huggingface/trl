@@ -1,12 +1,12 @@
 # Fuse three RL experts into one model with MOPD
 
-Say you trained one RL expert per domain, for math, code and instruction following, all from the same SFT checkpoint, and you want one model that keeps what each of them learned. Multi-teacher on-policy distillation (MOPD) does that: the student answers prompts from every domain, and the expert of each prompt's domain scores the answer token by token. This example runs it with [`AsyncDistillationTrainer`](https://huggingface.co/docs/trl/async_distillation_trainer) and the experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098).
+Say you trained one RL expert per domain, for math, code and instruction following, all from the same SFT checkpoint, and you want one model that keeps what each of them learned. Multi-teacher on-policy distillation (MOPD) does that. The student answers prompts from every domain, and the expert of each prompt's domain scores the answer token by token. This example runs it with [`AsyncDistillationTrainer`](https://huggingface.co/docs/trl/async_distillation_trainer) and the experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098).
 
 ## 1. Where the student starts
 
 Open-MOPD released its whole recipe on SmolLM3-3B: an SFT checkpoint on mixed data, [`Open-MOPD-SmolLM3-3B-MixSFT`](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT), and three experts trained from it with GRPO, for [math](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math), [code](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code) and [instruction following](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF). The SFT checkpoint is the student, so this is the fusion stage of their recipe. With the Open-MOPD evaluation sets and scorers, it starts at 17.5 on AIME24, 19.2 on AIME25 and 67.5 on IFEval.
 
-All four models share one tokenizer, which the trainer needs: it compares the student and the teacher token by token.
+All four models share one tokenizer, which the trainer needs, since it compares the student and the teacher token by token.
 
 ## 2. Send each prompt to its teacher
 
@@ -51,7 +51,7 @@ The `vllm serve` commands to run it on your own GPUs are in the script's docstri
 
 ## 4. Watch the token imbalance
 
-The trainer logs two metrics per teacher: `teacher_token_frac/<id>`, the share of each step's tokens that went to it, and `teacher_jsd/<id>`, how far the student is from it. The first one is the one to watch. The loss is averaged over tokens, so a domain weighs as much as the tokens it produces, not as much as the prompts it has. Math and code answers run to thousands of tokens, instruction-following ones to a few hundred, so with 20% of the prompts instruction following got 1 to 3% of the tokens, and the student barely moved toward that teacher:
+The trainer logs two metrics per teacher: `teacher_token_frac/<id>`, the share of each step's tokens that went to it, and `teacher_jsd/<id>`, how far the student is from it. Keep an eye on `teacher_token_frac`. The loss is averaged over tokens, so each domain counts in proportion to the tokens it produces. Math and code answers run to thousands of tokens, instruction-following ones to a few hundred, so with 20% of the prompts instruction following got 1 to 3% of the tokens, and the student barely moved toward that teacher:
 
 ![Per-teacher token share and divergence](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/trl/mopd-per-teacher-metrics.png)
 
@@ -67,7 +67,7 @@ We stopped the run at step 60 (the script runs 90), about 1% of the paper's trai
 | + MOPD with TRL, 60 steps ([model](https://huggingface.co/sergiopaniego/open-mopd-smollm3-trl-naive)) | 24.2 | 22.5 | 73.0 |
 | Open-MOPD final model (paper) | 19.2 | 25.0 | 75.8 |
 
-AIME with 4 samples per problem, so a few points either way is noise, and IFEval strict prompt-level accuracy. Code was not evaluated. On math the student lands where the paper's final model does. Instruction following, the domain that got the fewest tokens, is where the gap is. The metrics of the run are on [Trackio](https://huggingface.co/spaces/sergiopaniego/open-mopd-trl).
+AIME with 4 samples per problem, so a few points either way is noise, and IFEval strict prompt-level accuracy. Code was not evaluated. On math the student is close to the paper's final model, and on IFEval it stays 2.8 points below, in the domain that got the fewest tokens. The metrics of the run are on [Trackio](https://huggingface.co/spaces/sergiopaniego/open-mopd-trl).
 
 ## 6. Use your own experts
 
