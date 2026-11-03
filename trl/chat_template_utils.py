@@ -146,7 +146,7 @@ def clone_chat_template(
 
 
 glm4moe_schema = {
-    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?$",
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|(?:user|observation|endoftext)\|>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?(?:<\|(?:user|observation|endoftext)\|>)?$",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
