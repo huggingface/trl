@@ -1252,10 +1252,7 @@ class SFTTrainer(_BaseTrainer):
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
         if hasattr(text_config, "router_aux_loss_coef"):
-            # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
-            # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
-            # `output_router_logits` the model was loaded with, so `router_aux_loss_coef=0.0` reliably turns it off.
-            text_config.output_router_logits = self.aux_loss_enabled
+            # The fused LM head forward weights the aux loss with the coef of the model config, so keep it in sync
             text_config.router_aux_loss_coef = self.router_aux_loss_coef
 
         # Initialize the metrics
