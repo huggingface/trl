@@ -83,10 +83,6 @@ def is_requests_available() -> bool:
     return _is_package_available("requests")
 
 
-def is_unsloth_available() -> bool:
-    return _is_package_available("unsloth")
-
-
 def is_vllm_available(min_version: str | None = None) -> bool:
     _vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
     if _vllm_available:
