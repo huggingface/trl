@@ -1123,7 +1123,7 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
-    def test_padding_free_without_packing_and_max_length_raises(self):
+    def test_padding_free_without_packing_truncates_to_max_length(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
@@ -1131,7 +1131,20 @@ class TestSFTTrainer(TrlTestCase):
             padding_free=True,
             report_to="none",
         )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+        assert all(len(x) <= 16 for x in trainer.train_dataset["input_ids"])
 
+    def test_padding_free_skip_prepare_dataset_and_max_length_raises(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=16,
+            padding_free=True,
+            dataset_kwargs={"skip_prepare_dataset": True},
+            report_to="none",
+        )
         with pytest.raises(ValueError, match="`max_length` is not enforced"):
             SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset

@@ -1044,12 +1044,6 @@ class SFTTrainer(_BaseTrainer):
                 )
 
         # Dataset
-        if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
-            raise ValueError(
-                "When `padding_free=True` without packing, `max_length` is not enforced. Either enable packing "
-                "(e.g., `packing=True, packing_strategy='bfd'`), provide already truncated inputs, or set "
-                "`max_length=None`."
-            )
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
         self._skip_prepare_dataset = (
@@ -1057,6 +1051,17 @@ class SFTTrainer(_BaseTrainer):
             and args.dataset_kwargs.get("skip_prepare_dataset", False)
             or self._is_vision_dataset
         )
+        if (
+            self.padding_free
+            and not args.packing
+            and args.max_length is not None
+            and self._skip_prepare_dataset
+        ):
+            raise ValueError(
+                "When `padding_free=True` without packing and dataset preparation is skipped, `max_length` is "
+                "not enforced. Either enable packing (e.g., `packing=True, packing_strategy='bfd'`), provide "
+                "already truncated inputs, or set `max_length=None`."
+            )
         # Kept on the instance so that `evaluate` can preprocess freshly-passed eval datasets the same way.
         self._formatting_func = formatting_func
         eval_datasets = (
