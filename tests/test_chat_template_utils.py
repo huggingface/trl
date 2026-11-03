@@ -1722,6 +1722,7 @@ class TestGetTrainingChatTemplate:
             assert after == before + "<|user|>"
         elif tokenizer_name in (
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
+            "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
             "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         ):
             # These DeepSeek native templates drop everything up to and including `</think>` when re-rendering an
