@@ -14,8 +14,6 @@
 
 import pytest
 import torch
-import transformers
-from packaging.version import Version
 from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils.checkpoint import CheckpointPolicy
 from transformers import AutoModelForCausalLM
@@ -101,11 +99,7 @@ class TestSelectiveActivationCheckpointing(TrlTestCase):
     def test_idempotent(self):
         """Enabling SAC twice on the same model must not stack wrappers."""
         model = AutoModelForCausalLM.from_pretrained(self.model_id, attn_implementation="sdpa").to(torch_device)
-        if Version(transformers.__version__) >= Version("5.23.0.dev0"):
-            enable_name = "activation_checkpointing_enable"
-        else:
-            enable_name = "gradient_checkpointing_enable"
         enable_selective_activation_checkpointing(model)
-        once_wrapped = getattr(model, enable_name)
+        once_wrapped = model.gradient_checkpointing_enable
         enable_selective_activation_checkpointing(model)
-        assert getattr(model, enable_name) is once_wrapped
+        assert model.gradient_checkpointing_enable is once_wrapped
