@@ -21,7 +21,7 @@ import transformers
 from accelerate.utils.memory import release_memory
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -411,6 +411,30 @@ class TestDistillationTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = DistillationConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_steps=1,
+            report_to="none",
+        )
+        trainer = DistillationTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            teacher_model="trl-internal-testing/small-Qwen3ForCausalLM",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Saved with the router config it was loaded with
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @pytest.mark.parametrize("config_name", ["standard_prompt_only", "conversational_prompt_only"])
     def test_train_dataset_format(self, config_name):

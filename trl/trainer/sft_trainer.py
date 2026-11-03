@@ -1251,9 +1251,6 @@ class SFTTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
-        if hasattr(text_config, "router_aux_loss_coef"):
-            # The fused LM head forward weights the aux loss with the coef of the model config, so keep it in sync
-            text_config.router_aux_loss_coef = self.router_aux_loss_coef
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1627,10 +1624,10 @@ class SFTTrainer(_BaseTrainer):
                 and parallelism_config.sp_enabled
                 and self.model.training
             ):
-                # Ulysses sequence parallelism reduces the model's own `loss` across ranks
+                # Ulysses sequence parallelism reduces the model's own `loss` across ranks, which includes the aux loss
                 loss, outputs = super().compute_loss(
                     model,
-                    {**inputs, "fused_lm_head": True},
+                    {**inputs, "fused_lm_head": True, "router_aux_loss_coef": self.router_aux_loss_coef},
                     return_outputs=True,
                     num_items_in_batch=num_items_in_batch,
                 )

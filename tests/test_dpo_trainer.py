@@ -17,7 +17,7 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -246,6 +246,24 @@ class TestDPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir, router_aux_loss_coef=0.5, max_steps=1, logging_steps=1, report_to="none"
+        )
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @pytest.mark.parametrize("precompute_ref_log_probs", [False, True])
     @pytest.mark.parametrize(

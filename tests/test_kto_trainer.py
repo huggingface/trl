@@ -18,7 +18,7 @@ import torch
 import transformers
 from datasets import Dataset, DatasetDict, IterableDatasetDict, load_dataset
 from packaging.version import Version
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import KTOConfig, KTOTrainer
@@ -342,6 +342,24 @@ class TestKTOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        training_args = KTOConfig(
+            output_dir=self.tmp_dir, router_aux_loss_coef=0.5, max_steps=1, logging_steps=1, report_to="none"
+        )
+        trainer = KTOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Trained with another aux loss coef, saved with the router config it was loaded with
+        assert "aux_loss" in trainer.state.log_history[0]
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @pytest.mark.parametrize(
         "model_id",

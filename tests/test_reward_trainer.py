@@ -18,7 +18,7 @@ import pathlib
 import pytest
 import torch
 from datasets import DatasetDict, IterableDatasetDict, load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, BitsAndBytesConfig
 from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer
@@ -151,6 +151,21 @@ class TestRewardTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+        training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        trainer.train()
+        trainer.save_model()
+
+        # Saved with the router config it was loaded with
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @pytest.mark.parametrize(
         "eval_dataset_type",

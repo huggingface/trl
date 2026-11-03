@@ -956,18 +956,23 @@ class TestSFTTrainer(TrlTestCase):
         accumulated_aux_update = router_update(2, 2, 1.0) - router_update(2, 2, 0.0)
         torch.testing.assert_close(accumulated_aux_update, aux_update, rtol=1e-3, atol=1e-6)
 
-    def test_saved_model_keeps_its_router_logits_config(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=1, logging_steps=1, report_to="none")
+    def test_saved_model_keeps_its_router_config(self):
+        # Regression test for https://github.com/huggingface/trl/issues/8102
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, router_aux_loss_coef=0.5, max_steps=1, logging_steps=1, report_to="none"
+        )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
         )
         trainer.train()
         trainer.save_model()
 
-        # Trained with the aux loss, saved with the `output_router_logits` it was loaded with
+        # Trained with another aux loss coef, saved with the router config it was loaded with
         assert "aux_loss" in trainer.state.log_history[0]
-        assert AutoConfig.from_pretrained(self.tmp_dir).output_router_logits is False
+        config = AutoConfig.from_pretrained(self.tmp_dir)
+        assert config.output_router_logits is False
+        assert config.router_aux_loss_coef == 0.001
 
     @require_peft
     def test_train_peft_model(self):
