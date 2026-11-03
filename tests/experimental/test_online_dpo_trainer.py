@@ -14,7 +14,9 @@
 
 import pytest
 import torch
+import transformers
 from datasets import Dataset, DatasetDict, features, load_dataset
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.utils import is_peft_available, is_vision_available
 
@@ -514,7 +516,13 @@ class TestOnlineDPOVisionTrainer(TrlTestCase):
             "trl-internal-testing/tiny-LlavaForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3VLForConditionalGeneration",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("4.57.0"),
+                    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+                ),
+            ),
         ],
     )
     def test_online_dpo_vlm_trainer(self, model_id):
