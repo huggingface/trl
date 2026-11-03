@@ -1,10 +1,10 @@
 # Teach Qwen3-1.7B to play Wordle with GRPO
 
-Say you want a small model to play [Wordle](https://en.wikipedia.org/wiki/Wordle) through tool calls, one `guess` per word, against the [OpenEnv](https://huggingface.co/docs/trl/openenv) TextArena environment. This example follows what you would do: measure the base model, warm it up with SFT, train it with GRPO against the environment, and measure again. [`grpo_wordle.py`](grpo_wordle.py) is the GRPO step, and [`grpo_wordle.ipynb`](grpo_wordle.ipynb) walks through the same steps.
+[`grpo_wordle.py`](grpo_wordle.py) trains Qwen3-1.7B to play [Wordle](https://en.wikipedia.org/wiki/Wordle) against the [OpenEnv](https://huggingface.co/docs/trl/openenv) TextArena environment, with one `guess` tool call per word. [`grpo_wordle.ipynb`](grpo_wordle.ipynb) walks through the same steps.
 
 ## 1. Can Qwen3-1.7B play Wordle?
 
-On 30 fixed words, with greedy decoding, [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B) wins 0 games and makes 24 invalid guesses. A model that never wins gives GRPO nothing to learn from: every game in a group gets the same reward.
+On 30 fixed words, with greedy decoding, [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B) wins 0 games and makes 24 invalid guesses. A model that never wins gives GRPO nothing to learn from, since every game in a group gets the same reward.
 
 ## 2. Warm it up with SFT
 
@@ -19,7 +19,7 @@ hf jobs uv run --flavor a100-large --timeout 4h --secrets HF_TOKEN examples/grpo
     --env-url https://<user>-wordle.hf.space --push-to-hub
 ```
 
-The script's docstring has the commands for a local GPU, with vLLM colocated or as a separate server. The reward has three terms, a win, paid more the faster it comes, partial credit from the best guess, and a penalty per invalid move, and TRL logs each one. [OpenEnv integration](https://huggingface.co/docs/trl/openenv) covers the environment class and the rewards in detail. Our run did 150 steps on one A100 80GB, in about 2 hours 15 minutes, and its curves are on [Trackio](https://huggingface.co/spaces/openenv/wordle-runs).
+The script's docstring has the commands for a local GPU, with vLLM colocated or as a separate server. The reward has three terms (a win, paid more the faster it comes, partial credit from the best guess, and a penalty per invalid move), and TRL logs each one. [OpenEnv integration](https://huggingface.co/docs/trl/openenv) covers the environment class and the rewards in detail. Our run did 150 steps on one A100 80GB, in about 2 hours 15 minutes, and its curves are on [Trackio](https://huggingface.co/spaces/openenv/wordle-runs).
 
 ## 4. Measure again
 
