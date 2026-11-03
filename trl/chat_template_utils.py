@@ -146,7 +146,7 @@ def clone_chat_template(
 
 
 glm4moe_schema = {
-    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?$",
+    "x-regex": r"^(?:\n?<think>\n?(?:(?P<reasoning_content>.*?\S.*?)\n?|[\s]*)</think>\s*)?(?P<content>(?:(?!<tool_call>)[\s\S])*?)(?:\n(?=<tool_call>))?(?=(?:<tool_call>|<\|(?:user|observation|endoftext)\|>|$))(?P<tool_calls>(?:<tool_call>(?:(?!</tool_call>)[\s\S])+</tool_call>\s*)+)?(?:<\|(?:user|observation|endoftext)\|>)?$",
     "type": "object",
     "properties": {
         "role": {"const": "assistant"},
@@ -394,27 +394,29 @@ qwen3_5_template = {
 }
 
 glm4moe_template = {
+    # Later GLM templates pre-fill `<think>`: the anchor consumes it, and reasoning opens only if a `</think>` follows
     "defaults": {"role": "assistant"},
-    "start_anchor": "<|assistant|>",
+    "start_anchor_pattern": r"<\|assistant\|>(?:<think>(?:</think>)?)?",
     "fields": {
         "reasoning_content": {
-            "open": "<think>",
+            "open_pattern": r"\s*(?:<think>)?(?=[\s\S]*?</think>)",
             "close_pattern": r"</think>\s*",
             "content": "text",
         },
         "tool_calls": {
-            "open_pattern": r"<tool_call>(?P<name>\S+)\n?",
+            # GLM-4.5 puts a newline after the name and between key and value; later GLM templates put none
+            "open_pattern": r"<tool_call>(?P<name>[^<\s]+)\s*",
             "close_pattern": r"</tool_call>\s*",
             "repeats": True,
             "content": "xml-inline",
             "content_args": {
-                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*\n<arg_value>(?P<value>.*?)</arg_value>",
+                "tag_pattern": r"<arg_key>(?P<key>[^<]+)</arg_key>\s*<arg_value>(?P<value>.*?)</arg_value>",
                 "value_parser": _XML_INLINE_VALUE_PARSER,
             },
             "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
         },
         "content": {
-            "close_pattern": r"<\|user\|>\s*|$",
+            "close_pattern": r"(?:<\|user\|>|<\|observation\|>)\s*|$",
             "content": "text",
         },
     },
@@ -614,6 +616,31 @@ gemma4_template = {
     },
 }
 
+deepseekv3_template = {
+    # The generation prompt pre-fills `<think>\n`, and after tool outputs the model continues without a new
+    # `<｜Assistant｜>` and opens `<think>` itself, so the anchor accepts either opener and the reasoning field the tag.
+    "defaults": {"role": "assistant"},
+    "start_anchor_pattern": r"(?:<｜Assistant｜>|<｜tool▁outputs▁end｜>)(?:<think>\n)?",
+    "fields": {
+        "reasoning_content": {
+            "open_pattern": r"(?:<think>\n?)?(?=[\s\S]*?</think>)",
+            "close_pattern": r"</think>\s*",
+            "content": "text",
+        },
+        "tool_calls": {
+            "open_pattern": r"(?:<｜tool▁calls▁begin｜>)?<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n",
+            "close_pattern": r"\n```<｜tool▁call▁end｜>\s*(?:<｜tool▁calls▁end｜>)?",
+            "repeats": True,
+            "content": "json",
+            "transform": {"type": "function", "function": {"name": "{name}", "arguments": "{content}"}},
+        },
+        "content": {
+            "close_pattern": r"<｜end▁of▁sentence｜>\s*|$",
+            "content": "text",
+        },
+    },
+}
+
 deepseek_r1_distill_template = {
     # DeepSeek-R1-Distill prefills the assistant turn with the `<think>` opener, so the start anchor consumes it.
     # Reasoning content is therefore not framed by a `<think>` open in the model output; the zero-width `open_pattern`
@@ -644,6 +671,12 @@ deepseek_r1_distill_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1_distill.
 
 deepseekv3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3.jinja").read_text(encoding="utf-8")
 
+deepseekv3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2.jinja").read_text(encoding="utf-8")
+
+deepseekv3_v3_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v3.jinja").read_text(encoding="utf-8")
+
+deepseekv3_v4_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v4.jinja").read_text(encoding="utf-8")
+
 diffusion_gemma_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma.jinja").read_text(encoding="utf-8")
 
 gemma_chat_template = (_CHAT_TEMPLATES_DIR / "gemma.jinja").read_text(encoding="utf-8")
@@ -670,7 +703,19 @@ gemma4_v9_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v9.jinja").read_text(en
 
 gemma4_v10_chat_template = (_CHAT_TEMPLATES_DIR / "gemma4_v10.jinja").read_text(encoding="utf-8")
 
+glm4_7_chat_template = (_CHAT_TEMPLATES_DIR / "glm4_7.jinja").read_text(encoding="utf-8")
+
 glm4moe_chat_template = (_CHAT_TEMPLATES_DIR / "glm4moe.jinja").read_text(encoding="utf-8")
+
+glm5_chat_template = (_CHAT_TEMPLATES_DIR / "glm5.jinja").read_text(encoding="utf-8")
+
+glm5_1_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_1.jinja").read_text(encoding="utf-8")
+
+glm5_2_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_2.jinja").read_text(encoding="utf-8")
+
+glm5_3_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3.jinja").read_text(encoding="utf-8")
+
+glm5_3_flash_chat_template = (_CHAT_TEMPLATES_DIR / "glm5_3_flash.jinja").read_text(encoding="utf-8")
 
 gptoss_chat_template = (_CHAT_TEMPLATES_DIR / "gptoss.jinja").read_text(encoding="utf-8")
 
@@ -722,12 +767,18 @@ phi3_5_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5.jinja").read_text(encoding
 
 qwen2_5_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5.jinja").read_text(encoding="utf-8")
 
+qwen2_5_base_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base.jinja").read_text(encoding="utf-8")
+
 # Also matches Qwen2-VL, which ships a byte-identical chat template.
 qwen2_5_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl.jinja").read_text(encoding="utf-8")
 
 qwen3_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3.jinja").read_text(encoding="utf-8")
 
+qwen3_v2_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2.jinja").read_text(encoding="utf-8")
+
 qwen3_instruct_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507.jinja").read_text(encoding="utf-8")
+
+qwen3_thinking_2507_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507.jinja").read_text(encoding="utf-8")
 
 qwen3_vl_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_vl.jinja").read_text(encoding="utf-8")
 
@@ -738,6 +789,10 @@ qwen3_5_think_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_5_think.jinja").read
 qwen3_6_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_6.jinja").read_text(encoding="utf-8")
 
 qwen3_8_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_8.jinja").read_text(encoding="utf-8")
+
+qwen3_coder_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder.jinja").read_text(encoding="utf-8")
+
+qwen3_coder_next_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_coder_next.jinja").read_text(encoding="utf-8")
 
 # Also matches SmolVLM2, which ships a byte-identical chat template.
 smolvlm_chat_template = (_CHAT_TEMPLATES_DIR / "smolvlm.jinja").read_text(encoding="utf-8")
@@ -787,36 +842,72 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         tokenizer = processing_class.tokenizer
     else:
         tokenizer = processing_class
-    if chat_template == glm4moe_chat_template:
+    if chat_template in [deepseekv3_chat_template, deepseekv3_training_chat_template]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, deepseekv3_template
+    elif chat_template in [glm4moe_chat_template, glm4moe_training_chat_template]:
         schema, template = glm4moe_schema, glm4moe_template
-    elif chat_template == gptoss_chat_template:
+    elif chat_template in [
+        glm4_7_chat_template,
+        glm5_chat_template,
+        glm5_1_chat_template,
+        glm5_2_chat_template,
+        glm5_3_chat_template,
+        glm5_3_flash_chat_template,
+    ]:
+        # Only the new-style template; the legacy `response_schema` is being removed upstream
+        # (huggingface/transformers#47320).
+        schema, template = None, glm4moe_template
+    elif chat_template in [gptoss_chat_template, gptoss_training_chat_template]:
         schema, template = gptoss_schema, gptoss_template
     elif chat_template in [llama3_1_chat_template, llama3_2_chat_template]:
         schema, template = llama3_schema, llama3_template
     elif chat_template in [
         qwen2_5_chat_template,
+        qwen2_5_training_chat_template,
+        qwen2_5_base_chat_template,
+        qwen2_5_base_training_chat_template,
         qwen3_chat_template,
         qwen3_training_chat_template,
+        qwen3_v2_chat_template,
+        qwen3_v2_training_chat_template,
         qwen3_instruct_2507_chat_template,
+        qwen3_instruct_2507_training_chat_template,
         qwen3_vl_chat_template,
+        qwen3_vl_training_chat_template,
     ]:
         schema, template = qwen3_schema, qwen3_template
+    elif chat_template in [qwen3_thinking_2507_chat_template, qwen3_thinking_2507_training_chat_template]:
+        # Only the new-style template: the legacy `qwen3_schema` does not handle the `<think>` pre-fill
+        schema, template = None, qwen3_template
     elif chat_template in [
         qwen3_5_nothink_chat_template,
+        qwen3_5_nothink_training_chat_template,
         qwen3_5_think_chat_template,
+        qwen3_5_think_training_chat_template,
         qwen3_6_chat_template,
+        qwen3_6_training_chat_template,
         qwen3_8_chat_template,
+        qwen3_8_training_chat_template,
+        qwen3_coder_chat_template,
+        qwen3_coder_next_chat_template,
     ]:
         schema, template = qwen3_5_schema, qwen3_5_template
     elif chat_template in [
         nemotron_3_nano_chat_template,
+        nemotron_3_nano_training_chat_template,
         nemotron_3_super_chat_template,
+        nemotron_3_super_training_chat_template,
         nemotron_3_ultra_chat_template,
+        nemotron_3_ultra_training_chat_template,
         nemotron_3_5_lightning_chat_template,
+        nemotron_3_5_lightning_training_chat_template,
     ]:
         schema, template = qwen3_5_schema, nemotron_3_template
     elif chat_template in [
         lfm2_v2_chat_template,
+        lfm2_v2_training_chat_template,
         lfm2_2_5_chat_template,
         lfm2_2_5_v2_chat_template,
         lfm2_2_5_vl_v2_chat_template,
@@ -843,7 +934,7 @@ def add_response_schema(processing_class: ProcessingClassT) -> ProcessingClassT:
         # Only the new-style template; recent Gemma 4 repos ship a `response_template` natively, and the legacy
         # `response_schema` is being removed upstream (huggingface/transformers#47320).
         schema, template = None, gemma4_template
-    elif chat_template == deepseek_r1_distill_chat_template:
+    elif chat_template in [deepseek_r1_distill_chat_template, deepseek_r1_distill_training_chat_template]:
         # Only the new-style template; the legacy `response_schema` is being removed upstream
         # (huggingface/transformers#47320).
         schema, template = None, deepseek_r1_distill_template
@@ -979,15 +1070,8 @@ def is_chat_template_prefix_preserving(processing_class: PreTrainedTokenizerBase
             messages2, tokenize=True, return_dict=False, add_generation_prompt=True
         )
     except TypeError:
-        # Best-effort fallback for templates that reject dict args (e.g. DeepSeek-V3). This is a chat template
-        # bug (see transformers#45419), and the training chat template fixes it to avoid blocking users.
-        dummy_tool_calls = [{"type": "function", "function": {"name": "dummy", "arguments": "{}"}}]
-        messages1[1]["tool_calls"] = dummy_tool_calls
-        messages2[1]["tool_calls"] = dummy_tool_calls
-        ids1 = processing_class.apply_chat_template(messages1, tokenize=True, return_dict=False)
-        ids2 = processing_class.apply_chat_template(
-            messages2, tokenize=True, return_dict=False, add_generation_prompt=True
-        )
+        # The template rejects dict arguments (transformers#45419), so trainers must swap in the training template
+        return False
 
     # VLM processors return batched output (list of lists), unbatch for single conversation
     if is_vlm:
@@ -1085,6 +1169,18 @@ deepseek_r1_distill_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseek_r1
 
 deepseekv3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_training.jinja").read_text(encoding="utf-8")
 
+deepseekv3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v2_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+deepseekv3_v3_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v3_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+deepseekv3_v4_training_chat_template = (_CHAT_TEMPLATES_DIR / "deepseekv3_v4_training.jinja").read_text(
+    encoding="utf-8"
+)
+
 diffusion_gemma_training_chat_template = (_CHAT_TEMPLATES_DIR / "diffusion_gemma_training.jinja").read_text(
     encoding="utf-8"
 )
@@ -1139,11 +1235,19 @@ phi3_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "phi3_5_training.jinja").
 
 qwen2_5_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_training.jinja").read_text(encoding="utf-8")
 
+qwen2_5_base_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_base_training.jinja").read_text(encoding="utf-8")
+
 qwen2_5_vl_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen2_5_vl_training.jinja").read_text(encoding="utf-8")
 
 qwen3_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_training.jinja").read_text(encoding="utf-8")
 
+qwen3_v2_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_v2_training.jinja").read_text(encoding="utf-8")
+
 qwen3_instruct_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_instruct_2507_training.jinja").read_text(
+    encoding="utf-8"
+)
+
+qwen3_thinking_2507_training_chat_template = (_CHAT_TEMPLATES_DIR / "qwen3_thinking_2507_training.jinja").read_text(
     encoding="utf-8"
 )
 
@@ -1256,6 +1360,15 @@ def get_training_chat_template(
     if chat_template == deepseekv3_chat_template:
         return deepseekv3_training_chat_template
 
+    if chat_template == deepseekv3_v2_chat_template:
+        return deepseekv3_v2_training_chat_template
+
+    if chat_template == deepseekv3_v3_chat_template:
+        return deepseekv3_v3_training_chat_template
+
+    if chat_template == deepseekv3_v4_chat_template:
+        return deepseekv3_v4_training_chat_template
+
     if chat_template == diffusion_gemma_chat_template:
         return diffusion_gemma_training_chat_template
 
@@ -1316,14 +1429,23 @@ def get_training_chat_template(
     if chat_template == qwen2_5_chat_template:
         return qwen2_5_training_chat_template
 
+    if chat_template == qwen2_5_base_chat_template:
+        return qwen2_5_base_training_chat_template
+
     if chat_template == qwen2_5_vl_chat_template:
         return qwen2_5_vl_training_chat_template
 
     if chat_template == qwen3_chat_template:
         return qwen3_training_chat_template
 
+    if chat_template == qwen3_v2_chat_template:
+        return qwen3_v2_training_chat_template
+
     if chat_template == qwen3_instruct_2507_chat_template:
         return qwen3_instruct_2507_training_chat_template
+
+    if chat_template == qwen3_thinking_2507_chat_template:
+        return qwen3_thinking_2507_training_chat_template
 
     if chat_template == qwen3_vl_chat_template:
         return qwen3_vl_training_chat_template
