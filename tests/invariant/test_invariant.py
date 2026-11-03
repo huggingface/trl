@@ -215,17 +215,17 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
     },
     "sft_fa2": {
         # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
-        # Loss is much tighter than grad_norm under FA2+bf16 (grad_norm absorbs bf16 + FA varlen kernel noise).
-        # The grad_norm tol (5.0) is intentionally ~50× looser than the non-FA2 sft class (0.1): it is sized to the
-        # FA2 varlen kernel noise observed in practice, not a regression budget. Do not tighten it without re-running
-        # the class and confirming the new gap; see https://github.com/huggingface/trl/pull/5842#issuecomment-4539190615
-        "tol": {"loss": 1.5e-2, "grad_norm": 5.0},
-        "residual_tol": {"loss": 1e-3, "grad_norm": 2.5e-1},
+        # The class stops at step 4. The step-5 batch is ill-conditioned: a 5e-5 relative parameter drift over steps
+        # 1-4 moves its grad_norm from 15.8 to 25.1 even in fp64, so any bf16 numerics change moves the trajectory from
+        # step 5 on. Tolerances are ~2x the largest gap between padded and padding-free runs, before and after #7882.
+        "tol": {"loss": 3e-3, "grad_norm": 3e-1},
+        "residual_tol": {"loss": 5e-4, "grad_norm": 1e-1},
         "members": [
             _build(
                 "sft_fa2",
                 "sft",
                 SFT_DATASET,
+                max_steps=4,
                 attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
@@ -235,6 +235,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 "sft_fa2_padfree",
                 "sft",
                 SFT_DATASET,
+                max_steps=4,
                 attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
                 max_length=None,  # Required when padding_free=True
