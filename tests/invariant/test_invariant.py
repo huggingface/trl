@@ -215,9 +215,9 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
     },
     "sft_fa2": {
         # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
-        # The class stops at step 4. The step-5 batch is ill-conditioned: a 5e-5 relative parameter drift over steps
-        # 1-4 moves its grad_norm from 15.8 to 25.1 even in fp64, so any bf16 numerics change moves the trajectory from
-        # step 5 on. Tolerances are ~2x the largest gap between padded and padding-free runs, before and after #7882.
+        # The class stops at step 4. A relative 1e-6 change to the gradients moves the step-5 grad_norm anywhere between
+        # 12.5 and 25.2, while steps 1-4 stay within 0.2. Tolerances are ~2x the largest gap between padded and
+        # padding-free runs, before and after #7882.
         "tol": {"loss": 3e-3, "grad_norm": 3e-1},
         "residual_tol": {"loss": 5e-4, "grad_norm": 1e-1},
         "members": [
