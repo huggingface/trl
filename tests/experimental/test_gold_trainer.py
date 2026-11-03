@@ -2224,6 +2224,10 @@ def test_eval_vlm_attaches_raw_images_for_teacher_processor(tmp_path, vlm_datase
     assert inputs["_raw_prompts"] == expected_prompts
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.0.0"),
+    reason="LFM2.5-VL requires transformers>=5.0.0",
+)
 def test_on_policy_vlm_without_vllm_collates_only_consumed_slice(tmp_path, vlm_dataset):
     # LFM2-VL's processor returns `spatial_shapes`, which generation needs alongside the pixel values
     trainer = GOLDTrainer(
