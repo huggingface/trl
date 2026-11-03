@@ -12,7 +12,11 @@
 
 Greedy decoding on the same 30 words. GRPO ran 150 steps on one A100 80GB, in about 2 hours 15 minutes. The training curves are on [Trackio](https://huggingface.co/spaces/openenv/wordle-runs), and the [Wordle Arena](https://huggingface.co/spaces/openenv/wordle-arena) Space replays the three models on any of the 30 words. Our run allowed 6 tool rounds per game, and the script now allows 12, so that invalid guesses don't use up the 6 legal ones.
 
-## Run it
+## SFT warmup
+
+This example starts from the published SFT model. To train your own, the OpenEnv repo has the two scripts: [`generate_sft_data.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/generate_sft_data.py) plays 1,000 games with a solver and writes them as tool-calling conversations ([`openenv/wordle-tool-calls-sft`](https://huggingface.co/datasets/openenv/wordle-tool-calls-sft)), and [`sft.py`](https://github.com/openenv/OpenEnv/blob/main/examples/wordle/sft.py) trains on them with `SFTTrainer`, in 7 minutes on one A100. Then pass your model with `--model`.
+
+## Run GRPO
 
 Each step plays 64 games, one environment session each, and the shared [`openenv/wordle`](https://huggingface.co/spaces/openenv/wordle) Space allows 8. [Duplicate it](https://huggingface.co/spaces/openenv/wordle?duplicate=true), set the `MAX_CONCURRENT_ENVS=64` variable on your copy, and pass its URL:
 
@@ -27,4 +31,4 @@ The rewards are three separate terms (a win, paid more the faster it comes, part
 
 ## The whole pipeline
 
-The SFT data, the SFT run, the evaluation and the GIF are in the [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo), with the scripts in [`examples/wordle`](https://github.com/openenv/OpenEnv/tree/main/examples/wordle) of the OpenEnv repo. The whole pipeline costs about $6 on Hugging Face Jobs.
+The SFT data, the SFT run, the evaluation and the GIF are explained step by step in the [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo), with the scripts in [`examples/wordle`](https://github.com/openenv/OpenEnv/tree/main/examples/wordle) of the OpenEnv repo. The whole pipeline costs about $6 on Hugging Face Jobs.
