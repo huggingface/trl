@@ -97,6 +97,11 @@ jobs:
           OPENENV_VERSION=$(python -c "import importlib.metadata; print(importlib.metadata.version('openenv'))")
           git clone --depth 1 --branch "v$OPENENV_VERSION" https://github.com/openenv/OpenEnv.git "$RUNNER_TEMP/OpenEnv"
           PYTHONPATH="$RUNNER_TEMP/OpenEnv/envs" pytest -v tests/experimental/test_openenv_tito.py
+          touch .pytest-openenv-completed
+
+      - name: Check that the OpenEnv pytest completed
+        if: ${{ !cancelled() }}
+        run: test -f .pytest-openenv-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
