@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl",
-#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla_env",
+#     "openenv-carla-env @ git+https://huggingface.co/spaces/sergiopaniego/carla-env",
 # ]
 # ///
 
@@ -29,7 +29,7 @@ scene description, so the model sees the driving scene after each action.
 Setup:
 
 ```sh
-uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla_env
+uv pip install git+https://huggingface.co/spaces/sergiopaniego/carla-env
 ```
 
 Usage (requires at least 2 CARLA Spaces, each supports only 1 concurrent connection):
@@ -126,9 +126,6 @@ You have the following tools available:
 Observe the scene first, then decide the best course of action to minimize harm."""
 
 
-SIM_TICKS = 10  # Number of simulation steps to advance after each action
-
-
 class CarlaGRPOEnv:
     _env_url_iter = None
     _image_size = 256
@@ -166,13 +163,9 @@ class CarlaGRPOEnv:
         content.append({"type": "text", "text": self._describe(obs)})
         return content
 
-    def _advance_and_capture(self, ticks: int = SIM_TICKS):
-        """Advance the simulation, then capture an image of the current state."""
-        result = None
-        for _ in range(ticks):
-            result = self.client.step(CarlaAction(action_type="observe"))
-            if result.done:
-                break
+    def _step_and_capture(self, action: CarlaAction):
+        """Step the simulation, then capture an image of the current state."""
+        result = self.client.step(action)
         capture_result = self.client.step(CarlaAction(action_type="capture_image"))
         result.observation.camera_image = capture_result.observation.camera_image
         return result
@@ -189,7 +182,7 @@ class CarlaGRPOEnv:
         Returns:
             The camera image and scene description with vehicle state and nearby actors.
         """
-        result = self._advance_and_capture()
+        result = self._step_and_capture(CarlaAction(action_type="observe"))
         self.reward = result.observation.rubric_reward or 0.0
         return self._format_multimodal(result.observation)
 
@@ -200,8 +193,7 @@ class CarlaGRPOEnv:
         Returns:
             The camera image and scene description after braking.
         """
-        self.client.step(CarlaAction(action_type="emergency_stop"))
-        result = self._advance_and_capture()
+        result = self._step_and_capture(CarlaAction(action_type="emergency_stop"))
         self.reward = result.observation.rubric_reward or 0.0
         return self._format_multimodal(result.observation)
 
@@ -215,8 +207,7 @@ class CarlaGRPOEnv:
         Returns:
             The camera image and scene description after changing lane.
         """
-        self.client.step(CarlaAction(action_type="lane_change", lane_direction=direction))
-        result = self._advance_and_capture()
+        result = self._step_and_capture(CarlaAction(action_type="lane_change", lane_direction=direction))
         self.reward = result.observation.rubric_reward or 0.0
         return self._format_multimodal(result.observation)
 
@@ -256,6 +247,8 @@ def main():
         environment_factory=CarlaGRPOEnv,
     )
     trainer.train()
+
+    trainer.end()
 
 
 if __name__ == "__main__":

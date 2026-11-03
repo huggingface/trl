@@ -39,7 +39,7 @@ from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_availa
 
 from ...chat_template_utils import add_response_schema, parse_response, supports_tool_calling
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import create_model_from_path, nanstd, pad, patch_chunked_lm_head
+from ...trainer.utils import add_fused_lm_head, create_model_from_path, nanstd, pad
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
 
@@ -347,23 +347,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 input_embeddings.__dict__.pop("forward", None)
             # An untied input embedding loads outside the plan, as a plain tensor, and the sweep below replicates it
 
-        # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head runs in
-        # chunks with an online logsumexp. Long completions make this the difference between training and an OOM.
-        # The patch replaces `forward`, and the generation engine decodes through that same object, so the standard
-        # forward is kept for calls without labels, which is what decoding does.
-        generation_forward = model.forward
-        # Under tensor parallelism the replicated lm_head would make every rank compute the whole vocabulary;
-        # passing the group makes each rank take every tp_size-th chunk instead, combined with two collectives.
-        tp_group = model._device_mesh.get_group() if args.tp_size > 1 else None
-        patch_chunked_lm_head(model, chunk_size=8192, temperature=self.temperature, tp_group=tp_group)
-        training_forward = model.forward
-
-        def forward(*args, labels=None, **kwargs):
-            if labels is None:
-                return generation_forward(*args, **kwargs)
-            return training_forward(*args, labels=labels, **kwargs)
-
-        model.forward = forward
+        # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head projects
+        # in tiles, only at the scored positions. Long completions make this the difference between training and an
+        # OOM. The forward is only fused when asked for with `fused_lm_head=True`, so the generation engine, which
+        # decodes through this same object, keeps the standard one.
+        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
         def data_collator(features):
             # No data collation is needed in GRPO
@@ -963,12 +951,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             for key in ("cu_seq_lens_q", "cu_seq_lens_k", "max_length_q", "max_length_k")
             if key in inputs
         }
+        # The fused head scores the positions whose next-token label is not -100, which is the completion tokens.
+        labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
         outputs = model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs.get("attention_mask"),
             position_ids=inputs.get("position_ids"),
-            labels=inputs["input_ids"],
-            completion_mask=completion_mask,
+            labels=labels,
+            fused_lm_head=True,
             **boundary_kwargs,
         )
         per_token_logps = outputs["log_probs"]

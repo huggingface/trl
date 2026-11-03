@@ -22,6 +22,7 @@ from trl.experimental.utils import (
     create_reference_model,
     prepare_peft_model,
     truncate_dataset,
+    truncate_right,
 )
 
 from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator
@@ -164,6 +165,21 @@ class TestTruncateExamples(TrlTestCase):
         }
         dataset = truncate_dataset(dataset, max_length)
         assert dataset.to_dict() == expected_output
+
+
+class TestTruncateRight(TrlTestCase):
+    def test_truncates_after_the_first_of_any_stop_token(self):
+        # The second row stops on 3, a stop token the first row does not use
+        input_ids = torch.tensor([[5, 2, 7, 8], [5, 3, 7, 8]])
+        output_ids, mask = truncate_right(input_ids, [2, 3], pad_token_id=0)
+        assert output_ids.tolist() == [[5, 2, 0, 0], [5, 3, 0, 0]]
+        assert mask.tolist() == [[1, 1, 0, 0], [1, 1, 0, 0]]
+
+    def test_keeps_sequences_without_a_stop_token(self):
+        input_ids = torch.tensor([[5, 7, 8, 9]])
+        output_ids, mask = truncate_right(input_ids, [2, 3], pad_token_id=0)
+        assert output_ids.tolist() == [[5, 7, 8, 9]]
+        assert mask.tolist() == [[1, 1, 1, 1]]
 
 
 class TestPreparePeftModel(TrlTestCase):

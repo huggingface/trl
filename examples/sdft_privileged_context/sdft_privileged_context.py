@@ -302,7 +302,7 @@ def _run_tooluse_eval(
 
     sample_path = os.path.join(trainer.args.output_dir, f"{metric_prefix}_samples.json")
     os.makedirs(trainer.args.output_dir, exist_ok=True)
-    with open(sample_path, "w") as f:
+    with open(sample_path, "w", encoding="utf-8") as f:
         json.dump(records[: min(20, len(records))], f, indent=2)
 
     return metrics
@@ -424,3 +424,5 @@ if __name__ == "__main__":
 
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name or script_args.dataset_path)
+
+    trainer.end()

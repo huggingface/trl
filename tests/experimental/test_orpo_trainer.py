@@ -14,7 +14,7 @@
 
 import pytest
 import torch
-from datasets import DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 
 from trl.experimental.orpo import ORPOConfig, ORPOTrainer
@@ -106,6 +106,48 @@ class TestORPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.equal(param, new_param)
 
+    def test_orpo_trainer_truncation(self):
+        # Each response is truncated to `max_length` minus the prompt length. A prompt that fills `max_length` leaves no
+        # response, so its example is dropped.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        training_args = ORPOConfig(output_dir=self.tmp_dir, report_to="none")
+        full = ORPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+        training_args = ORPOConfig(output_dir=self.tmp_dir, max_length=8, report_to="none")
+        truncated = ORPOTrainer(
+            model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dataset
+        ).train_dataset
+
+        kept = [row for row in full if len(row["prompt_input_ids"]) < 8]
+        for full_row, truncated_row in zip(kept, truncated, strict=True):
+            assert truncated_row["chosen_input_ids"] == full_row["chosen_input_ids"][:8]
+            assert truncated_row["rejected_input_ids"] == full_row["rejected_input_ids"][:8]
+
+    def test_fully_truncated_completion_examples_dropped(self):
+        """An example whose prompt alone fills `max_length` loses every completion token in truncation, so it's dropped
+        during dataset preparation."""
+        dataset = Dataset.from_dict(
+            {
+                "prompt": ["Hi", "This is a very long prompt that fills up the whole max_length budget on its own"],
+                "chosen": [" there", " yes"],
+                "rejected": [" bye", " no"],
+            }
+        )
+
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            max_length=6,
+            report_to="none",
+        )
+        trainer = ORPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Only the short-prompt example survives.
+        assert len(trainer.train_dataset) == 1
+        assert trainer.train_dataset[0]["prompt_input_ids"] == trainer.processing_class("Hi")["input_ids"]
+
     @pytest.mark.parametrize(
         "eval_dataset_type",
         [
@@ -167,6 +209,28 @@ class TestORPOTrainer(TrlTestCase):
         assert trainer.processing_class is not None
         trainer.train()
         assert trainer.state.log_history[-1]["train_loss"] is not None
+
+    @require_peft
+    def test_peft_init_is_seeded(self):
+        from peft import LoraConfig
+
+        # Two trainers with the same seed start from the same adapter weights
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        adapters = []
+        for global_seed in range(2):
+            torch.manual_seed(global_seed)  # a different global RNG state, as in two separate runs
+            trainer = ORPOTrainer(
+                model=self.model_id,
+                args=ORPOConfig(output_dir=self.tmp_dir, report_to="none"),
+                processing_class=self.tokenizer,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+            adapters.append({n: p.clone() for n, p in trainer.model.named_parameters() if "lora_A" in n})
+
+        assert adapters[0]
+        for n, param in adapters[0].items():
+            assert torch.equal(param, adapters[1][n]), f"Parameter {n} differs between the two trainers."
 
     @pytest.mark.parametrize(
         "config_name",

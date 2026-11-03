@@ -16,10 +16,13 @@ import types
 from unittest.mock import patch
 
 import pytest
+import torch
+from accelerate import Accelerator
 from transformers import AutoModelForCausalLM
+from transformers.testing_utils import torch_device
 
 from trl.import_utils import is_deepspeed_available
-from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed
+from trl.models.utils import disable_gradient_checkpointing, prepare_deepspeed, unwrap_model_for_generation
 
 
 @pytest.mark.skipif(not is_deepspeed_available(), reason="deepspeed is not installed")
@@ -73,3 +76,24 @@ class TestDisableGradientCheckpointing:
         with disable_gradient_checkpointing(model):
             assert model.is_gradient_checkpointing is False
         assert model.is_gradient_checkpointing is True
+
+
+class TestUnwrapModelForGeneration:
+    @pytest.mark.parametrize("use_reentrant", [True, False])
+    def test_restores_gradient_checkpointing_kwargs(self, use_reentrant):
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").to(torch_device)
+        model.train()  # checkpointing only runs in training mode
+        model.gradient_checkpointing_enable({"use_reentrant": use_reentrant})
+        with unwrap_model_for_generation(
+            model, Accelerator(), gradient_checkpointing_kwargs={"use_reentrant": use_reentrant}
+        ):
+            pass
+
+        input_ids = torch.randint(0, model.config.vocab_size, (1, 8), device=torch_device)
+        loss = model(input_ids=input_ids, labels=input_ids).loss
+        # Only non-reentrant checkpointing supports `torch.autograd.grad`, so this tells which one is enabled
+        if use_reentrant:
+            with pytest.raises(RuntimeError, match=r"\.grad\(\)"):
+                torch.autograd.grad(loss, list(model.parameters()))
+        else:
+            torch.autograd.grad(loss, list(model.parameters()))

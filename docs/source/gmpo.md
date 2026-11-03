@@ -2,7 +2,7 @@
 
 In the paper [Geometric-Mean Policy Optimization](https://huggingface.co/papers/2507.20673), the authors propose a GRPO variant that maximizes the *geometric* mean of the token-level importance ratios instead of the arithmetic mean. Because the geometric mean is far less sensitive to outlier ratios, the policy update is more stable and tolerates a much wider clipping range. Clipping is applied per token, in log space, and one-sided per the advantage sign (the standard PPO trust region) — crucially, *before* the geometric mean is taken.
 
-To use GMPO, you can use the [`GMPOTrainer`] class in `trl.experimental.gmpo`.
+To use GMPO, you can use the [`experimental.gmpo.GMPOTrainer`] class in `trl.experimental.gmpo`.
 
 ## Usage
 

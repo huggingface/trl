@@ -35,17 +35,18 @@ class GRPOConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
+        model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string.
+            argument of the [`GRPOTrainer`] is provided as a string. The `revision` value is also used when loading
+            processing classes.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoProcessor.from_pretrained`].
             Also applied to reward-model and reward-tokenizer loads.
-        router_aux_loss_coef (`float`, *optional*, defaults to `0.001`):
-            Coefficient of the load-balancing auxiliary loss. Only has an effect when training a Mixture-of-Experts
-            (MoE) model; for other models it does nothing. The auxiliary loss is added to the training loss with this
-            weight. Set to `0.0` to disable it.
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -63,7 +64,7 @@ class GRPOConfig(_BaseConfig):
         num_generations (`int`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
-        num_generations_eval (`int` or `None`, *optional*):
+        num_generations_eval (`int`, *optional*):
             Number of generations to sample during evaluation. This allows using fewer generations during evaluation to
             save computation. If `None`, uses the value of `num_generations`.
         max_completion_length (`int` or `None`, *optional*, defaults to `512`):
@@ -75,8 +76,9 @@ class GRPOConfig(_BaseConfig):
             with vLLM generation.
         shuffle_dataset (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the training dataset.
-        pad_to_multiple_of (`int`, *optional*):
-            If set, the prompts ids and completions ids will be padded to a multiple of this value.
+        pad_to_multiple_of (`int` or `str`, *optional*, defaults to `"auto"`):
+            If set, the prompts ids and completions ids will be padded to a multiple of this value. `"auto"` pads to a
+            multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not pad elsewhere.
 
         > Parameters that control generation
 
@@ -87,7 +89,7 @@ class GRPOConfig(_BaseConfig):
         steps_per_generation (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
-        temperature (`float`, defaults to `1.0`):
+        temperature (`float`, *optional*, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
@@ -129,6 +131,9 @@ class GRPOConfig(_BaseConfig):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
+            waking the engine adds host–device transfer latency.
         vllm_structured_outputs_regex (`str`, *optional*):
             Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
@@ -161,17 +166,6 @@ class GRPOConfig(_BaseConfig):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
-            Enable vLLM sleep mode to offload weights/cache during the optimizer step. Keeps GPU memory usage low, but
-            waking the engine adds host–device transfer latency.
-
-        > Parameters that control generation acceleration powered by transformers continuous batching
-
-        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
-            Whether to use transformers' continuous batching engine for generating completions. Requires
-            `transformers>=5.8.0`.
-        transformers_continuous_batching_config (`dict`, *optional*):
-            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Parameters that control the training
 
@@ -329,13 +323,15 @@ class GRPOConfig(_BaseConfig):
             Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM completion logprobs and
             recomputed training logprobs. If set to `False`, no IS is applied regardless of
             `vllm_importance_sampling_mode`. When `True`, the selected mode determines how the IS ratios are computed
-            and constrained.
+            and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed logprobs are normalized over
+            the candidate set each token was sampled from, which requires `vllm_mode="colocate"` and vLLM 0.28 or
+            later; otherwise, the IS ratios are biased. vLLM bounds that candidate set with `top_k`, so `top_p < 1` and
+            `min_p > 0` require `top_k > 0` (e.g. `top_k=512`).
         vllm_importance_sampling_mode (`str`, *optional*, defaults to `"sequence_mask"`):
             Specifies how Importance Sampling is performed when `vllm_importance_sampling_correction=True`. Possible
             values are:
 
-                - `"token_truncate"`: Token-level truncated IS (default). Per-token ratios are clipped to
-                [C_min, C_max].
+                - `"token_truncate"`: Token-level truncated IS. Per-token ratios are clipped to [C_min, C_max].
                 - `"token_mask"`: Token-level masked IS. Per-token ratios outside [C_min, C_max] are set to zero.
                 - `"sequence_truncate"`: Sequence-level truncated IS. A single sequence ratio is clipped to
                 [C_min, C_max] and applied to all tokens in the sequence.
@@ -380,7 +376,15 @@ class GRPOConfig(_BaseConfig):
             Hugging Face Hub repository to save the completions. Should be a complete repository name like
             `'username/reponame'` or `'orgname/reponame'`, or just `'reponame'` in which case the repository will be
             created in the currently-logged-in Hugging Face user's namespace. Note that this repository will be public
-            unless you set `hub_private_repo=True` or your organization's default is to create private repositories."
+            unless you set `hub_private_repo=True` or your organization's default is to create private repositories.
+
+        > Parameters that control generation acceleration powered by transformers continuous batching
+
+        use_transformers_continuous_batching (`bool`, *optional*, defaults to `False`):
+            Whether to use transformers' continuous batching engine for generating completions. Requires
+            `transformers>=5.8.0`.
+        transformers_continuous_batching_config (`dict`, *optional*):
+            Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`].
 
         > Deprecated parameters
 
@@ -397,7 +401,7 @@ class GRPOConfig(_BaseConfig):
 
             <Deprecated version="1.6.0">
 
-            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in v2.0.0. Use
+            Parameter `vllm_importance_sampling_cap` is deprecated and will be removed in version v2.0.0. Use
             `vllm_importance_sampling_clip_max` instead.
 
             </Deprecated>
@@ -428,7 +432,8 @@ class GRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
-            "argument of the `GRPOTrainer` is provided as a string."
+            "argument of the `GRPOTrainer` is provided as a string. The `revision` value is also used when loading "
+            "processing classes."
         },
     )
     trust_remote_code: bool = field(
@@ -439,12 +444,12 @@ class GRPOConfig(_BaseConfig):
             "reward-model and reward-tokenizer loads."
         },
     )
-    router_aux_loss_coef: float = field(
-        default=0.001,
+    router_aux_loss_coef: float | None = field(
+        default=None,
         metadata={
-            "help": "Coefficient of the load-balancing auxiliary loss. Only has an effect when training a "
-            "Mixture-of-Experts (MoE) model; for other models it does nothing. The auxiliary loss is added to the "
-            "training loss with this weight. Set to `0.0` to disable it."
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
     disable_dropout: bool = field(
@@ -457,7 +462,7 @@ class GRPOConfig(_BaseConfig):
     cast_lm_head_to_fp32: bool = field(
         default=False,
         metadata={
-            "help": "Whether to cast the language modeling head of the policy and reference, models to float32."
+            "help": "Whether to cast the language modeling head of the policy and reference models to float32. "
             "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe. This flag is only "
             "supported when the model has untied word embedding and language modeling head layers i.e. "
             "`tie_word_embeddings` in the model config is False."
@@ -505,9 +510,13 @@ class GRPOConfig(_BaseConfig):
         default=True,
         metadata={"help": "Whether to shuffle the training dataset."},
     )
-    pad_to_multiple_of: int | None = field(
-        default=None,
-        metadata={"help": "If set, the prompts ids and completions ids will be padded to a multiple of this value."},
+    pad_to_multiple_of: int | str | None = field(
+        default="auto",
+        metadata={
+            "help": "If set, the prompts ids and completions ids will be padded to a multiple of this value. `'auto'` "
+            "pads to a multiple of 128 on Neuron (AWS Trainium), which compiles once per input shape, and does not "
+            "pad elsewhere."
+        },
     )
 
     # Parameters that control generation
@@ -754,7 +763,7 @@ class GRPOConfig(_BaseConfig):
         default="token",
         metadata={
             "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
+            "`'token'` keeps the raw per-token log-probability ratios (one weight per token). `'sequence'` averages "
             "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
             "shows that sequence-level sampling often yields more stable training and better alignment with "
             "sequence-level rewards."
@@ -921,7 +930,10 @@ class GRPOConfig(_BaseConfig):
             "help": "Whether to apply Importance Sampling (IS) to correct for the mismatch between vLLM "
             "completion logprobs and recomputed training logprobs. If set to `False`, no IS is applied "
             "regardless of `vllm_importance_sampling_mode`. When `True`, the selected mode determines how "
-            "IS ratios are computed and constrained."
+            "IS ratios are computed and constrained. With `top_p < 1`, `top_k > 0` or `min_p > 0`, the recomputed "
+            "logprobs are normalized over the candidate set each token was sampled from, which requires "
+            '`vllm_mode="colocate"` and vLLM 0.28 or later; otherwise, the IS ratios are biased. vLLM bounds that '
+            "candidate set with `top_k`, so `top_p < 1` and `min_p > 0` require `top_k > 0` (e.g. `top_k=512`)."
         },
     )
     vllm_importance_sampling_mode: str = field(
@@ -1040,6 +1052,14 @@ class GRPOConfig(_BaseConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # The CLI passes the value as a string
+        if isinstance(self.pad_to_multiple_of, str) and self.pad_to_multiple_of != "auto":
+            self.pad_to_multiple_of = (
+                None if self.pad_to_multiple_of.lower() in ("none", "null") else int(self.pad_to_multiple_of)
+            )
+        if self.pad_to_multiple_of == "auto":
+            # Neuron compiles once per input shape, so padding bounds the number of compilations
+            self.pad_to_multiple_of = 128 if self.device.type == "neuron" else None
 
         if self.use_transformers_paged:
             warnings.warn(
@@ -1058,6 +1078,18 @@ class GRPOConfig(_BaseConfig):
                 "`parallelism_config.sp_size > 1`) yet. GRPO builds model inputs after generation inside the trainer, "
                 "so Transformers' context-parallel / Ulysses sequence-parallel input sharding cannot be applied to the "
                 "raw generation batch. Set both `cp_size=1` and `sp_size=1`, or disable `parallelism_config`."
+            )
+
+        if (
+            self.use_vllm
+            and self.vllm_importance_sampling_correction
+            and self.top_k == 0
+            and (self.top_p < 1.0 or (self.min_p or 0.0) > 0.0)
+        ):
+            raise ValueError(
+                "`top_p < 1.0` or `min_p > 0.0` needs `top_k > 0`: vLLM bounds the candidate set it returns for each "
+                "sampled token with `top_k` (e.g. `top_k=512`). Alternatively, set "
+                "`vllm_importance_sampling_correction=False`."
             )
 
         self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
@@ -1127,7 +1159,7 @@ class GRPOConfig(_BaseConfig):
 
         if self.vllm_importance_sampling_cap is not None:
             warnings.warn(
-                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0.  "
+                "The `vllm_importance_sampling_cap` argument is deprecated and will be removed in v2.0.0. "
                 "Use `vllm_importance_sampling_clip_max` instead.",
                 FutureWarning,
                 stacklevel=2,

@@ -21,11 +21,14 @@ from .._common import (
     init_weights_tiny_model,
     print_config_diff,
     push_to_hub,
+    set_seed,
     smoke_test,
 )
 
 
 check_transformers_version("5.15.0")
+
+set_seed()
 
 MODEL_ID = "meta-models/Muse-Glimmer-30B"
 

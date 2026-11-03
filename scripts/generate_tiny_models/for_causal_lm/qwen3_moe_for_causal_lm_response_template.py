@@ -24,12 +24,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from trl import add_response_schema
 
-from .._common import check_transformers_version, push_to_hub, smoke_test
+from .._common import check_transformers_version, push_to_hub, set_seed, smoke_test
 
 
 # The new-style `response_template` attribute (as opposed to the legacy `response_schema`) is only set, and
 # only serialized to `tokenizer_config.json`, from this release on.
 check_transformers_version("5.13.0")
+
+set_seed()
 
 MODEL_ID = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
 

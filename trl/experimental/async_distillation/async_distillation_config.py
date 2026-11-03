@@ -21,7 +21,7 @@ from ...trainer.base_config import _BaseConfig
 @dataclass
 class AsyncDistillationConfig(_BaseConfig):
     r"""
-    Configuration class for the [`AsyncDistillationTrainer`].
+    Configuration class for the [`experimental.async_distillation.AsyncDistillationTrainer`].
 
     This class includes only the parameters that are specific to asynchronous on-policy distillation. For a full list
     of training arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default
@@ -34,7 +34,7 @@ class AsyncDistillationConfig(_BaseConfig):
 
         model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when instantiating the
-            student model from a path.
+            student model from a path. The `revision` value is also used when loading the processing class.
         dtype (`str`, *optional*, defaults to `"float32"`):
             Data type to load the student model under, one of `"auto"`, `"bfloat16"`, `"float16"` or `"float32"`. It
             defaults to `"float32"` because the training-inference mismatch the async trainers are measured against
@@ -44,9 +44,19 @@ class AsyncDistillationConfig(_BaseConfig):
             trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
             same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence. Teacher servers are
             unaffected: they are never updated.
+
+            This only sets the dtype the weights are loaded in. Under FSDP with mixed precision (`bf16=True` is the
+            default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master weights and
+            the optimizer state are fp32 whatever `dtype` says, while the forward and backward run in bf16 or fp16.
+            Checkpoints are then written in that mixed-precision dtype, not in fp32. Without FSDP nothing upcasts:
+            `dtype="bfloat16"` with `bf16=True` keeps bf16 weights and optimizer states, which is pure bf16 training.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
 
         > Parameters that control generation
 
@@ -85,10 +95,11 @@ class AsyncDistillationConfig(_BaseConfig):
             teacher-forced request against the student's own completion tokens (`max_tokens=1`,
             `prompt_logprobs=teacher_top_k`, `temperature=teacher_temperature`), the same request
             [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous server-teacher
-            trainers. A single entry scores every sample (plain single-teacher on-policy distillation, the default).
-            Multiple entries enable MOPD (multi-teacher on-policy distillation, see
-            [MOPD](https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects which
-            entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
+            trainers. Because of that throwaway token, a teacher needs a `--max-model-len` larger than the student's,
+            or the longest completions cannot be scored. A single entry scores every sample (plain single-teacher
+            on-policy distillation, the default). Multiple entries enable MOPD (multi-teacher on-policy distillation,
+            see [MOPD](https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects
+            which entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
             `teacher_id` of `"math"` or `"code"` per row.
         request_timeout (`int`, *optional*, defaults to `600`):
             Timeout in seconds for individual HTTP requests to any vLLM server.
@@ -178,22 +189,29 @@ class AsyncDistillationConfig(_BaseConfig):
     > - `ignore_data_skip`: Defaults to `True` instead of `False`; the base Trainer's skip-and-replay loop does not apply to the async rollout queue.
     """
 
-    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + ["model_init_kwargs", "teacher_server_urls"]
+    _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
+        "model_init_kwargs",
+        "teacher_server_urls",
+        "chat_template_kwargs",
+    ]
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when "
-            "instantiating the student model from a path."
+            "instantiating the student model from a path. The `revision` value is also used when loading the "
+            "processing class."
         },
     )
     dtype: str = field(
         default="float32",
         metadata={
             "help": "Dtype to load the student model under. Defaults to 'float32', the precision the "
-            "training-inference mismatch results the async trainers are measured against were obtained at. A `dtype` "
-            "in `model_init_kwargs` takes precedence.",
+            "training-inference mismatch results the async trainers are measured against were obtained at. Under FSDP "
+            "with mixed precision the master weights and optimizer state are fp32 regardless (accelerate upcasts "
+            "before sharding) and checkpoints are written in the bf16/fp16 compute dtype. A `dtype` in "
+            "`model_init_kwargs` takes precedence.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
@@ -209,6 +227,14 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={
             "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
+        },
+    )
+    router_aux_loss_coef: float | None = field(
+        default=None,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
 
@@ -257,7 +283,7 @@ class AsyncDistillationConfig(_BaseConfig):
             "to repeat tokens."
         },
     )
-    chat_template_kwargs: dict | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "

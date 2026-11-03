@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[kernels]",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
@@ -70,6 +70,8 @@ def main() -> None:
         reward_funcs=accuracy_reward,
     )
     trainer.train()
+
+    trainer.end()
 
 
 if __name__ == "__main__":

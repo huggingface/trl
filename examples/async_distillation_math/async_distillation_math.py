@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[kernels]",
 #     "trackio",
 # ]
 # ///
@@ -74,6 +74,8 @@ def main() -> None:
         train_dataset=dataset,
     )
     trainer.train()
+
+    trainer.end()
 
 
 if __name__ == "__main__":

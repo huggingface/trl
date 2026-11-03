@@ -386,3 +386,5 @@ if __name__ == "__main__":
         trainer.save_metrics("eval", after_metrics | delta_metrics)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name or script_args.dataset_path)
+
+    trainer.end()

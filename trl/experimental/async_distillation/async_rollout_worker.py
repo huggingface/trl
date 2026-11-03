@@ -18,6 +18,7 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import random
 import threading
 import time
 import traceback
@@ -29,20 +30,24 @@ from multiprocessing.sharedctypes import Synchronized as MPValue
 from multiprocessing.synchronize import Event as MPEvent
 from typing import Any, TypeAlias
 
-import aiohttp
+import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from ...import_utils import is_vllm_available
+from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import print_prompt_completions_sample
+
+
+if is_aiohttp_available():
+    import aiohttp
+
+    _RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 logger = get_logger(__name__)
 
 Messages: TypeAlias = list[dict[str, str]]
-
-_RETRYABLE_HTTP_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionResetError)
 
 
 @dataclass(slots=True)
@@ -60,10 +65,10 @@ class RolloutSample:
 
     prompt: Messages
     completion: Messages
-    input_ids: list[int]
-    completion_mask: list[int]
-    teacher_topk_ids: list[list[int]]  # per completion position; empty list where mask is 0
-    teacher_topk_logprobs: list[list[float]]  # per completion position; empty list where mask is 0
+    input_ids: np.ndarray
+    completion_mask: np.ndarray
+    teacher_topk_ids: np.ndarray  # (len(input_ids), teacher_top_k + 1), padded with -1
+    teacher_topk_logprobs: np.ndarray  # (len(input_ids), teacher_top_k + 1), padded with -inf
     model_version: int
     metrics: dict[str, float]
     teacher_id: str  # which teacher_server_urls entry scored this sample (see _resolve_teacher_server_url)
@@ -95,6 +100,8 @@ def _scrub_child_env() -> None:
     # The child has no business touching CUDA; any library that imports torch
     # and lazily probes devices would race the parent's allocator.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # On ROCm, an empty CUDA_VISIBLE_DEVICES is ignored when HIP_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES is set.
+    os.environ["HIP_VISIBLE_DEVICES"] = ""
     for k in _CHILD_ENV_TO_STRIP:
         os.environ.pop(k, None)
 
@@ -195,6 +202,7 @@ class _AsyncRolloutLoop:
         model_name: str,
         dataset: Dataset,
         processing_class: PreTrainedTokenizerBase,
+        eos_token_ids: list[int],
         rollout_buffer: MPQueue,
         model_version_value: MPValue,
         heartbeat_value: MPValue,
@@ -204,6 +212,7 @@ class _AsyncRolloutLoop:
         max_inflight_tasks: int = 128,
         queue_maxsize: int = 0,
         vllm_server_url: str = "http://localhost:8000",
+        lora_name: str | None = None,
         teacher_server_urls: dict[str, str] | None = None,
         teacher_top_k: int = 8,
         teacher_temperature: float = 1.0,
@@ -221,6 +230,7 @@ class _AsyncRolloutLoop:
         dataset_start_index: int = 0,
     ):
         self.model_name = model_name
+        self.lora_name = lora_name
         self.dataset = dataset
         if dataset_start_index > 0:
             start = dataset_start_index % len(dataset)
@@ -228,6 +238,7 @@ class _AsyncRolloutLoop:
         else:
             self._dataset_iter = iter(dataset)
         self.tokenizer = processing_class
+        self.eos_token_ids = eos_token_ids
         self.rollout_buffer = rollout_buffer  # shared mp.Queue
         self._model_version_value = model_version_value  # shared mp.Value
         self._heartbeat_value = heartbeat_value  # shared mp.Value('d'); wall-clock seconds
@@ -262,10 +273,10 @@ class _AsyncRolloutLoop:
         # Served model id per teacher, resolved from each teacher server's `/v1/models` in `_run_loops`, since
         # `/v1/completions` names the model it is addressing and a teacher serves a different one than the student.
         self.teacher_model_names: dict[str, str] = {}
+        self.teacher_max_model_lens: dict[str, int | None] = {}
 
         self._total_completion_tokens = 0
         self._total_samples_scored = 0
-        self._generation_start_time: float | None = None
         self.session: aiohttp.ClientSession | None = None
 
         self._loop = asyncio.new_event_loop()
@@ -274,6 +285,15 @@ class _AsyncRolloutLoop:
     @property
     def model_version(self) -> int:
         return int(self._model_version_value.value)
+
+    @property
+    def _request_model(self) -> str:
+        # In vLLM's API an adapter *is* a model name: naming the base model while an adapter is loaded silently
+        # serves the base model, so the published version has to be part of the request. `model_version` reads the
+        # shared `mp.Value`, so a sync is picked up without extra IPC.
+        if self.lora_name is None:
+            return self.model_name
+        return f"{self.lora_name}-v{self.model_version}"
 
     def run(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -309,7 +329,8 @@ class _AsyncRolloutLoop:
 
         Doubles as the readiness wait for the teachers: the retry budget is the same generous one the generation and
         scoring calls use, so a teacher still loading its weights when the worker starts is waited out rather than
-        failing the run.
+        failing the run. Also records each teacher's `max_model_len`, which `_generate_and_score_one` checks every
+        sequence against before scoring it.
         """
         for teacher_id, url in self.teacher_server_urls.items():
             models = await self._retry(
@@ -318,6 +339,9 @@ class _AsyncRolloutLoop:
                 label=f"teacher {teacher_id} /v1/models",
             )
             self.teacher_model_names[teacher_id] = models["data"][0]["id"]
+            # vLLM adds `max_model_len` to the OpenAI model card. Without it, `_generate_and_score_one` skips the
+            # length check
+            self.teacher_max_model_lens[teacher_id] = models["data"][0].get("max_model_len")
             logger.info(f"teacher {teacher_id!r} at {url} serves {self.teacher_model_names[teacher_id]}")
 
     async def _generate_loop(self, stop_event: asyncio.Event) -> None:
@@ -325,7 +349,6 @@ class _AsyncRolloutLoop:
         free_slots = set(range(self.max_inflight_tasks))
         work_iter = self._repeat_iterator()
 
-        self._generation_start_time = time.monotonic()
         try:
             while True:
                 self._heartbeat_value.value = time.time()
@@ -460,7 +483,7 @@ class _AsyncRolloutLoop:
             # Truncation is read off the same way [`GRPOTrainer`] and [`RLOOTrainer`] define
             # `completions/clipped_ratio`: a completion that does not end on EOS (or pad) was cut off by `max_tokens`
             # rather than finishing. Deliberately NOT vLLM's `finish_reason`, so the metric means the same thing here
-            eos_and_pad = (self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
         self._push_metrics(
@@ -515,16 +538,29 @@ class _AsyncRolloutLoop:
         completion = [{"role": "assistant", "content": completion_text}]
 
         teacher_id, teacher_server_url = self._resolve_teacher_server_url(row)
+        # Scoring sends the whole sequence and asks for one throwaway token. A teacher without room for that rejects
+        # the request with a 400 that `_retry` retries for minutes before surfacing it without the cause.
+        sequence_length = len(prompt_ids) + len(completion_ids)
+        max_model_len = self.teacher_max_model_lens[teacher_id]
+        if max_model_len is not None and sequence_length >= max_model_len:
+            raise ValueError(
+                f"Teacher {teacher_id!r} at {teacher_server_url} has max_model_len={max_model_len}, too short to "
+                f"score a {sequence_length}-token sequence (scoring needs one position past it). Serve every teacher "
+                "with a `--max-model-len` larger than the student's."
+            )
         t_score = time.monotonic()
         teacher_topk_ids, teacher_topk_logprobs = await self._score_with_teacher(
             prompt_ids, completion_ids, teacher_server_url, self.teacher_model_names[teacher_id]
         )
         score_s = time.monotonic() - t_score
 
-        input_ids = prompt_ids + completion_ids
-        completion_mask = [0] * len(prompt_ids) + [1] * len(completion_ids)
-        full_teacher_ids = [[] for _ in prompt_ids] + teacher_topk_ids
-        full_teacher_logprobs = [[] for _ in prompt_ids] + teacher_topk_logprobs
+        input_ids = np.asarray(prompt_ids + completion_ids, dtype=np.int64)
+        completion_mask = np.asarray([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64)
+        full_teacher_ids = np.full((len(input_ids), self.teacher_top_k + 1), -1, dtype=np.int64)
+        full_teacher_logprobs = np.full((len(input_ids), self.teacher_top_k + 1), -np.inf, dtype=np.float32)
+        for i, (cand_ids, cand_lps) in enumerate(zip(teacher_topk_ids, teacher_topk_logprobs, strict=True)):
+            full_teacher_ids[len(prompt_ids) + i, : len(cand_ids)] = cand_ids
+            full_teacher_logprobs[len(prompt_ids) + i, : len(cand_lps)] = cand_lps
 
         self._push_rollout_metrics(
             completion_ids=completion_ids,
@@ -547,7 +583,7 @@ class _AsyncRolloutLoop:
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> list[int]:
         payload = {
-            "model": self.model_name,
+            "model": self._request_model,
             "prompt": prompt_ids,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -556,6 +592,10 @@ class _AsyncRolloutLoop:
             "repetition_penalty": self.repetition_penalty,
             "n": 1,
             "return_token_ids": True,
+            # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
+            # identically, so samples of the same prompt spread across engines can decode the same text. A unique seed
+            # per request keeps them independent.
+            "seed": random.getrandbits(63),
         }
         if self.min_p is not None:
             payload["min_p"] = self.min_p
@@ -643,10 +683,10 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available(min_version="0.22.0"):
-            raise ImportError(
-                "vLLM >= 0.22.0 is required to use AsyncRolloutWorker. Install it with: pip install 'vllm>=0.22.0'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
+        if not is_aiohttp_available():
+            raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
         self._mp_ctx = ctx
         self.rollout_buffer = ctx.Queue(maxsize=queue_maxsize)

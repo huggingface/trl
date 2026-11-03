@@ -32,7 +32,7 @@ def _write_task(tasks_dir: Path, task_id: str, gold: str, difficulty: int) -> No
     d = tasks_dir / task_id
     (d / "environment").mkdir(parents=True)
     (d / "tests").mkdir()
-    (d / "instruction.md").write_text(f"Solve task {task_id}.")
+    (d / "instruction.md").write_text(f"Solve task {task_id}.", encoding="utf-8")
     # Built from a joined list (not a triple-quoted block) so doc-builder doesn't reflow the TOML.
     lines = [
         "[task]",
@@ -43,7 +43,7 @@ def _write_task(tasks_dir: Path, task_id: str, gold: str, difficulty: int) -> No
         f"difficulty_level = {difficulty}",
         f'kaggle_dataset_name = "owner/{task_id}"',
     ]
-    (d / "task.toml").write_text("\n".join(lines))
+    (d / "task.toml").write_text("\n".join(lines), encoding="utf-8")
 
 
 class TestResolveAgent(TrlTestCase):
@@ -64,7 +64,8 @@ class TestResolveAgent(TrlTestCase):
             "class MyEnv(HarborEnv):\n"
             "    def run_cmd(self, command: str) -> str:\n"
             "        'Run a command.\\n\\nArgs:\\n    command: cmd.'\n"
-            "        return self._exec(command)\n"
+            "        return self._exec(command)\n",
+            encoding="utf-8",
         )
         cls = _resolve_agent(f"{path}:MyEnv")
         assert issubclass(cls, HarborEnv) and cls.__name__ == "MyEnv"
@@ -127,12 +128,13 @@ class TestRewardFunc(TrlTestCase):
         assert _outcome_reward_func(environment_reward=[0.25, 0.75]) == [0.25, 0.75]
 
     def test_fresh_env_reward_is_zero_without_backend(self):
-        # The trainer discovers tool methods via `inspect.getmembers`, which evaluates properties. A fresh
-        # env (never `reset`) must expose its tools and return 0.0 from `reward` WITHOUT starting the
-        # Harbor backend or importing `harbor` (not installed in the trainer env).
+        # The trainer discovers tool methods on the environment's class (`inspect.getmembers` on the
+        # instance would evaluate `reward`). A fresh env (never `reset`) must expose its tools and return
+        # 0.0 from `reward` WITHOUT starting the Harbor backend or importing `harbor` (not installed in
+        # the trainer env).
         import inspect
 
         env = HarborBashEnv()
-        names = {n for n, _ in inspect.getmembers(env, predicate=inspect.ismethod)}
+        names = {n for n, _ in inspect.getmembers(type(env), predicate=inspect.isfunction)}
         assert {"bash", "reset"} <= names
         assert env.reward == 0.0

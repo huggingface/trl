@@ -18,10 +18,19 @@
 import torch
 from transformers import AutoConfig, AutoProcessor, GenerationConfig, Qwen2_5_VLForConditionalGeneration
 
-from .._common import check_dtype_pattern, check_transformers_version, print_config_diff, push_to_hub, smoke_test
+from .._common import (
+    check_dtype_pattern,
+    check_transformers_version,
+    print_config_diff,
+    push_to_hub,
+    set_seed,
+    smoke_test,
+)
 
 
 check_transformers_version()
+
+set_seed()
 
 MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 
@@ -34,7 +43,7 @@ text_config = {
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
     "layer_types": None,
-    "rope_scaling": {"type": "default", "mrope_section": [1, 1], "rope_type": "default"},
+    "rope_scaling": {"type": "default", "mrope_section": [1, 1, 0], "rope_type": "default"},
 }
 vision_config = {
     "hidden_size": 16,
@@ -48,7 +57,7 @@ config = AutoConfig.from_pretrained(
     MODEL_ID,
     text_config=text_config,
     vision_config=vision_config,
-    rope_scaling={"type": "default", "mrope_section": [1, 1], "rope_type": "default"},
+    rope_scaling={"type": "default", "mrope_section": [1, 1, 0], "rope_type": "default"},
     num_hidden_layers=2,
     hidden_size=16,
     num_attention_heads=4,
