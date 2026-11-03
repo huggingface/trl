@@ -121,6 +121,23 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
+    def probe_lora_adapter(self, lora_name: str, timeout: int = 1800) -> None:
+        """Force the engine to actually load `lora_name`'s files now, instead of on the first real request.
+
+        `load_lora_adapter` only registers a name/path mapping on the API server; the engine resolves `lora_path`
+        lazily, inside whatever request names the adapter first. Left alone, that first reference can be a real
+        rollout request racing a later sync's cleanup of this same adapter's files. A throwaway one-token
+        completion forces the lazy load to happen here, under the trainer's control, before any rollout request
+        can possibly be tagged with this version.
+        """
+        response = requests.post(
+            f"{self.server_url}/v1/completions",
+            json={"model": lora_name, "prompt": "Hi", "max_tokens": 1},
+            timeout=timeout,
+        )
+        if response.status_code != 200:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
     def unload_lora_adapter(self, lora_name: str, timeout: int = 1800) -> None:
         """Remove a previously registered adapter. Missing names are not an error."""
         requests.post(f"{self.server_url}/v1/unload_lora_adapter", json={"lora_name": lora_name}, timeout=timeout)
