@@ -2400,7 +2400,10 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @pytest.mark.xfail(
+        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
+        strict=True,
+    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained(
@@ -2447,7 +2450,10 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @pytest.mark.xfail(
+        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes (see #7954)",
+        strict=True,
+    )
     def test_train_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2481,7 +2487,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     @pytest.mark.parametrize(
         "vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max",
         [
@@ -2562,7 +2567,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_train_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

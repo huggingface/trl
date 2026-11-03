@@ -46,7 +46,7 @@ from transformers import (
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
+from transformers.utils import is_peft_available
 
 from ...data_utils import (
     apply_chat_template,
@@ -74,15 +74,6 @@ if is_bitsandbytes_available():
 
 if is_peft_available():
     from peft import PeftConfig
-
-
-if is_sagemaker_mp_enabled():
-    from smdistributed.modelparallel import __version__ as SMP_VERSION
-
-    IS_SAGEMAKER_MP_POST_1_10 = Version(SMP_VERSION) >= Version("1.10")
-
-else:
-    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 if is_vllm_available():
@@ -916,33 +907,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         for prefix in prefixes:
             name = name.replace(prefix, "")
         return name
-
-    def process_vision_row(
-        self, features: dict[str, list | torch.Tensor], processing_class=None
-    ) -> dict[str, list[int]]:
-        """
-        Process a vision row for VLM models (adapted from DPO trainer)
-        """
-        processor = processing_class or self.processing_class
-        processed_features = processor(images=[features["image"]], text=features["prompt"], add_special_tokens=False)
-
-        prompt_input_ids = processed_features["input_ids"][0]
-
-        # Create the output dict with required fields
-        output = {
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": processed_features["attention_mask"][0],
-        }
-
-        # Add vision-specific fields
-        if "pixel_values" in processed_features:
-            output["pixel_values"] = processed_features["pixel_values"][0]
-        if "pixel_attention_mask" in processed_features:
-            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
-        if "image_sizes" in processed_features:
-            output["image_sizes"] = processed_features["image_sizes"][0]
-
-        return output
 
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
