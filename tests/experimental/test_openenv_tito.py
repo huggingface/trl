@@ -19,6 +19,7 @@ import dataclasses
 import itertools
 import multiprocessing as mp
 import queue
+import random
 import threading
 import time
 from collections import defaultdict
@@ -27,8 +28,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 from accelerate import PartialState
+from datasets import Dataset
 from transformers import AutoTokenizer
+from transformers.testing_utils import torch_device
 
 
 pytest.importorskip("openenv.core.harness.training")
@@ -44,6 +48,8 @@ from openenv.core.harness import (
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, async_rollout_worker, openenv_harness
 from trl.experimental.async_grpo.async_rollout_worker import TurnRecord, _chain_to_sequences, _SampleBuilder
+
+from ..testing_utils import is_ampere_or_newer, require_vllm
 
 
 def entry(prompt, completion, logprobs, mask=None):
@@ -183,6 +189,50 @@ class Session:
 
     def close(self):
         self.closed.set()
+
+
+class SessionFactory:
+    """Picklable stand-in for a Harbor factory: every session replays `captured_entry()`."""
+
+    def __init__(self, **kwargs):
+        pass
+
+    def create(self, prompt, **kwargs):
+        return Session(captured_entry())
+
+
+def random_reward(outcome):
+    return random.random()
+
+
+@require_vllm
+@pytest.mark.skipif(
+    not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
+    reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
+)
+def test_harness_trainer_trains_on_sessions_in_the_rollout_process(tmp_path):
+    trainer = openenv_harness.HarnessAsyncGRPOTrainer(
+        model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+        harness_session_factory=SessionFactory,
+        args=AsyncGRPOConfig(
+            output_dir=str(tmp_path),
+            num_generations=2,
+            max_steps=1,
+            temperature=0.8,
+            vllm_server_base_url="http://127.0.0.1:9",
+            report_to="none",
+        ),
+        train_dataset=Dataset.from_dict({"prompt": [[{"role": "user", "content": "task"}]] * 4}),
+        rollout_reward_fn=random_reward,
+    )
+    trainer.rollout_worker.start()
+    try:
+        sample = trainer.rollout_queue.get(timeout=120)
+    finally:
+        trainer.rollout_worker.stop()
+    assert sample.input_ids.tolist() == [1, 2, 3]
+    assert sample.completion_mask.tolist() == [0, 1, 0]
+    assert sample.advantage != 0
 
 
 def test_loop_owning_capture_rejects_truncated_sampling(make_loop):
