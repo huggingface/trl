@@ -1,10 +1,10 @@
 # Teach Qwen3-1.7B to play Sudoku with GRPO
 
-Say you want a small model to solve Sudoku through tool calls, filling one cell per `place(row, col, number)` call, against the [OpenEnv](https://huggingface.co/docs/trl/openenv) TextArena environment. This example follows what you would do: measure the base model, warm it up with SFT, train it with GRPO against the environment, and measure again. [`grpo_sudoku.py`](grpo_sudoku.py) is the GRPO step, and [`grpo_sudoku.ipynb`](grpo_sudoku.ipynb) walks through the same steps.
+[`grpo_sudoku.py`](grpo_sudoku.py) trains Qwen3-1.7B to solve Sudoku against the [OpenEnv](https://huggingface.co/docs/trl/openenv) TextArena environment, filling one cell per `place(row, col, number)` tool call. [`grpo_sudoku.ipynb`](grpo_sudoku.ipynb) walks through the same steps.
 
 ## 1. Can Qwen3-1.7B play Sudoku?
 
-No. On 30 fixed puzzles with 16 empty cells, with greedy decoding, [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B) solves none and fills 2% of the cells, and at 26 empty cells it fills 0.1%. In 20 of the 30 games its first move goes on a cell that is already given. With almost no correct moves, GRPO has very little to compare.
+On 30 fixed puzzles with 16 empty cells, with greedy decoding, [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B) solves none and fills 2% of the cells, and at 26 empty cells it fills 0.1%. In 20 of the 30 games its first move goes on a cell that is already given. With almost no correct moves, GRPO has very little to compare.
 
 ## 2. Warm it up with SFT
 
