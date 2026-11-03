@@ -22,72 +22,90 @@
 """
 MOPD (multi-teacher on-policy distillation): [`~trl.experimental.async_distillation.AsyncDistillationTrainer`] with
 more than one entry in `teacher_server_urls`. Each training sample carries a `teacher_id` column selecting which
-teacher scores it — here, math prompts (GSM8K) route to a math teacher and code prompts
-(`iamtarun/python_code_instructions_18k_alpaca`) route to a code teacher, each served independently.
+teacher scores it.
 
-CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
-    --port 8001 \
-    --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+The experts are the ones released with [Open-MOPD](https://huggingface.co/papers/2608.19098): three SmolLM3-3B models
+(math, code and instruction following), each trained with GRPO from the same mixed-domain SFT checkpoint. The student
+starts from that SFT checkpoint, so this is the fusion stage of the paper's recipe. Every prompt of the released RL
+prompt mix has a `domain` label, which becomes the `teacher_id` that routes it to its expert. All checkpoints share one
+tokenizer and chat template, as the trainer requires.
 
-CUDA_VISIBLE_DEVICES=1 vllm serve Qwen/Qwen2.5-Coder-1.5B-Instruct \
-    --port 8002 \
-    --logprobs-mode processed_logprobs \
-    --max-logprobs -1
+Runs on 4 GPUs: the student's vLLM server, two teachers sharing a GPU, the third teacher, and training. Each teacher
+gets a larger `--max-model-len` than the student, because scoring sends the student's whole sequence plus one token.
+Start the teachers that share GPU 1 one after the other, since vLLM sizes its cache from the memory free at startup.
 
-CUDA_VISIBLE_DEVICES=2 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT \
     --port 8000 \
+    --max-model-len 19456 \
     --weight-transfer-config '{"backend":"nccl"}'
+
+CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math \
+    --port 8001 \
+    --max-model-len 19520 \
+    --gpu-memory-utilization 0.42 \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
+
+CUDA_VISIBLE_DEVICES=1 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF \
+    --port 8003 \
+    --max-model-len 19520 \
+    --gpu-memory-utilization 0.42 \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
+
+CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code \
+    --port 8002 \
+    --max-model-len 19520 \
+    --gpu-memory-utilization 0.85 \
+    --logprobs-mode processed_logprobs \
+    --max-logprobs -1
 
 CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_math/async_distillation_mopd.py
 """
 
-from datasets import concatenate_datasets, load_dataset
+from datasets import interleave_datasets, load_dataset
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
 
 
-def format_math(sample):
-    return {"prompt": [{"role": "user", "content": sample["question"]}], "teacher_id": "math"}
-
-
-def format_code(sample):
-    content = sample["instruction"]
-    if sample["input"].strip():
-        content = f"{content}\n\n{sample['input']}"
-    return {"prompt": [{"role": "user", "content": content}], "teacher_id": "code"}
-
-
 def main() -> None:
-    math_dataset = load_dataset("openai/gsm8k", "main", split="train")
-    math_dataset = math_dataset.map(format_math, remove_columns=math_dataset.column_names)
-
-    code_dataset = load_dataset("iamtarun/python_code_instructions_18k_alpaca", split="train")
-    code_dataset = code_dataset.map(format_code, remove_columns=code_dataset.column_names)
-
-    dataset = concatenate_datasets([math_dataset, code_dataset]).shuffle(seed=42)
+    dataset = load_dataset("BytedTsinghua-SIA/Open-MOPD-Data", data_files="rl_prompt_mix/train.parquet", split="train")
+    # The prompts already carry each domain's system prompt, so only the domain label needs renaming
+    dataset = dataset.select_columns(["prompt", "domain"]).rename_column("domain", "teacher_id").shuffle(seed=42)
+    # The raw mix is about half instruction following, so sample math, code and instruction following 40/40/20
+    dataset = interleave_datasets(
+        [dataset.filter(lambda row, d=domain: row["teacher_id"] == d) for domain in ("math", "code", "if")],
+        probabilities=[0.4, 0.4, 0.2],
+        seed=42,
+    )
 
     config = AsyncDistillationConfig(
         output_dir="async_distillation_mopd",
-        save_strategy="no",
-        per_device_train_batch_size=16,
-        gradient_accumulation_steps=2,
-        max_completion_length=256,
-        beta=1.0,  # the paper's Stage 3 minimizes reverse KL against the routed teacher
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=16,
+        max_completion_length=16384,
+        beta=1.0,  # MOPD's fusion stage minimizes reverse KL against the routed teacher
+        teacher_top_k=1,  # with beta=1.0 only the teacher's logprob of the sampled token is used
         teacher_server_urls={
             "math": "http://localhost:8001",
             "code": "http://localhost:8002",
+            "if": "http://localhost:8003",
         },
         vllm_server_base_url="http://localhost:8000",
-        max_steps=100,
-        learning_rate=1e-6,
+        # 16K-token completions can take longer than the default 600 s to generate under load
+        request_timeout=3600,
+        max_staleness=8,
+        max_steps=90,
+        save_strategy="no",
+        learning_rate=1.5e-6,
+        lr_scheduler_type="constant",
         report_to="trackio",
         trackio_space_id="async-distillation-mopd",
         project="async-distillation-mopd",
         log_completions=True,
     )
     trainer = AsyncDistillationTrainer(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
+        model="BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT",
         args=config,
         train_dataset=dataset,
     )
