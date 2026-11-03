@@ -1773,6 +1773,75 @@ class TestGRPOTrainer(TrlTestCase):
 
         torch.testing.assert_close(off_policy_mask_keep, expected_mask_keep)
 
+    def test_get_gamma_weights_ignores_masked_tokens(self):
+        # Regression test for #7952: a token outside the mask must not contribute to the sequence weight, even when
+        # its importance sampling ratio is 0 (as set by `vllm_importance_sampling_mode="token_mask"`).
+        advantages = torch.tensor([[1.0], [-1.0]])
+        log_ratio_per_token = torch.zeros((2, 4))
+        importance_sampling_ratio = torch.ones((2, 4))
+        importance_sampling_ratio[:, 2] = 0.0
+        mask = torch.ones((2, 4))
+        mask[:, 2] = 0.0
+
+        phi_seq = GRPOTrainer.get_gamma_weights(advantages, log_ratio_per_token, mask, importance_sampling_ratio)
+
+        # Every remaining token is on-policy with ratio 1, so w = 1 and φ(1) = 1
+        torch.testing.assert_close(phi_seq, torch.ones((2, 1)))
+
+    def test_vespo_token_mask_drops_only_the_masked_token(self):
+        # Regression test for #7952: under VESPO, a token dropped by `vllm_importance_sampling_mode="token_mask"`
+        # (ratio 0) must be excluded from both the sequence weight and the loss, exactly as if it were removed from
+        # the loss mask. Before the fix, its log(0) was summed into the sequence weight and vetoed the whole
+        # sequence.
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(output_dir=self.tmp_dir, loss_type="vespo", report_to="none")
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+        trainer.model.eval()
+
+        device = next(trainer.model.parameters()).device
+        batch_size, prompt_len, completion_len = 2, 3, 6
+        prompt_ids = torch.randint(1, 1000, (batch_size, prompt_len), device=device)
+        completion_ids = torch.randint(1, 1000, (batch_size, completion_len), device=device)
+        completion_mask = torch.ones(batch_size, completion_len, dtype=torch.long, device=device)
+        with torch.no_grad():
+            per_token_logps, _, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                torch.cat([prompt_ids, completion_ids], dim=1),
+                torch.ones(batch_size, prompt_len + completion_len, dtype=torch.long, device=device),
+                completion_len,
+            )
+        inputs = {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": torch.ones(batch_size, prompt_len, dtype=torch.long, device=device),
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "advantages": torch.tensor([1.0, -1.0], device=device),
+            # Slightly off-policy, so that the dropped token's own log-ratio also feeds the sequence weight
+            "old_per_token_logps": per_token_logps + 0.05,
+            "num_items_in_batch": completion_mask.sum(),
+        }
+
+        # Token 2 of the first sequence is dropped by token_mask (ratio 0)...
+        masked_inputs = dict(inputs)
+        masked_inputs["importance_sampling_ratio"] = torch.ones(batch_size, completion_len, device=device)
+        masked_inputs["importance_sampling_ratio"][0, 2] = 0.0
+        # ...which must be the same as keeping every ratio and removing that token from the loss mask (tool_mask
+        # only affects the loss mask, not the attention mask)
+        excluded_inputs = dict(inputs)
+        excluded_inputs["importance_sampling_ratio"] = torch.ones(batch_size, completion_len, device=device)
+        excluded_inputs["tool_mask"] = torch.ones(batch_size, completion_len, dtype=torch.long, device=device)
+        excluded_inputs["tool_mask"][0, 2] = 0
+
+        loss_masked = trainer._compute_loss(trainer.model, masked_inputs)
+        loss_excluded = trainer._compute_loss(trainer.model, excluded_inputs)
+
+        torch.testing.assert_close(loss_masked, loss_excluded)
+
     @pytest.mark.parametrize(
         "vllm_importance_sampling_mode", ["token_truncate", "token_mask", "sequence_truncate", "sequence_mask"]
     )

@@ -3122,7 +3122,7 @@ class GRPOTrainer(_BaseTrainer):
         if importance_sampling_ratio is not None:
             log_is_ratio = torch.clamp(torch.log(importance_sampling_ratio), lower_clamp, 20.0)
             # log(w) = log(π_θ/π_old) + log(π_old/π_sampler)
-            seq_log_ratio += torch.sum(log_is_ratio, dim=-1, keepdim=True)
+            seq_log_ratio += torch.sum(log_is_ratio * mask, dim=-1, keepdim=True)
 
         log_w_seq = torch.clamp(seq_log_ratio, lower_clamp, 20.0)
         w_seq = torch.exp(log_w_seq)
@@ -3245,17 +3245,20 @@ class GRPOTrainer(_BaseTrainer):
             soft_coef_1 = torch.sigmoid(temperatures * (coef_1 - 1)) * 4 / temperatures
             per_token_loss = -soft_coef_1 * advantages
         elif self.loss_type == "vespo":
+            importance_sampling_ratio = inputs.get("importance_sampling_ratio")
+            # `token_mask` drops a token by zeroing its ratio: exclude it from the sequence weight and from the loss
+            vespo_mask = mask if importance_sampling_ratio is None else mask * (importance_sampling_ratio > 0)
             phi_seq = self.get_gamma_weights(
                 advantages=advantages,
                 log_ratio_per_token=log_ratio,
-                mask=mask,
-                importance_sampling_ratio=inputs.get("importance_sampling_ratio"),
+                mask=vespo_mask,
+                importance_sampling_ratio=importance_sampling_ratio,
                 k_pos=self.args.vespo_k_pos,
                 lambda_pos=self.args.vespo_lambda_pos,
                 k_neg=self.args.vespo_k_neg,
                 lambda_neg=self.args.vespo_lambda_neg,
             )
-            per_token_loss = -phi_seq * advantages * per_token_logps
+            per_token_loss = -phi_seq * advantages * per_token_logps * vespo_mask
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
