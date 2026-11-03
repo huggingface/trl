@@ -21,8 +21,8 @@
 
 # docstyle-ignore
 """
-Share of the 1,000 test puzzles a model solves: its move must be the first move of the solution, or any move that
-mates, as Lichess accepts. One GPU.
+Share of the 1,000 test puzzles a model solves, and its puzzle rating: its move must be the first move of the
+solution, or any move that mates, as Lichess accepts. One GPU.
 
     python examples/sft_gpt_oss_chess/evaluate.py gpt-oss-20b-chess-mxfp4
 
@@ -76,4 +76,12 @@ for example, output in zip(dataset, outputs, strict=True):
     if "<|channel|>final<|message|>" in text:
         answer = text.rsplit("<|channel|>final<|message|>", 1)[1].split("<|return|>")[0]
         solved += solves(example["prompt"][0]["content"], example["completion"][0]["content"], answer)
-print(f"{args.model}: {100 * solved / len(dataset):.1f}% of the puzzles solved")
+
+# Each puzzle has a Lichess rating, like an opponent. The model's puzzle rating is the one at which the Elo formula
+# expects it to solve as many puzzles as it did (the maximum-likelihood rating).
+low, high = 0.0, 4000.0
+for _ in range(50):
+    rating = (low + high) / 2
+    expected = sum(1 / (1 + 10 ** ((puzzle_rating - rating) / 400)) for puzzle_rating in dataset["Rating"])
+    low, high = (rating, high) if expected < solved else (low, rating)
+print(f"{args.model}: {100 * solved / len(dataset):.1f}% of the puzzles solved, puzzle rating {rating:.0f}")
