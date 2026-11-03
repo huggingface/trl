@@ -14,80 +14,64 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "kernels",
+#     "trl>=1.18.0",
+#     "transformers>=5.23.0",
+#     "kernels>=0.17.2",
 #     "trackio",
-#     "kernels",
 # ]
 # ///
 
+# docstyle-ignore
 """
-pip install –-upgrade kernels
+Full fine-tuning of gpt-oss-20b on 500k chess puzzles, then back to MXFP4. TRL loads the MXFP4 experts dequantized,
+FSDP2 shards the model across the GPUs of one node, and the fine-tuned experts are quantized again at the end, so the
+model is served like the original. About 2 hours on 4xH200; see README.md for the results.
 
-Example:
-
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sft_gpt_oss/sft_gpt_oss.py \
-    --dtype bfloat16 \
-    --model_name_or_path openai/gpt-oss-20b \
-    --packing \
-    --run_name 20b-full-eager \
-    --attn_implementation kernels-community/vllm-flash-attn3 \
-    --dataset_num_proc 12 \
-    --dataset_name HuggingFaceH4/Multilingual-Thinking \
-    --max_length 4096 \
-    --per_device_train_batch_size 2 \
-    --num_train_epochs 1 \
-    --logging_steps 1 \
-    --warmup_steps 0.03 \
-    --lr_scheduler_type cosine_with_min_lr \
-    --lr_scheduler_kwargs '{"min_lr_rate": 0.1}' \
-    --output_dir gpt-oss-20b-multilingual-reasoner \
-    --report_to trackio \
-    --seed 42
+    accelerate launch --config_file examples/accelerate_configs/fsdp2.yaml --num_processes 4 \
+        examples/sft_gpt_oss/sft_gpt_oss.py
 """
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, Mxfp4Config
 
-from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
+from trl import SFTConfig, SFTTrainer
 
 
-def main(script_args, training_args, model_args):
-    # Load model
-    quantization_config = Mxfp4Config(dequantize=True)
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        attn_implementation=model_args.attn_implementation,
-        dtype=model_args.dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        quantization_config=quantization_config,
+MODEL = "openai/gpt-oss-20b"
+
+# Each prompt shows the board, its FEN and the legal moves; the completion is the first move of the solution.
+train_dataset = load_dataset("trl-lib/chess-puzzles", split="train[:500000]")
+
+training_args = SFTConfig(
+    output_dir="gpt-oss-20b-chess",
+    model_init_kwargs={
+        # Flash Attention 3 from the Hub runs on Hopper and keeps packed sequences apart.
+        "attn_implementation": "kernels-community/vllm-flash-attn3",
+    },
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=2,
+    num_train_epochs=1,
+    max_length=2048,
+    packing=True,
+    learning_rate=2e-5,
+    lr_scheduler_type="cosine_with_min_lr",
+    lr_scheduler_kwargs={"min_lr_rate": 0.1},
+    warmup_steps=0.03,
+    logging_steps=1,
+    save_strategy="no",
+    report_to="trackio",
+)
+trainer = SFTTrainer(model=MODEL, args=training_args, train_dataset=train_dataset)
+trainer.train()
+trainer.save_model()
+
+# Loading the fine-tuned model with `Mxfp4Config()` quantizes its experts to MXFP4, like the original checkpoint.
+if trainer.accelerator.is_main_process:
+    model = AutoModelForCausalLM.from_pretrained(
+        training_args.output_dir, quantization_config=Mxfp4Config(), dtype=torch.bfloat16, device_map="cuda"
     )
+    model.save_pretrained(f"{training_args.output_dir}-mxfp4")
+    trainer.processing_class.save_pretrained(f"{training_args.output_dir}-mxfp4")
 
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
-
-    # Load dataset
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-
-    # Train model
-    trainer = SFTTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        peft_config=get_peft_config(model_args),
-    )
-
-    trainer.train()
-    trainer.save_model(training_args.output_dir)
-    if training_args.push_to_hub:
-        trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    trainer.end()
-
-
-if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
-    script_args, training_args, model_args, _ = parser.parse_args_and_config(return_remaining_strings=True)
-    main(script_args, training_args, model_args)
+trainer.end()
