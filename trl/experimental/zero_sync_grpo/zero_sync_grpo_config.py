@@ -43,8 +43,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         > Parameters that control generation
 
         num_generations (`int`, *optional*, defaults to `8`):
-            Number of generations per prompt to sample. The effective batch size (num_processes *
-            per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
+            Number of generations per prompt to sample. They form the group the advantages are computed over.
         max_completion_length (`int`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         temperature (`float`, *optional*, defaults to `1.0`):
@@ -133,8 +132,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     num_generations: int = field(
         default=8,
         metadata={
-            "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
-            "* gradient_accumulation_steps) must be evenly divisible by this value."
+            "help": "Number of generations to sample. They form the group the advantages are computed over."
         },
     )
     max_completion_length: int = field(
