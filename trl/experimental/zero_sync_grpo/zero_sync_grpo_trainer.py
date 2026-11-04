@@ -13,13 +13,16 @@
 # limitations under the License.
 
 import os
+import sys
 import time
+import warnings
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import torch
+from accelerate.logging import get_logger
 from accelerate.parallelism_config import ParallelismConfig
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -27,6 +30,7 @@ from torch.distributed.tensor import DTensor
 from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -37,10 +41,26 @@ from transformers.distributed.configuration_utils import DistributedConfig
 from transformers.generation import ContinuousBatchingConfig
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 
-from ...chat_template_utils import add_response_schema, parse_response, supports_tool_calling
+from ...chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
+    add_response_schema,
+    parse_response,
+    supports_tool_calling,
+)
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import add_fused_lm_head, create_model_from_path, nanstd
+from ...trainer.utils import (
+    add_fused_lm_head,
+    create_model_from_path,
+    get_callable_name,
+    get_config_model_id,
+    identity,
+    model_accepts_images,
+    nanstd,
+)
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
+
+
+logger = get_logger(__name__)
 
 
 # Functions with this signature can be used as reward functions
@@ -202,7 +222,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     ):
         # Args
         if args is None:
-            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
             model_name = model_name.split("/")[-1]
             args = ZeroSyncGRPOConfig(f"{model_name}-ZeroSyncGRPO")
 
@@ -220,6 +240,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 # deciding where parameters go are mutually exclusive.
                 model_init_kwargs["distributed_config"] = DistributedConfig(tp_size=args.tp_size)
                 model_init_kwargs["device_map"] = None
+            model_revision = model_init_kwargs.get("revision")
             model = create_model_from_path(model, **model_init_kwargs)
             if "attn_implementation" not in model_init_kwargs:
                 # Training packs the samples of a micro-batch in one flat row whose boundaries travel as the flash
@@ -234,21 +255,51 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 else:
                     model.set_attn_implementation("sdpa")
         else:
+            model_revision = None
             if args.model_init_kwargs is not None:
-                raise ValueError(
-                    "You passed `model_init_kwargs` to the `ZeroSyncGRPOConfig`, but your model is already "
-                    "instantiated. This argument can only be used when the `model` argument is a string."
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `ZeroSyncGRPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
                 )
 
-        # Processing class. For VLMs this is a processor whose tokenizer handles the text-only conversations.
+        # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
+                get_config_model_id(model.config),
+                revision=model_revision,
+                truncation_side="left",
+                padding_side="left",
+            )
+
+        # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             self._tokenizer = processing_class.tokenizer
-        else:
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
             self._tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
+
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
 
         # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
         eos_token_ids = model.generation_config.eos_token_id
@@ -261,14 +312,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.eos_token_ids = eos_token_ids
 
         # Reward functions
-        if not isinstance(reward_funcs, list):
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
+        self.reward_func_names = [get_callable_name(reward_func) for reward_func in reward_funcs]
         self.reward_funcs = reward_funcs
-        self.reward_func_names = [func.__name__ for func in reward_funcs]
 
         # Training arguments
-        self.num_generations = args.num_generations
-        self.max_completion_length = args.max_completion_length
+        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
+        self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -312,10 +368,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._pause = None
         self._step_generation_wait = 0.0
         self._request_counter = 0
-        self.max_tool_calling_iterations = args.max_tool_calling_iterations
 
-        # Tools. `add_response_schema` teaches the tokenizer how to parse tool calls back out of a
-        # generation, unless the chat template already carries a response template.
+        # Tools
         self.tools = tools
         self.tool_dict = {tool.__name__: tool for tool in tools} if tools else {}
         if tools:
@@ -324,9 +378,20 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                     "The provided chat template does not support tool calling. The template must be able to render a "
                     "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
                 )
-            if getattr(self._tokenizer, "response_template", None) is None:
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        if self.tools:
+            has_template = getattr(self._tokenizer, "response_template", None) is not None
+            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
+            if not has_template and not has_schema:
                 processing_class = add_response_schema(processing_class)
-                self._tokenizer = getattr(processing_class, "tokenizer", processing_class)
+            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+                warnings.warn(
+                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                    "support will eventually be removed. See the Transformers response-parsing docs.",
+                    FutureWarning,
+                )
 
         # Under tensor parallelism the vocabulary projection is replicated rather than split. The chunked lm_head
         # below multiplies by the weight directly, which a sharded weight cannot serve, and the projection is the one
@@ -357,14 +422,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # decodes through this same object, keeps the standard one.
         add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
 
-        def data_collator(features):
-            # No data collation is needed in GRPO
-            return features
-
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator,
+            data_collator=identity,  # No data collation is needed in GRPO
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
@@ -577,10 +638,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         rollout["completion"].append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls")
-        may_iterate = (
-            self.max_tool_calling_iterations is None or rollout["iterations"] < self.max_tool_calling_iterations
-        )
-        if tool_calls and may_iterate:
+        if tool_calls and rollout["iterations"] < self.max_tool_calling_iterations:
             tool_messages = self._execute_tool_calls(tool_calls)
             rollout["tool_calls"] += len(tool_calls)
             rollout["messages"].extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
