@@ -606,7 +606,8 @@ class _AsyncRolloutLoop:
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         connector = aiohttp.TCPConnector(limit=self.max_concurrent_rollouts + 1)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        timeout = aiohttp.ClientTimeout(total=self.vllm_server_timeout)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             self.session = session
             await self._check_sampling_replay()
             await self._init_concurrency_cap()

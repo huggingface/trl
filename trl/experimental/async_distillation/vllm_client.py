@@ -74,13 +74,15 @@ class VLLMClient:
 
     def get_max_model_len(self) -> int:
         """Return the served model's `max_model_len` (the cap on prompt + completion tokens)."""
-        response = requests.get(f"{self.server_url}/v1/models")
+        response = requests.get(f"{self.server_url}/v1/models", timeout=self.timeout)
         response.raise_for_status()
         return response.json()["data"][0]["max_model_len"]
 
     def get_server_info(self) -> dict:
         """Return the server's resolved `vllm_config`, as reported by `/server_info`."""
-        response = requests.get(f"{self.server_url}/server_info", params={"config_format": "json"})
+        response = requests.get(
+            f"{self.server_url}/server_info", params={"config_format": "json"}, timeout=self.timeout
+        )
         response.raise_for_status()
         return response.json()["vllm_config"]
 
@@ -115,7 +117,7 @@ class VLLMClient:
 
     def get_world_size(self) -> int:
         """Return the vLLM server's inference world size (tensor/pipeline parallel processes)."""
-        response = requests.get(f"{self.server_url}/get_world_size")
+        response = requests.get(f"{self.server_url}/get_world_size", timeout=self.timeout)
         return response.json()["world_size"]
 
     def pause(self) -> None:
