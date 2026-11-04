@@ -8,7 +8,7 @@ The example in this guide trains on exactly one such sequence per step, on a sin
 
 ## Run it
 
-You need one node with 8 H100s (or better), and `transformers>=5.17.0`: the example uses gradient checkpointing's `offload`, added in that release.
+You need one node with 8 H100s (or better), and `transformers>=5.23.0`: the example uses activation checkpointing's `offload`, under the name that release gives it.
 
 ```sh
 accelerate launch \
@@ -123,12 +123,12 @@ With the loss chunked and the positions rescaled, one GPU takes us to 160k token
 
 The model and its optimizer account for a fixed 22 GB, whatever the sequence length. Above that, each red band is one layer's saved activation, 0.47 GB apiece. They stack up as the forward writes them, sit there, and come off one at a time as the backward consumes them. The grey on top is everything recomputed and thrown away within milliseconds.
 
-TRL already reduces them for you, and it is on by default. Gradient checkpointing keeps only what goes into each layer and throws away everything the layer computes inside itself: the attention scores, the wide MLP intermediate, the norms. When the backward pass needs them it runs the layer a second time to get them back. What survives is one saved tensor per layer, `sequence x hidden` each, and at long sequence lengths that is still the largest thing on the card.
+TRL already reduces them for you, and it is on by default. Activation checkpointing keeps only what goes into each layer and throws away everything the layer computes inside itself: the attention scores, the wide MLP intermediate, the norms. When the backward pass needs them it runs the layer a second time to get them back. What survives is one saved tensor per layer, `sequence x hidden` each, and at long sequence lengths that is still the largest thing on the card.
 
 The useful observation is that those tensors are not needed during the forward pass at all. They are written, left alone, and read much later. So they do not have to sit on the GPU in the meantime: they can be moved to CPU memory and brought back when the backward pass reaches them.
 
 ```python
-training_args = SFTConfig(..., gradient_checkpointing_kwargs={"offload": True})
+training_args = SFTConfig(..., activation_checkpointing_kwargs={"offload": True})
 ```
 
 <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/profile_layers_offload.png" alt="The same step with the activations offloaded, where almost no red bands remain resident"/>
@@ -145,7 +145,7 @@ This one is not free. Every saved activation crosses to the host and back, and t
 
 Chunked loss, offloaded activations: one card now trains on 256k tokens. How to reach one million? To see what stands in the way, look inside a single layer during the backward pass (grey peaks in the above profile).
 
-Gradient checkpointing means the forward keeps almost nothing: each layer stores its input and throws the rest away. The layer is recomputed later, when the backward reaches it, and that is the moment everything exists at once. In the MLP, one line of the model,
+Activation checkpointing means the forward keeps almost nothing: each layer stores its input and throws the rest away. The layer is recomputed later, when the backward reaches it, and that is the moment everything exists at once. In the MLP, one line of the model,
 
 ```python
 down_proj(act_fn(gate_proj(x)) * up_proj(x))

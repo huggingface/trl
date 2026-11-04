@@ -1402,7 +1402,7 @@ i.e. an additive correction on the logit of the observed token, where \\( K \\) 
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
     --use_peft \
-    --gradient_checkpointing \
+    --activation_checkpointing \
     --model_prediction_type mean_loo \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 ```
@@ -1417,8 +1417,8 @@ Full activation checkpointing recomputes every op in a checkpointed region durin
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    gradient_checkpointing=True,
-    gradient_checkpointing_kwargs={"selective": True},
+    activation_checkpointing=True,
+    activation_checkpointing_kwargs={"selective": True},
 )
 ```
 
