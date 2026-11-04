@@ -1055,7 +1055,7 @@ class TestSFTTrainer(TrlTestCase):
 
         # The Trainer enables checkpointing from these kwargs in `train()`; since 5.23 it reads the new name
         assert trainer.args.gradient_checkpointing_kwargs["use_reentrant"] is True
-        if Version(transformers.__version__) >= Version("5.23.0.dev0"):
+        if Version(transformers.__version__) >= Version("5.23.0"):
             assert trainer.args.activation_checkpointing_kwargs["use_reentrant"] is True
 
     def test_train_with_non_chatml_conversational_data(self):

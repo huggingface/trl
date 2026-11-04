@@ -111,7 +111,7 @@ class _BaseConfig(TrainingArguments):
 
         # transformers 5.23 renamed `gradient_checkpointing` to `activation_checkpointing`. TRL's default lives on the
         # old name, so move it over before the parent resolves the aliases, which would warn.
-        if Version(transformers.__version__) >= Version("5.23.0.dev0") and self.activation_checkpointing is None:
+        if Version(transformers.__version__) >= Version("5.23.0") and self.activation_checkpointing is None:
             self.activation_checkpointing, self.gradient_checkpointing = self.gradient_checkpointing, None
 
         super().__post_init__()

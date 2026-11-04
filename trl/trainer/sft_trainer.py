@@ -943,7 +943,7 @@ class SFTTrainer(_BaseTrainer):
             args.gradient_checkpointing_kwargs["use_reentrant"] = True
             # transformers 5.23 renamed `gradient_checkpointing_kwargs` to `activation_checkpointing_kwargs` and the
             # Trainer reads the new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
-            if Version(transformers.__version__) >= Version("5.23.0.dev0"):
+            if Version(transformers.__version__) >= Version("5.23.0"):
                 args.activation_checkpointing_kwargs = args.gradient_checkpointing_kwargs
 
         # When using gradient checkpointing with PEFT, we need to enable input gradients. transformers.Trainer normally

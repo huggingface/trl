@@ -919,7 +919,7 @@ def prepare_peft_model(
         args.gradient_checkpointing = False
         # transformers 5.23 renamed `gradient_checkpointing` to `activation_checkpointing` and the Trainer reads the
         # new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
-        if Version(transformers.__version__) >= Version("5.23.0.dev0"):
+        if Version(transformers.__version__) >= Version("5.23.0"):
             args.activation_checkpointing = False
     elif args.gradient_checkpointing:
         model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)

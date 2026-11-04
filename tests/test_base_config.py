@@ -31,5 +31,5 @@ def test_gradient_checkpointing_default_does_not_warn(tmp_path, gradient_checkpo
         args = SFTConfig(output_dir=tmp_path, report_to="none", **kwargs)
     expected = gradient_checkpointing is None
     assert args.gradient_checkpointing is expected
-    if Version(transformers.__version__) >= Version("5.23.0.dev0"):
+    if Version(transformers.__version__) >= Version("5.23.0"):
         assert args.activation_checkpointing is expected
