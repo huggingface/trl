@@ -907,7 +907,8 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         if is_peft and model.prefix in name:
             continue
         # When module to save, remove its prefix and discard the original module
-        if "original_module" in name:
+        # and the other adapters' copies (e.g. a "ref" adapter)
+        if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
             continue
         name = name.replace("modules_to_save.default.", "")
         yield name, param
@@ -1395,14 +1396,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 f"max_steps={self.args.max_steps} is a safety ceiling."
             )
 
-        # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
+        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
         # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
+        if self.args.max_concurrent_rollouts is None:
+            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
-                f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
+                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
@@ -1499,7 +1500,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                             "dtype_names": weight_dtype_names,
                             "shapes": weight_shapes,
                         },
-                        weight_sync_timeout=self.args.weight_sync_timeout,
                     )
 
             if rollout_worker is not None:
@@ -1516,7 +1516,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     processing_class=processing_class,
                     eos_token_ids=self.eos_token_ids,
-                    max_inflight_tasks=self.args.max_inflight_tasks,
+                    max_concurrent_rollouts=self.args.max_concurrent_rollouts,
                     queue_maxsize=self.args.queue_maxsize,
                     vllm_server_url=self.args.vllm_server_base_url,
                     teacher_server_urls=self.args.teacher_server_urls,
@@ -1528,7 +1528,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     top_k=self.args.top_k,
                     min_p=self.args.min_p,
                     repetition_penalty=self.args.repetition_penalty,
-                    request_timeout=self.args.request_timeout,
+                    vllm_server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     log_completions=self.args.log_completions,
                     log_completions_steps=self.args.log_completions_steps,
@@ -1566,7 +1566,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
                 check_health_fn=self.rollout_worker.check_health,
-                stale_after_s=self.args.heartbeat_stale_after_s,
+                stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
