@@ -1006,16 +1006,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Clipped surrogate loss. The old policy is the generation engine itself: its logprobs are exact for the
         # sampled tokens, so no extra forward pass is needed to obtain them.
         old_per_token_logps = inputs["old_per_token_logps"][:, 1:]
-        ratio = torch.exp(per_token_logps - old_per_token_logps)
-        clipped_ratio = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon)
+        log_ratio = per_token_logps - old_per_token_logps
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
         # Packed rows hold several samples, so the advantage is per token there; padded rows hold one each
         advantages = advantages[:, 1:] if advantages.dim() == 2 else advantages.unsqueeze(1)
-        per_token_loss = -torch.min(ratio * advantages, clipped_ratio * advantages)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
-        is_clipped = ((ratio < 1 - self.epsilon) | (ratio > 1 + self.epsilon)) & (mask > 0)
+        is_clipped = ((coef_1 < 1 - self.epsilon) | (coef_1 > 1 + self.epsilon)) & (mask > 0)
         self._metrics[mode]["clip_ratio"].append(
             self.accelerator.gather(is_clipped.sum() / mask.sum().clamp(min=1.0)).mean().item()
         )
