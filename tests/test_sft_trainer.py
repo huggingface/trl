@@ -926,6 +926,20 @@ class TestSFTTrainer(TrlTestCase):
         assert trainer.router_aux_loss_coef == 0.5
         assert trainer.aux_loss_enabled
 
+    def test_save_model_preserves_original_output_router_logits(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=1, report_to="none")
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        orig_value = model.config.get_text_config().output_router_logits
+
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+        trainer.train()
+        trainer.save_model()
+
+        saved_config = AutoModelForCausalLM.from_pretrained(self.tmp_dir).config.get_text_config()
+        assert saved_config.output_router_logits == orig_value
+
     def test_aux_loss_does_not_scale_with_gradient_accumulation(self):
         # Four copies of one example: every micro-batch has the same aux loss as the full batch
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train").select([0] * 4)

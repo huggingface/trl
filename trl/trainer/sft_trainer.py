@@ -1251,6 +1251,8 @@ class SFTTrainer(_BaseTrainer):
                 f"that returns its router logits, so there is no auxiliary loss to weight."
             )
         self.aux_loss_enabled = hasattr(text_config, "output_router_logits") and self.router_aux_loss_coef != 0.0
+        self._orig_output_router_logits = getattr(text_config, "output_router_logits", None)
+        self._orig_router_aux_loss_coef = getattr(text_config, "router_aux_loss_coef", None)
         if hasattr(text_config, "router_aux_loss_coef"):
             # The native and chunked forwards add the aux loss from the model config, so keep the config in sync with
             # the coef: enable it (and propagate the coef) when non-zero, disable it otherwise. This overrides any
@@ -1754,10 +1756,29 @@ class SFTTrainer(_BaseTrainer):
         self._metrics[mode].clear()
 
     # Ensure the model card is saved along with the checkpoint
+    @contextlib.contextmanager
+    def _restore_moe_config(self):
+        text_config = self.model.config.get_text_config()
+        if hasattr(text_config, "output_router_logits"):
+            text_config.output_router_logits = self._orig_output_router_logits
+        if hasattr(text_config, "router_aux_loss_coef") and self._orig_router_aux_loss_coef is not None:
+            text_config.router_aux_loss_coef = self._orig_router_aux_loss_coef
+        try:
+            yield
+        finally:
+            if hasattr(text_config, "router_aux_loss_coef"):
+                text_config.output_router_logits = self.aux_loss_enabled
+                text_config.router_aux_loss_coef = self.router_aux_loss_coef
+
     def _save_checkpoint(self, model, trial):
         if self.args.hub_model_id is None:
             model_name = Path(self.args.output_dir).name
         else:
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
-        super()._save_checkpoint(model, trial)
+        with self._restore_moe_config():
+            super()._save_checkpoint(model, trial)
+
+    def save_model(self, output_dir=None, _internal_call=False):
+        with self._restore_moe_config():
+            super().save_model(output_dir=output_dir, _internal_call=_internal_call)
