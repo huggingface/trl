@@ -809,6 +809,12 @@ class TestRolloutStartIndex(TrlTestCase):
         _group_id, _row_index, row = next(it)
         assert row["prompt"] == "row_3"
 
+    def test_rollout_loop_starts_a_streaming_dataset_at_row_0(self):
+        dataset = Dataset.from_dict({"prompt": [f"row_{i}" for i in range(10)]}).to_iterable_dataset()
+        loop = _rollout_loop(dataset=dataset, num_generations=2)
+        _group_id, row_index, row = next(loop._repeat_iterator())
+        assert (row_index, row["prompt"]) == (0, "row_0")
+
 
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
