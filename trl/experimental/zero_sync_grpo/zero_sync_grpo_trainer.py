@@ -626,14 +626,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
         # optimizer updates in place.
         model = self.accelerator.unwrap_model(self.model)
-        generation_config = GenerationConfig(
-            max_new_tokens=self.max_completion_length,
-            do_sample=True,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            top_k=self.top_k,
-            eos_token_id=self.eos_token_ids,
-        )
+        generation_kwargs = {
+            "max_new_tokens": self.max_completion_length,
+            "do_sample": True,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self.eos_token_ids,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+        }
+        generation_config = GenerationConfig(**generation_kwargs)
         cb_kwargs = dict(self.args.continuous_batching_config or {})
         cb_kwargs["return_logprobs"] = True  # the engine's logprobs are the behavior-policy logprobs
         # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
