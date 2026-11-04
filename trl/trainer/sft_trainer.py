@@ -1514,18 +1514,26 @@ class SFTTrainer(_BaseTrainer):
             if packing:
                 if args.max_length is None:
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Packing {dataset_name} dataset"
+                # The "seq_lengths" column is a fingerprint left by `pack_dataset`: the dataset is already packed, so
+                # packing it again would re-chunk the packed sequences and lose the original document boundaries.
+                if "seq_lengths" in get_dataset_column_names(dataset):
+                    logger.warning_once(
+                        f"The {dataset_name} dataset is already packed (it has a `seq_lengths` column), so it is left "
+                        "as is and is not packed again. Pass the unpacked dataset if you want it to be packed here."
+                    )
+                else:
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
-                dataset = dataset.select_columns(["input_ids", "labels"])
+                    dataset = dataset.select_columns(["input_ids", "labels"])
 
-                # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
-                # packing as well to avoid correlations between sequences packed together.
-                if args.shuffle_dataset:
-                    dataset = dataset.shuffle(seed=args.seed)
+                    # Shuffle the dataset before packing. When using wrapped packing, it's important to shuffle before
+                    # packing as well to avoid correlations between sequences packed together.
+                    if args.shuffle_dataset:
+                        dataset = dataset.shuffle(seed=args.seed)
 
-                # Packing adds new column "seq_lengths" needed for document aware FlashAttention
-                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
+                    # Packing adds new column "seq_lengths" needed for document aware FlashAttention
+                    dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
 
         if args.shuffle_dataset:
             dataset = dataset.shuffle(seed=args.seed)
@@ -1578,7 +1586,8 @@ class SFTTrainer(_BaseTrainer):
     ) -> dict[str, float]:
         # When a dataset is passed directly to `evaluate` (e.g. a held-out test set), preprocess it the same way
         # `__init__` does, so that `evaluate` accepts the same dataset types as the trainer (language modeling,
-        # prompt-completion, etc.). `_prepare_dataset` is idempotent: it skips datasets that are already tokenized. A
+        # prompt-completion, etc.). `_prepare_dataset` is idempotent: it skips datasets that are already tokenized, and
+        # does not pack datasets that are already packed (they carry a `seq_lengths` column). A
         # `str` selects a dataset that was already prepared at init time, so it's left untouched.
         if not self._skip_prepare_dataset and eval_dataset is not None and not isinstance(eval_dataset, str):
             packing = self.args.packing if self.args.eval_packing is None else self.args.eval_packing

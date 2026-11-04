@@ -1249,6 +1249,30 @@ class TestSFTTrainer(TrlTestCase):
 
     @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
     @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
+    def test_evaluate_packed_dataset_not_repacked(self):
+        """Passing an already packed eval dataset to `evaluate` must not pack it again (loses doc boundaries)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            packing=True,
+            max_length=64,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        default_loss = trainer.evaluate()["eval_loss"]
+        # The packed dataset carries `seq_lengths`; passing it back must be a no-op, not a second packing pass.
+        repacked_loss = trainer.evaluate(eval_dataset=trainer.eval_dataset)["eval_loss"]
+        assert default_loss == repacked_loss
+
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_only_train_packing(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
