@@ -17,6 +17,7 @@ on:
       - "!trl/experimental/**"
       - "!tests/experimental/**"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
