@@ -210,7 +210,7 @@ def random_reward(outcome):
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
-def test_harness_trainer_trains_on_sessions_in_the_rollout_process(tmp_path):
+def test_harness_trainer_produces_samples_from_sessions_in_the_rollout_process(tmp_path):
     trainer = openenv_harness.HarnessAsyncGRPOTrainer(
         model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
         harness_session_factory=SessionFactory,
