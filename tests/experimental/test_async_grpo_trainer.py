@@ -104,13 +104,12 @@ class _StubRolloutWorker:
         processing_class,
         samples_per_weight_sync: int = 10,
         fork_k: int = 1,
-        candidate_sets: bool = False,
         drop_every: int = 0,
         **kwargs,
     ):
         self.rollout_buffer = queue.Queue()
         self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
-        self._candidate_sets = candidate_sets
+        self._candidate_sets = config.top_k > 0
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
@@ -551,15 +550,13 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             report_to="none",
             **correction,
         )
-        rollout_worker = partial(_StubRolloutWorker, candidate_sets=training_args.top_k > 0)
-        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", rollout_worker):
-            trainer = AsyncGRPOTrainer(
-                model=model_id,
-                reward_funcs=dummy_reward_func,
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=peft_config,
-            )
+        trainer = AsyncGRPOTrainer(
+            model=model_id,
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
         previous_trainable_params = {
             n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
         }
