@@ -78,7 +78,7 @@ def main() -> None:
         learning_rate=1e-4,
         per_device_train_batch_size=8,
         gradient_accumulation_steps=4,
-        gradient_checkpointing=True,
+        activation_checkpointing=True,
         max_completion_length=1024,
         chat_template_kwargs={"enable_thinking": False},
         max_steps=200,

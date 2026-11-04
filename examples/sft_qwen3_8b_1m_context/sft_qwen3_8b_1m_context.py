@@ -26,7 +26,7 @@ Fine-tune Qwen3-8B on 1,048,576-token sequences, one 8xH100 node.
 Context parallelism splits each sequence across the 8 GPUs, so every GPU holds 131,072 tokens and
 attention is computed as a ring. One book-length sequence per step, 373 s/step, 56.2 GB per GPU.
 
-Gradient checkpointing runs with `offload`, which holds each checkpointed layer's input in pinned host
+Activation checkpointing runs with `offload`, which holds each checkpointed layer's input in pinned host
 memory. That is what keeps an 8B model inside 80 GB at this length.
 
 accelerate launch \
@@ -92,7 +92,7 @@ def main():
         pad_to_multiple_of=16,
         # `offload` holds each checkpointed layer's input in pinned host memory, freeing
         # `layers x sequence x hidden` bytes of GPU memory for a slower step.
-        gradient_checkpointing_kwargs={"offload": True},
+        activation_checkpointing_kwargs={"offload": True},
         bf16=True,
         # A base model used far beyond its trained context needs RoPE scaling: without it, loss at 1M
         # starts around 10.6 instead of 4.4. In Transformers v5 `rope_theta` lives inside

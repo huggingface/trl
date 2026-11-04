@@ -100,14 +100,14 @@ from trl.rewards import accuracy_reward, think_format_reward
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, OnlineDPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
-    training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
+    training_args.activation_checkpointing_kwargs = {"use_reentrant": True}
 
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
+        use_cache=False if training_args.activation_checkpointing else True,
     )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:

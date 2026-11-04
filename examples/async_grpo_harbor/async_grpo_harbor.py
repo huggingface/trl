@@ -261,9 +261,9 @@ def main() -> None:
         optim="adamw_torch",
         dtype="bfloat16",
         bf16=True,
-        gradient_checkpointing=True,
+        activation_checkpointing=True,
         # Support layers whose inputs are passed as keyword arguments.
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        activation_checkpointing_kwargs={"use_reentrant": False},
         report_to="trackio",
         project=args.project,
         trackio_space_id=args.trackio_space_id,

@@ -112,7 +112,7 @@ if __name__ == "__main__":
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=model_args.dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
+        use_cache=False if training_args.activation_checkpointing else True,
         quantization_config=quantization_config,
     )
     training_args.model_init_kwargs = model_kwargs
