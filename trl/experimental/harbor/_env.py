@@ -135,7 +135,7 @@ class HarborEnv:
         dockerfile = self._task.paths.environment_dir / "Dockerfile"
         if not dockerfile.exists():
             return
-        for line in dockerfile.read_text().splitlines():
+        for line in dockerfile.read_text(encoding="utf-8").splitlines():
             s = line.strip()
             if not s.upper().startswith("COPY ") or "--from" in s:
                 continue

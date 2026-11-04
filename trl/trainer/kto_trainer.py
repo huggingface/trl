@@ -34,6 +34,7 @@ from packaging.version import Version
 from torch.utils.data import DataLoader, Sampler, SequentialSampler
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
@@ -68,6 +69,7 @@ from .utils import (
     get_config_model_id,
     global_then_local_main_first,
     hash_module,
+    model_accepts_images,
     pad,
     use_adapter,
 )
@@ -494,7 +496,7 @@ class KTOTrainer(_BaseTrainer):
         ref_model ([`~transformers.PreTrainedModel`], *optional*):
             Reference model used to compute the reference log probabilities.
 
-            - If provided, this model is used directly as the reference policy.
+            - If provided, this model is used directly as the reference policy. It cannot be a [`~peft.PeftModel`].
             - If `None`, the trainer will automatically use the initial policy corresponding to `model`, i.e. the model
               state before KTO training starts.
         args ([`KTOConfig`], *optional*):
@@ -646,10 +648,16 @@ class KTOTrainer(_BaseTrainer):
                 "`model` and `ref_model` cannot be the same object. In most cases you should omit `ref_model` and "
                 "we'll initialize it to a copy of `model` for you."
             )
+        if ref_model is not None and is_peft_model(ref_model):
+            raise ValueError(
+                "`ref_model` cannot be a `PeftModel`. To train with PEFT, pass the `PeftModel` as `model` and omit "
+                "`ref_model`."
+            )
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
         if isinstance(processing_class, ProcessorMixin):
@@ -712,6 +720,51 @@ class KTOTrainer(_BaseTrainer):
                     "peft, or load the model with `device_map=None`. See "
                     "https://github.com/huggingface/peft/issues/2821."
                 )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
+                )
+            # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version("0.19.0") <= Version(peft.__version__) < Version("0.21.3.dev0")
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and any(
+                    isinstance(module, torch.nn.Linear)
+                    and name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                    for name, module in model.named_modules()
+                )
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                logger.warning(
+                    "With transformers v5 and peft>=0.19.0,<0.21.3, LoRA `target_modules` skip the dense and shared "
+                    "expert layers of MoE models, so only the routed experts are trained. Install peft from main to "
+                    "train them too. See https://github.com/huggingface/trl/issues/7767."
+                )
             model = get_peft_model(model, peft_config, **get_peft_model_kwargs)
 
         elif is_peft_model(model) and ref_model is None:
@@ -720,12 +773,11 @@ class KTOTrainer(_BaseTrainer):
             # 0.20.0, only one adapter per model was supported when the LoRA config uses `target_parameters` (see
             # peft#3340, fixed in peft#3350), so in that case we skip the "ref" adapter and compute the reference log
             # probs with adapters disabled, i.e. with the base model. The fix only allows adapters targeting the same
-            # parameters, which holds here since the "ref" adapter reuses the "default" config. `target_parameters`
-            # itself was only added in PEFT 0.17.0, so the version check is bounded on both sides.
+            # parameters, which holds here since the "ref" adapter reuses the "default" config.
             default_config = model.peft_config["default"]
             if (
                 isinstance(default_config, LoraConfig)
-                and Version("0.17.0") <= Version(peft.__version__) < Version("0.20.0")
+                and Version(peft.__version__) < Version("0.20.0")
                 and default_config.target_parameters
             ):
                 logger.warning(
