@@ -250,6 +250,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
@@ -428,7 +438,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             temperature=self.temperature,
             top_p=self.top_p,
             top_k=self.top_k,
-            eos_token_id=self._tokenizer.eos_token_id,
+            eos_token_id=self.eos_token_ids,
         )
         cb_kwargs = dict(self.args.continuous_batching_config or {})
         cb_kwargs["return_logprobs"] = True  # the engine's logprobs are the behavior-policy logprobs
