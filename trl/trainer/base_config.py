@@ -14,6 +14,8 @@
 
 from dataclasses import dataclass, field
 
+import transformers
+from packaging.version import Version
 from transformers import TrainingArguments
 
 
@@ -106,5 +108,10 @@ class _BaseConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # transformers 5.23 renamed `gradient_checkpointing` to `activation_checkpointing`. TRL's default lives on the
+        # old name, so move it over before the parent resolves the aliases, which would warn.
+        if Version(transformers.__version__) >= Version("5.23.0.dev0") and self.activation_checkpointing is None:
+            self.activation_checkpointing, self.gradient_checkpointing = self.gradient_checkpointing, None
 
         super().__post_init__()

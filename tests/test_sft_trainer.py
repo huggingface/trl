@@ -1034,6 +1034,30 @@ class TestSFTTrainer(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    @require_peft
+    def test_train_with_peft_config_and_deepspeed_zero3_forces_reentrant(self, monkeypatch):
+        # PEFT + ZeRO-3 needs reentrant checkpointing (see #2514). The trainer forces `use_reentrant=True`, and it must
+        # reach the checkpoint function whichever name transformers reads the kwargs from.
+        monkeypatch.setenv("ACCELERATE_USE_DEEPSPEED", "false")  # `TrainingArguments` sets it, restore it after
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, deepspeed={"zero_optimization": {"stage": 3}}, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        # The Trainer enables checkpointing from these kwargs in `train()`; since 5.23 it reads the new name
+        assert trainer.args.gradient_checkpointing_kwargs["use_reentrant"] is True
+        if Version(transformers.__version__) >= Version("5.23.0.dev0"):
+            assert trainer.args.activation_checkpointing_kwargs["use_reentrant"] is True
+
     def test_train_with_non_chatml_conversational_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
