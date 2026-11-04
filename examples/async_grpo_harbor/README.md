@@ -6,10 +6,10 @@ logprobs, and loss masks, then updates the same vLLM instance.
 ## Local setup
 
 Use Python 3.12 and this TRL checkout. The typed capture API was merged in
-[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install the pinned upstream revision:
+[OpenEnv #1280](https://github.com/openenv/OpenEnv/pull/1280). Install the pinned upstream revision:
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git OpenEnv
+git clone https://github.com/openenv/OpenEnv.git OpenEnv
 git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
 pip install -e . trackio datasets ./OpenEnv[harbor] kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
