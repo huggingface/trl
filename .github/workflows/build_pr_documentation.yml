@@ -2,6 +2,7 @@ name: Build PR Documentation
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 env:
   TRL_EXPERIMENTAL_SILENCE: 1

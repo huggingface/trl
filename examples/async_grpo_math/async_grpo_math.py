@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[kernels]",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",

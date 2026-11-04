@@ -331,7 +331,6 @@ class SDPOTrainer(_BaseTrainer):
 
     loss_is_scaled_for_ga = True
 
-    config_cls = SDPOConfig
     _tag_names = ["trl", "sdpo"]
     _name = "SDPO"
     # docstyle-ignore
@@ -1002,7 +1001,7 @@ class SDPOTrainer(_BaseTrainer):
 
         mode = "train" if self.model.training else "eval"
         num_generations = self.num_generations if mode == "train" else self.num_generations_eval
-        prompt_ids_out, completion_ids_list, _, _ = self.vllm_generation.generate(
+        prompt_ids_out, completion_ids_list, _, _, _ = self.vllm_generation.generate(
             prompts=prompt_ids,
             images=None,
             num_generations=num_generations,

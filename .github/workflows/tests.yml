@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - ci-*
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
@@ -18,6 +17,7 @@ on:
       - "!trl/experimental/**"
       - "!tests/experimental/**"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # Run only when relevant files are modified
       - ".github/workflows/tests.yml"
@@ -89,6 +89,10 @@ jobs:
         run: |
           source .venv/bin/activate
           make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -146,6 +150,10 @@ jobs:
         run: |
           source .venv/bin/activate
           make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -198,6 +206,10 @@ jobs:
         run: |
           source .venv/bin/activate
           make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -248,10 +260,11 @@ jobs:
           uv pip install \
             ".[dev]" \
             "accelerate==1.11.0" \
-            "bitsandbytes==0.45.1" \
+            "bitsandbytes==0.45.2" \
             "datasets==4.7.0" \
+            "deepspeed==0.18.6" \
             "huggingface_hub==0.34.0" \
-            "liger-kernel==0.8.2" \
+            "math-verify==0.8.0" \
             "numpy==1.26.0" \
             "pandas==2.1.1" \
             "peft==0.17.0" \
@@ -265,6 +278,10 @@ jobs:
         run: |
           source .venv/bin/activate
           make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -319,6 +336,10 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -392,6 +413,10 @@ jobs:
         run: |
           source .venv/bin/activate
           make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
@@ -461,6 +486,10 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
