@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
 import sys
 import time
@@ -447,9 +448,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs.
-        # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
-        # Instead, we set them to the columns expected by the `training_step` method, hence the override.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
+        # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt"]
 
@@ -706,15 +707,15 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         rewards_per_func = torch.stack([scored["rewards_per_func"] for scored in group["scored"]])
 
         # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
-        # which both biases the group baseline and hands the completion a spurious advantage. Mark these rows NaN so
-        # they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
+        # which both biases the per-group baseline and hands the completion a spurious advantage. Mark these rows NaN
+        # so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
         unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
         rewards = rewards_per_func.nansum(dim=1)
         rewards[unscorable_mask] = torch.nan
         advantages = (rewards - torch.nanmean(rewards)) / (nanstd(rewards) + 1e-4)
 
-        # Unscorable completions carry no learning signal: their reward is NaN here, so zero their advantage to keep
-        # them from moving the policy.
+        # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
+        # so zero their advantage to keep them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
 
         # A rollout produces one row, or several when the chat template rewrote history. They all carry the rollout's
@@ -1025,15 +1026,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         mode = "train" if self.model.training else "eval"
-        # Skip what has nothing to average: the rollouts are produced a batch ahead of the step that trains on
-        # them, so a log can fall between a metric's key appearing and its first value.
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items() if val}
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
 
         # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
