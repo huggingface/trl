@@ -418,7 +418,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires this argument
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards
             args=training_args,
             train_dataset=dataset,
         )
@@ -724,7 +724,7 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         return AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires it
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards
             args=training_args,
             train_dataset=dataset,
         )

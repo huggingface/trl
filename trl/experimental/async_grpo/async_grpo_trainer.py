@@ -1878,7 +1878,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         super()._save_checkpoint(model, trial)
 
     def _inner_training_loop(self, *args, **kwargs):
-        # When resuming, pass the saved prompt position to the worker before _StartRolloutWorkerCallback fires.
+        # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
         # Always reset first so a stale value from a prior train() call is never carried over.
         if self.accelerator.is_main_process:
