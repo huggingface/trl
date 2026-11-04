@@ -1213,9 +1213,10 @@ class DistillationTrainer(_BaseTrainer):
         tool_call_count = 0
         tool_failure_count = 0
         iteration_num = 0
-        # In vLLM server mode, generation gathers the prompts of all processes, so every process stays in the loop until
-        # no process has tool calls left. A process with no tool calls left generates from an empty list.
-        sync_processes = self.use_vllm and self.vllm_mode == "server"
+        # In vLLM server mode, and in colocate mode with tensor parallelism, generation gathers the prompts of several
+        # processes, so every process stays in the loop until no process has tool calls left. A process with no tool
+        # calls left generates from an empty list.
+        sync_processes = self.use_vllm and (self.vllm_mode == "server" or self.args.vllm_tensor_parallel_size > 1)
 
         while iteration_num < self.max_tool_calling_iterations:
             if not idxs_with_tool and not sync_processes:

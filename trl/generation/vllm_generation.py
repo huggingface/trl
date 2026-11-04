@@ -759,9 +759,11 @@ class VLLMGeneration:
 
             if self.tensor_parallel_size > 1:
                 # Slice completions for this rank within its TP group.
-                # Each rank generates all outputs — we keep only our share.
+                # Each rank generates all outputs — we keep only our share. Ranks don't necessarily hold the same
+                # number of prompts (see the server branch), so the offset comes from the gathered prompt counts.
                 local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
-                tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                start = sum(len(rank_prompts) for rank_prompts in gathered_prompts[:local_rank_in_group])
+                tp_slice = slice(start, start + orig_size)
                 prompt_ids = all_prompt_ids[tp_slice]
                 completion_ids = all_completion_ids[tp_slice]
                 logprobs = all_logprobs[tp_slice] if all_logprobs is not None else None
