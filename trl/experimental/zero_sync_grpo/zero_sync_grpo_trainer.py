@@ -39,7 +39,7 @@ from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_availa
 
 from ...chat_template_utils import add_response_schema, parse_response, supports_tool_calling
 from ...trainer.base_trainer import _BaseTrainer
-from ...trainer.utils import add_fused_lm_head, create_model_from_path, nanstd, pad
+from ...trainer.utils import add_fused_lm_head, create_model_from_path, nanstd
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
 
@@ -222,19 +222,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 model_init_kwargs["device_map"] = None
             model = create_model_from_path(model, **model_init_kwargs)
             if "attn_implementation" not in model_init_kwargs:
-                if "linear_attention" in (getattr(model.config.get_text_config(), "layer_types", None) or []):
-                    # Hybrid models read the sample boundaries from the flash varlen kwargs; flex attention is
-                    # not supported there, and a dense implementation would attend across samples
-                    if is_flash_attn_3_available(kernels_fallback_ok=True):
-                        model.set_attn_implementation("flash_attention_3")
-                    elif is_flash_attn_2_available(kernels_fallback_ok=True):
-                        model.set_attn_implementation("flash_attention_2")
-                    else:
-                        raise ValueError("Packed training on a hybrid model requires flash attention")
+                # Training packs the samples of a micro-batch in one flat row whose boundaries travel as the flash
+                # varlen kwargs; sdpa reads them from the position ids instead. Linear attention layers (hybrid
+                # models like Qwen3.5) scan the row with varlen kernels and have no sdpa path.
+                if is_flash_attn_3_available(kernels_fallback_ok=True):
+                    model.set_attn_implementation("flash_attention_3")
+                elif is_flash_attn_2_available(kernels_fallback_ok=True):
+                    model.set_attn_implementation("flash_attention_2")
+                elif "linear_attention" in (getattr(model.config.get_text_config(), "layer_types", None) or []):
+                    raise ValueError("Packed training on a hybrid model requires flash attention")
                 else:
-                    # Packed rows attend through a block-diagonal mask; flex attention skips the masked-out
-                    # cross-sample blocks, where a dense implementation still pays for them.
-                    model.set_attn_implementation("flex_attention")
+                    model.set_attn_implementation("sdpa")
         else:
             if args.model_init_kwargs is not None:
                 raise ValueError(
@@ -266,11 +264,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.top_k = args.top_k
         self.chat_template_kwargs = args.chat_template_kwargs or {}
         self.epsilon = args.epsilon
-        # Linear attention layers (hybrid models like Qwen3.5) scan packed rows with varlen kernels that take one
-        # flat row with explicit boundaries, so packing then goes in a single unpadded row instead of several rows
-        self.packed_single_row = "linear_attention" in (
-            getattr(model.config.get_text_config(), "layer_types", None) or []
-        )
         self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
 
@@ -803,65 +796,32 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
         # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
-        pad_token_id = self._tokenizer.pad_token_id
-        if self.packed_single_row:
-            # One flat row, no padding: samples go back to back and the boundaries travel as cu_seq_lens_q, which
-            # the varlen attention kernels and the linear attention layers consume directly. Position ids still
-            # restart at every sample, and the loss shift stays sound at the seams for the same reason as below.
-            lengths = torch.tensor([len(s["input_ids"]) for s in samples])
-            cu_seq_lens = torch.cat([torch.zeros(1, dtype=torch.int32), lengths.cumsum(0).to(torch.int32)])
-            return {
-                "input_ids": torch.tensor([t for s in samples for t in s["input_ids"]]).unsqueeze(0).to(device),
-                "position_ids": torch.cat([torch.arange(len(s["input_ids"])) for s in samples])
-                .unsqueeze(0)
-                .to(device),
-                "completion_mask": torch.tensor([m for s in samples for m in s["completion_mask"]], dtype=torch.long)
-                .unsqueeze(0)
-                .to(device),
-                "old_per_token_logps": torch.tensor([lp for s in samples for lp in s["logprobs"]], dtype=torch.float32)
-                .unsqueeze(0)
-                .to(device),
-                "advantages": torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in samples])
-                .to(torch.float32)
-                .unsqueeze(0)
-                .to(device),
-                "cu_seq_lens_q": cu_seq_lens.to(device),
-                "cu_seq_lens_k": cu_seq_lens.to(device),
-                "max_length_q": int(lengths.max()),
-                "max_length_k": int(lengths.max()),
-            }
-        # Pack the samples back to back, first-fit by decreasing length, instead of padding each to the
-        # longest. Position ids restart at every sample and no attention mask is passed, so the model builds
-        # the block-diagonal mask from them. The global shift in the loss stays sound at the seams: the first
-        # token of a sample is always context (mask 0), so no term ever crosses two samples. Advantages and
-        # behavior logprobs become per-token, since one row now holds several samples.
-        capacity = max(4096, max(len(s["input_ids"]) for s in samples))
-        rows = []  # each row is a list of samples whose total length fits the capacity
-        row_space = []
-        for sample in sorted(samples, key=lambda s: len(s["input_ids"]), reverse=True):
-            length = len(sample["input_ids"])
-            for i, space in enumerate(row_space):
-                if length <= space:
-                    rows[i].append(sample)
-                    row_space[i] -= length
-                    break
-            else:
-                rows.append([sample])
-                row_space.append(capacity - length)
-        input_ids, position_ids, completion_mask, old_per_token_logps, advantages = [], [], [], [], []
-        for row in rows:
-            input_ids.append(torch.tensor([t for s in row for t in s["input_ids"]]))
-            position_ids.append(torch.cat([torch.arange(len(s["input_ids"])) for s in row]))
-            completion_mask.append(torch.tensor([m for s in row for m in s["completion_mask"]], dtype=torch.long))
-            old_per_token_logps.append(torch.tensor([lp for s in row for lp in s["logprobs"]], dtype=torch.float32))
-            advantages.append(torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in row]).to(torch.float32))
+        # One flat row, no padding: samples go back to back and the boundaries travel as cu_seq_lens_q, which the
+        # varlen attention kernels and the linear attention layers consume directly; sdpa builds its block-diagonal
+        # mask from the position ids, which restart at every sample. Flash attention reads packing from the position
+        # ids only when the batch has a single row, so several rows would attend across their samples. The global
+        # shift in the loss stays sound at the seams: the first token of a sample is always context (mask 0), so no
+        # term ever crosses two samples. Advantages and behavior logprobs are per token, since the row holds several
+        # samples.
+        lengths = torch.tensor([len(s["input_ids"]) for s in samples])
+        cu_seq_lens = torch.cat([torch.zeros(1, dtype=torch.int32), lengths.cumsum(0).to(torch.int32)])
         return {
-            "input_ids": pad(input_ids, padding_value=pad_token_id, padding_side="right").to(device),
-            # Padding restarts the position ids, so the mask treats it as one more (never-trained) sample
-            "position_ids": pad(position_ids, padding_value=0, padding_side="right").to(device),
-            "completion_mask": pad(completion_mask, padding_value=0, padding_side="right").to(device),
-            "old_per_token_logps": pad(old_per_token_logps, padding_value=0.0, padding_side="right").to(device),
-            "advantages": pad(advantages, padding_value=0.0, padding_side="right").to(device),
+            "input_ids": torch.tensor([t for s in samples for t in s["input_ids"]]).unsqueeze(0).to(device),
+            "position_ids": torch.cat([torch.arange(len(s["input_ids"])) for s in samples]).unsqueeze(0).to(device),
+            "completion_mask": torch.tensor([m for s in samples for m in s["completion_mask"]], dtype=torch.long)
+            .unsqueeze(0)
+            .to(device),
+            "old_per_token_logps": torch.tensor([lp for s in samples for lp in s["logprobs"]], dtype=torch.float32)
+            .unsqueeze(0)
+            .to(device),
+            "advantages": torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in samples])
+            .to(torch.float32)
+            .unsqueeze(0)
+            .to(device),
+            "cu_seq_lens_q": cu_seq_lens.to(device),
+            "cu_seq_lens_k": cu_seq_lens.to(device),
+            "max_length_q": int(lengths.max()),
+            "max_length_k": int(lengths.max()),
         }
 
     def create_optimizer(self, model=None):
