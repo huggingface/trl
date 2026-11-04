@@ -602,6 +602,7 @@ class AsyncRolloutLoop:
         self._groups_to_score: asyncio.Queue[RolloutGroup | None] = asyncio.Queue(maxsize=score_queue_maxsize)
         self._total_completion_tokens = 0
         self._total_groups_scored = 0
+        self._groups_without_sample = 0
         self.session: aiohttp.ClientSession | None = None
 
         self._loop = asyncio.new_event_loop()
@@ -1036,6 +1037,16 @@ class AsyncRolloutLoop:
 
     async def _put_in_buffer(self, item: RolloutSample | int, stop_event: asyncio.Event) -> bool:
         """Put `item` in the rollout buffer, waiting while it is full. Returns `False` if `stop_event` is set first."""
+        if isinstance(item, RolloutSample):
+            self._groups_without_sample = 0
+        else:
+            self._groups_without_sample += 1
+            if self._groups_without_sample % 100 == 0:
+                logger.warning(
+                    f"The last {self._groups_without_sample} groups were all dropped or skipped by `filter_prompt`, "
+                    "so the trainer may not reach another step. Check the rewards: a group is dropped when they're all "
+                    "equal or none could be scored, for example once the policy solves every prompt."
+                )
         t_blocked = None
         while True:
             try:

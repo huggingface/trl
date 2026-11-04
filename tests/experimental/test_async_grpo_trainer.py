@@ -2251,6 +2251,11 @@ class _SelfScoredLoop(_FixedRolloutLoop):
         return dataclasses.replace(rollout, reward=float(self.calls % 2))
 
 
+class _NoPromptsLoop(_FixedRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return False
+
+
 class _LifecycleLoop(_FixedRolloutLoop):
     async def setup(self):
         self.events.append("setup")
@@ -2317,6 +2322,24 @@ class TestCustomRolloutLoop(TrlTestCase):
         samples = [item for item in self._run(loop, 4) if isinstance(item, RolloutSample)]
         assert {sample.metrics["rewards/rollout"] for sample in samples} == {0.0, 1.0}
         assert {round(sample.advantage, 4) for sample in samples} == {-1.0, 1.0}
+
+    def test_warns_when_no_group_reaches_the_trainer(self, caplog):
+        loop = _rollout_loop(
+            _NoPromptsLoop,
+            num_generations=2,
+            reward_funcs=[two_reward],
+            vllm_server_base_url="http://127.0.0.1:9",
+            rollout_buffer=mp.Queue(maxsize=100),
+        )
+        thread = threading.Thread(target=loop._run)
+        with caplog.at_level("WARNING"):
+            thread.start()
+            skipped = [loop.rollout_buffer.get(timeout=60) for _ in range(100)]
+            loop._loop.call_soon_threadsafe(loop._stop_event.set)
+            thread.join(timeout=60)
+        assert not thread.is_alive()
+        assert all(isinstance(item, int) for item in skipped)
+        assert "The last 100 groups were all dropped or skipped" in caplog.text
 
     def test_setup_runs_before_generation_and_close_after(self):
         loop = _rollout_loop(
