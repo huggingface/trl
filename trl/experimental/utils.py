@@ -23,7 +23,9 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.types
 import torch
+import transformers
 from accelerate.utils import is_peft_model
+from packaging.version import Version
 from pyarrow import compute as pc
 from tokenizers.models import BPE
 from torch import nn
@@ -915,6 +917,10 @@ def prepare_peft_model(
         )
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
         args.gradient_checkpointing = False
+        # transformers 5.23 renamed `gradient_checkpointing` to `activation_checkpointing` and the Trainer reads the
+        # new name; the old one is only a mirror resolved in `TrainingArguments.__post_init__`
+        if Version(transformers.__version__) >= Version("5.23.0.dev0"):
+            args.activation_checkpointing = False
     elif args.gradient_checkpointing:
         model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
 
