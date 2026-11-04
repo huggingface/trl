@@ -71,7 +71,7 @@ trainer = ZeroSyncGRPOTrainer(
 )
 ```
 
-`completions/forks` logs how often this happens, and `tools/call_count` how many tool calls a rollout makes.
+`completions/forks` logs how often this happens, and `tools/call_frequency` how many tool calls a rollout makes.
 
 ## Staleness
 

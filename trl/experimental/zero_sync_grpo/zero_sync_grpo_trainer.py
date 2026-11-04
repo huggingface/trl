@@ -848,17 +848,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         rollout_metrics = [sample["metrics"] for sample in samples if sample["metrics"] is not None]
         rewards = torch.stack([metrics["reward"] for metrics in rollout_metrics])
         rewards_per_func = torch.stack([metrics["rewards_per_func"] for metrics in rollout_metrics])
+        # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
-            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(
-                torch.nanmean(rewards_per_func[:, i]).item()
-            )
+            mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
+            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
         self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
         self._metrics[mode]["completions/mean_length"].append(
             sum(metrics["completion_length"] for metrics in rollout_metrics) / len(rollout_metrics)
         )
         if self.tools:
-            self._metrics[mode]["tools/call_count"].append(
+            self._metrics[mode]["tools/call_frequency"].append(
                 sum(metrics["tool_calls"] for metrics in rollout_metrics) / len(rollout_metrics)
             )
             self._metrics[mode]["completions/forks"].append(
