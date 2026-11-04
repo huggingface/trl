@@ -383,7 +383,7 @@ def _scrub_child_env() -> None:
         os.environ.pop(k, None)
 
 
-def _spawn_stop_watcher(rollout_loop: "AsyncRolloutLoop", stop_event: MPEvent) -> None:
+def _spawn_stop_watcher(rollout_loop: "AsyncRolloutLoop", stop_event: MPEvent) -> threading.Thread:
     # Daemon thread that translates the parent's mp.Event into the child's
     # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
@@ -397,7 +397,9 @@ def _spawn_stop_watcher(rollout_loop: "AsyncRolloutLoop", stop_event: MPEvent) -
             # Loop already closed (run() returned before stop fired). Nothing to do.
             pass
 
-    threading.Thread(target=_watch, daemon=True, name="grpo-mp-stop-watcher").start()
+    watcher = threading.Thread(target=_watch, daemon=True, name="grpo-mp-stop-watcher")
+    watcher.start()
+    return watcher
 
 
 def _child_main(
@@ -428,12 +430,18 @@ def _child_main(
         metrics_queue=metrics_queue,
     )
     child_ready_event.set()
-    _spawn_stop_watcher(rollout_loop, stop_event)
+    watcher = _spawn_stop_watcher(rollout_loop, stop_event)
     try:
         rollout_loop._run()
     except Exception:
         traceback.print_exc()
         raise
+    finally:
+        # The worker is stopping either way: release the watcher so it does not outlive `run()`
+        stop_event.set()
+        watcher.join(timeout=1.0)
+        if watcher.is_alive():
+            logger.warning("Stop watcher did not exit within 1s.")
 
 
 class AsyncRolloutLoop:

@@ -1614,3 +1614,11 @@ class TestStopWatcher:
         hung = setter.is_alive()
         setter.kill()
         assert not hung
+
+    def test_watcher_exits_once_the_stop_event_is_set(self):
+        # `_child_main` sets the stop event and joins the watcher when `run()` returns or raises
+        stop_event = mp.get_context("spawn").Event()
+        watcher = _spawn_stop_watcher(_rollout_loop(teacher_server_urls=ONE_TEACHER), stop_event)
+        stop_event.set()
+        watcher.join(timeout=5)
+        assert not watcher.is_alive()
