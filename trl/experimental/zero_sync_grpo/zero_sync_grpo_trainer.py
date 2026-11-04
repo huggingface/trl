@@ -801,7 +801,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
                 continue
             try:
-                result = tool(**function.get("arguments", {}))
+                arguments = function.get("arguments", {})
+                result = tool(**arguments)
             except Exception as error:
                 result = {"error": str(error)}
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
