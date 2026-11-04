@@ -27,30 +27,30 @@ tensors the optimizer updates, so there is no inference server and no weight syn
 generates between optimizer steps, and every completion is produced by the current policy (at
 most `rollouts_in_flight` rollouts behind the policy).
 
-This recipe is the tuned configuration for the long-completion regime (Qwen3-14B, ~3-4k-token
-thinking completions, 4x H100). Each knob below is what moved the needle:
+This recipe is the tuned configuration for the long-completion regime (Qwen3-14B, thinking
+completions of 1-4k tokens, 4x B200). Each knob below is what moved the needle:
 
-- rows are always packed back to back, so no pad-token compute, and the model defaults to flex
-  attention, which skips the masked-out cross-sample blocks.
-- `rollouts_in_flight=128`: a decode step costs about the same whatever number of sequences it
-  carries, so the engine wants its batch kept full. A finished rollout is replaced immediately by
-  the next one rather than the batch refilling once per optimizer step. Raising it kept improving
-  throughput at 14B until in-flight rollouts crowd the KV cache, where it regresses: raise
-  `max_memory_percent` before raising this further.
-- `gradient_accumulation_steps`: splits the step into forwards that fit in memory next to the KV
-  cache; advantages are computed at scoring time, so accumulation does not change the loss.
-- `tp_size` should be the smallest that fits the model: decode is all-reduce latency-bound, so
-  wider TP slows generation (14B at tp=8 decodes slower than at tp=4). The ranks left over hold
-  replicas of the model, which train on their own prompts and sum their gradients, so more GPUs
-  means more replicas rather than a wider split. On 16 GPUs, tp=4 with four replicas is 2.4x
-  tp=8 with two.
+- a micro-batch is packed in one row with explicit sample boundaries, so no pad-token compute and
+  flash attention's varlen kernels attend within each sample.
+- `rollouts_in_flight=512`: a decode step is latency-bound, so its cost barely depends on how many
+  sequences it carries (on this model at tp=4, 34 ms with 128 in flight, 44 ms with 512). A finished
+  rollout is replaced immediately by the next one, and the engine wants as many as the KV cache
+  holds: raise `max_memory_percent` together with this. Completions then lag the policy by
+  `rollouts_in_flight / samples per step` optimizer steps (16 here), which the 14B tolerates; a 0.6B
+  at the same lag learned visibly slower, so keep the lag small on small models.
+- `per_device_train_batch_size=16` with `gradient_accumulation_steps=2`: fewer, larger forwards
+  per step; advantages are computed at scoring time, so accumulation does not change the loss. A
+  single forward of all 32 samples runs out of memory next to the KV cache.
+- `learning_rate=1e-5`: the reward goes from 0.41 to 0.92 in the first 50 steps and holds there,
+  with a clip ratio of 0.014; at 1e-6 it stays between 0.2 and 0.3 over 200 steps.
+- `tp_size` should be the smallest that fits the model: tp=2, 4 and 8 give 2.6, 2.9 and 3.0
+  samples/s, so a wider split buys almost nothing per GPU. The world size must equal `tp_size`
+  until transformers' device mesh has a replicate dimension again.
 
-Measured on 4x H100 with Qwen3-14B: ~75k trained tokens per optimizer step, ~3.1k decoded
-tokens/s, 94% average SM utilization, generation and training together reaching ~10% MFU. On 8 and
-16 H100 the same recipe does 4.1k and 9.2k trained tokens/s, the second being 2.2x the first.
+Measured on 4x B200 with Qwen3-14B: 6.6 s per optimizer step of 32 samples (~45k trained tokens),
+200 steps in 22 minutes.
 
 torchrun --nproc-per-node 4 examples/zero_sync_grpo_math/zero_sync_grpo_math.py
-torchrun --nproc-per-node 8 examples/zero_sync_grpo_math/zero_sync_grpo_math.py  # tp=4, two replicas
 """
 
 import os
@@ -94,15 +94,16 @@ def main():
     config = ZeroSyncGRPOConfig(
         output_dir="zero-sync-grpo-gsm8k",
         save_strategy="no",
-        per_device_train_batch_size=8,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=16,
+        gradient_accumulation_steps=2,
         num_generations=8,
         max_completion_length=4096,
         chat_template_kwargs={"enable_thinking": True},
-        rollouts_in_flight=128,
+        learning_rate=1e-5,
+        rollouts_in_flight=512,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients.
-        continuous_batching_config={"max_memory_percent": 0.25},
-        # The smallest split that fits a 14B; whatever ranks are left over hold replicas of it.
+        continuous_batching_config={"max_memory_percent": 0.5},
+        # The smallest split that fits a 14B
         tp_size=min(4, int(os.environ.get("WORLD_SIZE", "1"))),
         max_steps=200,
     )
