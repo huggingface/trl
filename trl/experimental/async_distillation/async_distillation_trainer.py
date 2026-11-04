@@ -667,7 +667,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "teacher_topk_logprobs": sample.teacher_topk_logprobs,
                 "teacher_id": sample.teacher_id,
                 "prompt_id": sample.prompt_id,  # counted by the collator, never sent to the model
-                "metrics": sample.metrics,  # per-sample scalars a custom worker stamped; aggregated by the collator
+                "metrics": sample.metrics,  # per-sample scalars, none for distillation; aggregated by the collator
             }
 
 
@@ -816,9 +816,8 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
         self.metrics["batch/masked_token_frac"].append((sum(forwarded) - sum(trained), sum(forwarded)))
 
-        # Per-sample scalars, nan-aware. Empty for the built-in worker — distillation has no reward function, so it
-        # measures nothing per sample — but a custom worker can stamp its own, and each key averages over the samples
-        # that carry it rather than over the whole micro-batch.
+        # Per-sample scalars, nan-aware: each key averages over the samples that carry it rather than over the whole
+        # micro-batch. Always empty for now, since distillation has no reward function and measures nothing per sample.
         keys = dict.fromkeys(key for example in all_examples for key in example["metrics"])
         for key in keys:
             values = [example["metrics"][key] for example in all_examples if key in example["metrics"]]
@@ -2066,8 +2065,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
         # Always reset first so a stale value from a prior train() call is never carried over. The trained ids are
-        # cleared whatever the worker, since the collator fills them regardless and the worker's `prompt_id` restarts
-        # at 0, so leftovers from an earlier run would collide with this one's.
+        # cleared too: the worker's `prompt_id` restarts at 0, so leftovers from an earlier run would collide with this
+        # one's.
         self._trained_prompts.clear()
         if self.accelerator.is_main_process:
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0

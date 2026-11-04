@@ -20,7 +20,7 @@ import multiprocessing as mp
 import os
 import queue
 from collections import OrderedDict, defaultdict
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
@@ -1068,9 +1068,8 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             )
 
     def test_resume_from_checkpoint(self):
-        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
-        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are covered by
-        # TestRolloutStateCheckpoint.
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
+        # covered by TestRolloutStateCheckpoint.
         # Qwen3 rather than the Qwen2.5 model the tests above use: that one has head_dim=2, which flash-attn rejects
         # ("head_size should be a multiple of 8") on some of its kernels, and this test happens to select one of them.
         model_id = "trl-internal-testing/tiny-Qwen3ForCausalLM"
@@ -1145,8 +1144,7 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
         args=AsyncDistillationConfig(output_dir=output_dir, report_to="none"),
         train_dataset=dataset,
     )
-    trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-    trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    trainer.rollout_worker._loop_kwargs["dataset_start_index"] = dataset_start_index
     return trainer
 
 
@@ -1262,7 +1260,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # under a name a still-running vLLM server already holds, and strand the previous run's directories outside
         # the eviction window.
         assert trainer.model_version == 42
-        trainer.rollout_worker.update_model_version.assert_called_once_with(42)
+        assert trainer.rollout_worker._model_version == 42
 
     def test_inner_training_loop_defaults_model_version_for_old_checkpoints(self):
         # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
