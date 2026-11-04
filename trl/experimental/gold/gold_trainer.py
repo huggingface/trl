@@ -2563,14 +2563,31 @@ class GOLDTrainer(SFTTrainer):
         return str(content)
 
     @staticmethod
-    def _build_privileged_teacher_prompt(
+    def _render_prompt_and_completion(
         processing_class: PreTrainedTokenizerBase,
+        prompt: list[dict[str, Any]],
+        completion: list[dict[str, Any]],
+        chat_template_kwargs: dict[str, Any],
+    ) -> tuple[str, str]:
+        """Render a conversation and split it into prompt and completion text."""
+        prompt_text = processing_class.apply_chat_template(
+            prompt, add_generation_prompt=True, tokenize=False, **chat_template_kwargs
+        )
+        full_text = processing_class.apply_chat_template(prompt + completion, tokenize=False, **chat_template_kwargs)
+        # The generation prompt is not always a prefix of the full render (e.g. templates that open a `<think>` block
+        # in the generation prompt but strip it from rendered assistant turns), so split at the common prefix.
+        prompt_text = "".join(
+            x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt_text, full_text, strict=False))
+        )
+        return prompt_text, full_text[len(prompt_text) :]
+
+    @staticmethod
+    def _build_privileged_teacher_prompt(
         prompt: str | list[dict[str, Any]],
         privileged_context: Any,
         teacher_prompt_template: str,
         privileged_context_column: str,
-        chat_template_kwargs: dict[str, Any],
-    ) -> str:
+    ) -> str | list[dict[str, Any]]:
         """Build the teacher prompt by enriching the final user turn with privileged context."""
         if privileged_context is None:
             raise ValueError(f"`{privileged_context_column}` must not be None when `use_privileged_context=True`.")
@@ -2594,12 +2611,7 @@ class GOLDTrainer(SFTTrainer):
                 privileged_context=privileged_context,
             )
             messages[-1] = {**last_message, "content": teacher_content}
-            return processing_class.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                tokenize=False,
-                **chat_template_kwargs,
-            )
+            return messages
 
         return teacher_prompt_template.format(prompt=prompt, privileged_context=privileged_context)
 
@@ -2663,29 +2675,16 @@ class GOLDTrainer(SFTTrainer):
 
                 if "prompt" in example and "completion" in example:  # prompt-completion case
                     if is_conversational(example):
-                        prompt_text = processing_class.apply_chat_template(
+                        prompt_text, completion_text = GOLDTrainer._render_prompt_and_completion(
+                            processing_class,
                             example["prompt"],
-                            add_generation_prompt=True,
-                            tokenize=False,
-                            **example.get("chat_template_kwargs", {}),
+                            example["completion"],
+                            example.get("chat_template_kwargs", {}),
                         )
-                        full_text = processing_class.apply_chat_template(
-                            example["prompt"] + example["completion"],
-                            tokenize=False,
-                            **example.get("chat_template_kwargs", {}),
-                        )
-                        prompt_text = "".join(
-                            x
-                            for x, _ in takewhile(
-                                lambda x: x[0] == x[1],
-                                zip(prompt_text, full_text, strict=False),
-                            )
-                        )
-                        completion_text = full_text[len(prompt_text) :]
                     else:
                         prompt_text = example["prompt"]
                         completion_text = example["completion"]
-                        full_text = prompt_text + completion_text
+                    full_text = prompt_text + completion_text
                     result["original_prompt_text"] = prompt_text
                     result["original_completion_text"] = completion_text
                 elif is_conversational(example) or "messages" in example:
@@ -2696,28 +2695,21 @@ class GOLDTrainer(SFTTrainer):
                         prompt_messages = messages[:completion_idx]
                         full_messages = messages[: completion_idx + 1]
                         if prompt_messages:
-                            prompt_text = processing_class.apply_chat_template(
+                            prompt_text, completion_text = GOLDTrainer._render_prompt_and_completion(
+                                processing_class,
                                 prompt_messages,
-                                add_generation_prompt=True,
-                                tokenize=False,
-                                **example.get("chat_template_kwargs", {}),
+                                [messages[completion_idx]],
+                                example.get("chat_template_kwargs", {}),
                             )
                         else:
                             prompt_text = ""
-                        full_text = processing_class.apply_chat_template(
-                            full_messages,
-                            add_generation_prompt=False,
-                            tokenize=False,
-                            **example.get("chat_template_kwargs", {}),
-                        )
-                        prompt_text = "".join(
-                            x
-                            for x, _ in takewhile(
-                                lambda x: x[0] == x[1],
-                                zip(prompt_text, full_text, strict=False),
+                            completion_text = processing_class.apply_chat_template(
+                                full_messages,
+                                add_generation_prompt=False,
+                                tokenize=False,
+                                **example.get("chat_template_kwargs", {}),
                             )
-                        )
-                        completion_text = full_text[len(prompt_text) :]
+                        full_text = prompt_text + completion_text
                         result["original_prompt_text"] = prompt_text
                         result["original_completion_text"] = completion_text
                     else:
@@ -2746,6 +2738,7 @@ class GOLDTrainer(SFTTrainer):
                     privileged_context = example[privileged_context_column]
                     if "prompt" in example:
                         teacher_prompt = example["prompt"]
+                        teacher_completion = example["completion"]
                     elif is_conversational(example):
                         messages = example["messages"]
                         assistant_indices = [idx for idx, msg in enumerate(messages) if msg["role"] == "assistant"]
@@ -2755,19 +2748,28 @@ class GOLDTrainer(SFTTrainer):
                                 "ending with an assistant completion."
                             )
                         teacher_prompt = messages[: assistant_indices[-1]]
+                        teacher_completion = [messages[assistant_indices[-1]]]
                     else:
                         raise ValueError(
                             "Privileged-context distillation requires a prompt/completion dataset or conversational "
                             "messages with an assistant completion."
                         )
-                    teacher_prompt_text = GOLDTrainer._build_privileged_teacher_prompt(
-                        processing_class,
+                    teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
                         teacher_prompt,
                         privileged_context,
                         teacher_prompt_template,
                         privileged_context_column,
-                        example.get("chat_template_kwargs", {}),
                     )
+                    if isinstance(teacher_prompt, list):
+                        # Render the teacher exactly like the student, so the prompts differ only by the privileged context.
+                        teacher_prompt_text, _ = GOLDTrainer._render_prompt_and_completion(
+                            processing_class,
+                            teacher_prompt,
+                            teacher_completion,
+                            example.get("chat_template_kwargs", {}),
+                        )
+                    else:
+                        teacher_prompt_text = teacher_prompt
 
                 if use_extended_uld:
                     # Single backend call: ids and char-derived byte offsets from the same encoding,

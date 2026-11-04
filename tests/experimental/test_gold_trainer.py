@@ -2606,7 +2606,7 @@ def test_gold_config_validates_privileged_context_scope():
         )
 
 
-def test_privileged_context_rewrites_last_user_turn(llama_tokenizer):
+def test_privileged_context_rewrites_last_user_turn():
     prompt = [
         {"role": "system", "content": "Be concise."},
         {"role": "user", "content": "Earlier question"},
@@ -2615,12 +2615,10 @@ def test_privileged_context_rewrites_last_user_turn(llama_tokenizer):
     ]
 
     teacher_prompt = GOLDTrainer._build_privileged_teacher_prompt(
-        llama_tokenizer,
         prompt,
         "The timeout changed immediately before the errors.",
         "Question: {prompt}\n\nEvidence: {privileged_context}",
         "privileged_context",
-        {},
     )
     expected_messages = prompt[:-1] + [
         {
@@ -2628,11 +2626,8 @@ def test_privileged_context_rewrites_last_user_turn(llama_tokenizer):
             "content": "Question: What caused the outage?\n\nEvidence: The timeout changed immediately before the errors.",
         }
     ]
-    expected = llama_tokenizer.apply_chat_template(expected_messages, add_generation_prompt=True, tokenize=False)
-
-    assert teacher_prompt == expected
-    assert "Earlier answer" in teacher_prompt
-    assert "Evidence: The timeout changed immediately before the errors." in teacher_prompt
+    assert teacher_prompt == expected_messages
+    assert prompt[-1]["content"] == "What caused the outage?"
 
 
 @pytest.fixture
@@ -2644,6 +2639,65 @@ def privileged_context_dataset():
             "privileged_context": ["The deployment changed the timeout immediately before the errors."],
         }
     )
+
+
+@pytest.mark.parametrize("dataset_format", ["prompt_completion", "messages"])
+@pytest.mark.parametrize("teacher_prompt_template", ["{prompt}", "{prompt}\n\n{privileged_context}"])
+def test_privileged_context_teacher_prompt_rendered_like_student(
+    tmp_path, privileged_context_dataset, dataset_format, teacher_prompt_template
+):
+    tokenizer = AutoTokenizer.from_pretrained(_TINY_QWEN2)
+    # Reasoning templates can open a thinking block only in the generation prompt, so it is not a prefix of the
+    # full conversation render. Both teacher and student must split at the same boundary.
+    tokenizer.chat_template = (
+        "{{ conversation_prefix }}{% for message in messages %}"
+        "<|im_start|>{{ message['role'] }}\n{{ message['content'] }}<|im_end|>\n"
+        "{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}"
+    )
+    example = privileged_context_dataset[0]
+    prompt = [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        *example["prompt"],
+    ]
+    row = {
+        "privileged_context": example["privileged_context"],
+        "chat_template_kwargs": {"conversation_prefix": "CUSTOM_CHAT_PREFIX\n"},
+    }
+    if dataset_format == "prompt_completion":
+        row.update(prompt=prompt, completion=example["completion"])
+    else:
+        row["messages"] = prompt + example["completion"]
+    trainer = GOLDTrainer(
+        model=_TINY_QWEN2,
+        teacher_model=_TINY_QWEN2,
+        args=GOLDConfig(
+            output_dir=str(tmp_path),
+            use_privileged_context=True,
+            teacher_prompt_template=teacher_prompt_template,
+            lmbda=0.0,
+            max_length=512,
+            use_cpu=True,
+            bf16=False,
+            report_to="none",
+        ),
+        train_dataset=Dataset.from_list([row]),
+        processing_class=tokenizer,
+    )
+    prepared = trainer.train_dataset[0]
+    expected_prompt = prepared["original_prompt_text"].replace(
+        example["prompt"][-1]["content"],
+        teacher_prompt_template.format(
+            prompt=example["prompt"][-1]["content"], privileged_context=example["privileged_context"]
+        ),
+    )
+
+    assert len(prepared["input_ids"]) < 512  # Prompt equality is only expected without student truncation.
+    assert prepared["teacher_prompt_text"] == expected_prompt
+    assert prepared["teacher_prompt_text"].startswith("CUSTOM_CHAT_PREFIX\n")
+    assert "Earlier answer" in prepared["teacher_prompt_text"]
+    assert "<think>" not in prepared["teacher_prompt_text"]
 
 
 def test_privileged_context_preparation_preserves_shared_completion_tokens(tmp_path, privileged_context_dataset):
