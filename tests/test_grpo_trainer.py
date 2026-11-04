@@ -2400,6 +2400,37 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
+    @require_torch_accelerator
+    def test_vllm_weight_sync_skips_ref_adapter_modules_to_save(self):
+        # With a pretrained adapter and `beta != 0`, GRPO adds a "ref" copy of the adapter. Its copy of the
+        # `modules_to_save` head must not reach vLLM, which only knows `lm_head.weight`.
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.bfloat16
+        )
+        model = get_peft_model(model, LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            beta=0.04,
+            use_vllm=True,
+            vllm_mode="colocate",
+            max_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+    @require_peft
+    @require_vllm
     @pytest.mark.xfail(
         reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
         strict=True,
