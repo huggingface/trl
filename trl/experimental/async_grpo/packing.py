@@ -253,7 +253,6 @@ def tree_attention(
 ):
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
-    # By keyword: the builds of one kernel do not all take these in the same positional order
     out = _flash_attn().flash_attn_varlen_func(
         query,
         key.index_select(0, tree_kv_index),
