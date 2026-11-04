@@ -183,7 +183,7 @@ Generation, rewards, advantages and filtering run in the rollout process, in [`e
 | `filter_prompt(row_index, row, epoch)` | once per prompt, before generation | admits every prompt |
 | `generate_one(prompt, tools, group_id)` | once per rollout | the multi-turn tool loop |
 | `generate_one_turn(prompt_ids)` | once per sampling request | one vLLM request with the config's sampling settings |
-| `compute_advantages(group)` | once per group, after `reward_funcs` set `group.rewards` | reward standardized within the group |
+| `compute_advantages(group)` | once per group, after the rewards are summed into `group.rewards` | reward standardized within the group |
 | `setup()`, `close()` | when the loops start and stop | nothing |
 
 For example, a curriculum that stops sampling prompts the policy already solves, with its threshold in a config subclass:
@@ -219,7 +219,7 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
-Rewards always come from `reward_funcs`: to score with a judge, pass an async reward function. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group.
+Rewards come from `reward_funcs` and from environments that define `get_reward`: to score with a judge, pass an async reward function. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group.
 
 ## Design philosophy
 
@@ -395,7 +395,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 
 | metric                                                             | meaning                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rollout/duration_s`                                               | wall time for one conversation, from dispatch to its last turn.                                                                                                                                                                              |
+| `rollout/duration_s`                                               | wall time for one rollout, from dispatch until the loop collects the finished rollout.                                                                                                                                                                              |
 | `rollout/generated_tok_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
 | `rollout/concurrency`                                              | rollouts in flight to vLLM.                                                                                                                                                                                                             |
 | `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
@@ -413,7 +413,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/vllm_preemptions_total`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
 | `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
 
-A group whose rollouts all received the same reward (or fewer than two of which were scorable) has zero advantage everywhere, so the worker drops it instead of enqueuing it: it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
+A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
 
 ### Tools
 

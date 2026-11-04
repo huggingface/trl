@@ -237,7 +237,25 @@ def _chain_to_sequences(
 
 @dataclass(frozen=True)
 class Rollout:
-    """One rollout, as `generate_one` returns it. The loop builds its training rows from `turns`."""
+    """
+    One rollout, as `generate_one` returns it. The loop builds its training rows from `turns`.
+
+    Args:
+        completion (`list[dict]`):
+            The rollout's messages after the prompt, passed to the reward functions.
+        completion_ids (`list[int]`):
+            Its completion token stream, passed to the reward functions.
+        turns (`list[TurnRecord]`):
+            Every sampling request, in order: the whole prompt that turn, the sampled token ids and their
+            log-probabilities.
+        tool_call_count (`int`, *optional*, defaults to `0`):
+            Number of tool calls, for the `tools/call_frequency` metric.
+        tool_failure_count (`int`, *optional*, defaults to `0`):
+            Number of tool calls that raised or named an unknown tool, for the `tools/failure_frequency` metric.
+        reward (`float`, *optional*):
+            Used only by the OpenEnv harness loop, which scores its own rollouts. The built-in loop ignores it and
+            scores with the reward functions.
+    """
 
     completion: Messages
     completion_ids: list[int]  # its completion token stream, for reward funcs
@@ -372,8 +390,8 @@ class AsyncRolloutLoop:
     - [`~experimental.async_grpo.AsyncRolloutLoop.filter_prompt`]: whether to generate for the prompt at all.
     - [`~experimental.async_grpo.AsyncRolloutLoop.generate_one`]: one full rollout, which calls
       [`~experimental.async_grpo.AsyncRolloutLoop.generate_one_turn`] for each sampling request.
-    - The trainer's `reward_funcs` score the group of `num_generations` rollouts, then
-      [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] runs once per group.
+    - The trainer's `reward_funcs`, and environments that define `get_reward`, score the group of `num_generations`
+      rollouts, then [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] runs once per group.
 
     [`~experimental.async_grpo.AsyncRolloutLoop.setup`] and [`~experimental.async_grpo.AsyncRolloutLoop.close`] create
     and release resources on the loop's event loop, like an HTTP client. A hook can read `self.config` (a subclass of
@@ -1090,7 +1108,7 @@ class AsyncRolloutLoop:
             self._row_index += 1
 
     async def generate_one(self, prompt: Messages, tools: list[Callable], group_id: int = 0) -> Rollout:
-        """Roll out one conversation, re-tokenizing the whole message list each turn and reconciling drift.
+        """Roll out one conversation, re-tokenizing the whole message list each turn.
 
         Every turn renders the full conversation through the chat template, generates, records the turn, and feeds the
         tool result back as a message (re-tokenized on the next whole-conversation pass). The loop then reconciles
@@ -1099,7 +1117,7 @@ class AsyncRolloutLoop:
         each turn (instead of gluing tokens on the end and never looking back) is what lets the reconciler catch
         rewrites.
 
-        The built-in loop leaves `Rollout.reward` at `None`: it scores via `reward_funcs` and environments.
+        The built-in loop leaves `Rollout.reward` at `None`: it scores with `reward_funcs` and environments.
         """
         messages = list(prompt)  # a MESSAGE list, not a token list
         tool_dict = {tool.__name__: tool for tool in tools}
@@ -1288,8 +1306,11 @@ class AsyncRolloutLoop:
         One advantage per rollout of a group: its reward standardized within the group. An unscorable rollout (NaN
         reward) gets advantage 0 and is left out of the group's mean and std.
 
+        It runs for every group, including one that is then dropped because all its scored rewards are equal: the drop
+        looks at the rewards, not at the advantages returned here.
+
         Args:
-            group:
+            group (`RolloutGroup`):
                 The group of `num_generations` rollouts of one prompt. A subclass may read `group.rewards` (the summed
                 reward of each rollout, NaN when unscorable), `group.row_index` (the prompt's row in the training
                 dataset) and `group.completions_ids` (each rollout's completion token ids).
@@ -1421,9 +1442,9 @@ class AsyncRolloutWorker:
     reads/writes.
 
     Constructor kwargs are forwarded as-is to `loop_cls` (an [`experimental.async_grpo.AsyncRolloutLoop`] subclass)
-    when the child spawns; only `child_ready_timeout` is consumed here. Because the child is spawned, every forwarded
-    kwarg is pickled: `reward_funcs`, `tools`, and `environment_factory` (and anything they close over) must be
-    picklable — module-level functions, `functools.partial`, or callable instances, never lambdas or closures.
+    when the child spawns; only `loop_cls` and `child_ready_timeout` are consumed here. Because the child is spawned,
+    every forwarded kwarg is pickled: `reward_funcs`, `tools`, and `environment_factory` (and anything they close over)
+    must be picklable — module-level functions, `functools.partial`, or callable instances, never lambdas or closures.
     `start()` validates this up front and raises a `TypeError` otherwise. The child also runs with
     `CUDA_VISIBLE_DEVICES=""`, so GPU reward models execute on CPU.
     """
