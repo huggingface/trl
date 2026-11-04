@@ -45,6 +45,8 @@ MODEL_ID = "zai-org/GLM-5.3-Flash"
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
+# Unset: save_pretrained rejects top_p without do_sample (the reference decodes greedily by default anyway)
+generation_config.top_p = None
 
 text_config = Glm5NextTextConfig(
     vocab_size=154880,
