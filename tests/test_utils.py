@@ -296,6 +296,14 @@ class TestCreateModelFromPath(TrlTestCase):
         model = create_model_from_path("trl-internal-testing/tiny-Mistral3ForConditionalGeneration")
         assert model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.23.0"),
+        reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
+    )
+    def test_dequantizes_mxfp4_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-GptOssForCausalLM")
+        assert model.model.layers[0].mlp.experts.gate_up_proj.dtype == torch.float32
+
 
 class TestModelAcceptsImages(TrlTestCase):
     @pytest.mark.parametrize(
