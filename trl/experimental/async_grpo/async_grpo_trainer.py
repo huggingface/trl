@@ -149,7 +149,7 @@ class RolloutWorkerProtocol(Protocol):
         ...
 
     def update_model_version(self, model_version: int) -> None:
-        """Tell the worker which policy version is now live, so it can tag or discard stale samples."""
+        """Tell the worker which policy version is now live, so it can tag or drop stale samples."""
         ...
 
     def check_health(self, stale_after_s: float) -> None:
@@ -700,7 +700,8 @@ def _iter_vllm_named_params(model: torch.nn.Module) -> Iterator[tuple[str, torch
         if is_peft and model.prefix in name:
             continue
         # When module to save, remove its prefix and discard the original module
-        if "original_module" in name:
+        # and the other adapters' copies (e.g. a "ref" adapter)
+        if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
             continue
         name = name.replace("modules_to_save.default.", "")
         yield name, param
@@ -1306,14 +1307,14 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 f"max_steps={self.args.max_steps} is a safety ceiling."
             )
 
-        # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
+        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
         # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
+        if self.args.max_concurrent_rollouts is None:
+            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
-                f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
+                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
@@ -1398,7 +1399,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                             "dtype_names": weight_dtype_names,
                             "shapes": weight_shapes,
                         },
-                        weight_sync_timeout=self.args.weight_sync_timeout,
                         compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
                     )
 
@@ -1411,6 +1411,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
             else:
                 self.rollout_worker = AsyncRolloutWorker(
+                    self.args,
                     model_name=get_config_model_id(model.config),
                     lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,
@@ -1419,23 +1420,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
-                    num_generations=self.args.num_generations,
-                    max_inflight_tasks=self.args.max_inflight_tasks,
-                    queue_maxsize=self.args.queue_maxsize,
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    max_tokens=self.args.max_completion_length,
-                    temperature=self.args.temperature,
-                    top_p=self.args.top_p,
-                    top_k=self.args.top_k,
-                    num_sampler_logprobs=self.args.num_sampler_logprobs if self.args.score_centering else 0,
-                    min_p=self.args.min_p,
-                    repetition_penalty=self.args.repetition_penalty,
-                    request_timeout=self.args.request_timeout,
-                    chat_template_kwargs=self.args.chat_template_kwargs,
-                    max_tool_calling_iterations=self.args.max_tool_calling_iterations,
-                    log_completions=self.args.log_completions,
-                    num_completions_to_print=self.args.num_completions_to_print,
-                    fork_threshold_tokens=self.args.fork_threshold_tokens,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer
@@ -1470,7 +1454,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
                 check_health_fn=self.rollout_worker.check_health,
-                stale_after_s=self.args.heartbeat_stale_after_s,
+                stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
                 dropped_groups=self._dropped_groups,
                 max_staleness=self.args.max_staleness,

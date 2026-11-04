@@ -179,7 +179,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-tasks", type=int, default=32)
     p.add_argument("--task-indices", default="", help="comma-separated indices, or @path to a file of them")
     p.add_argument("--num-generations", type=int, default=8)
-    p.add_argument("--max-inflight", type=int, default=8)
+    p.add_argument("--max-concurrent-rollouts", type=int, default=8)
     p.add_argument("--max-completion-length", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=20)
     p.add_argument("--save-steps", type=int, default=50)
@@ -235,7 +235,7 @@ def main() -> None:
 
     print(f"server    {args.server}")
     print(f"vllm      {args.vllm_url}   model {args.model}")
-    print(f"rollouts  {args.harness} on {args.sandbox}, {args.num_generations}x{args.max_inflight}")
+    print(f"rollouts  {args.harness} on {args.sandbox}, {args.num_generations}x{args.max_concurrent_rollouts}")
     print(f"tasks     {len(dataset)} from {args.split}")
     print(f"output    {output_dir}")
 
@@ -256,6 +256,8 @@ def main() -> None:
         temperature=args.temperature,
         top_p=1.0,
         top_k=-1,
+        chat_template_kwargs={"enable_thinking": False},
+        max_concurrent_rollouts=args.max_concurrent_rollouts,
         max_staleness=args.max_staleness,
         vllm_server_base_url=args.vllm_url,
         optim="adamw_torch",
@@ -269,11 +271,13 @@ def main() -> None:
         trackio_space_id=args.trackio_space_id,
         run_name=run_name,
         log_completions=True,
+        num_completions_to_print=2,
         logging_steps=1,
         seed=0,
     )
 
     worker = HarnessRolloutWorker(
+        config,
         harness_session_factory=factory,
         harness_adapter=None,
         rollout_reward_fn=harbor_reward,
@@ -281,16 +285,6 @@ def main() -> None:
         dataset=dataset,
         reward_funcs=[],  # the reward is the task's own verifier, via `rollout_reward_fn`
         processing_class=tokenizer,
-        chat_template_kwargs={"enable_thinking": False},
-        num_generations=args.num_generations,
-        max_inflight_tasks=args.max_inflight,
-        vllm_server_url=args.vllm_url,
-        max_tokens=args.max_completion_length,
-        temperature=args.temperature,
-        top_p=1.0,
-        top_k=-1,
-        log_completions=True,
-        num_completions_to_print=2,
         eos_token_ids=eos_token_ids,
     )
 
