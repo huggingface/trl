@@ -145,7 +145,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         self.reward_func_names.append("harness_reward")
 
         self._session_pool = ThreadPoolExecutor(
-            max_workers=max(1, self.max_inflight_tasks), thread_name_prefix="harness-session"
+            max_workers=max(1, self.max_concurrent_rollouts), thread_name_prefix="harness-session"
         )
         self._live_sessions: set = set()
         self._max_session_failures_per_slot = max_session_failures_per_slot
@@ -176,7 +176,10 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         elif not self._stop_event.is_set():
             # A persistent failure (harness server down, broken sandbox) would otherwise spin without producing samples
             self._consecutive_session_failures += 1
-            if self._consecutive_session_failures >= self._max_session_failures_per_slot * self.max_inflight_tasks:
+            if (
+                self._consecutive_session_failures
+                >= self._max_session_failures_per_slot * self.max_concurrent_rollouts
+            ):
                 raise RuntimeError(
                     f"{self._consecutive_session_failures} harness sessions in a row were unscorable; see the "
                     "warnings above for their errors."

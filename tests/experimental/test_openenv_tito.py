@@ -134,7 +134,7 @@ def make_loop():
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
             metrics_queue=queue.Queue(),
-            max_inflight_tasks=8,
+            max_concurrent_rollouts=8,
             **kwargs,
         )
         loops.append(loop)

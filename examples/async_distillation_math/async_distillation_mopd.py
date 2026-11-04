@@ -92,8 +92,8 @@ def main() -> None:
             "if": "http://localhost:8003",
         },
         vllm_server_base_url="http://localhost:8000",
-        # 16K-token completions can take longer than the default 600 s to generate under load
-        request_timeout=3600,
+        # 16K-token completions can take longer than the default 1800 s to generate under load
+        vllm_server_timeout=3600,
         max_staleness=8,
         max_steps=90,
         save_strategy="no",
