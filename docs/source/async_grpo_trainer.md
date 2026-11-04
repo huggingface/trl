@@ -267,6 +267,7 @@ So we split our metrics based on which stage (or _entity_) they are about:
 | `sample/`      | represents _one_ training sample, as it arrives in the queue                           |
 | `batch/`       | one micro-batch or one optimizer step (built from one or multiple samples)             |
 | `perf/`        | measured seconds and FLOPs                                                             |
+| `sampling/`    | how far the trained policy is from the sampler that generated the tokens               |
 
 Let's also define some terms to make token metrics unambiguous:
 
@@ -449,6 +450,15 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
 | `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` show the _effect_ of off-policyness on the loss; this shows the cause                 |
 | `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |
+
+### Rewards and off-policyness
+
+| metric | meaning |
+| --- | --- |
+| `rewards/<func>/mean`, `rewards/<func>/std` | each reward function's mean, and its std within the group, over the groups that were trained on. GRPO takes both over every generated completion in the batch |
+| `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
+| `sampling/sampling_logp_difference/mean`, `/max` | `\|log π_θ − log π_sampler\|` per completion token |
+| `num_tokens` | tokens forwarded since the start of training. With tree packing, a prefix shared by several samples is counted once |
 
 ### Batches
 

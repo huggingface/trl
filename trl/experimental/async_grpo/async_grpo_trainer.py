@@ -261,7 +261,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward, reward_std, rewards/<func>, tools/call_frequency, tools/failure_frequency
+                    **sample.metrics,  # reward_kept, reward_std, rewards/<func>/{mean,std}, tools/*_frequency
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
@@ -1193,7 +1193,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
-        # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
+        # while the server serves the real one, and the importance ratio is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
         # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
