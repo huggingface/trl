@@ -310,6 +310,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
         # step, see `_pause_generation`.
         self._pause = None
+        self._step_generation_wait = 0.0
         self._request_counter = 0
         self.max_tool_calling_iterations = args.max_tool_calling_iterations
 
@@ -758,7 +759,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if int(counts.item()) >= num_samples * self.dp_size:
                     break
                 self._drain(timeout=0.2)
-        self._metrics[mode]["generation_wait_s"].append(time.perf_counter() - wait_start)
+        # Summed over the accumulation micro-steps and logged once per optimizer step, in `training_step`
+        self._step_generation_wait += time.perf_counter() - wait_start
         # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
         # and the training step are fighting over memory, which slows both.
         self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
@@ -899,6 +901,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def training_step(self, *args, **kwargs):
         output = super().training_step(*args, **kwargs)
+        if self.accelerator.sync_gradients:
+            mode = "train" if self.model.training else "eval"
+            self._metrics[mode]["generation_wait_s"].append(self._step_generation_wait)
+            self._step_generation_wait = 0.0
         # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
         # optimizer step rather than one per accumulation micro-step.
         # Without tensor parallelism the model is a plain DDP one and accelerate already reduced the gradients;
