@@ -1450,6 +1450,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GPT2LMHeadModel",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1486,6 +1487,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-PhimoeForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
@@ -1780,6 +1782,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1809,6 +1812,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-PhimoeForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -1974,7 +1978,6 @@ class TestAddFusedLMHeadLoss:
                 "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
                 marks=[
                     require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
-                    pytest.mark.xfail(reason="FP8 grouped matmul kernel fails to compile in CI (see #8020)"),
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.22.0"),
                         reason="Mistral Large 4 was introduced in transformers-5.22.0",
