@@ -797,8 +797,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
         # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
         # One flat row, no padding: samples go back to back and the boundaries travel as cu_seq_lens_q, which the
-        # varlen attention kernels and the linear attention layers consume directly; sdpa builds its block-diagonal
-        # mask from the position ids, which restart at every sample. Flash attention reads packing from the position
+        # varlen attention kernels and the gated delta rule of linear attention layers consume directly, and as
+        # seq_idx, which their causal convolution needs; sdpa builds its block-diagonal mask from the position ids,
+        # which restart at every sample. Flash attention reads packing from the position
         # ids only when the batch has a single row, so several rows would attend across their samples. The global
         # shift in the loss stays sound at the seams: the first token of a sample is always context (mask 0), so no
         # term ever crosses two samples. Advantages and behavior logprobs are per token, since the row holds several
@@ -822,6 +823,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             "cu_seq_lens_k": cu_seq_lens.to(device),
             "max_length_q": int(lengths.max()),
             "max_length_k": int(lengths.max()),
+            "seq_idx": torch.repeat_interleave(torch.arange(len(samples), dtype=torch.int32), lengths)
+            .unsqueeze(0)
+            .to(device),
         }
 
     def create_optimizer(self, model=None):
@@ -908,7 +912,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # only completion positions are scored and the full-vocab logits never materialize.
         boundary_kwargs = {
             key: inputs[key]
-            for key in ("cu_seq_lens_q", "cu_seq_lens_k", "max_length_q", "max_length_k")
+            for key in ("cu_seq_lens_q", "cu_seq_lens_k", "max_length_q", "max_length_k", "seq_idx")
             if key in inputs
         }
         # The fused head scores the positions whose next-token label is not -100, which is the completion tokens.
