@@ -2239,6 +2239,13 @@ class _EvenRowsLoop(_FixedRolloutLoop):
         return await super().generate_one(prompt, tools, group_id)
 
 
+class _SelfScoredLoop(_FixedRolloutLoop):
+    async def generate_one(self, prompt, tools, group_id=0):
+        rollout = await super().generate_one(prompt, tools, group_id)
+        self.calls += 1
+        return dataclasses.replace(rollout, reward=float(self.calls % 2))
+
+
 class _LifecycleLoop(_FixedRolloutLoop):
     async def setup(self):
         self.events.append("setup")
@@ -2287,6 +2294,15 @@ class TestCustomRolloutLoop(TrlTestCase):
         trained = [item for item in items if isinstance(item, RolloutSample)]
         assert skipped and all(group_id % 2 == 0 for group_id in skipped)
         assert trained and all(sample.group_id % 2 == 1 for sample in trained)
+
+    def test_generate_one_can_score_its_own_rollouts(self):
+        loop = _rollout_loop(
+            _SelfScoredLoop, num_generations=2, reward_funcs=[], vllm_server_base_url="http://127.0.0.1:9"
+        )
+        loop.calls = 0
+        samples = [item for item in self._run(loop, 4) if isinstance(item, RolloutSample)]
+        assert {sample.metrics["rewards/rollout"] for sample in samples} == {0.0, 1.0}
+        assert {round(sample.advantage, 4) for sample in samples} == {-1.0, 1.0}
 
     def test_setup_runs_before_generation_and_close_after(self):
         loop = _rollout_loop(

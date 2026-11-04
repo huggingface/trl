@@ -75,16 +75,32 @@ def _by_token_id(top_logprobs: list[dict[str, float]]) -> list[dict[int, float]]
 
 @dataclass(frozen=True)
 class TurnRecord:
-    """One generation call: the whole prompt this turn, the tokens the model produced, their logprobs."""
+    """
+    One sampling request: the prompt sent to the sampler and the tokens it generated.
+
+    Args:
+        prompt_ids (`list[int]`):
+            Token ids of the full prompt sent for this turn, including every earlier turn of the conversation.
+        output_ids (`list[int]`):
+            Token ids the sampler generated.
+        output_log_probs (`list[float]`, *optional*, defaults to `[]`):
+            Sampler log-probability of each token in `output_ids`. Required when any of them is trained on.
+        output_mask (`list[int]`, *optional*):
+            One value per token in `output_ids`: `1` to train on the token, `0` to keep it as context only. If `None`,
+            every output token is trained on.
+        output_sampling_mask (`list[list[int]]`, *optional*):
+            One list per token in `output_ids`: the token ids the sampler could draw from under `top_k` / `top_p`
+            truncation. If `None`, the full vocabulary.
+        output_sampler_logprobs (`list[dict[int, float]]`, *optional*):
+            One dict per token in `output_ids`: the sampler's log-probabilities of its most likely tokens, keyed by
+            token id. Used by score centering (`num_sampler_logprobs`).
+    """
 
     prompt_ids: list[int]
     output_ids: list[int]
     output_log_probs: list[float] = field(default_factory=list)
-    # Completion-token eligibility. None supervises all output tokens; zeros retain context only.
     output_mask: list[int] | None = None
-    # Per output token, the token ids the sampler could draw (top-k/top-p truncation); None without truncation.
     output_sampling_mask: list[list[int]] | None = None
-    # Per output token, the sampler's log-prob of its most likely tokens, by token id; None when not requested.
     output_sampler_logprobs: list[dict[int, float]] | None = None
 
 
@@ -238,49 +254,86 @@ def _chain_to_sequences(
 @dataclass(frozen=True)
 class Rollout:
     """
-    One rollout, as `generate_one` returns it. The loop builds its training rows from `turns`.
+    One finished rollout, as returned by [`~experimental.async_grpo.AsyncRolloutLoop.generate_one`].
 
     Args:
-        completion (`list[dict]`):
-            The rollout's messages after the prompt, passed to the reward functions.
+        completion (`list[dict[str, Any]]`):
+            Messages generated after the prompt, in conversational format. Passed to the reward functions as
+            `completions`.
         completion_ids (`list[int]`):
-            Its completion token stream, passed to the reward functions.
+            Token ids of the generated completion. Passed to the reward functions as `completion_ids`.
         turns (`list[TurnRecord]`):
-            Every sampling request, in order: the whole prompt that turn, the sampled token ids and their
-            log-probabilities.
+            The sampling requests that produced the rollout, in order. The training sequences are built from them: the
+            sampled tokens are trained on, the rest of each prompt is context.
         tool_call_count (`int`, *optional*, defaults to `0`):
-            Number of tool calls, for the `tools/call_frequency` metric.
+            Number of tool calls made during the rollout.
         tool_failure_count (`int`, *optional*, defaults to `0`):
-            Number of tool calls that raised or named an unknown tool, for the `tools/failure_frequency` metric.
+            Number of those tool calls that failed.
         reward (`float`, *optional*):
-            Used only by the OpenEnv harness loop, which scores its own rollouts. The built-in loop ignores it and
-            scores with the reward functions.
+            Reward computed while generating, for example by an external grader. It is added to the rewards of the
+            reward functions and environments. If `None`, this rollout gets no reward from this source.
     """
 
     completion: Messages
-    completion_ids: list[int]  # its completion token stream, for reward funcs
-    turns: list[TurnRecord]  # every sampling request, in order
+    completion_ids: list[int]
+    turns: list[TurnRecord]
     tool_call_count: int = 0
     tool_failure_count: int = 0
-    reward: float | None = None  # set by a loop that scores its own rollouts
+    reward: float | None = None
 
 
 @dataclass(slots=True)
 class RolloutGroup:
+    """
+    The `num_generations` rollouts of one prompt, scored together. Each list has one entry per rollout.
+
+    Args:
+        prompts (`list[list[dict[str, Any]]]`):
+            Prompt of each rollout.
+        reward_kwargs (`dict[str, list[Any]]`):
+            The other columns of the prompt's dataset row, passed to the reward functions as keyword arguments.
+        completions (`list[list[dict[str, Any]]]`):
+            Completion messages of each rollout.
+        completions_ids (`list[list[int]]`):
+            Completion token ids of each rollout.
+        completions_sequences (`list[list[TrainingSequence]]`):
+            Training sequences built from each rollout. A rollout whose re-tokenized history changed between turns
+            gives more than one.
+        tool_call_counts (`list[int]`):
+            Number of tool calls in each rollout.
+        tool_failure_counts (`list[int]`):
+            Number of failed tool calls in each rollout.
+        model_version (`int`):
+            Policy version when the group's first rollout started.
+        group_id (`int`):
+            Identifier of the group, counted from `0` in the rollout process.
+        row_index (`int`):
+            Index of the prompt's row in the training dataset.
+        env_rewards (`list[tuple[type, float] or None]`):
+            For a rollout whose environment defines `get_reward`, the environment class and its reward; else `None`.
+        rollout_rewards (`list[float or None]`):
+            [`~experimental.async_grpo.Rollout`]`.reward` of each rollout.
+        queued_at (`float`, *optional*, defaults to `0.0`):
+            `time.monotonic()` when the group was queued for scoring.
+        rewards (`np.ndarray`, *optional*):
+            Total reward of each rollout, summed over every reward source, NaN when no source scored it. Set before
+            [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] is called.
+    """
+
     prompts: list[Messages]
     reward_kwargs: dict[str, list[Any]]
     completions: list[Messages]
-    completions_ids: list[list[int]]  # per rollout, its completion token stream (for reward funcs)
-    completions_sequences: list[list[TrainingSequence]]  # per rollout, its 1+ training rows
+    completions_ids: list[list[int]]
+    completions_sequences: list[list[TrainingSequence]]
     tool_call_counts: list[int]
     tool_failure_counts: list[int]
     model_version: int
     group_id: int
-    row_index: int  # the prompt's row in the training dataset
+    row_index: int
     env_rewards: list[tuple[type, float] | None]
     rollout_rewards: list[float | None]
     queued_at: float = 0.0
-    rewards: np.ndarray | None = None  # per rollout, summed over reward funcs; NaN when unscorable
+    rewards: np.ndarray | None = None
 
 
 @dataclass(slots=True)
@@ -390,17 +443,15 @@ class AsyncRolloutLoop:
     - [`~experimental.async_grpo.AsyncRolloutLoop.filter_prompt`]: whether to generate for the prompt at all.
     - [`~experimental.async_grpo.AsyncRolloutLoop.generate_one`]: one full rollout, which calls
       [`~experimental.async_grpo.AsyncRolloutLoop.generate_one_turn`] for each sampling request.
-    - The trainer's `reward_funcs`, and environments that define `get_reward`, score the group of `num_generations`
-      rollouts, then [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] runs once per group.
+    - The group of `num_generations` rollouts is scored: its rewards are the sum of the trainer's `reward_funcs`, of
+      environments that define `get_reward`, and of [`~experimental.async_grpo.Rollout`]`.reward`. Then
+      [`~experimental.async_grpo.AsyncRolloutLoop.compute_advantages`] runs once per group.
 
     [`~experimental.async_grpo.AsyncRolloutLoop.setup`] and [`~experimental.async_grpo.AsyncRolloutLoop.close`] create
     and release resources on the loop's event loop, like an HTTP client. A hook can read `self.config` (a subclass of
     [`experimental.async_grpo.AsyncGRPOConfig`] can carry its own fields) and `self.tokenizer`. Since the loop is built
     in a spawned process, the subclass must be importable (defined at module level).
     """
-
-    # Class attribute: declares that this loop produces its own per-rollout reward
-    _provides_rollout_reward: bool = False
 
     def __init__(
         self,
@@ -519,13 +570,9 @@ class AsyncRolloutLoop:
         else:
             self.tools = tools
 
-        # At least one reward source is required: either `reward_funcs`, or an environment that owns the reward via a
-        # `get_reward` method.
-        if not self.reward_funcs and not self._env_reward_types and not self._provides_rollout_reward:
-            raise ValueError(
-                "No reward source provided. Pass `reward_funcs`, or an `environment_factory` whose environment "
-                "defines a `get_reward` method."
-            )
+        # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
+        # scores its own rollouts. The built-in `generate_one` leaves it at `None`.
+        self.reward_func_names.append("rollout")
 
         # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
         self._tool_pool = ThreadPoolExecutor(
@@ -618,12 +665,16 @@ class AsyncRolloutLoop:
             )
 
     async def setup(self) -> None:
-        """Create resources the hooks need, on the loop's event loop, before the first prompt. Does nothing by
-        default."""
+        """
+        Create the resources the other hooks need, such as an HTTP client. Runs on the loop's event loop before the
+        first prompt. Does nothing by default.
+        """
 
     async def close(self) -> None:
-        """Release what [`~experimental.async_grpo.AsyncRolloutLoop.setup`] created, when the loops stop or fail. Does
-        nothing by default."""
+        """
+        Release what [`~experimental.async_grpo.AsyncRolloutLoop.setup`] created. Runs when the loops stop, including
+        on failure. Does nothing by default.
+        """
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
         connector = aiohttp.TCPConnector(limit=self.config.max_concurrent_rollouts + 1)
@@ -1108,16 +1159,26 @@ class AsyncRolloutLoop:
             self._row_index += 1
 
     async def generate_one(self, prompt: Messages, tools: list[Callable], group_id: int = 0) -> Rollout:
-        """Roll out one conversation, re-tokenizing the whole message list each turn.
+        """
+        Generate one rollout for a prompt.
 
-        Every turn renders the full conversation through the chat template, generates, records the turn, and feeds the
-        tool result back as a message (re-tokenized on the next whole-conversation pass). The loop then reconciles
-        re-tokenization drift across `Rollout.turns` into one or more training rows: a clean append stays one row, a
-        rewrite (dropped reasoning, summarized history) forks a new row. Rebuilding `prompt_ids` from the message list
-        each turn (instead of gluing tokens on the end and never looking back) is what lets the reconciler catch
-        rewrites.
+        By default, a multi-turn tool loop: each turn renders the whole conversation with the chat template, samples a
+        reply with [`~experimental.async_grpo.AsyncRolloutLoop.generate_one_turn`] and runs the tool calls it contains,
+        until the model stops calling tools or `max_tool_calling_iterations` is reached. Override it to generate
+        differently, for example with an agent framework. Return every sampling request in `Rollout.turns`, since the
+        training sequences are built from them, and set `Rollout.reward` to score the rollout here.
 
-        The built-in loop leaves `Rollout.reward` at `None`: it scores with `reward_funcs` and environments.
+        Args:
+            prompt (`list[dict[str, Any]]`):
+                Prompt messages.
+            tools (`list[Callable]`):
+                Tools available to this rollout: the trainer's `tools`, plus the public methods of the environment when
+                using `environment_factory`.
+            group_id (`int`, *optional*, defaults to `0`):
+                Identifier of the group the rollout belongs to.
+
+        Returns:
+            [`~experimental.async_grpo.Rollout`]: The finished rollout.
         """
         messages = list(prompt)  # a MESSAGE list, not a token list
         tool_dict = {tool.__name__: tool for tool in tools}
@@ -1207,8 +1268,19 @@ class AsyncRolloutLoop:
         return tool_messages, n_calls, n_failures
 
     async def generate_one_turn(self, prompt_ids: list[int]) -> TurnRecord:
-        """Sample one turn: its token ids, their logprobs, with top-k/top-p the candidate set of each token, and with
-        `num_sampler_logprobs` the sampler's top log-probs at each token, by token id."""
+        """
+        Sample one reply from the vLLM server, with the config's sampling settings (`temperature`, `top_p`, `top_k`,
+        `min_p`, `repetition_penalty` and `max_completion_length`).
+
+        Args:
+            prompt_ids (`list[int]`):
+                Token ids of the full prompt.
+
+        Returns:
+            [`TurnRecord`]: The prompt and the sampled tokens with their log-probabilities. With `top_k` or `top_p`, it
+            also holds the candidate set of each sampled token, and with `num_sampler_logprobs`, the sampler's top
+            log-probabilities.
+        """
         sampling_params = {
             "max_tokens": self.config.max_completion_length,
             "temperature": self.config.temperature,
@@ -1294,8 +1366,7 @@ class AsyncRolloutLoop:
             column = [r[1] if (r is not None and r[0] is env_type) else None for r in group.env_rewards]
             all_rewards = [*all_rewards, column]
 
-        if self._provides_rollout_reward:
-            all_rewards = [*all_rewards, list(group.rollout_rewards)]
+        all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
         all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
@@ -1303,20 +1374,18 @@ class AsyncRolloutLoop:
 
     def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
         """
-        One advantage per rollout of a group: its reward standardized within the group. An unscorable rollout (NaN
-        reward) gets advantage 0 and is left out of the group's mean and std.
+        Compute one advantage per rollout of a group. By default, each reward standardized within the group; a rollout
+        with a NaN reward gets advantage `0` and is left out of the mean and std.
 
-        It runs for every group, including one that is then dropped because all its scored rewards are equal: the drop
-        looks at the rewards, not at the advantages returned here.
+        It runs for every group. A group whose scored rewards are all equal is then dropped, whatever advantages this
+        returns.
 
         Args:
-            group (`RolloutGroup`):
-                The group of `num_generations` rollouts of one prompt. A subclass may read `group.rewards` (the summed
-                reward of each rollout, NaN when unscorable), `group.row_index` (the prompt's row in the training
-                dataset) and `group.completions_ids` (each rollout's completion token ids).
+            group ([`~experimental.async_grpo.async_rollout_worker.RolloutGroup`]):
+                The `num_generations` rollouts of one prompt, with their total rewards in `group.rewards`.
 
         Returns:
-            `np.ndarray`: one advantage per rollout, in the order of `group.rewards`.
+            `np.ndarray`: One advantage per rollout, in the order of `group.rewards`.
         """
         rewards = group.rewards
         scored_mask = ~np.isnan(rewards)
@@ -1363,6 +1432,9 @@ class AsyncRolloutLoop:
             if total_calls > 0
             else [{}] * len(group.completions)
         )
+        # A reward source that scored no rollout of the group (e.g. the `rollout` column when `generate_one` sets no
+        # reward) is not logged, rather than logged as NaN.
+        used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
 
         # Option 3 advantage: one advantage per conversation, stamped on every training row it produced.
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
@@ -1384,7 +1456,10 @@ class AsyncRolloutLoop:
                 "reward_std": reward_std,
                 **{
                     f"rewards/{name}": float(func_reward)
-                    for name, func_reward in zip(self.reward_func_names, per_func_rewards[:, i], strict=True)
+                    for name, func_reward, used in zip(
+                        self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
+                    )
+                    if used
                 },
                 **tm,
             }

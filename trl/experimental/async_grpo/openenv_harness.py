@@ -99,8 +99,6 @@ def _msg_to_llm_response(msg: Message) -> LLMResponse:
 class _HarnessRolloutLoop(AsyncRolloutLoop):
     """`AsyncRolloutLoop` whose `generate_one` drives an OpenEnv session instead of TRL's own turn loop."""
 
-    _provides_rollout_reward = True
-
     # Unscorable rollouts are excluded from the group baseline.
     _EMPTY_ROLLOUT = Rollout([], [], [])
 
@@ -145,7 +143,6 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
             sampling={"temperature": self.config.temperature, "max_tokens": self.config.max_completion_length},
         )
         self._rollout_reward_fn = rollout_reward_fn
-        self.reward_func_names.append("harness_reward")
 
         self._session_pool = ThreadPoolExecutor(
             max_workers=max(1, self.config.max_concurrent_rollouts), thread_name_prefix="harness-session"
