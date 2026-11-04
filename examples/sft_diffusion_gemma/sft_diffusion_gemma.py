@@ -61,13 +61,13 @@ global batch size 8, sequence length 1024, 800 steps, LoRA rank 16 with alpha 32
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/sft_diffusion_gemma/sft_diffusion_gemma.py \
     --use_peft \
-    --activation_checkpointing \
+    --gradient_checkpointing \
     --output_dir diffusiongemma-26B-A4B-it-gsm8k-lora
 
 Drop `--use_peft` for full fine-tuning, which keeps the MoE router frozen like the reference recipe.
 
 Hardware: the 26B parameters do not fit on a single 80 GB GPU, so this needs at least 2 GPUs to shard them
-across ranks with ZeRO-3. Activation checkpointing (`--activation_checkpointing`) is required to keep activations within
+across ranks with ZeRO-3. Gradient checkpointing (`--gradient_checkpointing`) is required to keep activations within
 memory. Two 80 GB H100s are enough for the defaults above; more GPUs increase throughput.
 """
 
