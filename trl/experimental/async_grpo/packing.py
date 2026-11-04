@@ -14,7 +14,7 @@
 
 import math
 import sys
-from functools import cache, partial
+from functools import cache
 from itertools import chain
 from typing import Any
 
@@ -223,19 +223,15 @@ TREE_ATTENTION = "tree_fa3"
 
 
 @cache
-def _flash_attn(kernel_kwargs: tuple[tuple[str, Any], ...] | None = None):
-    """The device's FlashAttention kernel, loaded with `kernel_kwargs` (as items, to be cacheable) or at its tested
-    version."""
+def _flash_attn():
     from kernels import get_kernel
 
     if torch.version.hip:
-        repo_id, default_kwargs = "kernels-community/aiter-flash-attn", {"version": 2}
+        return get_kernel("kernels-community/aiter-flash-attn", version=2)
     # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
-    elif torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
-        repo_id, default_kwargs = "kernels-community/flash-attn4", {"version": 0}
-    else:
-        repo_id, default_kwargs = "kernels-community/flash-attn3", {"version": 1}
-    return get_kernel(repo_id, **(default_kwargs if kernel_kwargs is None else dict(kernel_kwargs)))
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+        return get_kernel("kernels-community/flash-attn4", version=1)
+    return get_kernel("kernels-community/flash-attn3", version=1)
 
 
 def tree_attention(
@@ -253,13 +249,12 @@ def tree_attention(
     scaling=None,
     sliding_window=None,
     softcap=None,
-    kernel_kwargs=None,
     **kwargs,
 ):
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
     # By keyword: the builds of one kernel do not all take these in the same positional order
-    out = _flash_attn(kernel_kwargs).flash_attn_varlen_func(
+    out = _flash_attn().flash_attn_varlen_func(
         query,
         key.index_select(0, tree_kv_index),
         value.index_select(0, tree_kv_index),
@@ -276,17 +271,8 @@ def tree_attention(
     return out.unsqueeze(0), None
 
 
-def register_tree_attention(kernel_kwargs: dict[str, Any] | None = None) -> None:
-    """
-    Register tree attention with transformers.
-
-    Args:
-        kernel_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments for `kernels.get_kernel` when loading the FlashAttention kernel. If `None`, the device's
-            kernel is loaded at its tested version.
-    """
-    kernel_kwargs = tuple(kernel_kwargs.items()) if kernel_kwargs is not None else None
-    AttentionInterface.register(TREE_ATTENTION, partial(tree_attention, kernel_kwargs=kernel_kwargs))
+def register_tree_attention() -> None:
+    AttentionInterface.register(TREE_ATTENTION, tree_attention)
     AttentionMaskInterface.register(TREE_ATTENTION, lambda **kwargs: None)
 
 
