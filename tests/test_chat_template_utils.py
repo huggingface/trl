@@ -1960,6 +1960,16 @@ class TestGetTrainingChatTemplate:
         if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
             reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
             request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
+            request.node.add_marker(
+                pytest.mark.xfail(
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
+                    strict=True,
+                )
+            )
         tokenizer = self._load(tokenizer_name)
         if enable_thinking is not None and "enable_thinking" not in tokenizer.chat_template:
             pytest.skip("This chat template doesn't use enable_thinking.")
