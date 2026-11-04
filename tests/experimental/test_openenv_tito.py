@@ -15,6 +15,7 @@
 """Captured contexts and eligible sampled tokens must survive trainer ingestion exactly."""
 
 import asyncio
+import dataclasses
 import itertools
 import multiprocessing as mp
 import queue
@@ -41,8 +42,8 @@ from openenv.core.harness import (
     VerifyResult,
 )
 
-from trl.experimental.async_grpo import openenv_harness
-from trl.experimental.async_grpo.async_rollout_worker import _chain_to_sequences, _SampleBuilder
+from trl.experimental.async_grpo import AsyncGRPOConfig, openenv_harness
+from trl.experimental.async_grpo.async_rollout_worker import TurnRecord, _chain_to_sequences, _SampleBuilder
 
 
 def entry(prompt, completion, logprobs, mask=None):
@@ -119,9 +120,19 @@ def make_loop():
     loops = []
 
     def make(factory=None, *, factory_builder=None, **kwargs):
-        kwargs.setdefault("temperature", 0.8)
+        config_fields = {f.name for f in dataclasses.fields(AsyncGRPOConfig)}
+        config_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in config_fields}
+        config_kwargs.setdefault("temperature", 0.8)
+        config = AsyncGRPOConfig(
+            max_completion_length=32,
+            max_concurrent_rollouts=8,
+            score_centering=False,
+            report_to="none",
+            **config_kwargs,
+        )
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         loop = openenv_harness._HarnessRolloutLoop(
+            config=config,
             harness_session_factory=factory_builder or (lambda **kwargs: factory),
             model_name="test",
             dataset=[{"prompt": [{"role": "user", "content": "task"}]}],
@@ -134,7 +145,6 @@ def make_loop():
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),
             metrics_queue=queue.Queue(),
-            max_inflight_tasks=8,
             **kwargs,
         )
         loops.append(loop)
@@ -248,7 +258,8 @@ def test_persistent_session_failures_stop_the_worker(make_loop):
     with pytest.raises(RuntimeError, match="harness sessions in a row were unscorable"):
         loop.run()
     assert loop._failed_event.is_set()
-    assert loop.rollout_buffer.empty()
+    # Only the ids of dropped groups, no samples
+    assert all(isinstance(item, int) for item in loop.rollout_buffer.queue)
 
 
 def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
@@ -256,9 +267,9 @@ def test_timeout_preserves_verifier_reward_and_tokens(make_loop):
     session.wait_for_completion = MagicMock(side_effect=TimeoutError("agent budget"))
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     result, metrics = loop._run_session([])
-    assert result[-1] == 0.25
-    assert result[2][0].input_ids == [1, 2, 3]
-    assert result[2][0].completion_mask == [0, 1, 0]
+    assert result.reward == 0.25
+    assert result.sequences[0].input_ids == [1, 2, 3]
+    assert result.sequences[0].completion_mask == [0, 1, 0]
     assert metrics["loop_exhausted"]
 
 
@@ -305,10 +316,10 @@ def test_concurrent_correctness_metrics_stay_on_event_loop(make_loop):
     loop._rates = Rates(lambda: [0.0, 0.0])
 
     async def run():
-        return await asyncio.gather(*(loop._generate_one([], {}, [], group_id=i) for i in range(32)))
+        return await asyncio.gather(*(loop.generate_one([], {}, [], group_id=i) for i in range(32)))
 
     results = asyncio.run(run())
-    assert all(result[-1] == 0.55 and result[2] for result in results)
+    assert all(result.reward == 0.55 and result.sequences for result in results)
     metrics = [loop._metrics_queue.get_nowait() for _ in results]
     assert sum(item["rollout/correctness_mean"][0] for item in metrics) == 8.0
     assert sum(item["rollout/correctness_mean"][1] for item in metrics) == 32
@@ -334,11 +345,11 @@ def test_white_box_tool_metrics_reach_the_queue_per_tool(make_loop, monkeypatch)
     )
 
     async def generate_one_turn(prompt_ids):
-        return [2, 3], [-0.1, -0.2], None, None
+        return TurnRecord(prompt_ids, [2, 3], [-0.1, -0.2])
 
-    loop._generate_one_turn = generate_one_turn
-    result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
-    assert result[3:5] == (2, 1)
+    loop.generate_one_turn = generate_one_turn
+    result = loop._loop.run_until_complete(loop.generate_one([], {}, [], group_id=0))
+    assert (result.tool_call_count, result.tool_failure_count) == (2, 1)
     payload = loop._metrics_queue.get_nowait()
     assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/call_total"] == 1
     assert payload["tools/edit/failure_total"] == 1 and "tools/bash/failure_total" not in payload
@@ -360,8 +371,8 @@ def test_loop_owning_tool_counts_resolve_names_through_call_ids(make_loop):
     ]
     row["response"]["choices"][0]["message"]["tool_calls"] = [{"id": "c", "function": {"name": "bash"}}]
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: Session(row)))
-    result = loop._loop.run_until_complete(loop._generate_one([], {}, [], group_id=0))
-    assert result[3:5] == (1, 1)
+    result = loop._loop.run_until_complete(loop.generate_one([], {}, [], group_id=0))
+    assert (result.tool_call_count, result.tool_failure_count) == (1, 1)
     payload = loop._metrics_queue.get_nowait()
     assert payload["tools/bash/call_total"] == 1 and payload["tools/edit/failure_total"] == 1
     assert "tools/latency_s" not in payload
@@ -492,12 +503,12 @@ def test_harbor_session_to_worker_preserves_masks_and_outcome(make_loop, reward)
     )
     loop = make_loop(SimpleNamespace(create=lambda *args, **kwargs: session))
     actual, _ = loop._run_session([])
-    assert actual[-1] == reward
-    assert actual[3] == 2  # Usage includes the zero-masked agent call.
-    assert len(actual[2]) == 1
-    assert actual[2][0].input_ids == [10, 11, 12]
-    assert actual[2][0].completion_mask == [0, 1, 0]
-    assert actual[2][0].old_log_probs == [0.0, -0.1, -0.2]
+    assert actual.reward == reward
+    assert actual.tool_call_count == 2  # Usage includes the zero-masked agent call.
+    assert len(actual.sequences) == 1
+    assert actual.sequences[0].input_ids == [10, 11, 12]
+    assert actual.sequences[0].completion_mask == [0, 1, 0]
+    assert actual.sequences[0].old_log_probs == [0.0, -0.1, -0.2]
     env.close.assert_called_once()
 
 

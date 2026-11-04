@@ -289,6 +289,13 @@ class TestCreateModelFromPath(TrlTestCase):
             )
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
+    )
+    def test_dequantizes_fp8_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-Mistral3ForConditionalGeneration")
+        assert model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
+
 
 class TestModelAcceptsImages(TrlTestCase):
     @pytest.mark.parametrize(
@@ -1463,6 +1470,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
         ),
     ),
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1695,6 +1703,8 @@ class TestAddFusedLMHead:
                     reason="MXFP4 experts dequantize to bfloat16 before transformers-5.23.0 (see transformers#50256)",
                 ),
             ),
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
         ],
     )
     def test_aux_loss(self, model_id):
@@ -1716,6 +1726,18 @@ class TestAddFusedLMHead:
         )
 
         torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", dtype=torch.float32
+        ).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
 
     @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1821,6 +1843,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
         ),
     ),
     "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -2030,7 +2053,6 @@ class TestAddFusedLMHeadLoss:
                 "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
                 marks=[
                     require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
-                    pytest.mark.xfail(reason="FP8 grouped matmul kernel fails to compile in CI (see #8020)"),
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.22.0"),
                         reason="Mistral Large 4 was introduced in transformers-5.22.0",
