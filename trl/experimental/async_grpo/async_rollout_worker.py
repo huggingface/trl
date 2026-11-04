@@ -409,12 +409,11 @@ class AsyncRolloutLoop:
         self.model_name = model_name
         self.lora_name = lora_name
         self.dataset = dataset
-        self._row_index = dataset_start_index % len(dataset)
-        self._epoch = dataset_start_index // len(dataset)
-        if self._row_index > 0:
+        self._epoch, self._row_index = 0, 0
+        self._dataset_iter = iter(dataset)
+        if dataset_start_index > 0:
+            self._epoch, self._row_index = divmod(dataset_start_index, len(dataset))
             self._dataset_iter = iter(dataset.select(range(self._row_index, len(dataset))))
-        else:
-            self._dataset_iter = iter(dataset)
         self.reward_funcs = reward_funcs
         self.reward_func_names = [get_callable_name(f) for f in reward_funcs]
         # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
