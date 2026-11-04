@@ -11,7 +11,7 @@ Jinja2 chat templates stored here serve two purposes:
 
 **Why `_v2`?** Identity comparison is exact, so when a model repo changes its chat template, the new revision is stored next to the original as `<name>_v2.jinja` (then `_v3`, ...) and both are recognized. The suffix only orders revisions as they are added; each section below says where the revision comes from.
 
-**How is drift detected?** A weekly CI job runs `scripts/check_chat_templates.py`, which fails when one of its reference Hub repos ships a chat template that is not stored here. When adding a template for a new model, add the repo it comes from to `REPOS` in that script.
+**How is drift detected?** A weekly CI job runs `scripts/check_chat_templates.py`, which fails when one of its reference Hub repos ships a chat template that is not stored here. For each stored template, `REPOS` in that script lists the repo it comes from and the most-downloaded chat checkpoint that ships it; when adding a template, add both.
 
 ## Original templates
 
@@ -76,6 +76,26 @@ Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [905e84b](https:/
 ### `gemma4_v5.jinja`
 
 Gemma 4 chat template as shipped by `google/gemma-4-E2B-it` at [8995379](https://huggingface.co/google/gemma-4-E2B-it/commit/899537982545a3e55ce64d34462b2efa5af85232): the current revision. Unlike the earlier ones, it also renders the reasoning of a final assistant turn. Response parsing reuses `gemma4_template`.
+
+### `gemma4_v6.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-31B-it` at [419b2ef](https://huggingface.co/google/gemma-4-31B-it/commit/419b2efe421994fdfd3394e621983d4cc511cd4f): the revision the model was released with; `google/gemma-4-26B-A4B-it` went through the same revisions. Same as `gemma4_v2.jinja`, except that with thinking disabled the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`). Response parsing reuses `gemma4_template`.
+
+### `gemma4_v7.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-31B-it` at [e51e7dc](https://huggingface.co/google/gemma-4-31B-it/commit/e51e7dcdb6febd74c182fe0cb41c236363ae2ac5): the revision between the release and `gemma4_v8.jinja`. Same as `gemma4_v3.jinja`, except that with thinking disabled the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`). Response parsing reuses `gemma4_template`.
+
+### `gemma4_v8.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-31B-it` at [145dc25](https://huggingface.co/google/gemma-4-31B-it/commit/145dc2508c480a64b47242f160d286cff94a2343): the revision between `gemma4_v7.jinja` and `gemma4_v9.jinja`. Same as `gemma4.jinja`, except that with thinking disabled the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`). Response parsing reuses `gemma4_template`.
+
+### `gemma4_v9.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-31B-it` at [fcf2302](https://huggingface.co/google/gemma-4-31B-it/commit/fcf2302760ae9c6e528a8dbba9dd636e56848237): the revision after `gemma4_v8.jinja`, also shipped by `google/gemma-4-12B-it` at release. Same as `gemma4_v4.jinja`, except that with thinking disabled the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`). Response parsing reuses `gemma4_template`.
+
+### `gemma4_v10.jinja`
+
+Gemma 4 chat template as shipped by `google/gemma-4-31B-it` at [68abe48](https://huggingface.co/google/gemma-4-31B-it/commit/68abe48010cbe15293462fa11e901a60639a44e5): the current revision, also shipped by `google/gemma-4-12B-it`. Same as `gemma4_v5.jinja`, except that with thinking disabled the generation prompt pre-fills an empty thought channel (`<|channel>thought\n<channel|>`). Response parsing reuses `gemma4_template`.
 
 ### `glm4_7.jinja`
 
@@ -197,13 +217,21 @@ Original Phi-3.5 chat template.
 
 Original Qwen2.5 chat template.
 
+### `qwen2_5_base.jinja`
+
+Qwen2.5 chat template shipped by the base checkpoints (`Qwen/Qwen2.5-0.5B`, `Qwen/Qwen2.5-1.5B`, `Qwen/Qwen2.5-3B`, `Qwen/Qwen2.5-7B`, `Qwen/Qwen2.5-14B`, ...). Same as `qwen2_5.jinja`, except for the default system prompt (`You are a helpful assistant.`). Response parsing reuses `qwen3_template`, like `qwen2_5.jinja`.
+
 ### `qwen2_5_vl.jinja`
 
 Original Qwen2.5-VL chat template. Also matches Qwen2-VL, which ships a byte-identical template. Does not support tool calling.
 
 ### `qwen3.jinja`
 
-Original Qwen3 chat template.
+Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 checkpoints since [895c8d1](https://huggingface.co/Qwen/Qwen3-8B/commit/895c8d171bc03c30e113cd7a28c02494b5e068b7)).
+
+### `qwen3_v2.jinja`
+
+Original Qwen3 chat template (as shipped by `Qwen/Qwen3-8B` and the other Qwen3 checkpoints before [895c8d1](https://huggingface.co/Qwen/Qwen3-8B/commit/895c8d171bc03c30e113cd7a28c02494b5e068b7), and still by the Qwen3 base checkpoints such as `Qwen/Qwen3-8B-Base`). Unlike `qwen3.jinja`, it assumes string message content, and reads the reasoning from `reasoning_content` whenever it is set. Response parsing reuses `qwen3_template`.
 
 ### `qwen3_instruct_2507.jinja`
 
@@ -265,14 +293,15 @@ Move the trailing `<|END_OF_TURN_TOKEN|>` from after the role-dispatch `{% endif
 Patched DeepSeek-R1-Distill template. Diff vs `deepseek_r1_distill.jinja`:
 
 - Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>` — fine for inference history, but it would silently remove the reasoning from the SFT training target.
-- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
 
 ### `deepseekv3_training.jinja`
 
 Patched DeepSeek-V3 template. Diff vs `deepseekv3.jinja`:
 
 - Uses `| tojson` on `tool['function']['arguments']` so that `arguments` can be passed as a `dict` (the documented format per [transformers docs](https://huggingface.co/docs/transformers/en/chat_extras#tool-calling-example)). The original template uses raw string concatenation, which crashes on dict inputs.
-- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+- Removes the `'</think>'` split on assistant content, so the reasoning block is always rendered. The original drops everything up to and including `</think>`, which would silently remove the reasoning from the training target.
+- Wraps assistant message output with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. The `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn stay outside the markers, since the prompt already ends with them.
 
 ### `deepseekv3_v2_training.jinja`
 
@@ -284,7 +313,7 @@ Patched DeepSeek-R1-0528 template. Diff vs `deepseekv3_v2.jinja`:
 
 ### `deepseekv3_v3_training.jinja`
 
-Patched DeepSeek-V3 template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja` (which has no `'</think>'` split to remove): `{% generation %}` / `{% endgeneration %}` markers around assistant message output for SFT assistant-only loss.
+Patched DeepSeek-V3 template. Same diff as `deepseek_r1_distill_training.jinja`, applied to `deepseekv3_v3.jinja` (which has no `'</think>'` split to remove): `{% generation %}` / `{% endgeneration %}` markers around assistant message output for SFT assistant-only loss, with the `<｜Assistant｜>` and `<｜tool▁outputs▁end｜>` that open an assistant turn left outside them.
 
 ### `deepseekv3_v4_training.jinja`
 
@@ -411,6 +440,10 @@ Patched Qwen2.5 template. Diff vs `qwen2_5.jinja`:
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
 
+### `qwen2_5_base_training.jinja`
+
+Patched Qwen2.5 base template. Same diff as `qwen2_5_training.jinja`, applied to `qwen2_5_base.jinja`.
+
 ### `qwen2_5_vl_training.jinja`
 
 Patched Qwen2.5-VL template (also used for Qwen2-VL, which ships a byte-identical template). Diff vs `qwen2_5_vl.jinja`:
@@ -444,6 +477,10 @@ Always include the thinking block regardless of message position. The original c
 ```
 
 Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n\n</think>\n\n` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it. The other Qwen3 training templates do the same with what their own generation prompt pre-fills, such as `<think>\n`.
+
+### `qwen3_v2_training.jinja`
+
+Patched original Qwen3 template. Same diff as `qwen3_training.jinja`, applied to `qwen3_v2.jinja`.
 
 ### `qwen3_instruct_2507_training.jinja`
 
