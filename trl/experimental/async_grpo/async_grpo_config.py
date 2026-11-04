@@ -100,9 +100,9 @@ class AsyncGRPOConfig(_BaseConfig):
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
             Base URL of the vLLM server used for generation (e.g., `"http://localhost:8000"`).
         vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
-            Timeout in seconds for every call to the vLLM server: waiting for it to be ready at startup, one generation
-            request, and one weight-sync call. A call that does not complete within this time raises instead of hanging
-            the run.
+            Timeout in seconds for calls to the vLLM server: waiting for it to be ready at startup, each generation
+            request, and each weight-sync call. Waiting for the server and weight-sync calls raise when it runs out; a
+            generation request that times out is retried.
 
         > Parameters that control the training
 
@@ -141,8 +141,9 @@ class AsyncGRPOConfig(_BaseConfig):
         > Parameters that control the async rollout pipeline
 
         max_concurrent_rollouts (`int`, *optional*):
-            Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to `max_staleness *
-            per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
+            Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to
+            `max(max_staleness, 1)
+            * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
             this is wasteful, since they are dropped as stale before the trainer can consume them. If using tool-use
             environments, you may want to set this manually based on how many parallel environments you can run.
         max_staleness (`int`, *optional*, defaults to `4`):
@@ -328,9 +329,9 @@ class AsyncGRPOConfig(_BaseConfig):
     vllm_server_timeout: float = field(
         default=1800.0,
         metadata={
-            "help": "Timeout in seconds for every call to the vLLM server: waiting for it to be ready at startup, one "
-            "generation request, and one weight-sync call. A call that does not complete within this time raises "
-            "instead of hanging the run."
+            "help": "Timeout in seconds for calls to the vLLM server: waiting for it to be ready at startup, each "
+            "generation request, and each weight-sync call. Waiting for the server and weight-sync calls raise when "
+            "it runs out; a generation request that times out is retried."
         },
     )
 
@@ -391,10 +392,10 @@ class AsyncGRPOConfig(_BaseConfig):
         default=None,
         metadata={
             "help": "Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to "
-            "`max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating "
-            "more samples than this is wasteful, since they are dropped as stale before the trainer can consume "
-            "them. If using tool-use environments, you may want to set this manually based on how many parallel "
-            "environments you can run."
+            "`max(max_staleness, 1) * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: "
+            "generating more samples than this is wasteful, since they are dropped as stale before the trainer can "
+            "consume them. If using tool-use environments, you may want to set this manually based on how many "
+            "parallel environments you can run."
         },
     )
     max_staleness: int = field(

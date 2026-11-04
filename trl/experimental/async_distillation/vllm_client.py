@@ -31,9 +31,8 @@ class VLLMClient:
 
     Ported from [`~trl.experimental.async_grpo.vllm_client.VLLMClient`]. The student's server uses the full API
     (readiness, world size, pause/resume, weight-update endpoints) since [`WeightTransferClient`] streams updated
-    weights to it; the teacher's server only ever needs [`wait_for_server_ready`], since the teacher is static and is
-    otherwise queried directly over `/v1/completions` from the rollout worker's `aiohttp` session, not through this
-    client.
+    weights to it; the teachers' servers don't use this client: they are static, and the rollout worker queries them
+    directly over `/v1/completions` from its `aiohttp` session.
 
     Args:
         server_url (`str`):

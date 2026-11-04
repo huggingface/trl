@@ -83,9 +83,9 @@ class AsyncDistillationConfig(_BaseConfig):
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
             Base URL of the student's vLLM server, used both for generation and for streaming weight updates.
         vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
-            Timeout in seconds for every call to a vLLM server, the student's or a teacher's: waiting for it to be
-            ready at startup, one generation or scoring request, and one weight-sync call. A call that does not
-            complete within this time raises instead of hanging the run.
+            Timeout in seconds for calls to the vLLM servers: waiting for the student's server to be ready at startup,
+            each generation or scoring request, and each weight-sync call. Waiting for the server and weight-sync calls
+            raise when it runs out; a generation or scoring request that times out is retried.
         teacher_server_urls (`dict[str, str]`, *optional*, defaults to `{"default": "http://localhost:8001"}`):
             Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
             --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so a
@@ -153,9 +153,9 @@ class AsyncDistillationConfig(_BaseConfig):
         > Parameters that control the async rollout pipeline
 
         max_concurrent_rollouts (`int`, *optional*):
-            Maximum number of rollouts in flight against the two vLLM servers at once, generating or being scored. If
-            `None`, it is set to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps *
-            num_processes`.
+            Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, generating
+            or being scored. If `None`, it is set to `max(max_staleness, 1) * per_device_train_batch_size *
+            gradient_accumulation_steps * num_processes`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
             being dropped.
@@ -296,9 +296,9 @@ class AsyncDistillationConfig(_BaseConfig):
     vllm_server_timeout: float = field(
         default=1800.0,
         metadata={
-            "help": "Timeout in seconds for every call to a vLLM server, the student's or a teacher's: waiting for it "
-            "to be ready at startup, one generation or scoring request, and one weight-sync call. A call that does "
-            "not complete within this time raises instead of hanging the run."
+            "help": "Timeout in seconds for calls to the vLLM servers: waiting for the student's server to be ready "
+            "at startup, each generation or scoring request, and each weight-sync call. Waiting for the server and "
+            "weight-sync calls raise when it runs out; a generation or scoring request that times out is retried."
         },
     )
     teacher_server_urls: dict[str, str] | str | None = field(
@@ -361,9 +361,9 @@ class AsyncDistillationConfig(_BaseConfig):
     max_concurrent_rollouts: int | None = field(
         default=None,
         metadata={
-            "help": "Maximum number of rollouts in flight against the two vLLM servers at once, generating or being "
-            "scored. If `None`, it is set to `max_staleness * per_device_train_batch_size * "
-            "gradient_accumulation_steps * num_processes`."
+            "help": "Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, "
+            "generating or being scored. If `None`, it is set to `max(max_staleness, 1) * "
+            "per_device_train_batch_size * gradient_accumulation_steps * num_processes`."
         },
     )
     max_staleness: int = field(
