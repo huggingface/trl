@@ -314,7 +314,8 @@ class _AsyncRolloutLoop:
             self._loop.close()
 
     async def _run_loops(self, stop_event: asyncio.Event) -> None:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=2 * self.max_inflight_tasks)) as session:
+        connector = aiohttp.TCPConnector(limit=2 * self.max_inflight_tasks, keepalive_timeout=4)
+        async with aiohttp.ClientSession(connector=connector) as session:
             self.session = session
             logger.info(
                 f"vllm worker started: max_inflight_tasks={self.max_inflight_tasks}, temperature={self.temperature}, "
