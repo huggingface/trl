@@ -30,7 +30,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     Parameters:
         > Parameters that control the model
 
-        model_init_kwargs (`dict[str, Any]` or `str`, *optional*):
+        model_init_kwargs (`str` or `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`ZeroSyncGRPOTrainer`] is provided as a string.
 
@@ -79,6 +79,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
     > - `logging_steps`: Defaults to `10` instead of `500`.
+    > - `gradient_checkpointing`: Defaults to `True` instead of `False`.
     > - `bf16`: Defaults to `True` if `fp16` is not set, instead of `False`.
     > - `learning_rate`: Defaults to `1e-6` instead of `5e-5`.
     """
@@ -94,21 +95,6 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
-    logging_steps: float = field(
-        default=10,
-        metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."
-        },
-    )
-    bf16: bool | None = field(
-        default=None,
-        metadata={
-            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-            "`fp16` is not set."
-        },
-    )
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
@@ -120,7 +106,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the data preprocessing
-    remove_unused_columns: bool = field(
+    remove_unused_columns: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to only keep the column 'prompt' in the dataset. If you use a custom reward function "
@@ -157,7 +143,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "top-k-filtering is disabled and all tokens are considered."
         },
     )
-    chat_template_kwargs: dict[str, Any] | None = field(
+    chat_template_kwargs: dict | str | None = field(
         default=None,
         metadata={
             "help": "Additional keyword arguments to pass to the `apply_chat_template` function when generating "
@@ -181,7 +167,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "decode slows."
         },
     )
-    continuous_batching_config: dict[str, Any] | None = field(
+    continuous_batching_config: dict | str | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.generation.ContinuousBatchingConfig`. `return_logprobs` is "
@@ -204,7 +190,3 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
-
-    def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-        super().__post_init__()
