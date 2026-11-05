@@ -157,36 +157,6 @@ class RolloutWorkerProtocol(Protocol):
         ...
 
 
-class WeightTransferProtocol(Protocol):
-    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`experimental.async_grpo.AsyncGRPOTrainer`].
-
-    The default [`WeightTransferClient`] streams the trainer's weights into the vLLM server over NCCL. Implement this
-    protocol to plug in a different sync mechanism, or pass a no-op implementation to disable trainer-side weight sync
-    (e.g. when a custom `rollout_worker` updates the policy itself).
-    """
-
-    def init_weight_transfer(self) -> None:
-        """Set up the transfer (e.g. the NCCL group). Called once on train begin, before the first sync."""
-        ...
-
-    def pause(self) -> None:
-        """Pause the inference server before weights are swapped in."""
-        ...
-
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None:
-        """Stream `(name, tensor)` pairs from `iterator` to the inference server."""
-        ...
-
-    def resume(self) -> None:
-        """Resume the inference server after the weights are updated."""
-        ...
-
-    def destroy(self) -> None:
-        """Release transfer resources. Called on train end."""
-        ...
-
-
 class StepIntervalCallback(TrainerCallback):
     """
     A callback that calls a function every N optimization steps.
@@ -1044,11 +1014,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
             `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
             one that runs reward models on their own GPUs.
-        weight_transfer (`WeightTransferProtocol`, *optional*):
-            Custom weight-sync backend implementing [`WeightTransferProtocol`]. If `None`, a default
-            [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
-            NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
-            implementation to disable trainer-side weight sync.
     """
 
     loss_is_scaled_for_ga = True
@@ -1081,7 +1046,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
-        weight_transfer: WeightTransferProtocol | None = None,
     ):
         # Args
         if args is None:
@@ -1362,7 +1326,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
         # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
         # alone would leave the others waiting in this collective.
-        if weight_transfer is None and is_peft_model(model):
+        if is_peft_model(model):
             lora_sync = None
             if self.accelerator.is_main_process:
                 try:
@@ -1375,32 +1339,27 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._lora_sync = lora_sync
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            if weight_transfer is not None:
-                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
-                # entirely, so the server is not probed and adapter sync stays off.
-                self.weight_transfer = weight_transfer
+            if self._lora_sync:
+                # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer group to
+                # build and no manifest to collect.
+                self.weight_transfer = None
             else:
-                if self._lora_sync:
-                    # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
-                    # group to build and no manifest to collect.
-                    self.weight_transfer = None
-                else:
-                    # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                    # DTensor.shape returns the global shape without triggering any all-gather.
-                    weight_names, weight_dtype_names, weight_shapes = [], [], []
-                    for name, param in _iter_vllm_named_params(model):
-                        weight_names.append(name)
-                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                        weight_shapes.append(list(param.shape))
-                    self.weight_transfer = WeightTransferClient(
-                        vllm_client=self.vllm_client,
-                        weight_update_info={
-                            "names": weight_names,
-                            "dtype_names": weight_dtype_names,
-                            "shapes": weight_shapes,
-                        },
-                        compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
-                    )
+                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
+                # DTensor.shape returns the global shape without triggering any all-gather.
+                weight_names, weight_dtype_names, weight_shapes = [], [], []
+                for name, param in _iter_vllm_named_params(model):
+                    weight_names.append(name)
+                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                    weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_client=self.vllm_client,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                    },
+                    compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
+                )
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.

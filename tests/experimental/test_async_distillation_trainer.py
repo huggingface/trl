@@ -35,6 +35,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerControl
 from transformers.testing_utils import torch_device
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
+from trl.experimental.async_distillation import async_distillation_trainer as async_distillation_trainer_module
 from trl.experimental.async_distillation import weight_transfer as weight_transfer_module
 from trl.experimental.async_distillation.async_distillation_trainer import (
     DataCollatorForRollout,
@@ -158,6 +159,9 @@ class _StubRolloutWorker:
 
 class _StubWeightTransfer:
     """No-op weight transfer for testing the trainer without a real vLLM server."""
+
+    def __init__(self, **kwargs):
+        pass
 
     def init_weight_transfer(self):
         pass
@@ -310,8 +314,8 @@ class FakeVLLMTransport(BaseAdapter):
 def fake_vllm(monkeypatch) -> FakeVLLMServer:
     """A [`FakeVLLMServer`] that every `requests` call to `FakeVLLMServer.url` reaches, for this test only.
 
-    The one patch in this module. It swaps the transport for one URL, leaves every other request untouched, and is
-    undone by `monkeypatch` when the test ends.
+    It swaps the transport for one URL, leaves every other request untouched, and is undone by `monkeypatch` when the
+    test ends.
     """
     server = FakeVLLMServer()
     transport = FakeVLLMTransport(server)
@@ -322,6 +326,11 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
 
     monkeypatch.setattr(requests.Session, "get_adapter", get_adapter)
     return server
+
+
+@pytest.fixture(autouse=True)
+def stub_weight_transfer(monkeypatch):
+    monkeypatch.setattr(async_distillation_trainer_module, "WeightTransferClient", _StubWeightTransfer)
 
 
 def _rollout_sample(length: int, top_k: int = TEACHER_TOP_K, teacher_id: str = "default", prompt_id: int = 0) -> dict:
@@ -962,7 +971,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             model=model_id,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
 
     def _train_one_step_and_save(self):
@@ -986,7 +994,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
         return trainer
@@ -1041,7 +1048,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
         if instantiated:
             assert trainer.model is model
@@ -1071,7 +1077,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 args=AsyncDistillationConfig(output_dir=self.tmp_dir, router_aux_loss_coef=0.01, report_to="none"),
                 train_dataset=dataset,
                 rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-                weight_transfer=_StubWeightTransfer(),
             )
 
     def test_resume_from_checkpoint(self):
@@ -1100,7 +1105,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 args=args,
                 train_dataset=dataset,
                 rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-                weight_transfer=_StubWeightTransfer(),
             )
 
         # First run: train for 2 steps, which saves a checkpoint at step 1.
@@ -1139,7 +1143,6 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
             rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-            weight_transfer=_StubWeightTransfer(),
         )
         trainer.train()
 
@@ -1159,7 +1162,6 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
         args=AsyncDistillationConfig(output_dir=output_dir, report_to="none"),
         train_dataset=dataset,
         rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
-        weight_transfer=_StubWeightTransfer(),
     )
     # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
@@ -1344,16 +1346,15 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         peft_config,
         lora_config=None,
         data_parallel_size=1,
-        weight_transfer=None,
+        weight_transfer=_StubWeightTransfer,
         rollout_worker="stub",
         **config_kwargs,
     ):
         """Build a trainer against `fake`, configured to look like a server started with the given flags.
 
-        With `weight_transfer=None` the trainer owns weight sync, which is what makes it probe the server and pick a
-        mode. Pass a `weight_transfer` to exercise the send itself — an injected backend deliberately keeps adapter
-        sync off. `rollout_worker="stub"` injects `_StubRolloutWorker`; `None` lets the trainer build the real
-        `AsyncRolloutWorker`, which is cheap until `start()` and useful for reading what it was told.
+        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker="stub"` injects
+        `_StubRolloutWorker`; `None` lets the trainer build the real `AsyncRolloutWorker`, which is cheap until
+        `start()` and useful for reading what it was told.
         """
         fake.lora_config = lora_config
         fake.data_parallel_size = data_parallel_size
@@ -1374,17 +1375,17 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         )
         if rollout_worker == "stub":
             rollout_worker = _StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer))
-        return AsyncDistillationTrainer(
-            model=self.model_id,
-            args=args,
-            train_dataset=dataset,
-            peft_config=peft_config,
-            rollout_worker=rollout_worker,
-            weight_transfer=weight_transfer,
-        )
+        with patch.object(async_distillation_trainer_module, "WeightTransferClient", weight_transfer):
+            return AsyncDistillationTrainer(
+                model=self.model_id,
+                args=args,
+                train_dataset=dataset,
+                peft_config=peft_config,
+                rollout_worker=rollout_worker,
+            )
 
     def test_train_peft_config(self, fake_vllm):
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_StubWeightTransfer())
+        trainer = self._build(fake_vllm, self._lora_config())
         previous_params = {n: p.clone() for n, p in trainer.model.named_parameters()}
 
         trainer.train()
@@ -1409,15 +1410,6 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         # the module and not on `target_modules` — that string never contains "lm_head".
         with pytest.raises(ValueError, match="lm_head"):
             self._build(fake_vllm, self._lora_config(target_modules=target_modules), lora_config=SERVER_LORA_CONFIG)
-
-    def test_an_injected_weight_transfer_keeps_adapter_sync_off(self, fake_vllm):
-        # An injected backend owns weight sync and may be a no-op that disables it; adapter sync must not run behind
-        # its back, and the server is not consulted.
-        trainer = self._build(
-            fake_vllm, self._lora_config(), lora_config=SERVER_LORA_CONFIG, weight_transfer=_StubWeightTransfer()
-        )
-        assert trainer._lora_sync is False
-        assert fake_vllm.requests == []
 
     def test_a_misconfigured_server_raises_at_init(self, fake_vllm):
         # The probe runs on rank 0 only, so its error is broadcast and raised on every rank: raising on rank 0 alone
@@ -1498,7 +1490,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
                 sent.extend(name for name, _ in iterator)
 
         trainer = self._build(
-            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer()
+            fake_vllm, self._lora_config(modules_to_save=["lm_head"]), weight_transfer=_RecordingWeightTransfer
         )
         trainer._sync_weight()
 
@@ -1522,7 +1514,12 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
         # `init_weight_transfer`, which is not called.
-        trainer = self._build(fake_vllm, self._lora_config(modules_to_save=["lm_head"]), lora_config=None)
+        trainer = self._build(
+            fake_vllm,
+            self._lora_config(modules_to_save=["lm_head"]),
+            lora_config=None,
+            weight_transfer=WeightTransferClient,
+        )
         manifest = trainer.weight_transfer._weight_update_info
 
         assert manifest["names"] == [name for name, _ in trainer._streaming_iter()]
@@ -1537,7 +1534,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
                 merged_during_send.append(_any_adapter_merged(trainer.model))
                 raise RuntimeError("transfer blew up")
 
-        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer())
+        trainer = self._build(fake_vllm, self._lora_config(), weight_transfer=_RaisingWeightTransfer)
         with pytest.raises(RuntimeError, match="transfer blew up"):
             trainer._sync_weight()
 
