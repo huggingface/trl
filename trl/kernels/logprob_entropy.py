@@ -177,6 +177,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
         log_z = torch.empty_like(logprobs)
         expected_logit = torch.empty_like(logprobs)
 
+        # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
         _forward_kernel[(n_rows,)](
             logits,
             index,
@@ -196,6 +197,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
             TEMPERATURE=temperature,
             HAS_MASK=row_mask is not None,
             BLOCK_SIZE=_BLOCK_SIZE,
+            enable_fp_fusion=True,
         )
 
         ctx.set_materialize_grads(False)
@@ -255,6 +257,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
             BLOCK_SIZE=_BLOCK_SIZE,
             HAS_LOGPROB_GRAD=has_logprob_grad,
             HAS_ENTROPY_GRAD=has_entropy_grad,
+            enable_fp_fusion=True,
         )
         return grad_logits, None, None, None
 
