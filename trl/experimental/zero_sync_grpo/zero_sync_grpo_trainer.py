@@ -1089,9 +1089,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
 
         def local_tensors(master):
-            # The copy and its optimizer state as the plain tensors that hold this rank's shard. Moving them means
-            # swapping their storage, so the optimizer's references stay valid. Scalars such as Adam's step count stay
-            # where the optimizer put them.
+            # The copy and its optimizer state as the plain tensors that hold this rank's shard (under no_grad,
+            # to_local() returns the DTensor's own). Moving them means swapping their storage, so the optimizer's
+            # references stay valid. Scalars such as Adam's step count stay where the optimizer put them.
             tensors = [master, *(value for value in self.optimizer.state[master].values() if value.dim() > 0)]
             return [tensor.to_local() if isinstance(tensor, DTensor) else tensor for tensor in tensors]
 
@@ -1108,6 +1108,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Copies come in and go out on two side streams, so the transfers in both directions overlap the updates
         copy_in, copy_out = torch.Stream(device=self.accelerator.device), torch.Stream(device=self.accelerator.device)
 
+        @torch.no_grad()
         def step_and_share(*args, **kwargs):
             compute = torch.accelerator.current_stream()
             work = [(param, master) for param, master in masters if param.grad is not None]
@@ -1130,8 +1131,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 param.grad = None
                 out = step(*args, **kwargs)
                 master.grad = None
-                with torch.no_grad():
-                    param.copy_(master)
+                param.copy_(master)
                 copy_out.wait_stream(compute)
                 with copy_out:
                     for local in local_tensors(master):

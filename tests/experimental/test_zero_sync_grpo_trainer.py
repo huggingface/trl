@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import pytest
 import torch
 from datasets import load_dataset
+from torch.distributed.tensor import DTensor
 
 from trl.experimental.zero_sync_grpo import ZeroSyncGRPOConfig, ZeroSyncGRPOTrainer
 from trl.experimental.zero_sync_grpo.zero_sync_grpo_trainer import (
@@ -207,3 +210,34 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
                 assert master.dtype == torch.float32
                 assert master.is_pinned()
                 assert not torch.equal(master, master.bfloat16().float())
+
+    @pytest.mark.skipif("TRL_TEST_ZERO_SYNC_TP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_train_tensor_parallel_body(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = ZeroSyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_ZERO_SYNC_TP_OUTPUT_DIR"],
+            learning_rate=1e-6,  # a step bf16 rounds away on most weights
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_steps=2,
+            model_init_kwargs={"dtype": "bfloat16"},
+            tp_size=int(os.environ["WORLD_SIZE"]),
+            report_to="none",
+        )
+        trainer = ZeroSyncGRPOTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        # Each rank's shard of the fp32 copies goes back to host memory after the step
+        for group in trainer.optimizer.param_groups:
+            for master in group["params"]:
+                local = master.to_local() if isinstance(master, DTensor) else master
+                assert local.dtype == torch.float32
+                assert local.is_pinned()
