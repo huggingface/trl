@@ -2235,6 +2235,11 @@ class _EvenRowsLoop(_FixedRolloutLoop):
         return await super().generate_one(prompt, tools, group_id)
 
 
+class _RejectAllLoop(_FixedRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return False
+
+
 class _SelfScoredLoop(_FixedRolloutLoop):
     async def generate_one(self, prompt, tools, group_id=0):
         rollout = await super().generate_one(prompt, tools, group_id)
@@ -2290,6 +2295,11 @@ class TestCustomRolloutLoop(TrlTestCase):
         trained = [item for item in items if isinstance(item, RolloutSample)]
         assert skipped and all(group_id % 2 == 0 for group_id in skipped)
         assert trained and all(sample.group_id % 2 == 1 for sample in trained)
+
+    def test_filter_prompt_rejecting_a_whole_epoch_raises(self):
+        loop = _rollout_loop(_RejectAllLoop, reward_funcs=[two_reward], vllm_server_base_url="http://127.0.0.1:9")
+        with pytest.raises(RuntimeError, match="rejected every prompt of epoch 0"):
+            loop._run()
 
     def test_generate_one_can_score_its_own_rollouts(self):
         loop = _rollout_loop(

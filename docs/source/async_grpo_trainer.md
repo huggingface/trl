@@ -219,7 +219,7 @@ class CurriculumTrainer(AsyncGRPOTrainer):
     loop_cls = CurriculumRolloutLoop
 ```
 
-Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group.
+Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
 
 ## Design philosophy
 
