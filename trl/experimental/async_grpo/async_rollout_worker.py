@@ -1144,6 +1144,9 @@ class _AsyncRolloutLoop:
             "temperature": self.config.temperature,
             "top_p": self.config.top_p,
             "top_k": self.config.top_k,
+            # Explicit: vLLM fills an omitted penalty from the model's generation config (1.05 for Qwen2.5-Instruct),
+            # and the trainer's log-probs carry none
+            "repetition_penalty": 1.0,
             "n": 1,
             "logprobs": self.num_sampler_logprobs,
             # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
