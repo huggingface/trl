@@ -12,7 +12,7 @@ On 30 fixed words, with greedy decoding, [Qwen3-1.7B](https://huggingface.co/Qwe
 
 ## 3. Train it with GRPO against the environment
 
-Each step plays 64 games, one environment session each, and the shared [`openenv/wordle`](https://huggingface.co/spaces/openenv/wordle) Space allows 8. [Duplicate it](https://huggingface.co/spaces/openenv/wordle?duplicate=true), set the `MAX_CONCURRENT_ENVS=64` variable on your copy, and pass its URL:
+Each step plays 64 games, one environment session each, and the shared [`openenv/wordle`](https://huggingface.co/spaces/openenv/wordle) Space allows 8. [Duplicate it](https://huggingface.co/spaces/openenv/wordle?duplicate=true), set the `MAX_CONCURRENT_ENVS=96` variable on your copy (64 games, plus the sessions still being closed between games), and pass its URL:
 
 ```sh
 hf jobs uv run --flavor a100-large --timeout 4h --secrets HF_TOKEN examples/grpo_wordle/grpo_wordle.py \
