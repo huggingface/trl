@@ -124,7 +124,6 @@ def main() -> None:
     args = parse_args()
 
     env_url = args.env_url
-    # A private Space needs your token. A public one ignores it.
     token = get_token()
     headers = {"Authorization": f"Bearer {token}"} if token else None
 
@@ -133,8 +132,6 @@ def main() -> None:
             self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
 
         def reset(self, **kwargs) -> str | None:
-            # A new connection per game. The Space closes WebSockets after about 2 hours, and a game cut in the middle
-            # is lost.
             self.client.close()
             self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
             result = self.client.reset()
