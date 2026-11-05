@@ -363,8 +363,8 @@ class FakeVLLMTransport(BaseAdapter):
 def fake_vllm(monkeypatch) -> FakeVLLMServer:
     """A [`FakeVLLMServer`] that every `requests` call to `FakeVLLMServer.url` reaches, for this test only.
 
-    The one patch in this module. It swaps the transport for one URL, leaves every other request untouched, and is
-    undone by `monkeypatch` when the test ends.
+    It swaps the transport for one URL, leaves every other request untouched, and is undone by `monkeypatch` when the
+    test ends.
     """
     server = FakeVLLMServer()
     transport = FakeVLLMTransport(server)
