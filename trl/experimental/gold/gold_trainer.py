@@ -2414,7 +2414,8 @@ class GOLDTrainer(SFTTrainer):
         # Decode completions with `parse_response`, which handles tool calls (tools require transformers >= 5.0.0 and
         # a response schema, both enforced at init).
         completions = [
-            [parse_response(self._tokenizer, ids, prefix=prompt_ids_list[i])] for i, ids in enumerate(completion_ids)
+            [parse_response(self._tokenizer, ids, prefix=prompt_ids_list[i], tools=self.tools)]
+            for i, ids in enumerate(completion_ids)
         ]
 
         # Extract tool calls from the completions and (possibly) execute them
@@ -2767,7 +2768,9 @@ class GOLDTrainer(SFTTrainer):
 
             # Decode post-tool completions
             post_tool_completions = [
-                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx]) if ids else {}
+                parse_response(self._tokenizer, ids, prefix=prompt_completion_tool_ids[idx], tools=self.tools)
+                if ids
+                else {}
                 for idx, ids in enumerate(post_tool_ids)
             ]
 
@@ -3010,7 +3013,7 @@ class GOLDTrainer(SFTTrainer):
             # Decode completions with `parse_response`, which handles tool calls (tools require transformers >= 5.0.0
             # and a response schema, both enforced at init).
             completions = [
-                [parse_response(self._tokenizer, ids, prefix=all_prompt_ids[i])]
+                [parse_response(self._tokenizer, ids, prefix=all_prompt_ids[i], tools=self.tools)]
                 for i, ids in enumerate(completion_ids)
             ]
             (
