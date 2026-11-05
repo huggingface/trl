@@ -1225,6 +1225,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Initialize the Trainer
         super().__init__(
