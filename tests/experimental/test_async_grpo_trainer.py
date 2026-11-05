@@ -601,7 +601,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=dummy_reward_func,
             train_dataset=dataset,
         )
@@ -655,7 +655,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
                     strict=True,
                 ),
             ),
-            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
@@ -745,7 +745,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=dummy_reward_func,
             args=training_args,
             train_dataset=dataset,
@@ -775,11 +775,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
             num_generations=2,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
@@ -809,11 +809,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_steps=4,
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
@@ -849,7 +849,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         if train_dataset_type == "none":
             with pytest.raises(ValueError, match="`train_dataset` is required"):
                 AsyncGRPOTrainer(
-                    model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                     reward_funcs=dummy_reward_func,
                     args=training_args,
                     train_dataset=train_dataset,
@@ -857,14 +857,14 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         elif train_dataset_type == "unsupported_dataset_dict":
             with pytest.raises(TypeError, match="`train_dataset` must be a `Dataset` or `IterableDataset`"):
                 AsyncGRPOTrainer(
-                    model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                     reward_funcs=dummy_reward_func,
                     args=training_args,
                     train_dataset=train_dataset,
                 )
         else:
             trainer = AsyncGRPOTrainer(
-                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=dummy_reward_func,
                 args=training_args,
                 train_dataset=train_dataset,
@@ -873,7 +873,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
 
     def test_train_model(self, vllm_server):
         model = AutoModelForCausalLM.from_pretrained(
-            "trl-internal-testing/small-Qwen2ForCausalLM-2.5", dtype="float32", attn_implementation="eager"
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", dtype="float32", attn_implementation="eager"
         )
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -883,7 +883,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(model=model, reward_funcs=varied_reward, args=training_args, train_dataset=dataset)
@@ -912,11 +912,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
@@ -945,11 +945,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             fp16=True,
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
@@ -976,11 +976,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             gradient_checkpointing=True,
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1007,11 +1007,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             gradient_accumulation_steps=2,  # accumulate over 2 micro-batches
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
@@ -1037,7 +1037,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         # sum / num_items_in_batch rather than the local per-microbatch mean.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=dummy_reward_func,
             args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
             train_dataset=dataset,
@@ -1073,11 +1073,11 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             num_generations=6,  # the number of generations is larger than the batch size, but
             gradient_accumulation_steps=2,  # gradient accumulation should allow that
-            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
