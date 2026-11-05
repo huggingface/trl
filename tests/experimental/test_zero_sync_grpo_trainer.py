@@ -177,3 +177,31 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_bf16_steps_fp32_copies(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = ZeroSyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=1e-6,  # a step bf16 rounds away on most weights
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_steps=2,
+            model_init_kwargs={"dtype": "bfloat16"},
+            report_to="none",
+        )
+        trainer = ZeroSyncGRPOTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        # The optimizer steps fp32 copies of the bf16 parameters, which keep what bf16 cannot represent
+        for group in trainer.optimizer.param_groups:
+            for master in group["params"]:
+                assert master.dtype == torch.float32
+                assert not torch.equal(master, master.bfloat16().float())

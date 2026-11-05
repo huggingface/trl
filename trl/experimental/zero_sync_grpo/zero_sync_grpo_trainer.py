@@ -1045,7 +1045,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         }
 
     def create_optimizer(self, model=None):
-        """Give each replica the optimizer state of only its share of the parameters.
+        """Step fp32 copies of 16-bit parameters, and give each replica the optimizer state of only its share.
+
+        Generation reads the model's own parameters, so they stay in the checkpoint dtype, and bf16 cannot absorb small
+        updates: a weight of 1.0 moved by 1e-6 rounds back to 1.0. Stepping them directly, one AdamW step at
+        `learning_rate=1e-6` lands 5% of its size on Qwen3.5-2B. The optimizer therefore updates fp32 copies and writes
+        them back to the parameters after each step. The copies and their fp32 moments add 8 bytes per parameter, which
+        brings the total to the 16 of fp32 training.
 
         Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The replicas
         split the parameters between them, each updates its own share, and passes the result back to the others. The
@@ -1054,37 +1060,55 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         Measured on a 14B at tp=4 with two replicas: 9.2 GiB less per GPU at the peak, and the step itself takes half
         as long, since each replica now updates half the parameters.
         """
-        if self._replica_group is None or self.optimizer is not None:
-            return super().create_optimizer(model)
+        if self.optimizer is not None:
+            return self.optimizer
 
         opt_model = self.model if model is None else model
-        trainable = [(name, param) for name, param in opt_model.named_parameters() if param.requires_grad]
-        # Largest first into the emptiest replica, so the shares come out even whatever the parameter sizes are.
-        self._parameter_owner = {}
-        held = [0] * self.dp_size
-        for name, param in sorted(trainable, key=lambda item: -item[1].numel()):
-            owner = min(range(self.dp_size), key=lambda replica: held[replica])
-            self._parameter_owner[name] = owner
-            held[owner] += param.numel()
+        if self._replica_group is None:
+            super().create_optimizer(model)
+        else:
+            trainable = [(name, param) for name, param in opt_model.named_parameters() if param.requires_grad]
+            # Largest first into the emptiest replica, so the shares come out even whatever the parameter sizes are.
+            self._parameter_owner = {}
+            held = [0] * self.dp_size
+            for name, param in sorted(trainable, key=lambda item: -item[1].numel()):
+                owner = min(range(self.dp_size), key=lambda replica: held[replica])
+                self._parameter_owner[name] = owner
+                held[owner] += param.numel()
 
-        replica = self.accelerator.process_index // self.tp_size
-        decay = set(self.get_decay_parameter_names(opt_model))
-        mine = [(name, param) for name, param in trainable if self._parameter_owner[name] == replica]
-        groups = [
-            {"params": [p for n, p in mine if n in decay], "weight_decay": self.args.weight_decay},
-            {"params": [p for n, p in mine if n not in decay], "weight_decay": 0.0},
-        ]
-        optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
-        self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
+            replica = self.accelerator.process_index // self.tp_size
+            decay = set(self.get_decay_parameter_names(opt_model))
+            mine = [(name, param) for name, param in trainable if self._parameter_owner[name] == replica]
+            groups = [
+                {"params": [p for n, p in mine if n in decay], "weight_decay": self.args.weight_decay},
+                {"params": [p for n, p in mine if n not in decay], "weight_decay": 0.0},
+            ]
+            optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
+            self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
+
+        masters = []  # (parameter, its fp32 copy)
+        for group in self.optimizer.param_groups:
+            for i, param in enumerate(group["params"]):
+                if param.dtype in (torch.float16, torch.bfloat16):
+                    group["params"][i] = param.detach().float()
+                    masters.append((param, group["params"][i]))
 
         step = self.optimizer.step
 
         def step_and_share(*args, **kwargs):
+            for param, master in masters:
+                master.grad = None if param.grad is None else param.grad.float()
+                param.grad = None
             out = step(*args, **kwargs)
-            self._share_updated_parameters()
-            # The optimizer only knows this replica's share, so its zero_grad would leave the rest holding
-            # gradients that the next step would accumulate onto.
-            opt_model.zero_grad(set_to_none=True)
+            with torch.no_grad():
+                for param, master in masters:
+                    param.copy_(master)
+                    master.grad = None
+            if self._replica_group is not None:
+                self._share_updated_parameters()
+                # The optimizer only knows this replica's share, so its zero_grad would leave the rest holding
+                # gradients that the next step would accumulate onto.
+                opt_model.zero_grad(set_to_none=True)
             return out
 
         self.optimizer.step = step_and_share
