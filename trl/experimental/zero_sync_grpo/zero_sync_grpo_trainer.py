@@ -58,6 +58,8 @@ from ...trainer.utils import (
     get_config_model_id,
     identity,
     model_accepts_images,
+    nanmax,
+    nanmin,
     nanstd,
 )
 from .zero_sync_grpo_config import ZeroSyncGRPOConfig
@@ -460,7 +462,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self.top_p = args.top_p
         self.top_k = args.top_k
         self.chat_template_kwargs = args.chat_template_kwargs or {}
-        self.epsilon = args.epsilon
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         self.rollouts_in_flight = args.rollouts_in_flight
         self.tp_size = args.tp_size
 
@@ -827,10 +830,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # Convert None values to NaN
             rewards_per_func[i] = torch.nan if output_reward_func[0] is None else output_reward_func[0]
 
-        # Reconcile the turn chain into training rows: one row for a conversation the template only appended to,
-        # several when a rewrite forked it.
-        # A single re-tokenized token forks a new row, so trained tokens are never rewritten as context
-        sequences, tally = _chain_to_sequences(rollout["turns"], rollout["id"], fork_threshold=1)
+        # >= 1 row per conversation; `tally` is the drift bookkeeping over the turn transitions.
+        sequences, tally = _chain_to_sequences(rollout["turns"], rollout["id"], self.args.fork_threshold_tokens)
         return {
             "sequences": sequences,
             "num_completion_tokens": len(completion_ids),
@@ -1177,7 +1178,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         old_per_token_logps = inputs["old_per_token_logps"][:, 1:]
         log_ratio = per_token_logps - old_per_token_logps
         coef_1 = torch.exp(log_ratio)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
         # Packed rows hold several samples, so the advantage is per token there; padded rows hold one each
         advantages = advantages[:, 1:] if advantages.dim() == 2 else advantages.unsqueeze(1)
         per_token_loss1 = coef_1 * advantages
@@ -1187,10 +1188,26 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
-        is_clipped = ((coef_1 < 1 - self.epsilon) | (coef_1 > 1 + self.epsilon)) & (mask > 0)
-        self._metrics[mode]["clip_ratio"].append(
-            self.accelerator.gather(is_clipped.sum() / mask.sum().clamp(min=1.0)).mean().item()
-        )
+
+        def masked_seq_mean(x):
+            return (x * mask).sum(-1) / mask.sum(-1)
+
+        def global_masked_mean(x):
+            local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
+        # Compute the clipped probability ratios
+        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+        is_region_clipped = is_low_clipped | is_high_clipped
+        self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+        self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+        self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+        gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
+        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+        gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
+        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
         self._metrics[mode]["entropy"].append(
             self.accelerator.gather((outputs["entropy"] * mask).sum() / mask.sum().clamp(min=1.0)).mean().item()
         )
