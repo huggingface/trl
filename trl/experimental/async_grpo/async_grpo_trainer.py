@@ -261,7 +261,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward_kept, reward_std, rewards/<func>/{mean,std}, tools/*_frequency
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),

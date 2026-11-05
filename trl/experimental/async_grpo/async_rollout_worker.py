@@ -1483,7 +1483,7 @@ class AsyncRolloutLoop:
         ):
             metrics = {
                 "reward_kept": float(reward),
-                "reward_std": reward_std,
+                "reward_group_std": reward_std,
                 **{
                     f"rewards/{name}/mean": float(func_reward)
                     for name, func_reward, used in zip(
@@ -1492,7 +1492,7 @@ class AsyncRolloutLoop:
                     if used
                 },
                 **{
-                    f"rewards/{name}/std": std
+                    f"rewards/{name}/group_std": std
                     for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },

@@ -455,7 +455,8 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 
 | metric | meaning |
 | --- | --- |
-| `rewards/<func>/mean`, `rewards/<func>/std` | each reward function's mean, and its std within the group, over the groups that were trained on. GRPO takes both over every generated completion in the batch |
+| `reward_group_std` | std of the reward within each sample's group, averaged over the samples that were trained on. This is what the default `compute_advantages` divides by. GRPO's `reward_std` is the std over the whole batch, a different quantity: a batch of easy prompts all at 1 and hard prompts all at 0 has a batch std of 0.5 but a group std of 0 |
+| `rewards/<func>/mean`, `rewards/<func>/group_std` | each reward function's mean, and its std within each sample's group, averaged over the samples that were trained on. GRPO's `rewards/<func>/mean` is over every generated completion in the batch, and its `rewards/<func>/std` is the std over the batch |
 | `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
 | `sampling/sampling_logp_difference/mean`, `/max` | `\|log π_θ − log π_sampler\|` per completion token |
 | `num_tokens` | tokens forwarded since the start of training. With tree packing, a prefix shared by several samples is counted once |

@@ -181,7 +181,7 @@ class _StubRolloutWorker:
                     advantage=float(advantages[idx]),
                     model_version=self._model_version,
                     group_id=group_id,
-                    metrics={"reward": float(rewards[idx]), "reward_std": float(rewards.std())},
+                    metrics={"reward": float(rewards[idx]), "reward_group_std": float(rewards.std())},
                 )
                 # fork_k rows per generation, all sharing this group_id: mimics message-mode forking a
                 # conversation into several training rows. Only the shared group_id matters for the epoch
@@ -2505,9 +2505,9 @@ class TestScoreGroupOptionThree(TrlTestCase):
 
         assert samples[0].metrics["reward_kept"] == 1.0
         assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
-        assert samples[0].metrics["reward_std"] == pytest.approx(1.0)
+        assert samples[0].metrics["reward_group_std"] == pytest.approx(1.0)
         assert samples[1].metrics["rewards/two_reward/mean"] == 3.0
-        assert samples[1].metrics["rewards/two_reward/std"] == pytest.approx(1.0)
+        assert samples[1].metrics["rewards/two_reward/group_std"] == pytest.approx(1.0)
         # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
         assert samples[1].metrics is not samples[2].metrics
 
