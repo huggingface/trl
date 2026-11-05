@@ -264,7 +264,7 @@ On two rollouts of one prompt, where `p` is the prompt and `a`, `b` the two comp
 2. Trie             S0 [p1 p2] ─┬─ S1 [p3 a1 a2]       p3 is not shared: a position predicts
                                 └─ S2 [p3 b1 b2]       one token, and p3 predicts a1 or b1
 
-3. Packed row       index         0  1 | 2  3  4 | 5  6  7
+3. Packed row       index         0  1 |  2  3  4 |  5  6  7
    (depth-first)    input_ids    p1 p2 | p3 a1 a2 | p3 b1 b2    8 tokens: everything but attention
                     position_ids  0  1 |  2  3  4 |  2  3  4    runs on 8 instead of 10
                     segment      S0    | S1       | S2
