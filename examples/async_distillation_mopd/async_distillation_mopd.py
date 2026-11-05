@@ -82,6 +82,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default="async_distillation_mopd")
     parser.add_argument("--max-concurrent-rollouts", type=int)
     parser.add_argument("--save-steps", type=int, default=20)
+    parser.add_argument("--resume-from-checkpoint")
     parser.add_argument("--report-to", default="trackio")
     parser.add_argument("--run-name")
     parser.add_argument("--trackio-space-id")
@@ -143,7 +144,7 @@ def main() -> None:
         args=config,
         train_dataset=dataset,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     trainer.save_model()
 
     trainer.end()

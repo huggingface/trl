@@ -92,6 +92,8 @@ python examples/async_distillation_mopd/launcher.py \
 
 The GPU layout and expert checkpoints remain the same. The student's server now serves Qwen. Each teacher uses its own tokenizer and chat template. Allow more context on the teachers: a fixed `+64` token allowance does not cover differences between tokenizer families. The worker checks each actual teacher sequence length before scoring.
 
+For a 60-step experiment, add `--max-steps 60 --output-dir /path/to/checkpoint --run-name qwen3-4b-csd-60steps`. CSD defaults to 16 concurrent rollouts to bound the larger top-k scoring responses, saves every 20 steps, and retains two checkpoints. Both modes save the final model to `output_dir`. Use `--resume-from-checkpoint /path/to/checkpoint-N` to resume. The launcher respects `CUDA_VISIBLE_DEVICES`, including GPUs assigned by Slurm. Trackio uses the `async-distillation-mopd-csd` project; `--trackio-space-id username/space` selects its dashboard.
+
 The CSD setting is equivalent to:
 
 ```python

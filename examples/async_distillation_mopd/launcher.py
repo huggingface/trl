@@ -167,6 +167,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", default="async_distillation_mopd")
     p.add_argument("--max-concurrent-rollouts", type=int)
     p.add_argument("--save-steps", type=int, default=20)
+    p.add_argument("--resume-from-checkpoint")
     p.add_argument("--train-script", type=pathlib.Path)
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
     p.add_argument("--logs", default="./logs")
@@ -242,6 +243,8 @@ def main() -> None:
         train_cmd.extend(["--max-concurrent-rollouts", str(args.max_concurrent_rollouts)])
     if args.run_name is not None:
         train_cmd.extend(["--run-name", args.run_name])
+    if args.resume_from_checkpoint is not None:
+        train_cmd.extend(["--resume-from-checkpoint", args.resume_from_checkpoint])
     if args.trackio_space_id is not None:
         train_cmd.extend(["--trackio-space-id", args.trackio_space_id])
     trainer = _spawn(train_cmd, None, env={"CUDA_VISIBLE_DEVICES": devices[3]})
