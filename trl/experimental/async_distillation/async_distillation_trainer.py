@@ -1396,14 +1396,14 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 f"max_steps={self.args.max_steps} is a safety ceiling."
             )
 
-        # Infer max_inflight_tasks when not explicitly set. Generating more samples than the trainer can consume
+        # Infer max_concurrent_rollouts when not explicitly set. Generating more samples than the trainer can consume
         # before they become stale is wasteful. The useful upper bound is max_staleness * samples_per_step, floored
-        # at samples_per_step so max_staleness=0 (a valid, strict discard policy) can't also zero out the rollout
+        # at samples_per_step so max_staleness=0 (a valid, strict drop policy) can't also zero out the rollout
         # loop's own scheduling capacity and hang the trainer forever on an empty queue.
-        if self.args.max_inflight_tasks < 0:
-            self.args.max_inflight_tasks = max(self.args.max_staleness, 1) * samples_per_step
+        if self.args.max_concurrent_rollouts is None:
+            self.args.max_concurrent_rollouts = max(self.args.max_staleness, 1) * samples_per_step
             logger.info(
-                f"max_inflight_tasks set to {self.args.max_inflight_tasks} "
+                f"max_concurrent_rollouts set to {self.args.max_concurrent_rollouts} "
                 f"(max_staleness={self.args.max_staleness} × samples_per_step={samples_per_step})"
             )
 
@@ -1500,7 +1500,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
                             "dtype_names": weight_dtype_names,
                             "shapes": weight_shapes,
                         },
-                        weight_sync_timeout=self.args.weight_sync_timeout,
                     )
 
             if rollout_worker is not None:
@@ -1517,7 +1516,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     dataset=train_dataset,
                     processing_class=processing_class,
                     eos_token_ids=self.eos_token_ids,
-                    max_inflight_tasks=self.args.max_inflight_tasks,
+                    max_concurrent_rollouts=self.args.max_concurrent_rollouts,
                     queue_maxsize=self.args.queue_maxsize,
                     vllm_server_url=self.args.vllm_server_base_url,
                     teacher_server_urls=self.args.teacher_server_urls,
@@ -1529,7 +1528,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     top_k=self.args.top_k,
                     min_p=self.args.min_p,
                     repetition_penalty=self.args.repetition_penalty,
-                    request_timeout=self.args.request_timeout,
+                    vllm_server_timeout=self.args.vllm_server_timeout,
                     chat_template_kwargs=self.args.chat_template_kwargs,
                     log_completions=self.args.log_completions,
                     log_completions_steps=self.args.log_completions_steps,
@@ -1567,7 +1566,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 rollout_queue=self.rollout_queue,
                 model_version_fn=lambda: self.model_version,
                 check_health_fn=self.rollout_worker.check_health,
-                stale_after_s=self.args.heartbeat_stale_after_s,
+                stale_after_s=self.args.rollout_worker_timeout,
                 metrics=self._metrics["train"],
                 max_staleness=self.args.max_staleness,
                 report_to=self.args.report_to,
@@ -1793,20 +1792,20 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
-            if Version(transformers.__version__) < Version("5.0.0"):
-                num_experts = causal_lm.num_experts
-                num_experts_per_tok = causal_lm.num_experts_per_tok
-            else:
-                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if config.model_type == "gpt_oss" and Version("5.0.0") <= Version(transformers.__version__) < Version(
-                    "5.6.0"
-                ):
-                    num_experts = causal_lm.num_experts
+            router_logits = backbone_outputs.router_logits
+            if router_logits:
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    num_experts_per_tok = causal_lm.num_experts_per_tok
                 else:
-                    num_experts = config.num_experts
-                num_experts_per_tok = config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
-            aux_loss = load_balancing_loss_func(backbone_outputs.router_logits, num_experts, num_experts_per_tok, None)
+                    num_experts_per_tok = config.num_experts_per_tok
+                # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
+                num_experts = router_logits[0].shape[-1]
+                # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
+                # counts.
+                aux_loss = load_balancing_loss_func(router_logits, num_experts, num_experts_per_tok, None)
+            else:
+                # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
+                aux_loss = loss.new_zeros(())
             loss = loss + self.router_aux_loss_coef * aux_loss / self.current_gradient_accumulation_steps
 
         with torch.no_grad():

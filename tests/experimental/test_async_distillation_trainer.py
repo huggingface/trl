@@ -518,7 +518,7 @@ def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
         processing_class=tokenizer,
         teacher_server_urls=teacher_server_urls,
         teacher_top_k=TEACHER_TOP_K,
-        request_timeout=30,
+        vllm_server_timeout=30,
     )
     # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
@@ -541,10 +541,10 @@ class TestWorkerMetrics:
         loop._counters["rollout/vllm_retry_total"] += 2
         loop._rates["rollout/score_s"][0] += 3.0
         loop._rates["rollout/score_s"][1] += 2
-        loop._push_metrics({"rollout/inflight": 4.0})
+        loop._push_metrics({"rollout/concurrency": 4.0})
 
         assert loop._metrics_queue.get(timeout=5) == {
-            "rollout/inflight": 4.0,
+            "rollout/concurrency": 4.0,
             "rollout/vllm_retry_total": 2.0,
             "rollout/score_s": (3.0, 2.0),
         }
@@ -555,7 +555,7 @@ class TestWorkerMetrics:
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
         loop = self._loop(maxsize=1)
         for _ in range(50):
-            loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
+            loop._push_metrics({"rollout/concurrency": 1.0})  # drops rather than stalling generation
 
     @pytest.mark.parametrize(
         ("teacher_server_urls", "ends_on_eos", "clipped", "per_teacher"),
@@ -1564,13 +1564,13 @@ def _tensors_handed_to_producer(info, stream):
     class _Server:
         server_url = "http://127.0.0.1:9"
 
-        def start_weight_update(self, timeout):
+        def start_weight_update(self):
             return None
 
-        def update_weights(self, update_info, timeout):
+        def update_weights(self, update_info):
             return None
 
-        def finish_weight_update(self, timeout):
+        def finish_weight_update(self):
             return None
 
     client = WeightTransferClient(_Server(), info)
