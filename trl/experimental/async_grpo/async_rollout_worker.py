@@ -573,6 +573,15 @@ class AsyncRolloutLoop:
         # The reward a rollout carries in `Rollout.reward` is the last reward column, set by a `generate_one` that
         # scores its own rollouts. The built-in `generate_one` leaves it at `None`.
         self.reward_func_names.append("rollout")
+        if (
+            not self.reward_funcs
+            and not self._env_reward_types
+            and type(self).generate_one is AsyncRolloutLoop.generate_one
+        ):
+            raise ValueError(
+                "No reward source provided. Pass `reward_funcs`, an `environment_factory` whose environment defines a "
+                "`get_reward` method, or a `loop_cls` whose `generate_one` sets `Rollout.reward`."
+            )
 
         # Sync tools run here so a slow one never blocks the event loop; sized so every rollout can be in a tool call.
         self._tool_pool = ThreadPoolExecutor(
