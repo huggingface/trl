@@ -229,11 +229,16 @@ Patched Qwen3-Thinking-2507 template (used by models like `Qwen3-4B-Thinking-250
 
 ### `qwen3_5_think_training.jinja` / `qwen3_5_nothink_training.jinja`
 
-Patched Qwen3.5 templates, shared logic across both flavors (they differ only in the default value of the `enable_thinking` flag — `qwen3_5_think_training.jinja` defaults to thinking enabled, used by Qwen3.5-4B and larger; `qwen3_5_nothink_training.jinja` defaults to thinking disabled, used by Qwen3.5-2B and smaller). Diff vs `qwen3_5_think.jinja` / `qwen3_5_nothink.jinja`: same set of changes as `qwen3_training.jinja` — drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation), and wrap assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+Patched Qwen3.5 templates with shared logic across both flavors (they differ only in the default value of the `enable_thinking` flag):
+
+- `qwen3_5_think_training.jinja` defaults to thinking enabled, used by Qwen3.5-4B and larger.
+- `qwen3_5_nothink_training.jinja` defaults to thinking disabled, used by Qwen3.5-2B and smaller.
+
+Diff vs `qwen3_5_think.jinja` / `qwen3_5_nothink.jinja`: same as `qwen3_training.jinja` (drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;`).
 
 ### `qwen3_6_training.jinja`
 
-Patched Qwen3.6 template. Diff vs `qwen3_6.jinja`: same set of changes as `qwen3_training.jinja` — drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation), and wrap assistant output with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+Patched Qwen3.6 template. Diff vs `qwen3_6.jinja`: same as `qwen3_training.jinja` (drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;`).
 
 ### `qwen3_8_training.jinja`
 
