@@ -121,7 +121,7 @@ While training, we record the following metrics:
 - `tools/call_frequency`: The average number of tool calls per completion. Logged only when the model calls tools.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception). It is `0.0` for a completion with no tool call. Logged only when the model calls tools.
 - `rewards/{reward_func_name}`: The average reward from a specific reward function, over the trained samples. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
-- `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped.
+- `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
 - `reward_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples.
 - `reward_kept`: The average reward of the trained samples, which excludes the dropped groups.
 - `frac_reward_zero_std`: The fraction of groups with a reward std of zero (all answers are correct or incorrect), or with fewer than two scorable completions. These groups are dropped.
