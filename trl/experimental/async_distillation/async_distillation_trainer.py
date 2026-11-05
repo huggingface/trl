@@ -471,22 +471,6 @@ class RolloutWorkerProtocol(Protocol):
     def check_health(self, stale_after_s: float) -> None: ...
 
 
-class WeightTransferProtocol(Protocol):
-    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`experimental.async_distillation.AsyncDistillationTrainer`].
-
-    Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.WeightTransferProtocol`]. The default
-    [`WeightTransferClient`] streams the student's weights into its vLLM server over NCCL; pass a no-op implementation
-    (as tests do) to exercise the trainer without a real vLLM server.
-    """
-
-    def init_weight_transfer(self) -> None: ...
-    def pause(self) -> None: ...
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
-    def resume(self) -> None: ...
-    def destroy(self) -> None: ...
-
-
 class StepIntervalCallback(TrainerCallback):
     """A callback that calls a function every N optimization steps."""
 
@@ -1195,11 +1179,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
             Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
             is created, spawning a CUDA-free child process that generates from the student's vLLM server and scores
             against the teacher's.
-        weight_transfer (`WeightTransferProtocol`, *optional*):
-            Custom weight-sync backend implementing [`WeightTransferProtocol`]. If `None`, a default
-            [`WeightTransferClient`] is created that streams the student's weights into its vLLM server over NCCL. Pass
-            a no-op implementation to disable trainer-side weight sync (e.g. in tests, or when a custom
-            `rollout_worker` updates the policy itself).
     """
 
     loss_is_scaled_for_ga = True
@@ -1230,7 +1209,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
-        weight_transfer: WeightTransferProtocol | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -1460,7 +1438,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
         # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
         # alone would leave the others waiting in this collective.
-        if weight_transfer is None and is_peft_model(model):
+        if is_peft_model(model):
             lora_sync = None
             if self.accelerator.is_main_process:
                 try:
@@ -1476,31 +1454,26 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if self.train_dataset is None:
                 raise ValueError("train_dataset is required for AsyncDistillationTrainer")
 
-            if weight_transfer is not None:
-                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
-                # entirely, so the server is not probed and adapter sync stays off.
-                self.weight_transfer = weight_transfer
+            if self._lora_sync:
+                # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer group to
+                # build and no manifest to collect.
+                self.weight_transfer = None
             else:
-                if self._lora_sync:
-                    # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
-                    # group to build and no manifest to collect.
-                    self.weight_transfer = None
-                else:
-                    # Collect weight metadata once, names/dtypes/shapes are fixed for the lifetime of training.
-                    # DTensor.shape returns the global shape without triggering any all-gather.
-                    weight_names, weight_dtype_names, weight_shapes = [], [], []
-                    for name, param in _iter_vllm_named_params(model):
-                        weight_names.append(name)
-                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                        weight_shapes.append(list(param.shape))
-                    self.weight_transfer = WeightTransferClient(
-                        vllm_client=self.vllm_client,
-                        weight_update_info={
-                            "names": weight_names,
-                            "dtype_names": weight_dtype_names,
-                            "shapes": weight_shapes,
-                        },
-                    )
+                # Collect weight metadata once, names/dtypes/shapes are fixed for the lifetime of training.
+                # DTensor.shape returns the global shape without triggering any all-gather.
+                weight_names, weight_dtype_names, weight_shapes = [], [], []
+                for name, param in _iter_vllm_named_params(model):
+                    weight_names.append(name)
+                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                    weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_client=self.vllm_client,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                    },
+                )
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
