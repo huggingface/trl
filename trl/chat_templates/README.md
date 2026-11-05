@@ -346,7 +346,7 @@ Require both `<think>` and `</think>` to be present before parsing, to avoid inc
 + {%- if '<think>' in content and '</think>' in content %}
 ```
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
 ### `gptoss_training.jinja`
 

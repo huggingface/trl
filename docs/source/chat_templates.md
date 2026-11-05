@@ -96,7 +96,7 @@ Require both `<think>` and `</think>` to be present before parsing, to avoid inc
 + {%- if '<think>' in content and '</think>' in content %}
 ```
 
-Wrap assistant message output (including the thinking block and tool calls) with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss.
+Wrap assistant message output (including the thinking block and tool calls) with `&#123;% generation %&#125;` / `&#123;% endgeneration %&#125;` markers for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
 ### `qwen3_training.jinja`
 
