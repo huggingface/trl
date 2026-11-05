@@ -128,9 +128,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     # Parameters that control generation
     num_generations: int = field(
         default=8,
-        metadata={
-            "help": "Number of generations to sample. They form the group the advantages are computed over."
-        },
+        metadata={"help": "Number of generations to sample. They form the group the advantages are computed over."},
     )
     max_completion_length: int = field(
         default=256,
