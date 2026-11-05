@@ -24,7 +24,33 @@ MOPD is not part of the [2306.13649](https://huggingface.co/papers/2306.13649) p
 `teacher_server_urls` accepts more than one entry. With a single entry, every sample is scored by that one teacher (plain on-policy distillation). With multiple entries, each training sample's `teacher_id` column selects which teacher scores it — for example, routing math prompts to a math-specialist teacher and code prompts to a code-specialist teacher, each served independently. Each sample is dispatched to its one matching teacher, never averaged or ensembled across teachers. A sample with a missing or unmapped `teacher_id` raises rather than silently falling back to the wrong teacher. See `examples/async_distillation_mopd/async_distillation_mopd.py` for a runnable example that fuses the math, code and instruction-following experts released with [Open-MOPD](https://huggingface.co/papers/2608.19098) into their shared SFT checkpoint, and `examples/async_distillation_mopd/launcher.py` to run it on 4 GPUs with a single [Hugging Face Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) command.
 
 > [!WARNING]
-> Every teacher must share the student's tokenizer. Completions travel to the teachers as raw token ids, and the candidate ids a teacher reports back index the student's own vocabulary directly in `compute_loss`. Teachers from the same model family as the student (as in the MOPD example, where a SmolLM3 student is fused from SmolLM3 experts trained from the same checkpoint) satisfy this; a teacher with a different vocabulary trains the student against the wrong tokens, silently unless its vocabulary is larger than the student's.
+> With the default `distillation_method="token"`, every teacher must share the student's tokenizer. Completions travel to the teachers as raw token IDs, and teacher candidate IDs index the student's vocabulary directly. Use `distillation_method="csd"` and explicit `teacher_tokenizers` for teachers with different vocabularies.
+
+### Cross-tokenizer MOPD with CSD
+
+Common-Support Distillation ([NeMo reference implementation](https://github.com/NVIDIA-NeMo/RL/pull/4680)) retains domain routing while comparing events that both tokenizers express. The CPU worker applies the routed teacher's chat template, tokenizes the student's assistant content with that teacher's tokenizer, and aligns it with the original generated student IDs. It prepares shared-token events for 1:1 chunks, prefix-compatible alternatives for 1:many and many:1 chunks, and observed chains for many:many chunks. REST carries probability mass outside the selected events. Teacher-forced HTTP scoring supplies the needed probabilities along the observed prefixes; no teacher generation or hypothetical-continuation requests are required.
+
+```python
+args = AsyncDistillationConfig(
+    distillation_method="csd",
+    teacher_server_urls={"math": "http://localhost:8001", "code": "http://localhost:8002"},
+    teacher_tokenizers={
+        "math": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math",
+        "code": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code",
+    },
+    beta=0.5,
+    teacher_top_k=64,
+    csd_mismatch_weight=5.0,
+)
+trainer = AsyncDistillationTrainer(model="Qwen/Qwen3-4B", args=args, train_dataset=dataset)
+trainer.train()
+```
+
+Tokenizers must match the served models, including revisions and added tokens. Local snapshot paths can pin revisions. Following NeMo's table builder, this path supports fast BPE tokenizers with ByteLevel decoders. Bidirectional sub-token tables are built once per pair at worker startup; chains longer than eight tokens remain unmapped and mismatch chunks fall back to observed-chain comparisons. Truncated or invalid UTF-8 completions that do not preserve the same byte string receive no content alignment; `csd/alignment_coverage` exposes that loss of coverage. Terminal EOS is aligned separately by role.
+
+CSD uses the selected support at every `beta`; it does not apply token mode's reverse-KL top-1 narrowing. `teacher_top_k=1` compares the observed event with REST. Larger finite values approximate dense CSD. The loss weights mismatch chunks by `csd_mismatch_weight`, multiplies KD by the temperature squared, and divides by the valid chunk count across all ranks and accumulation microbatches in the optimizer step. It does not add NeMo's off-policy CE term to student-generated answers. The small event distributions use paired log-ratios, `expm1`, and higher precision to mitigate [softmax cancellation](https://jonbarron.info/softmaxfix/#sec:bug2); teacher scores already rounded by the server cannot be made exact by the trainer.
+
+The teachers need enough context for their own tokenized sequences plus the scoring token; a fixed margin above the student's length is insufficient across tokenizer families. Each request is checked against that teacher's reported context limit. Monitor `teacher_chunk_frac/<id>` alongside the existing token shares and divergences: CSD weights domains by aligned chunks. These metrics and alignment coverage are reported through the same Trackio integration as token-mode MOPD. See `examples/async_distillation_mopd/README.md` for the four-GPU Qwen experiment.
 
 **Checkpoint and resume**: `ignore_data_skip` defaults to `True`; the base Trainer's skip-and-replay loop does not apply to a live rollout queue. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets (`IterableDataset`) cannot be repositioned; their worker restarts from prompt 0 on resume. Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is written in that dtype even though the master weights are fp32, so a pushed checkpoint is the size of the served model, not twice it; the fp32 master weights and optimizer state still go to the resume files (`pytorch_model_fsdp.bin`, `optimizer.bin`), which are what a resume reads, so resuming is unaffected. Without FSDP the checkpoint is also the resume file, so it keeps the master dtype.
 

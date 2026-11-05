@@ -6,7 +6,7 @@ Say you trained one RL expert per domain, for math, code and instruction followi
 
 Open-MOPD released its whole recipe on SmolLM3-3B: an SFT checkpoint on mixed data, [`Open-MOPD-SmolLM3-3B-MixSFT`](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT), and three experts trained from it with GRPO, for [math](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math), [code](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code) and [instruction following](https://huggingface.co/BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF). The SFT checkpoint is the student, so this is the fusion stage of their recipe. With the Open-MOPD evaluation sets and scorers, it starts at 17.5 on AIME24, 19.2 on AIME25 and 67.5 on IFEval.
 
-All four models share one tokenizer, which the trainer needs, since it compares the student and the teacher token by token.
+All four models share one tokenizer, as required by the default token-level objective. For a student from a different family, use the CSD configuration below.
 
 ## 2. Send each prompt to its teacher
 
@@ -74,3 +74,43 @@ AIME with 4 samples per problem, so a few points either way is noise, and IFEval
 The example uses math, code and instruction following because those are the experts Open-MOPD released. With your own RL experts, trained from the same base model so they share a tokenizer, serve each one with vLLM, add its URL to `teacher_server_urls` and label each prompt with its domain. To close the instruction-following gap, train longer or give those prompts more weight, and the per-teacher metrics will tell you if it helps.
 
 The [MOPD blog post](https://huggingface.co/blog/sergiopaniego/mopd-trl) covers which labs use MOPD and how, and the checkpoint, the dashboard and the Open-MOPD models and data are in [this collection](https://huggingface.co/collections/sergiopaniego/mopd-with-trl-experiment).
+
+## 7. Fuse the same experts into a Qwen student with CSD
+
+Keep the three Open-MOPD experts and the same domain-routed 40/40/20 prompt mix, but start the student from `Qwen/Qwen3-4B`. Common-Support Distillation ([NeMo reference implementation](https://github.com/NVIDIA-NeMo/RL/pull/4680)) aligns the teacher and student tokenizations of each student-generated answer. Shared token events and prefix-compatible chains are compared together with a REST category for remaining probability mass. The teacher never generates the answer.
+
+From this checkout, on four GPUs, run:
+
+```sh
+python examples/async_distillation_mopd/launcher.py \
+    --train-script examples/async_distillation_mopd/async_distillation_mopd.py \
+    --student-model Qwen/Qwen3-4B \
+    --distillation-method csd \
+    --teacher-max-model-len 32768 \
+    --logs logs/mopd-csd-qwen
+```
+
+The GPU layout and expert checkpoints remain the same. The student's server now serves Qwen. Each teacher uses its own tokenizer and chat template. Allow more context on the teachers: a fixed `+64` token allowance does not cover differences between tokenizer families. The worker checks each actual teacher sequence length before scoring.
+
+The CSD setting is equivalent to:
+
+```python
+config = AsyncDistillationConfig(
+    distillation_method="csd",
+    teacher_server_urls={"math": "http://localhost:8001", "code": "http://localhost:8002", "if": "http://localhost:8003"},
+    teacher_tokenizers={
+        "math": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math",
+        "code": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code",
+        "if": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF",
+    },
+    beta=0.5,
+    teacher_top_k=64,
+    csd_mismatch_weight=5.0,
+)
+```
+
+CSD uses NeMo's symmetric JSD by default in this example. Pass `--beta 1.0` to compare reverse KL on the common events plus REST. Unlike token mode, CSD retains its selected support at every beta; `teacher_top_k=1` reduces it to the observed event versus REST. Finite top-k is an approximation to dense CSD. The bidirectional sub-token tables are built once per teacher/student pair in the CPU rollout worker and require fast BPE tokenizers with ByteLevel decoders. Generated student token IDs are preserved, including noncanonical segmentations.
+
+The KD loss is normalized by the optimizer step's global valid chunk count, with mismatch chunks weighted by `csd_mismatch_weight` and the temperature-squared factor. No CE self-training term is added to student-generated answers. This adapts NeMo's KD term to the async on-policy setting; its off-policy controller and dynamic KD/CE scaling are not used. Near matched distributions, the event divergence uses paired log-ratios and `expm1` to mitigate [softmax cancellation](https://jonbarron.info/softmaxfix/#sec:bug2); precision already lost in teacher HTTP scores cannot be recovered.
+
+Watch `teacher_chunk_frac/<id>` alongside `teacher_token_frac/<id>`, `teacher_jsd/<id>`, and `csd/alignment_coverage`. Chunk share controls the loss weighting in CSD, so token share alone no longer explains each domain's contribution. This changes the objective and the student's starting checkpoint: evaluate the starting Qwen model and its distilled checkpoint with the same evaluation protocol before drawing comparisons with the SmolLM3 results above. The command is an experimental recipe, not a claim of reproduced benchmark gains.

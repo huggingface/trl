@@ -63,12 +63,27 @@ CUDA_VISIBLE_DEVICES=2 vllm serve BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code
 CUDA_VISIBLE_DEVICES=3 accelerate launch examples/async_distillation_mopd/async_distillation_mopd.py
 """
 
+import argparse
+
 from datasets import interleave_datasets, load_dataset
 
 from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDistillationTrainer
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--student-model", default="BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT")
+    parser.add_argument("--distillation-method", choices=("token", "csd"), default="token")
+    parser.add_argument("--teacher-top-k", type=int)
+    parser.add_argument("--beta", type=float)
+    parser.add_argument("--max-steps", type=int, default=90)
+    parser.add_argument("--max-completion-length", type=int, default=16384)
+    parser.add_argument("--output-dir", default="async_distillation_mopd")
+    parser.add_argument("--report-to", default="trackio")
+    parser.add_argument("--run-name")
+    parser.add_argument("--trackio-space-id")
+    args = parser.parse_args()
+    csd = args.distillation_method == "csd"
     dataset = load_dataset("BytedTsinghua-SIA/Open-MOPD-Data", data_files="rl_prompt_mix/train.parquet", split="train")
     # The prompts already carry each domain's system prompt, so only the domain label needs renaming
     dataset = dataset.select_columns(["prompt", "domain"]).rename_column("domain", "teacher_id").shuffle(seed=42)
@@ -80,12 +95,21 @@ def main() -> None:
     )
 
     config = AsyncDistillationConfig(
-        output_dir="async_distillation_mopd",
+        output_dir=args.output_dir,
         per_device_train_batch_size=4,
         gradient_accumulation_steps=16,
-        max_completion_length=16384,
-        beta=1.0,  # MOPD's fusion stage minimizes reverse KL against the routed teacher
-        teacher_top_k=1,  # with beta=1.0 only the teacher's logprob of the sampled token is used
+        max_completion_length=args.max_completion_length,
+        distillation_method=args.distillation_method,
+        # CSD defaults to NeMo's symmetric JSD; --beta 1 selects reverse KL on common events plus REST.
+        beta=args.beta if args.beta is not None else (0.5 if csd else 1.0),
+        teacher_top_k=args.teacher_top_k if args.teacher_top_k is not None else (64 if csd else 1),
+        teacher_tokenizers={
+            "math": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math",
+            "code": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code",
+            "if": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF",
+        }
+        if csd
+        else None,
         teacher_server_urls={
             "math": "http://localhost:8001",
             "code": "http://localhost:8002",
@@ -95,17 +119,19 @@ def main() -> None:
         # 16K-token completions can take longer than the default 1800 s to generate under load
         vllm_server_timeout=3600,
         max_staleness=8,
-        max_steps=90,
+        max_steps=args.max_steps,
         save_strategy="no",
         learning_rate=1.5e-6,
         lr_scheduler_type="constant",
-        report_to="trackio",
-        trackio_space_id="async-distillation-mopd",
-        project="async-distillation-mopd",
+        report_to=args.report_to,
+        trackio_space_id=args.trackio_space_id
+        or ("async-distillation-mopd-csd" if csd else "async-distillation-mopd"),
+        project="async-distillation-mopd-csd" if csd else "async-distillation-mopd",
+        run_name=args.run_name or (f"csd-{args.student_model.split('/')[-1]}" if csd else None),
         log_completions=True,
     )
     trainer = AsyncDistillationTrainer(
-        model="BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT",
+        model=args.student_model,
         args=config,
         train_dataset=dataset,
     )

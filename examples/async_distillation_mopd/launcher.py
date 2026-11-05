@@ -141,7 +141,7 @@ def start_teacher(name: str, port: int, device: str, memory: float, args: argpar
     cmd = [
         "vllm", "serve", f"{MODEL_PREFIX}-{name}",
         "--port", str(port),
-        "--max-model-len", str(args.max_model_len + 64),
+        "--max-model-len", str(args.teacher_max_model_len or (32768 if args.distillation_method == "csd" else args.max_model_len + 64)),
         "--gpu-memory-utilization", str(memory),
         "--logprobs-mode", "processed_logprobs",
         "--max-logprobs", "-1",
@@ -154,6 +154,16 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     # Prompt (the longest in the prompt mix is 2583 tokens with the chat template) + max_completion_length (16384)
     p.add_argument("--max-model-len", type=int, default=19456)
+    p.add_argument("--teacher-max-model-len", type=int)
+    p.add_argument("--student-model", default=f"{MODEL_PREFIX}-MixSFT")
+    p.add_argument("--distillation-method", choices=("token", "csd"), default="token")
+    p.add_argument("--teacher-top-k", type=int)
+    p.add_argument("--beta", type=float)
+    p.add_argument("--run-name")
+    p.add_argument("--trackio-space-id")
+    p.add_argument("--max-steps", type=int, default=90)
+    p.add_argument("--max-completion-length", type=int, default=16384)
+    p.add_argument("--train-script", type=pathlib.Path)
     p.add_argument("--train-script-url", default=TRAIN_SCRIPT_URL)
     p.add_argument("--logs", default="./logs")
     return p.parse_args()
@@ -187,7 +197,7 @@ def main() -> None:
     student_url = "http://127.0.0.1:8000"
     student_log = logs / "vllm-student.log"
     student_cmd = [
-        "vllm", "serve", f"{MODEL_PREFIX}-MixSFT",
+        "vllm", "serve", args.student_model,
         "--port", "8000",
         "--max-model-len", str(args.max_model_len),
         "--weight-transfer-config", '{"backend":"nccl"}',
@@ -202,15 +212,32 @@ def main() -> None:
     wait_for_vllm(code_url, code, code_log)
     wait_for_vllm(student_url, student, student_log)
 
-    script = pathlib.Path("async_distillation_mopd.py")
-    print(f"[launcher] fetching {args.train_script_url}", flush=True)
-    try:
-        urllib.request.urlretrieve(args.train_script_url, script)
-    except (urllib.error.URLError, OSError) as exc:
-        raise RuntimeError(f"could not download the training script from {args.train_script_url}: {exc}") from exc
+    script = args.train_script
+    if script is None:
+        script = pathlib.Path("async_distillation_mopd.py")
+        print(f"[launcher] fetching {args.train_script_url}", flush=True)
+        try:
+            urllib.request.urlretrieve(args.train_script_url, script)
+        except (urllib.error.URLError, OSError) as exc:
+            raise RuntimeError(f"could not download the training script from {args.train_script_url}: {exc}") from exc
 
     print("[launcher] starting training on GPU 3", flush=True)
-    trainer = _spawn([sys.executable, str(script)], None, env={"CUDA_VISIBLE_DEVICES": "3"})
+    train_cmd = [
+        sys.executable, str(script),
+        "--student-model", args.student_model,
+        "--distillation-method", args.distillation_method,
+        "--max-steps", str(args.max_steps),
+        "--max-completion-length", str(args.max_completion_length),
+    ]  # fmt: skip
+    if args.teacher_top_k is not None:
+        train_cmd.extend(["--teacher-top-k", str(args.teacher_top_k)])
+    if args.beta is not None:
+        train_cmd.extend(["--beta", str(args.beta)])
+    if args.run_name is not None:
+        train_cmd.extend(["--run-name", args.run_name])
+    if args.trackio_space_id is not None:
+        train_cmd.extend(["--trackio-space-id", args.trackio_space_id])
+    trainer = _spawn(train_cmd, None, env={"CUDA_VISIBLE_DEVICES": "3"})
     rc = trainer.wait()
     print(f"[launcher] training exited {rc}", flush=True)
     sys.exit(rc)
