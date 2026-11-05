@@ -168,7 +168,7 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `sample/trained_tokens_mean`: The average number of trained tokens per sample.
 - `sample/rollout_queue_size`: The number of samples waiting in the rollout queue.
 - `sample/time_in_queue_s`: The time a sample waited in the rollout queue before being trained on.
-- `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it.
+- `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. `ratio` and `kl` combine this staleness with the training-inference mismatch: `ratio` away from `1.0` or `kl` away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
 - `sample/dropped_stale_total`: The number of samples dropped for exceeding `max_staleness`.
 - `batch/forwarded_tokens_per_step`, `batch/trained_tokens_per_step`: The number of forwarded and trained tokens per step, over all processes.
 - `batch/samples_per_step`, `batch/groups_per_step`: The number of samples and of distinct groups per step. They differ by the number of samples per group.
