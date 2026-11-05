@@ -70,8 +70,24 @@ text_config = Glm5NextTextConfig(
     # Smaller than the test sequences, so the sparse attention path actually drops keys.
     index_topk=8,
     index_kpool=4,
-    linear_head_dim=8,
-    linear_num_heads=4,
+    linear_attn_config={
+        "num_heads": 4,
+        "gate_lower_bound": -5.0,
+        "head_dim": 8,
+        "short_conv_kernel_size": 4,
+        "kda_layers": [0, 1, 2],
+        "full_attn_layers": [3],
+    },
+    first_k_dense_replace=3,
+    index_kpool_compress=True,
+    index_share_for_mtp_iteration=True,
+    indexer_rope_interleave=True,
+    mhc=True,
+    mla_use_nope=True,
+    moe_router_dtype="float32",
+    num_nextn_predict_layers=1,
+    scoring_func="sigmoid",
+    topk_method="noaux_tc",
     eos_token_id=[154820, 154827, 154829],
     pad_token_id=154820,
 )
@@ -94,6 +110,13 @@ for layer in model.model.language_model.layers[3:]:
 with tempfile.TemporaryDirectory() as tmp_dir:
     model.save_pretrained(tmp_dir)
     model = Glm5NextForConditionalGeneration.from_pretrained(tmp_dir, device_map="cuda")
+# Restore the reference dtypes that the reload changes: fp32 mHC base/scale (#8123) and bf16 short convolutions
+for layer in model.model.language_model.layers:
+    for hc in (layer.attn_hc, layer.ffn_hc):
+        hc.base.data = hc.base.data.float()
+        hc.scale.data = hc.scale.data.float()
+for layer in model.model.language_model.layers[:3]:
+    layer.self_attn.conv1d.weight.data = layer.self_attn.conv1d.weight.data.to(torch.bfloat16)
 smoke_test(model, processor)
 check_dtype_pattern(MODEL_ID, model)
 print_config_diff(MODEL_ID, model)
