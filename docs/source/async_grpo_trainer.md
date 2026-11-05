@@ -1,10 +1,10 @@
-# Async GRPO Trainer
+# Asynchronous GRPO Trainer
 
-[![model badge](https://img.shields.io/badge/All_models-Async_GRPO-blue)](https://huggingface.co/models?other=async-grpo,trl)
+[![model badge](https://img.shields.io/badge/All_models-Asynchronous_GRPO-blue)](https://huggingface.co/models?other=async-grpo,trl)
 
 ## Overview
 
-TRL supports the Async GRPO Trainer for training language models with the GRPO method, as described in the paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300) by [Zhihong Shao](https://huggingface.co/syhia), [Peiyi Wang](https://huggingface.co/peiyiwang89), [Qihao Zhu](https://huggingface.co/zqh11), Runxin Xu, [Junxiao Song](https://huggingface.co/haha-point), Mingchuan Zhang, Y. K. Li, Y. Wu, [Daya Guo](https://huggingface.co/guoday).
+TRL supports the Asynchronous GRPO Trainer for training language models with the GRPO method, as described in the paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300) by [Zhihong Shao](https://huggingface.co/syhia), [Peiyi Wang](https://huggingface.co/peiyiwang89), [Qihao Zhu](https://huggingface.co/zqh11), Runxin Xu, [Junxiao Song](https://huggingface.co/haha-point), Mingchuan Zhang, Y. K. Li, Y. Wu, [Daya Guo](https://huggingface.co/guoday).
 
 The abstract from the paper is the following:
 
@@ -16,7 +16,7 @@ This trainer was contributed by [Amine Dirhoussi](https://huggingface.co/aminedi
 
 ## Quick start
 
-This example demonstrates how to train a model using the Async GRPO method. We train a [Qwen3.5 2B model](https://huggingface.co/Qwen/Qwen3.5-2B) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
+This example demonstrates how to train a model using the Asynchronous GRPO method. We train a [Qwen3.5 2B model](https://huggingface.co/Qwen/Qwen3.5-2B) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
@@ -59,7 +59,7 @@ Then execute the script on GPU 1 using the following command:
 CUDA_VISIBLE_DEVICES=1 accelerate launch train_async_grpo.py
 ```
 
-## Looking deeper into the Async GRPO method
+## Looking deeper into the Asynchronous GRPO method
 
 In [`GRPOTrainer`], generation and training are sequential: generate a batch, compute the loss, update the weights, repeat. Even in [colocate mode](grpo_trainer#option-1-colocate-mode), one phase must finish before the other begins. In [`experimental.async_grpo.AsyncGRPOTrainer`], a rollout worker generates and scores completions in a background process while the training loop computes the loss and updates the model. To understand how it works, it can be broken down into three main steps: **Generating completions**, **computing the advantage**, and **computing the loss**. There is no reference model, so there is no KL divergence term (GRPO's default, `beta=0.0`).
 
@@ -589,7 +589,7 @@ Under FSDP with `bf16=True` (the default) or `fp16=True`, `model.safetensors` is
 
 ## Agent Training
 
-Async GRPO supports **agent training**: the model calls tools during generation and learns from the outcome.
+Asynchronous GRPO supports **agent training**: the model calls tools during generation and learns from the outcome.
 
 - A **tool** is a plain Python function (sync or async) exposed to the model. Use `tools` for stateless calls (a calculator, a web search).
 - An **environment** is the more general form: a stateful object built fresh per rollout, whose public methods are exposed as tools, plus a `reset` lifecycle hook and an optional `get_reward` that lets it own the reward. Use `environment_factory` when you need per-rollout state, a reset hook, or environment-owned reward.
