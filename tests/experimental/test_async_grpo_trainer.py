@@ -94,6 +94,12 @@ def dummy_reward_func(completions, **kwargs):
     return [float(hash(c[0]["content"]) % 100) / 100.0 for c in completions]
 
 
+def varied_reward(completions, **kwargs):
+    # Distinct rewards guarantee a non-degenerate group. Without that, once the policy collapses to one completion,
+    # every group is dropped for zero reward std and no step can complete.
+    return [float(i) for i in range(len(completions))]
+
+
 class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
@@ -566,7 +572,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-            reward_funcs=dummy_reward_func,
+            reward_funcs=varied_reward,
             args=training_args,
             train_dataset=dataset,
         )
