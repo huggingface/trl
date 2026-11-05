@@ -600,8 +600,7 @@ class _AsyncRolloutLoop:
             logger.info(
                 f"vllm worker started: num_generations={self.config.num_generations}, "
                 f"max_concurrent_rollouts={self.config.max_concurrent_rollouts}, concurrency_cap={self._concurrency_cap}, "
-                f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}, min_p={self.config.min_p}, "
-                f"repetition_penalty={self.config.repetition_penalty}"
+                f"temperature={self.config.temperature}, top_p={self.config.top_p}, top_k={self.config.top_k}, min_p={self.config.min_p}"
             )
             await asyncio.gather(
                 asyncio.create_task(self._generate_loop(stop_event=stop_event)),
@@ -1145,7 +1144,6 @@ class _AsyncRolloutLoop:
             "temperature": self.config.temperature,
             "top_p": self.config.top_p,
             "top_k": self.config.top_k,
-            "repetition_penalty": self.config.repetition_penalty,
             "n": 1,
             "logprobs": self.num_sampler_logprobs,
             # Unseeded requests draw their sampling seed from an RNG that every data-parallel vLLM engine seeds
