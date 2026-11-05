@@ -1801,6 +1801,78 @@ class TestGetTrainingChatTemplate:
         # The assistant mask starts right after the generation prompt
         assert list(masks).index(1) == len(prompt_ids)
 
+    @pytest.mark.parametrize("enable_thinking", [None, False, True])
+    def test_assistant_masks_exclude_generation_prompt_without_reasoning(
+        self, tokenizer_name, enable_thinking, request
+    ):
+        if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
+            transformers.__version__
+        ) < Version("5.18.0.dev0"):
+            request.node.add_marker(
+                pytest.mark.xfail(
+                    reason="Llava's official chat template `{% generation %}` markers don't yield assistant masks "
+                    "through the processor path. It is not a supported training template.",
+                    strict=True,
+                )
+            )
+        # The enable_thinking values for which the training template trains tokens the generation prompt ends with
+        trains_generation_prompt = [
+            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", [False]),
+            ("trl-internal-testing/tiny-GptOssForCausalLM", [None]),
+            ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
+            ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
+            ("trl-internal-testing/tiny-NemotronHForCausalLM-nano", [False]),
+            ("trl-internal-testing/tiny-NemotronHForCausalLM-super", [False]),
+            ("trl-internal-testing/tiny-NemotronHForCausalLM-ultra", [False]),
+            ("trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning", [False]),
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
+            (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", [False]),
+            (("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template), [False]),
+            (("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template), [None]),
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", [None, False, True]),
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", [None, False, True]),
+            ("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", [None, False, True]),
+            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", [None, False, True]),
+        ]
+        if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
+            reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
+            request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+        tokenizer = self._load(tokenizer_name)
+        if enable_thinking is not None and "enable_thinking" not in tokenizer.chat_template:
+            pytest.skip("This chat template doesn't use enable_thinking.")
+        kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+        messages = [{"role": "user", "content": "What color is the sky?"}]
+        if self.is_vlm:
+            messages = prepare_multimodal_messages(messages)
+        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **kwargs)
+        assistant = {"role": "assistant", "content": "It is blue."}
+        messages = messages + (prepare_multimodal_messages([assistant]) if self.is_vlm else [assistant])
+        chat_template = get_training_chat_template(tokenizer)
+        text = tokenizer.apply_chat_template(messages, chat_template=chat_template, tokenize=False, **kwargs)
+        if not text.startswith(prompt):
+            pytest.skip("A turn without reasoning can't continue this generation prompt.")
+        result = tokenizer.apply_chat_template(
+            messages,
+            chat_template=chat_template,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+            tokenize=True,
+            **kwargs,
+        )
+        input_ids, masks = result["input_ids"], result["assistant_masks"]
+        if self.is_vlm:  # VLM processors return batched output
+            input_ids, masks = input_ids[0], masks[0]
+        encoding = (tokenizer.tokenizer if self.is_vlm else tokenizer)(
+            text, add_special_tokens=False, return_offsets_mapping=True
+        )
+        # Some processors add special tokens before the rendered text
+        shift = len(input_ids) - len(encoding["input_ids"])
+        assert list(input_ids[shift:]) == encoding["input_ids"]
+        assert 1 in masks
+        # The first trained token starts after the generation prompt
+        assert encoding["offset_mapping"][list(masks).index(1) - shift][0] >= len(prompt)
+
     def test_assistant_masks_multi_turn(self, tokenizer_name, request):
         if tokenizer_name == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and Version(
             transformers.__version__
