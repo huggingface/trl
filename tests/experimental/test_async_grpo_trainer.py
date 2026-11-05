@@ -103,12 +103,6 @@ def varied_reward(completions, **kwargs):
     return [float(i) for i in range(len(completions))]
 
 
-# Most tiny checkpoints have a head dim of 2, below what Flash Attention runs. These `model_init_kwargs` widen the
-# heads, initializing the resized weights at random: configs with a `head_dim` take the first, the others the second.
-_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
-_FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
-
-
 class _StubRolloutWorker:
     """Minimal rollout worker stub for testing the trainer in isolation."""
 
@@ -408,14 +402,11 @@ class TransformersVLLMServer:
     Args:
         model_id (`str`):
             The model to serve, the trainer's.
-        **model_init_kwargs:
-            Passed to `from_pretrained`, for the config overrides the trainer's model was loaded with.
     """
 
-    def __init__(self, model_id: str, **model_init_kwargs):
+    def __init__(self, model_id: str):
         self.model_id = model_id
-        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16, **model_init_kwargs)
-        self.model.to(torch_device)
+        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
         # As `vllm serve --max-model-len 512`. The trainer sizes its micro-batches from it, and at the model's context
         # length, one would wait for about a thousand samples
         self.max_model_len = 512
@@ -580,13 +571,12 @@ class TransformersVLLMServer:
 def vllm_server(monkeypatch):
     """Starts a [`TransformersVLLMServer`], as `vllm serve <model_id>` would, and hands it the trainer's weight syncs.
 
-    Call it with the model id (and the `model_init_kwargs` that change its architecture). The server shuts down when
-    the test ends.
+    Call it with the model id. The server shuts down when the test ends.
     """
     servers = []
 
-    def serve(model_id: str, **model_init_kwargs) -> TransformersVLLMServer:
-        server = TransformersVLLMServer(model_id, **model_init_kwargs)
+    def serve(model_id: str) -> TransformersVLLMServer:
+        server = TransformersVLLMServer(model_id)
         servers.append(server)
         # Overrides `stub_weight_transfer`, which pytest runs first as an autouse fixture
         monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", lambda **kwargs: server)
@@ -617,68 +607,58 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
 
     @pytest.mark.parametrize(
-        ("model_id", "model_init_kwargs"),
+        "model_id",
         [
             pytest.param(
                 "trl-internal-testing/tiny-Cohere2ForCausalLM",
-                _FA3_HEAD_DIM,
                 marks=pytest.mark.xfail(
                     raises=RuntimeError,
-                    reason="The rollout worker parses every completion with a response schema, and this chat template "
-                    "has none",
+                    reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
                     strict=True,
                 ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-Glm4MoeForCausalLM",
-                _FA3_HEAD_DIM,
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.0.0"),
                         reason="GLM4 tokenizer requires transformers>=5.0.0",
                     ),
                     pytest.mark.xfail(
-                        raises=AttributeError,
-                        reason="`compute_flops_per_token` reads MoE config fields this config does not have",
+                        raises=RuntimeError,
+                        reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
                         strict=True,
                     ),
                 ],
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GptOssForCausalLM",
-                {},
                 marks=pytest.mark.xfail(raises=ValueError, reason="Attention sinks are not supported", strict=True),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GraniteMoeForCausalLM",
-                _FA3_ONE_HEAD,
                 marks=pytest.mark.xfail(
                     raises=RuntimeError,
-                    reason="The rollout worker parses every completion with a response schema, and this chat template "
-                    "has none",
+                    reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
                     strict=True,
                 ),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
-                {},
                 marks=pytest.mark.xfail(raises=ValueError, reason="Mamba layers are not supported", strict=True),
             ),
             pytest.param(
                 "trl-internal-testing/tiny-PhimoeForCausalLM",
-                _FA3_ONE_HEAD,
                 marks=pytest.mark.xfail(
                     raises=RuntimeError,
-                    reason="The rollout worker parses every completion with a response schema, and this chat template "
-                    "has none",
+                    reason="The tiny checkpoint's head_size=2 is incompatible with Flash Attention (#6857)",
                     strict=True,
                 ),
             ),
-            pytest.param("trl-internal-testing/small-Qwen2ForCausalLM-2.5", {}),
-            pytest.param("trl-internal-testing/tiny-Qwen3MoeForCausalLM", {}),
+            "trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
                 "trl-internal-testing/tiny-BeamForCausalLM",
-                {},
                 marks=[
                     pytest.mark.skipif(
                         Version(transformers.__version__) < Version("5.20.1"),
@@ -693,22 +673,20 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
-                {},
                 marks=pytest.mark.xfail(raises=ValueError, reason="Mamba layers are not supported", strict=True),
             ),
         ],
     )
-    def test_train(self, model_id, model_init_kwargs, vllm_server):
+    def test_train(self, model_id, vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
-            model_init_kwargs=model_init_kwargs,
             learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            vllm_server_base_url=vllm_server(model_id, **model_init_kwargs).url,
+            vllm_server_base_url=vllm_server(model_id).url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
@@ -2329,6 +2307,8 @@ class TestTreePacking(TrlTestCase):
             assert all(len(group) > 0 for group in micro_batch)
 
 
+_FA3_HEAD_DIM = {"head_dim": 32, "ignore_mismatched_sizes": True}
+_FA3_ONE_HEAD = {"num_attention_heads": 1, "num_key_value_heads": 1, "ignore_mismatched_sizes": True}
 _VLM_TEXT_HEAD_DIM_4 = pytest.mark.xfail(
     reason="The tiny checkpoint's text head_dim is 4, which FA3 cannot run, and model_init_kwargs cannot reach a VLM's "
     "text config",
