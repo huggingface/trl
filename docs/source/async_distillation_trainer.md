@@ -206,11 +206,13 @@ The last two metrics (`perf/rollout_wait_s` and `rollout/backpressure_s`) are mi
 
 A **completion** is what the student's vLLM server generated for one prompt.
 
-| metric                                             | meaning                                                                                             |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `completions/mean_length`                          | generated tokens per rollout                                                                        |
-| `completions/min_length`, `completions/max_length` | shortest and longest completion in the window                                                       |
-| `completions/clipped_ratio`                        | fraction of completions that did not end on EOS, i.e. were cut off by `max_completion_length`        |
+| metric                                                                   | meaning                                                                                                                     |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `completions/mean_length`                                                | generated tokens per rollout                                                                                                |
+| `completions/min_length`, `completions/max_length`                       | shortest and longest completion in the window                                                                               |
+| `completions/clipped_ratio`                                              | fraction of completions that did not end on EOS, i.e. were cut off by `max_completion_length`                               |
+| `completions/mean_terminated_length`                                     | like `completions/mean_length`, over the completions that ended on EOS only, so a tail of clipped ones cannot hide a change |
+| `completions/min_terminated_length`, `completions/max_terminated_length` | shortest and longest of those completions in the window                                                                     |
 
 ### Rollouts
 
