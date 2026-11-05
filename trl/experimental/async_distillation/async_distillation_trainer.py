@@ -409,10 +409,9 @@ def _chunked_csd_loss(
 ):
     """Compute CSD over observed chains while bounding student projection memory.
 
-    Prefix lengths and weights live at each chunk's final student label. Other
-    completion tokens still need realized-token log-probabilities for the chain
-    products. Prefix sums retain gradients through every predictor in a chain.
-    Samples must be packed without allowing a chunk to cross a sample boundary.
+    Prefix lengths and weights live at each chunk's final student label. Other completion tokens still need
+    realized-token log-probabilities for the chain products. Prefix sums retain gradients through every predictor in a
+    chain. Samples must be packed without allowing a chunk to cross a sample boundary.
     """
     supports, actuals, entropies = [], [], []
     for start in range(0, hidden.size(0), chunk_size):
@@ -434,7 +433,9 @@ def _chunked_csd_loss(
         entropies.append(entropy)
     student_logps = torch.cat(supports)
     actual_logps = torch.cat(actuals)
-    prefix_sum = F.pad(actual_logps.cumsum(0), (1, 0))
+    # Long packed rows can accumulate large log-probability sums. Subtract
+    # prefix sums in fp64 so a short chain late in a row keeps its precision.
+    prefix_sum = F.pad(actual_logps.double().cumsum(0), (1, 0))
     anchor = chunk_weights > 0
     positions = torch.arange(hidden.size(0), device=hidden.device)[anchor]
     prefix_logps = prefix_sum[positions] - prefix_sum[positions - prefix_lengths[anchor]]
@@ -443,7 +444,7 @@ def _chunked_csd_loss(
     student_logps = student_logps.masked_fill(~candidate_mask, -torch.inf)
     teacher_logps = teacher_logps[anchor].masked_fill(~candidate_mask, -torch.inf)
     divergence, teacher_entropy = csd_divergence(student_logps, teacher_logps, candidate_mask, beta)
-    loss = (divergence * chunk_weights[anchor]).sum() * temperature**2
+    loss = (divergence * chunk_weights[anchor]).sum().float() * temperature**2
     with torch.no_grad():
         stats = hidden.new_zeros(3 * num_teachers)
         if teacher_id_idx is not None:

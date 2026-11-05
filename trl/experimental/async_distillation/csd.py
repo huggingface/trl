@@ -1,4 +1,4 @@
-# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,11 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+
 """Common-support targets for HTTP teacher-forced distillation.
 
-Table preparation adapted from NVIDIA-NeMo/RL PR #4680 (547d391),
-``tools/csd/build_subtoks_table.py``. Tables are built once per tokenizer pair
-in the CPU rollout worker; no NeMo runtime dependency is required.
+Table preparation adapted from NVIDIA-NeMo/RL PR #4680 (547d391), ``tools/csd/build_subtoks_table.py``. Tables are
+built once per tokenizer pair in the CPU rollout worker; no NeMo runtime dependency is required.
 """
 
 import math
@@ -41,12 +43,10 @@ def _expm1_minus_x(x):
 def csd_divergence(student_logps, teacher_logps, mask, beta):
     """Per-chunk divergence resistant to softmax cancellation.
 
-    Implements the paired log-ratio idea from Barron et al.
-    (https://jonbarron.info/softmaxfix/#sec:bug2) on CSD events plus REST.
-    Normalized KL is evaluated as an f-divergence with its linear term removed,
-    so equal event distributions have exactly zero loss and gradient. Only the
-    small event support uses fp64; vocabulary projections remain fp32. This
-    cannot recover precision already lost in the HTTP teacher's log-probabilities.
+    Implements the paired log-ratio idea from Barron et al. (https://jonbarron.info/softmaxfix/#sec:bug2) on CSD events
+    plus REST. Normalized KL is evaluated as an f-divergence with its linear term removed, so equal event distributions
+    have exactly zero loss and gradient. Only the small event support uses fp64; vocabulary projections remain fp32.
+    This cannot recover precision already lost in the HTTP teacher's log-probabilities.
 
     Args:
         student_logps (`torch.Tensor`):
@@ -131,9 +131,8 @@ def byte_bpe_model(tokenizer: PreTrainedTokenizerFast) -> BPE | None:
 def require_supported_tokenizer(tokenizer: PreTrainedTokenizerFast, *, label: str) -> None:
     """Reject decoders whose single-token text can change with context.
 
-    Metaspace and WordPiece decoders can add or remove whitespace or word
-    markers depending on token position. Isolated decoding cannot establish
-    the complete events needed by a static table for those tokenizers.
+    Metaspace and WordPiece decoders can add or remove whitespace or word markers depending on token position. Isolated
+    decoding cannot establish the complete events needed by a static table for those tokenizers.
     """
     if byte_bpe_model(tokenizer) is None:
         raise ValueError(
@@ -179,8 +178,8 @@ def ordinary_event_matches(
 ) -> bool:
     """Check complete events without replacing incomplete UTF-8 fragments.
 
-    Byte-level BPE pairs compare their reversible byte surfaces. Ordinary added
-    tokens compare decoded text and conservatively reject replacement characters.
+    Byte-level BPE pairs compare their reversible byte surfaces. Ordinary added tokens compare decoded text and
+    conservatively reject replacement characters.
     """
     if not destination_ids:
         return False
@@ -205,13 +204,16 @@ def build_subtoks_table(
     """Build complete destination chains for every source vocabulary ID.
 
     Args:
-        source: Source tokenizer, including its added tokens.
-        destination: Tokenizer whose IDs populate each chain.
-        max_subtokens: Positive maximum chain length; longer events are unmapped.
+        source (`PreTrainedTokenizerFast`):
+            Source tokenizer, including its added tokens.
+        destination (`PreTrainedTokenizerFast`):
+            Tokenizer whose IDs populate each chain.
+        max_subtokens (`int`):
+            Positive maximum chain length; longer events are unmapped.
 
     Returns:
-        Integer tensors ``subtoks[V_source, max_subtokens]`` and
-        ``lengths[V_source]``, ready for the CSD loss table loader.
+        Integer tensors ``subtoks[V_source, max_subtokens]`` and ``lengths[V_source]``, ready for the CSD loss table
+        loader.
     """
     if max_subtokens < 1:
         raise ValueError("max_subtokens must be positive")
@@ -322,10 +324,14 @@ class CSDTargetBuilder:
     def align(self, student_ids, teacher_ids):
         """Return half-open token spans covering identical byte strings.
 
-        The inputs contain assistant content only. Terminal special tokens are
-        paired separately by the caller. A non-round-tripping completion has no
-        valid chunks; it must never acquire targets for different text.
+        The inputs contain assistant content only. Terminal special tokens are paired separately by the caller. A
+        non-round-tripping completion has no valid chunks; it must never acquire targets for different text.
         """
+        if student_ids and max(student_ids) >= len(self.student_surfaces):
+            raise ValueError(
+                "CSD received a generated ID outside the student tokenizer vocabulary. "
+                "Check that the served student and tokenizer match, including added tokens and padded lm_head columns."
+            )
         s_parts = [self.student_surfaces[i] for i in student_ids]
         t_parts = [self.teacher_surfaces[i] for i in teacher_ids]
         if b"".join(s_parts) != b"".join(t_parts):
@@ -364,8 +370,8 @@ class CSDTargetBuilder:
                 Relative loss weight of a chunk spanning multiple tokens on either side.
 
         Returns:
-            `tuple` containing student candidate IDs, teacher event log-probabilities,
-            student prefix lengths, and chunk weights, all on the student token axis.
+            `tuple` containing student candidate IDs, teacher event log-probabilities, student prefix lengths, and
+            chunk weights, all on the student token axis.
         """
         candidates = np.full((len(student_ids), self.top_k + 1), -1, dtype=np.int64)
         logprobs = np.full(candidates.shape, -np.inf, dtype=np.float32)

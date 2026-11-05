@@ -91,12 +91,12 @@ class AsyncDistillationConfig(_BaseConfig):
             Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
             --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so a
             teacher needs neither `VLLM_SERVER_DEV_MODE` nor a weight-transfer backend, only those two flags, which
-            make its scoring exact (see `teacher_temperature` and `teacher_top_k`). With `distillation_method="token"`, every teacher must share the
-            student's tokenizer: completions are sent as raw token ids, and the ids a teacher reports back are used
-            directly to index the student's own vocabulary in `compute_loss`. A teacher with a different vocabulary
-            trains against the wrong tokens, silently if its vocabulary is no larger than the student's. Use
-            `distillation_method="csd"` and `teacher_tokenizers` for cross-tokenizer teachers. Scoring is a
-            teacher-forced request against the student's own completion tokens (`max_tokens=1`,
+            make its scoring exact (see `teacher_temperature` and `teacher_top_k`). With `distillation_method="token"`,
+            every teacher must share the student's tokenizer: completions are sent as raw token ids, and the ids a
+            teacher reports back are used directly to index the student's own vocabulary in `compute_loss`. A teacher
+            with a different vocabulary trains against the wrong tokens, silently if its vocabulary is no larger than
+            the student's. Use `distillation_method="csd"` and `teacher_tokenizers` for cross-tokenizer teachers.
+            Scoring is a teacher-forced request against the student's own completion tokens (`max_tokens=1`,
             `prompt_logprobs=teacher_top_k`, `temperature=teacher_temperature`), the same request
             [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous server-teacher
             trainers. Because of that throwaway token, a teacher needs a `--max-model-len` larger than the student's,
@@ -110,9 +110,9 @@ class AsyncDistillationConfig(_BaseConfig):
 
         distillation_method (`str`, *optional*, defaults to `"token"`):
             `"token"` compares shared-tokenizer distributions. `"csd"` uses Common-Support Distillation for teachers
-            with different tokenizers. CSD retains common events and REST at every `beta`, scores observed prefixes
-            for tokenization mismatches, and normalizes by valid chunks across the optimizer step. It optimizes KD
-            on student rollouts without adding CE on the student's own answers.
+            with different tokenizers. CSD retains common events and REST at every `beta`, scores observed prefixes for
+            tokenization mismatches, and normalizes by valid chunks across the optimizer step. It optimizes KD on
+            student rollouts without adding CE on the student's own answers.
         teacher_tokenizers (`dict[str, str]`, *optional*):
             Tokenizer name or local path for every `teacher_server_urls` key. Required for CSD and loaded in the CPU
             worker. Each teacher uses its own chat template and token IDs. CSD currently requires fast BPE tokenizers
