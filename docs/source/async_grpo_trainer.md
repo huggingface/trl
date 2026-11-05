@@ -196,7 +196,7 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 Some argument combinations are intentionally restricted in the current [`experimental.async_grpo.AsyncGRPOTrainer`] implementation:
 
 - Generation always runs on a separate vLLM server, started with `vllm serve`. There is no colocate mode.
-- The dataset must be in [conversational](dataset_formats#conversational) format.
+- Prompts from the dataset must be in [conversational](dataset_formats#conversational) format. With an `environment_factory`, the dataset may have no `prompt` column, and `reset()` provides it.
 - Reward functions must be Python callables. Reward models given as a model id or a [`~transformers.PreTrainedModel`] are not supported, see [Using a custom reward function](#using-a-custom-reward-function).
 - The trainer needs `transformers>=5.2.0`.
 - For distributed training, only FSDP2 is supported (DeepSpeed ZeRO is not). Context and sequence parallelism (`cp_size > 1` or `sp_size > 1` in `parallelism_config`) are not supported.
