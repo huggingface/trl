@@ -58,7 +58,7 @@ from ...trainer.utils import (
     pad,
 )
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
+from .async_rollout_worker import AsyncRolloutLoop, AsyncRolloutWorker, RolloutSample
 from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
@@ -126,11 +126,11 @@ class RolloutWorkerProtocol(Protocol):
     Attributes:
         rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
             Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it, or the bare `int` group id of
-            a group it scored but has nothing to train on (every advantage zero), so the prompt still counts as
-            consumed for epochs and checkpoint resume. The two queue types are structurally identical (`get` /
-            `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default [`AsyncRolloutWorker`]
-            runs its loop in a spawned process and uses `multiprocessing.Queue`, while an in-process worker uses
-            `queue.Queue`.
+            a group with nothing to train on (all its scored rewards equal) or of a prompt `filter_prompt` rejected, so
+            the prompt still counts as consumed for epochs and checkpoint resume. The two queue types are structurally
+            identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default
+            [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while an
+            in-process worker uses `queue.Queue`.
         metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
             Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
             like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
@@ -213,10 +213,10 @@ class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
     An epoch is counted in distinct prompt-groups consumed: trained (accumulated in the collator, which runs on the
-    main process just before the model forward) or dropped for zero advantage. This is fork-independent: all
-    generations of a prompt and all forked rows of a conversation share one `group_id`, so a conversation forking into
-    many rows still counts once. Only the main process collates (`dispatch_batches=True`), so the stop decision is
-    reduced across ranks to keep data-parallel workers in lockstep.
+    main process just before the model forward), dropped because all its scored rewards were equal, or rejected by
+    `filter_prompt`. This is fork-independent: all generations of a prompt and all forked rows of a conversation share
+    one `group_id`, so a conversation forking into many rows still counts once. Only the main process collates
+    (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel workers in lockstep.
     """
 
     def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
@@ -1013,9 +1013,19 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
             `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
-            one that runs reward models on their own GPUs.
+            one that runs reward models on their own GPUs. A custom worker ignores the trainer's `loop_cls`.
+
+    To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
+    [`experimental.async_grpo.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
+    rollout process:
+
+    ```python
+    >>> class CurriculumTrainer(AsyncGRPOTrainer):
+    ...     loop_cls = CurriculumRolloutLoop
+    ```
     """
 
+    loop_cls: type[AsyncRolloutLoop] = AsyncRolloutLoop
     loss_is_scaled_for_ga = True
 
     _tag_names = ["trl", "async-grpo"]
@@ -1371,6 +1381,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     self.args,
+                    loop_cls=self.loop_cls,
                     model_name=get_config_model_id(model.config),
                     lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,
