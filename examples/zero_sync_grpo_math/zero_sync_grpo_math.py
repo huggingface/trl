@@ -41,14 +41,17 @@ completions of 1-4k tokens, 4x B200). Each knob below is what moved the needle:
 - `per_device_train_batch_size=16` with `gradient_accumulation_steps=2`: fewer, larger forwards
   per step; advantages are computed at scoring time, so accumulation does not change the loss. A
   single forward of all 32 samples runs out of memory next to the KV cache.
-- `learning_rate=1e-5`: the reward goes from 0.41 to 0.92 in the first 50 steps and holds there,
-  with a clip ratio of 0.014; at 1e-6 it stays between 0.2 and 0.3 over 200 steps.
+- `learning_rate=3e-6`: the reward goes from 0.21 to 0.84 by step 60 and stays between 0.87 and
+  0.99 through step 200, with a clip ratio of 0.01-0.04; at 1e-6 it is at 0.48 by step 70, and
+  1e-5 clips 10% of the tokens.
+- `max_memory_percent=0.3`: the optimizer holds fp32 copies of the weights and their fp32 moments,
+  16 bytes per parameter, so the KV cache gets what is left; at 0.4 the backward ran out of memory
+  at step 77.
 - `tp_size` should be the smallest that fits the model: tp=2, 4 and 8 give 2.6, 2.9 and 3.0
   samples/s, so a wider split buys almost nothing per GPU. The world size must equal `tp_size`
   until transformers' device mesh has a replicate dimension again.
 
-Measured on 4x B200 with Qwen3-14B: 6.6 s per optimizer step of 32 samples (~45k trained tokens),
-200 steps in 22 minutes.
+Measured on 4x B200 with Qwen3-14B: 7.6 s per optimizer step of 32 samples, 200 steps in 25 minutes.
 
 torchrun --nproc-per-node 4 examples/zero_sync_grpo_math/zero_sync_grpo_math.py
 """
@@ -99,10 +102,10 @@ def main():
         num_generations=8,
         max_completion_length=4096,
         chat_template_kwargs={"enable_thinking": True},
-        learning_rate=1e-5,
+        learning_rate=3e-6,
         rollouts_in_flight=512,
         # Fraction of free VRAM for the KV cache; the rest is for activations and gradients.
-        continuous_batching_config={"max_memory_percent": 0.5},
+        continuous_batching_config={"max_memory_percent": 0.3},
         # The smallest split that fits a 14B
         tp_size=min(4, int(os.environ.get("WORLD_SIZE", "1"))),
         max_steps=200,
