@@ -200,8 +200,10 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        # The optimizer steps fp32 copies of the bf16 parameters, which keep what bf16 cannot represent
+        # The optimizer steps fp32 copies of the bf16 parameters, which keep what bf16 cannot represent, and keeps them
+        # in host memory between steps
         for group in trainer.optimizer.param_groups:
             for master in group["params"]:
                 assert master.dtype == torch.float32
+                assert master.is_pinned()
                 assert not torch.equal(master, master.bfloat16().float())

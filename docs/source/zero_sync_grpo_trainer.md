@@ -30,7 +30,7 @@ The dataset must be [conversational](dataset_formats#conversational): every prom
 
 ## Memory split
 
-The generation engine reserves its KV cache when the trainer starts, and whatever it takes is unavailable to training. Size it from what generation actually needs, roughly `requests in flight x expected completion length x KV bytes per token`, and leave the rest to gradients, optimizer states and activations:
+The generation engine reserves its KV cache when the trainer starts, and whatever it takes is unavailable to training. Size it from what generation actually needs, roughly `requests in flight x expected completion length x KV bytes per token`, and leave the rest to gradients and activations (the optimizer state waits in host memory):
 
 ```python
 ZeroSyncGRPOConfig(

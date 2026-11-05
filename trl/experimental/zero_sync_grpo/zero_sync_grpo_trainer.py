@@ -1046,13 +1046,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         }
 
     def create_optimizer(self, model=None):
-        """Step fp32 copies of 16-bit parameters, and give each replica the optimizer state of only its share.
+        """Step fp32 copies of the parameters kept in host memory, and give each replica the state of only its share.
 
         Generation reads the model's own parameters, so they stay in the checkpoint dtype, and bf16 cannot absorb small
         updates: a weight of 1.0 moved by 1e-6 rounds back to 1.0. Stepping them directly, one AdamW step at
         `learning_rate=1e-6` lands 5% of its size on Qwen3.5-2B. The optimizer therefore updates fp32 copies and writes
-        them back to the parameters after each step. The copies and their fp32 moments add 8 bytes per parameter, which
-        brings the total to the 16 of fp32 training.
+        them back to the parameters after each step. The copies and the optimizer state live in pinned host memory and
+        come onto the GPU one parameter at a time during the step, so the GPU holds only the parameters and their
+        gradients, 4 bytes per parameter in bf16, next to generation's KV cache and training's activations.
 
         Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The replicas
         split the parameters between them, each updates its own share, and passes the result back to the others. The
@@ -1087,24 +1088,45 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
             self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
 
+        def move(tensor, device):
+            # In place, so the optimizer's references to the tensor and its state stay valid
+            local = tensor.to_local() if isinstance(tensor, DTensor) else tensor
+            local.data = local.data.to(device, non_blocking=True)
+
         masters = []  # (parameter, its fp32 copy)
-        for group in self.optimizer.param_groups:
-            for i, param in enumerate(group["params"]):
-                if param.dtype in (torch.float16, torch.bfloat16):
-                    group["params"][i] = param.detach().float()
+        with torch.no_grad():
+            for group in self.optimizer.param_groups:
+                for i, param in enumerate(group["params"]):
+                    group["params"][i] = param.detach().to(torch.float32, copy=True)
+                    move(group["params"][i], "cpu")
                     masters.append((param, group["params"][i]))
 
         step = self.optimizer.step
 
         def step_and_share(*args, **kwargs):
+            out = None
             for param, master in masters:
-                master.grad = None if param.grad is None else param.grad.float()
+                if param.grad is None:
+                    continue
+                # The step updates only the copies that hold a gradient, here this one. Scalars such as Adam's step
+                # count stay where the optimizer put them.
+                with torch.no_grad():
+                    move(master, param.device)
+                    for value in self.optimizer.state[master].values():
+                        if value.dim() > 0:
+                            move(value, param.device)
+                master.grad = param.grad.float()
                 param.grad = None
-            out = step(*args, **kwargs)
-            with torch.no_grad():
-                for param, master in masters:
+                out = step(*args, **kwargs)
+                with torch.no_grad():
                     param.copy_(master)
                     master.grad = None
+                    move(master, "cpu")
+                    for value in self.optimizer.state[master].values():
+                        if value.dim() > 0:
+                            move(value, "cpu")
+            # The copies to host memory must land before anything reads them there, such as a checkpoint
+            torch.accelerator.synchronize()
             if self._replica_group is not None:
                 self._share_updated_parameters()
                 # The optimizer only knows this replica's share, so its zero_grad would leave the rest holding
