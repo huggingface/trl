@@ -49,6 +49,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     BitsAndBytesConfig,
+    FineGrainedFP8Config,
+    Mxfp4Config,
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
@@ -1318,12 +1320,25 @@ def create_model_from_path(
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`. A checkpoint quantized in MXFP4 or FP8
+            is loaded dequantized, unless `'quantization_config'` is set.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
+    # The config decides how the weights load, so it comes from the revision they load from
+    config = AutoConfig.from_pretrained(
+        model_id, revision=kwargs.get("revision"), trust_remote_code=kwargs.get("trust_remote_code", False)
+    )
+    # A quantized checkpoint is a serving artifact: neither MXFP4 nor FP8 weights train in place, so the checkpoint is
+    # loaded dequantized, unless the caller chose how to load it with `quantization_config`
+    dequantizers = {"mxfp4": Mxfp4Config, "fp8": FineGrainedFP8Config}
+    quant_method = config.to_dict().get("quantization_config", {}).get("quant_method")
+    if quant_method in dequantizers and "quantization_config" not in kwargs:
+        if quant_method == "fp8" and Version(transformers.__version__) < Version("5.0.0"):
+            raise ValueError(f"`{model_id}` is quantized in FP8, and dequantizing it needs transformers>=5.0.0.")
+        kwargs["quantization_config"] = dequantizers[quant_method](dequantize=True)
     dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
@@ -1346,7 +1361,6 @@ def create_model_from_path(
         kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
         architecture = getattr(transformers, config.architectures[0], None)
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
@@ -1729,22 +1743,22 @@ def add_fused_lm_head(
             # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
-            if Version(transformers.__version__) < Version("5.0.0"):
-                num_experts = self.num_experts
-                num_experts_per_tok = self.num_experts_per_tok
-            else:
-                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
-                    transformers.__version__
-                ) < Version("5.6.0"):
-                    num_experts = self.num_experts
+            router_logits = backbone_outputs.router_logits
+            if router_logits:
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    num_experts_per_tok = self.num_experts_per_tok
                 else:
-                    num_experts = text_config.num_experts
-                num_experts_per_tok = text_config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
-            aux_loss = load_balancing_loss_func(
-                backbone_outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
-            )
+                    num_experts_per_tok = text_config.num_experts_per_tok
+                # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
+                num_experts = router_logits[0].shape[-1]
+                # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
+                # counts.
+                aux_loss = load_balancing_loss_func(
+                    router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                )
+            else:
+                # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
+                aux_loss = loss.new_zeros(())
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return FusedCausalLMOutput(

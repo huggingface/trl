@@ -513,15 +513,16 @@ def _rollout_loop(**kwargs):
     return _AsyncRolloutLoop(**kwargs)
 
 
-def _scoring_loop(tokenizer, teacher_server_urls):
+def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
     loop = _rollout_loop(
         processing_class=tokenizer,
         teacher_server_urls=teacher_server_urls,
         teacher_top_k=TEACHER_TOP_K,
-        request_timeout=30,
+        vllm_server_timeout=30,
     )
     # Normally resolved from each teacher server's /v1/models in _run_loops, which these tests never reach
     loop.teacher_model_names = {teacher_id: f"{teacher_id}-model" for teacher_id in teacher_server_urls}
+    loop.teacher_max_model_lens = teacher_max_model_lens or dict.fromkeys(teacher_server_urls, 32768)
     return loop
 
 
@@ -540,10 +541,10 @@ class TestWorkerMetrics:
         loop._counters["rollout/vllm_retry_total"] += 2
         loop._rates["rollout/score_s"][0] += 3.0
         loop._rates["rollout/score_s"][1] += 2
-        loop._push_metrics({"rollout/inflight": 4.0})
+        loop._push_metrics({"rollout/concurrency": 4.0})
 
         assert loop._metrics_queue.get(timeout=5) == {
-            "rollout/inflight": 4.0,
+            "rollout/concurrency": 4.0,
             "rollout/vllm_retry_total": 2.0,
             "rollout/score_s": (3.0, 2.0),
         }
@@ -554,7 +555,7 @@ class TestWorkerMetrics:
     def test_push_never_blocks_when_the_trainer_stops_draining(self):
         loop = self._loop(maxsize=1)
         for _ in range(50):
-            loop._push_metrics({"rollout/inflight": 1.0})  # drops rather than stalling generation
+            loop._push_metrics({"rollout/concurrency": 1.0})  # drops rather than stalling generation
 
     @pytest.mark.parametrize(
         ("teacher_server_urls", "ends_on_eos", "clipped", "per_teacher"),
@@ -586,13 +587,13 @@ class TestMultiTeacherRouting:
     Multiple teachers enable MOPD: each row's `teacher_id` column selects among them; a missing or unmapped
     `teacher_id` is a configuration error, not a silent fallback. Each request must carry the URL *and* the served
     model id of the teacher it routes to, since `/v1/completions` names the model it addresses and every teacher serves
-    its own.
+    its own, and the sequence must fit that teacher's `max_model_len`.
     """
 
-    def _run(self, teacher_server_urls, *teacher_ids):
+    def _run(self, teacher_server_urls, *teacher_ids, teacher_max_model_lens=None):
         """Score one row per `teacher_ids` entry (`None` = no `teacher_id` column) and return the requests sent."""
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-        loop = _scoring_loop(tokenizer, teacher_server_urls)
+        loop = _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens)
         requests = []
 
         async def fake_generate_one_turn(prompt_ids):
@@ -640,6 +641,21 @@ class TestMultiTeacherRouting:
     def test_multi_teacher_raises_on_unroutable_row(self, teacher_id, match):
         with pytest.raises(ValueError, match=match):
             self._run(TWO_TEACHERS, teacher_id)
+
+    def test_raises_when_the_teacher_has_no_room_to_score_the_sequence(self):
+        (sample,), _ = self._run(ONE_TEACHER, None)
+        sequence_length = len(sample.input_ids)
+        # Scoring asks for one throwaway token past the sequence, so a teacher needs one more position than its length.
+        # Each row is checked against its own teacher's limit: math has room for this sequence, code does not.
+        max_model_lens = {"math": sequence_length + 1, "code": sequence_length}
+        self._run(TWO_TEACHERS, "math", teacher_max_model_lens=max_model_lens)
+        with pytest.raises(ValueError, match="'code'.*--max-model-len"):
+            self._run(TWO_TEACHERS, "code", teacher_max_model_lens=max_model_lens)
+
+    def test_skips_the_length_check_when_the_teacher_does_not_report_max_model_len(self):
+        # Only vLLM adds `max_model_len` to `/v1/models`
+        _, requests = self._run(ONE_TEACHER, None, teacher_max_model_lens={"default": None})
+        assert [url for url, _ in requests] == ["http://default:8001"]
 
 
 class TestBetaRange:
@@ -1412,7 +1428,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
     @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize("injected", [False, True])
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_the_rollout_worker_is_told_the_adapter_name(self, fake_vllm, lora_config, expected, injected):
+    def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected, injected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, and distilled against the teacher as if it were the student. The real worker is built here
         # (it spawns nothing until `start()`) to read the `lora_name` the trainer hands it. A worker the caller injects
@@ -1502,7 +1518,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         assert len(sent) == len(set(sent))
 
     @require_vllm  # the merged path builds the real `WeightTransferClient`, whose constructor requires vLLM
-    def test_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
+    def test_vllm_manifest_and_streaming_iter_agree_element_for_element(self, fake_vllm):
         # The server sizes its receive buffers from the manifest, so a name present in one and not the other
         # desyncs the transfer. The real `WeightTransferClient` is built here; it only touches the network on
         # `init_weight_transfer`, which is not called.
@@ -1548,13 +1564,13 @@ def _tensors_handed_to_producer(info, stream):
     class _Server:
         server_url = "http://127.0.0.1:9"
 
-        def start_weight_update(self, timeout):
+        def start_weight_update(self):
             return None
 
-        def update_weights(self, update_info, timeout):
+        def update_weights(self, update_info):
             return None
 
-        def finish_weight_update(self, timeout):
+        def finish_weight_update(self):
             return None
 
     client = WeightTransferClient(_Server(), info)
@@ -1579,7 +1595,7 @@ def _tensors_handed_to_producer(info, stream):
 
 
 @require_vllm  # WeightTransferClient's constructor requires vLLM
-class TestManifestWeightStream:
+class TestVLLMManifestWeightStream:
     def test_send_weights_streams_in_the_manifest_dtype(self):
         model = torch.nn.Sequential(
             torch.nn.Linear(3, 1, bias=False, dtype=torch.bfloat16),
