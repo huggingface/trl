@@ -52,6 +52,10 @@ if _HAS_STATEFUL_TRAINER_ENGINE:
 elif is_vllm_available():
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
+# vLLM 0.32.0 (vllm-project/vllm#58181) gave `/inference/v1/generate` its own logprob wire shape with integer token
+# IDs; before that it used the OpenAI shape with "token_id:<id>" placeholder strings.
+_HAS_GENERATE_LOGPROBS = is_vllm_available(min_version="0.32.0")
+
 # vLLM 0.26.0 (vllm-project/vllm#46893) made `/reset_prefix_cache` return `{"success": bool}`. Before that, it answered
 # with an empty body.
 _HAS_RESET_PREFIX_CACHE_SUCCESS = is_vllm_available(min_version="0.26.0")
@@ -102,7 +106,8 @@ def parse_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, li
     Args:
         choices_logprobs (`list[dict]`):
             Logprobs of each choice, either `{"tokens": ..., "top_logprobs": ...}` (completions) or `{"content":
-            [{"token": ..., "logprob": ..., "top_logprobs": ...}]}` (chat completions and token IDs).
+            [{"token": ..., "logprob": ..., "top_logprobs": ...}]}` (chat completions, and `/inference/v1/generate`
+            below vLLM 0.32.0).
 
     Returns:
         Tuple of (logprobs, logprob_token_ids), or `(None, None)` when the server returned no logprob.
@@ -130,6 +135,42 @@ def parse_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, li
             top_logprobs = {token: logprob, **(top_logprobs or {})}
             items = sorted(top_logprobs.items(), key=lambda item: -item[1])
             seq_token_ids.append([int(token.removeprefix("token_id:")) for token, _ in items])
+            seq_logprobs.append([None if math.isnan(logprob) else logprob for _, logprob in items])
+        all_logprobs.append(seq_logprobs)
+        all_token_ids.append(seq_token_ids)
+    return all_logprobs, all_token_ids
+
+
+def parse_generate_logprobs(choices_logprobs: list[dict | None]) -> tuple[list | None, list | None]:
+    """
+    Parse the logprobs of a batch of `/inference/v1/generate` choices into two lists of shape (num_sequences, seq_len,
+    num_logprobs).
+
+    From vLLM 0.32.0 (vllm-project/vllm#58181) the endpoint has its own wire shape: `{"content": [{"token_id": ...,
+    "logprob": ..., "rank": ..., "top_logprobs": [...]}]}`, with integer token IDs. `top_logprobs` holds the sampled
+    token first, then the remaining candidates in rank order.
+
+    Args:
+        choices_logprobs (`list[dict]`):
+            Logprobs of each choice.
+
+    Returns:
+        Tuple of (logprobs, logprob_token_ids), or `(None, None)` when the server returned no logprob.
+    """
+    if choices_logprobs[0] is None:
+        return None, None
+
+    all_logprobs = []
+    all_token_ids = []
+    for logprobs in choices_logprobs:
+        seq_logprobs = []
+        seq_token_ids = []
+        for entry in logprobs["content"]:
+            # The sampled token is always included, even when it falls outside the top-N.
+            top_logprobs = {top["token_id"]: top["logprob"] for top in entry["top_logprobs"]}
+            top_logprobs = {entry["token_id"]: entry["logprob"], **top_logprobs}
+            items = sorted(top_logprobs.items(), key=lambda item: -item[1])
+            seq_token_ids.append([token_id for token_id, _ in items])
             seq_logprobs.append([None if math.isnan(logprob) else logprob for _, logprob in items])
         all_logprobs.append(seq_logprobs)
         all_token_ids.append(seq_token_ids)
@@ -493,7 +534,10 @@ class VLLMClient:
             responses = list(executor.map(send, range(len(prompts))))
 
         choices = [choice for response in responses for choice in response["choices"]]
-        logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
+        if _HAS_GENERATE_LOGPROBS:
+            logprobs, logprob_token_ids = parse_generate_logprobs([choice["logprobs"] for choice in choices])
+        else:
+            logprobs, logprob_token_ids = parse_logprobs([choice["logprobs"] for choice in choices])
         return {
             "prompt_ids": list(prompts),  # the server generates from what it was given, so it echoes back unchanged
             "completion_ids": [choice["token_ids"] for choice in choices],

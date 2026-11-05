@@ -46,7 +46,7 @@ from transformers import (
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
+from transformers.utils import is_peft_available
 
 from ...data_utils import (
     apply_chat_template,
@@ -74,15 +74,6 @@ if is_bitsandbytes_available():
 
 if is_peft_available():
     from peft import PeftConfig
-
-
-if is_sagemaker_mp_enabled():
-    from smdistributed.modelparallel import __version__ as SMP_VERSION
-
-    IS_SAGEMAKER_MP_POST_1_10 = Version(SMP_VERSION) >= Version("1.10")
-
-else:
-    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 if is_vllm_available():
@@ -561,6 +552,9 @@ class OnlineDPOTrainer(_BaseTrainer):
             # Add min_p if supported
             if self.min_p is not None:
                 generation_kwargs["min_p"] = self.min_p
+            if isinstance(processing_class, ProcessorMixin):
+                # A sampled image token would mismatch the image features
+                generation_kwargs["suppress_tokens"] = [model.config.image_token_id]
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             # Remove None values
@@ -779,7 +773,8 @@ class OnlineDPOTrainer(_BaseTrainer):
             if is_peft_model(module) and module.prefix in name:
                 continue
             # When module to save, remove its prefix and discard the original module
-            if "original_module" in name:
+            # and the other adapters' copies (e.g. a "ref" adapter)
+            if "original_module" in name or ("modules_to_save." in name and "modules_to_save.default." not in name):
                 continue
             name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
@@ -848,7 +843,10 @@ class OnlineDPOTrainer(_BaseTrainer):
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
+                        # and the other adapters' copies (e.g. a "ref" adapter)
+                        if "original_module" in name or (
+                            "modules_to_save." in name and "modules_to_save.default." not in name
+                        ):
                             continue
                         name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
@@ -913,33 +911,6 @@ class OnlineDPOTrainer(_BaseTrainer):
         for prefix in prefixes:
             name = name.replace(prefix, "")
         return name
-
-    def process_vision_row(
-        self, features: dict[str, list | torch.Tensor], processing_class=None
-    ) -> dict[str, list[int]]:
-        """
-        Process a vision row for VLM models (adapted from DPO trainer)
-        """
-        processor = processing_class or self.processing_class
-        processed_features = processor(images=[features["image"]], text=features["prompt"], add_special_tokens=False)
-
-        prompt_input_ids = processed_features["input_ids"][0]
-
-        # Create the output dict with required fields
-        output = {
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": processed_features["attention_mask"][0],
-        }
-
-        # Add vision-specific fields
-        if "pixel_values" in processed_features:
-            output["pixel_values"] = processed_features["pixel_values"][0]
-        if "pixel_attention_mask" in processed_features:
-            output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
-        if "image_sizes" in processed_features:
-            output["image_sizes"] = processed_features["image_sizes"][0]
-
-        return output
 
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
@@ -1023,6 +994,8 @@ class OnlineDPOTrainer(_BaseTrainer):
                 vision_generation_kwargs["image_sizes"] = torch.cat([prompt_inputs["image_sizes"]] * 2)
             if "image_grid_thw" in prompt_inputs:
                 vision_generation_kwargs["image_grid_thw"] = torch.cat([prompt_inputs["image_grid_thw"]] * 2)
+            if "mm_token_type_ids" in prompt_inputs:
+                vision_generation_kwargs["mm_token_type_ids"] = prompt_inputs["mm_token_type_ids"].repeat(2, 1)
 
         with (
             profiling_context(self, "transformers.generate"),
@@ -1120,6 +1093,12 @@ class OnlineDPOTrainer(_BaseTrainer):
                 model_kwargs["image_sizes"] = vision_inputs["image_sizes"]
             if "image_grid_thw" in vision_inputs:
                 model_kwargs["image_grid_thw"] = vision_inputs["image_grid_thw"]
+            if "mm_token_type_ids" in vision_inputs:
+                # Completion tokens are text tokens (see #7858)
+                mm_token_type_ids = vision_inputs["mm_token_type_ids"]
+                model_kwargs["mm_token_type_ids"] = torch.cat(
+                    [mm_token_type_ids, mm_token_type_ids.new_zeros(completion_ids.shape)], dim=1
+                )
 
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, **model_kwargs)

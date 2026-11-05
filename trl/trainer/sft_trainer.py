@@ -31,6 +31,7 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
 from packaging.version import Version
 from transformers import (
     AutoProcessor,
+    AutoTokenizer,
     BitsAndBytesConfig,
     DataCollator,
     PreTrainedModel,
@@ -70,6 +71,7 @@ from .utils import (
     flush_left,
     get_config_model_id,
     global_then_local_main_first,
+    model_accepts_images,
     pad,
 )
 
@@ -711,7 +713,8 @@ class SFTTrainer(_BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
                 get_config_model_id(model.config), revision=model_revision, trust_remote_code=args.trust_remote_code
             )
 
@@ -867,6 +870,27 @@ class SFTTrainer(_BaseTrainer):
                     "peft, or load the model with `device_map=None`. See "
                     "https://github.com/huggingface/peft/issues/2821."
                 )
+            # With transformers v5, peft<0.19 doesn't apply `target_modules` to the fused MoE routed experts (#7765)
+            if (
+                isinstance(peft_config, LoraConfig)
+                and Version(transformers.__version__) >= Version("5.0.0")
+                and Version(peft.__version__) < Version("0.19.0")
+                and not peft_config.target_parameters
+                and any(param.ndim == 3 for name, param in model.named_parameters() if ".experts." in name)
+                and (
+                    peft_config.target_modules == "all-linear"
+                    or any(
+                        name.rsplit(".", 1)[-1] in {"gate_proj", "up_proj", "down_proj", "w1", "w2", "w3"}
+                        for name in peft_config.target_modules or []
+                    )
+                )
+            ):
+                raise ValueError(
+                    "With transformers v5, LoRA `target_modules` only reach the routed experts of MoE models from "
+                    "`peft>=0.19.0`. Upgrade peft, or also target the expert parameters with `target_parameters` "
+                    "(e.g. `target_parameters=['mlp.experts.gate_up_proj', 'mlp.experts.down_proj']`). See "
+                    "https://github.com/huggingface/trl/issues/7765."
+                )
             # With transformers v5, peft 0.19 to 0.21.2 skip the MoE dense and shared layers (#7767)
             if (
                 isinstance(peft_config, LoraConfig)
@@ -1020,12 +1044,6 @@ class SFTTrainer(_BaseTrainer):
                 )
 
         # Dataset
-        if self.padding_free and not args.packing and args.max_length is not None and not self._is_vision_dataset:
-            raise ValueError(
-                "When `padding_free=True` without packing, `max_length` is not enforced. Either enable packing "
-                "(e.g., `packing=True, packing_strategy='bfd'`), provide already truncated inputs, or set "
-                "`max_length=None`."
-            )
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
         self._skip_prepare_dataset = (

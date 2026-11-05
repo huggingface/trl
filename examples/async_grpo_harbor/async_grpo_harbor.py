@@ -14,10 +14,11 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[kernels]",
 #     "trackio",
 #     "datasets",
-#     "openenv @ git+https://github.com/huggingface/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
+#     "peft",
+#     "openenv @ git+https://github.com/openenv/OpenEnv.git@86a180ede21e044f7929b9a7783ad83aa67d83a3",
 # ]
 # ///
 
@@ -69,6 +70,30 @@ CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_harbor/async_grpo_harbor.py \
     --split <hf-dataset> \
     --max-steps 20
 ```
+
+To train a LoRA adapter instead, start the server with `--enable-lora` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING=1`, so each
+weight sync publishes only the adapter. `--max-lora-rank` must be at least `--lora-r`, and `--max-loras` must hold the
+`--max-staleness + 1` adapter versions requests may still name, plus the one being loaded (6 for the default of 4):
+
+```sh
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 VLLM_ALLOW_RUNTIME_LORA_UPDATING=1 vllm serve Qwen/Qwen3.5-2B \
+    --host 0.0.0.0 --port 8000 \
+    --enable-auto-tool-choice --tool-call-parser qwen3_xml \
+    --reasoning-parser qwen3 \
+    --default-chat-template-kwargs '{"enable_thinking": false}' \
+    --logprobs-mode processed_logprobs \
+    --return-tokens-as-token-ids \
+    --weight-transfer-config '{"backend":"nccl"}' \
+    --enable-lora --max-lora-rank 32 --max-loras 6
+
+CUDA_VISIBLE_DEVICES=1 python examples/async_grpo_harbor/async_grpo_harbor.py \
+    --server http://localhost:8200 \
+    --vllm-url http://localhost:8000 \
+    --model Qwen/Qwen3.5-2B \
+    --split <hf-dataset> \
+    --lora-r 32 --learning-rate 1e-5 \
+    --max-steps 20
+```
 """
 
 from __future__ import annotations
@@ -82,6 +107,7 @@ from functools import partial
 
 from datasets import Dataset
 from harbor_env.harness import HarborSessionFactory
+from peft import LoraConfig
 from transformers import AutoTokenizer
 
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
@@ -153,9 +179,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-tasks", type=int, default=32)
     p.add_argument("--task-indices", default="", help="comma-separated indices, or @path to a file of them")
     p.add_argument("--num-generations", type=int, default=8)
-    p.add_argument("--max-inflight", type=int, default=8)
+    p.add_argument("--max-concurrent-rollouts", type=int, default=8)
     p.add_argument("--max-completion-length", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=20)
+    p.add_argument("--save-steps", type=int, default=50)
+    p.add_argument("--save-total-limit", type=int, default=3, help="checkpoints kept; 0 keeps every one")
     p.add_argument("--learning-rate", type=float, default=1e-6)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--max-staleness", type=int, default=4)
@@ -164,6 +192,11 @@ def parse_args() -> argparse.Namespace:
     # Bound model calls; rewritten histories can still produce multiple training rows.
     p.add_argument("--agent-step-limit", type=int, default=12)
     p.add_argument("--per-device-train-batch-size", type=int, default=1)
+    p.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    # 0 trains every weight. With LoRA, start vLLM with `--enable-lora` so syncs publish only the adapter.
+    p.add_argument("--lora-r", type=int, default=0)
+    p.add_argument("--lora-alpha", type=int, default=None, help="defaults to 2 * --lora-r")
+    p.add_argument("--lora-target-modules", default="all-linear", help="`all-linear`, or comma-separated names")
     p.add_argument("--output-dir", default=None)
     p.add_argument("--project", default="async-grpo-harbor")
     p.add_argument("--trackio-space-id", default=None, help="host the trackio dashboard on a HF Space")
@@ -202,18 +235,20 @@ def main() -> None:
 
     print(f"server    {args.server}")
     print(f"vllm      {args.vllm_url}   model {args.model}")
-    print(f"rollouts  {args.harness} on {args.sandbox}, {args.num_generations}x{args.max_inflight}")
+    print(f"rollouts  {args.harness} on {args.sandbox}, {args.num_generations}x{args.max_concurrent_rollouts}")
     print(f"tasks     {len(dataset)} from {args.split}")
     print(f"output    {output_dir}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    eos_token_ids = [tokenizer.eos_token_id]
 
     config = AsyncGRPOConfig(
         output_dir=output_dir,
         save_strategy="steps",
-        save_steps=50,
-        save_total_limit=3,
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit or None,
         per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         max_steps=args.max_steps,
@@ -221,6 +256,8 @@ def main() -> None:
         temperature=args.temperature,
         top_p=1.0,
         top_k=-1,
+        chat_template_kwargs={"enable_thinking": False},
+        max_concurrent_rollouts=args.max_concurrent_rollouts,
         max_staleness=args.max_staleness,
         vllm_server_base_url=args.vllm_url,
         optim="adamw_torch",
@@ -234,11 +271,13 @@ def main() -> None:
         trackio_space_id=args.trackio_space_id,
         run_name=run_name,
         log_completions=True,
+        num_completions_to_print=2,
         logging_steps=1,
         seed=0,
     )
 
     worker = HarnessRolloutWorker(
+        config,
         harness_session_factory=factory,
         harness_adapter=None,
         rollout_reward_fn=harbor_reward,
@@ -246,17 +285,18 @@ def main() -> None:
         dataset=dataset,
         reward_funcs=[],  # the reward is the task's own verifier, via `rollout_reward_fn`
         processing_class=tokenizer,
-        chat_template_kwargs={"enable_thinking": False},
-        num_generations=args.num_generations,
-        max_inflight_tasks=args.max_inflight,
-        vllm_server_url=args.vllm_url,
-        max_tokens=args.max_completion_length,
-        temperature=args.temperature,
-        top_p=1.0,
-        top_k=-1,
-        log_completions=True,
-        num_completions_to_print=2,
+        eos_token_ids=eos_token_ids,
     )
+
+    peft_config = None
+    if args.lora_r:
+        # PEFT reads `all-linear` only as a string, and anything else as module names
+        target_modules = args.lora_target_modules
+        if target_modules != "all-linear":
+            target_modules = target_modules.split(",")
+        peft_config = LoraConfig(
+            r=args.lora_r, lora_alpha=args.lora_alpha or 2 * args.lora_r, target_modules=target_modules
+        )
 
     trainer = AsyncGRPOTrainer(
         model=args.model,
@@ -264,6 +304,7 @@ def main() -> None:
         train_dataset=dataset,
         processing_class=tokenizer,
         rollout_worker=worker,
+        peft_config=peft_config,
     )
     trainer.train()
     trainer.save_model()

@@ -44,9 +44,19 @@ class AsyncDistillationConfig(_BaseConfig):
             trainer's own precision. Closing that gap end to end also requires serving the student's vLLM server in the
             same dtype (`vllm serve --dtype`). A `dtype` in `model_init_kwargs` takes precedence. Teacher servers are
             unaffected: they are never updated.
+
+            This only sets the dtype the weights are loaded in. Under FSDP with mixed precision (`bf16=True` is the
+            default), accelerate upcasts every trainable parameter to fp32 before sharding, so the master weights and
+            the optimizer state are fp32 whatever `dtype` says, while the forward and backward run in bf16 or fp16.
+            Checkpoints are then written in that mixed-precision dtype, not in fp32. Without FSDP nothing upcasts:
+            `dtype="bfloat16"` with `bf16=True` keeps bf16 weights and optimizer states, which is pure bf16 training.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
             Whether to allow loading models and tokenizers that ship custom Python code from the Hub. Forwarded to
             [`~transformers.AutoModelForCausalLM.from_pretrained`] and [`~transformers.AutoTokenizer.from_pretrained`].
+        router_aux_loss_coef (`float`, *optional*):
+            Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to the training
+            loss with this weight. When not set, the value declared by the model config is used. Set to `0.0` to
+            disable it. Fails when used with a non-MoE model.
 
         > Parameters that control generation
 
@@ -72,8 +82,10 @@ class AsyncDistillationConfig(_BaseConfig):
 
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
             Base URL of the student's vLLM server, used both for generation and for streaming weight updates.
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Total timeout duration in seconds to wait for the student's vLLM server to be ready.
+        vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
+            Timeout in seconds for calls to the vLLM servers: waiting for the student's server to be ready at startup,
+            each generation or scoring request, and each weight-sync call. Waiting for the server and weight-sync calls
+            raise when it runs out; a generation or scoring request that times out is retried.
         teacher_server_urls (`dict[str, str]`, *optional*, defaults to `{"default": "http://localhost:8001"}`):
             Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
             --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so a
@@ -85,16 +97,12 @@ class AsyncDistillationConfig(_BaseConfig):
             teacher-forced request against the student's own completion tokens (`max_tokens=1`,
             `prompt_logprobs=teacher_top_k`, `temperature=teacher_temperature`), the same request
             [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous server-teacher
-            trainers. A single entry scores every sample (plain single-teacher on-policy distillation, the default).
-            Multiple entries enable MOPD (multi-teacher on-policy distillation, see
-            [MOPD](https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects which
-            entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
+            trainers. Because of that throwaway token, a teacher needs a `--max-model-len` larger than the student's,
+            or the longest completions cannot be scored. A single entry scores every sample (plain single-teacher
+            on-policy distillation, the default). Multiple entries enable MOPD (multi-teacher on-policy distillation,
+            see [MOPD](https://huggingface.co/papers/2606.30406)): each training row's `teacher_id` column selects
+            which entry scores it, e.g. `{"math": "http://localhost:8002", "code": "http://localhost:8003"}` with a
             `teacher_id` of `"math"` or `"code"` per row.
-        request_timeout (`int`, *optional*, defaults to `600`):
-            Timeout in seconds for individual HTTP requests to any vLLM server.
-        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not complete
-            within this time raises instead of hanging the run.
 
         > Parameters that control the distillation loss
 
@@ -144,18 +152,18 @@ class AsyncDistillationConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_inflight_tasks (`int`, *optional*, defaults to `-1`):
-            Maximum number of concurrent generation+scoring tasks in flight against the two vLLM servers. Defaults to
-            `-1` (auto), which sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps *
-            num_processes`.
+        max_concurrent_rollouts (`int`, *optional*):
+            Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, generating
+            or being scored. If `None`, it is set to `max(max_staleness, 1) * per_device_train_batch_size *
+            gradient_accumulation_steps * num_processes`.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being discarded.
+            being dropped.
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the student's vLLM server.
-        heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
+        rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
             Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung and aborts.
 
         > Parameters that control the logging
@@ -197,8 +205,10 @@ class AsyncDistillationConfig(_BaseConfig):
         default="float32",
         metadata={
             "help": "Dtype to load the student model under. Defaults to 'float32', the precision the "
-            "training-inference mismatch results the async trainers are measured against were obtained at. A `dtype` "
-            "in `model_init_kwargs` takes precedence.",
+            "training-inference mismatch results the async trainers are measured against were obtained at. Under FSDP "
+            "with mixed precision the master weights and optimizer state are fp32 regardless (accelerate upcasts "
+            "before sharding) and checkpoints are written in the bf16/fp16 compute dtype. A `dtype` in "
+            "`model_init_kwargs` takes precedence.",
             "choices": ["auto", "bfloat16", "float16", "float32"],
         },
     )
@@ -214,6 +224,14 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={
             "help": "Whether to allow loading models and tokenizers that ship custom Python code from the Hub. "
             "Forwarded to `AutoModelForCausalLM.from_pretrained` and `AutoTokenizer.from_pretrained`."
+        },
+    )
+    router_aux_loss_coef: float | None = field(
+        default=None,
+        metadata={
+            "help": "Coefficient of the load-balancing auxiliary loss for Mixture-of-Experts (MoE) models, added to "
+            "the training loss with this weight. When not set, the value declared by the model config is used. Set "
+            "to `0.0` to disable it. Fails when used with a non-MoE model."
         },
     )
 
@@ -276,8 +294,12 @@ class AsyncDistillationConfig(_BaseConfig):
         metadata={"help": "Base URL of the student's vLLM server (e.g., 'http://localhost:8000')."},
     )
     vllm_server_timeout: float = field(
-        default=240.0,
-        metadata={"help": "Total timeout duration in seconds to wait for the student's vLLM server to be ready."},
+        default=1800.0,
+        metadata={
+            "help": "Timeout in seconds for calls to the vLLM servers: waiting for the student's server to be ready "
+            "at startup, each generation or scoring request, and each weight-sync call. Waiting for the server and "
+            "weight-sync calls raise when it runs out; a generation or scoring request that times out is retried."
+        },
     )
     teacher_server_urls: dict[str, str] | str | None = field(
         default=None,
@@ -287,17 +309,6 @@ class AsyncDistillationConfig(_BaseConfig):
             "them. Defaults to a single teacher at 'http://localhost:8001'. A single entry scores every sample "
             "(plain single-teacher on-policy distillation). Multiple entries enable MOPD: each row's `teacher_id` "
             "column selects which entry scores it."
-        },
-    )
-    request_timeout: int = field(
-        default=600,
-        metadata={"help": "Timeout in seconds for individual HTTP requests to any vLLM server."},
-    )
-    weight_sync_timeout: int = field(
-        default=1800,
-        metadata={
-            "help": "Timeout in seconds for a weight transfer to the student's vLLM server. A transfer that does not "
-            "complete within this time raises instead of hanging the run."
         },
     )
 
@@ -347,18 +358,19 @@ class AsyncDistillationConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_inflight_tasks: int = field(
-        default=-1,
+    max_concurrent_rollouts: int | None = field(
+        default=None,
         metadata={
-            "help": "Maximum number of concurrent generation+scoring tasks in flight. Defaults to -1 (auto), which "
-            "sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`."
+            "help": "Maximum number of rollouts in flight against the student's and teachers' vLLM servers at once, "
+            "generating or being scored. If `None`, it is set to `max(max_staleness, 1) * "
+            "per_device_train_batch_size * gradient_accumulation_steps * num_processes`."
         },
     )
     max_staleness: int = field(
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model "
-            "version before being discarded."
+            "version before being dropped."
         },
     )
     queue_maxsize: int = field(
@@ -369,7 +381,7 @@ class AsyncDistillationConfig(_BaseConfig):
         default=1,
         metadata={"help": "Number of training steps between weight synchronizations to the student's vLLM server."},
     )
-    heartbeat_stale_after_s: float = field(
+    rollout_worker_timeout: float = field(
         default=300.0,
         metadata={
             "help": "Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung "

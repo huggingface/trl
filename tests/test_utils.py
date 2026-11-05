@@ -45,6 +45,7 @@ from trl.trainer.utils import (
     get_peft_config,
     hash_module,
     is_async_callable,
+    model_accepts_images,
     nanstd,
     pad,
     print_prompt_completions_sample,
@@ -58,7 +59,7 @@ from trl.trainer.utils import (
     use_adapter,
 )
 
-from .testing_utils import TrlTestCase, require_peft, require_rich, require_torch_accelerator
+from .testing_utils import TrlTestCase, require_kernels, require_peft, require_rich, require_torch_accelerator
 
 
 if is_peft_available():
@@ -288,6 +289,45 @@ class TestCreateModelFromPath(TrlTestCase):
             )
         assert mock_from_pretrained.call_args.kwargs["device_map"] == "auto"
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"), reason="FP8 dequantization requires transformers>=5.0.0"
+    )
+    def test_dequantizes_fp8_checkpoint(self):
+        model = create_model_from_path("trl-internal-testing/tiny-Mistral3ForConditionalGeneration")
+        assert model.model.language_model.layers[0].mlp.down_proj.weight.dtype == torch.float32
+
+
+class TestModelAcceptsImages(TrlTestCase):
+    @pytest.mark.parametrize(
+        "model_id, architecture, expected",
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", AutoModelForCausalLM, False),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", AutoModelForImageTextToText, True),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForImageTextToText,
+                True,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                AutoModelForCausalLM,
+                False,
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_model_accepts_images(self, model_id, architecture, expected):
+        model = architecture.from_pretrained(model_id)
+        assert model_accepts_images(model) is expected
+
 
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
@@ -321,6 +361,18 @@ class TestGetPEFTConfig(TrlTestCase):
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
             assert getattr(peft_config, arg) == value
+
+    @pytest.mark.parametrize(
+        "lora_target_modules",
+        [["q_proj"], "q_proj", ["self_attn.q_proj"], [r".*\.q_proj"], ["q_proj", "v_proj"], ["all-linear"]],
+    )
+    def test_lora_target_modules(self, lora_target_modules):
+        # A single value from the CLI or a config file is a module name, a regex or "all-linear" (#7795)
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model_args = ModelConfig(use_peft=True, lora_target_modules=lora_target_modules)
+        model = get_peft_model(model, get_peft_config(model_args))
+        targeted = {name.split(".lora_A")[0] for name, _ in model.named_parameters() if ".lora_A." in name}
+        assert any(name.endswith(".q_proj") for name in targeted)
 
 
 class TestGetCallableName(TrlTestCase):
@@ -1405,6 +1457,8 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GPT2LMHeadModel",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1441,6 +1495,7 @@ _FUSED_LM_HEAD_MODEL_IDS = [
     ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-PhimoeForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3ForCausalLM-Instruct-2507",
@@ -1626,7 +1681,13 @@ class TestAddFusedLMHead:
         torch.testing.assert_close(out["log_probs"], expected, rtol=1e-5, atol=1e-5)
 
     @pytest.mark.parametrize(
-        "model_id", ["trl-internal-testing/tiny-Qwen3MoeForCausalLM", "trl-internal-testing/tiny-GptOssForCausalLM"]
+        "model_id",
+        [
+            "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
+        ],
     )
     def test_aux_loss(self, model_id):
         model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32).to(torch_device)
@@ -1645,6 +1706,18 @@ class TestAddFusedLMHead:
         )
 
         torch.testing.assert_close(out["aux_loss"], expected)
+
+    def test_aux_loss_without_experts(self):
+        """Hybrid checkpoints without experts (e.g. granite-4.0-h-350m) return no router logits: the aux loss is 0."""
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM", dtype=torch.float32
+        ).to(torch_device)
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 12), device=torch_device)
+
+        add_fused_lm_head(model)
+        out = model(input_ids=input_ids, labels=input_ids, output_router_logits=True, fused_lm_head=True)
+
+        assert out["aux_loss"].item() == 0.0
 
     @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_MODEL_IDS)
     @pytest.mark.parametrize("temperature", [1.0, 0.7])
@@ -1735,6 +1808,8 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-Glm4MoeForCausalLM",
     "trl-internal-testing/tiny-GptOssForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+    "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
     "trl-internal-testing/tiny-Lfm2ForCausalLM",
     pytest.param(
         "trl-internal-testing/tiny-Lfm2ForCausalLM-2.5",
@@ -1764,6 +1839,7 @@ _FUSED_LM_HEAD_LOSS_MODEL_IDS = [
     ),
     "trl-internal-testing/tiny-Phi3ForCausalLM-3",
     "trl-internal-testing/tiny-Phi3ForCausalLM-3.5",
+    "trl-internal-testing/tiny-PhimoeForCausalLM",
     "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
     "trl-internal-testing/tiny-Qwen3ForCausalLM",
     "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -1920,7 +1996,23 @@ class TestAddFusedLMHeadLoss:
                     chunked_grad, ref_grad, atol=1e-5, rtol=1e-5, msg=f"gradient mismatch on model.{name}"
                 )
 
-    @pytest.mark.parametrize("model_id", _FUSED_LM_HEAD_VLM_MODEL_IDS)
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            *_FUSED_LM_HEAD_VLM_MODEL_IDS,
+            # Forward only: its weights are FP8, and FP8 layers have no backward yet (huggingface/transformers#50031)
+            pytest.param(
+                "trl-internal-testing/tiny-MistralLarge4ForConditionalGeneration",
+                marks=[
+                    require_kernels,  # FP8 weights run on the finegrained-fp8 Hub kernel
+                    pytest.mark.skipif(
+                        Version(transformers.__version__) < Version("5.22.0"),
+                        reason="Mistral Large 4 was introduced in transformers-5.22.0",
+                    ),
+                ],
+            ),
+        ],
+    )
     def test_forward_matches_reference_vlm(self, model_id):
         ref_model, chunked_model, input_ids, labels, num_items = self._setup_vlm(model_id)
 
