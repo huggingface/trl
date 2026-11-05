@@ -650,12 +650,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # the training collectives run, so captured and eager collectives are never in flight together and the
             # NCCL default, which is also the safe setting, can stay.
             cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
-        if self.args.release_kv_cache_during_step:
-            # The released rollouts wait in the engine's CPU swap pool, sized like the cache: a fraction of the free
-            # device memory. Async batching would apply its last batch after the release, so the engine refuses it.
-            free_memory, _ = torch.cuda.mem_get_info(model.device)
-            cb_kwargs.setdefault("cpu_offload_space", cb_kwargs["max_memory_percent"] * free_memory / 2**30)
-            cb_kwargs["use_async_batching"] = False
         # The engine decodes in its own thread, from the very tensors the optimizer updates, and the trainer pauses
         # it for its step (`_pause_generation`): the engine waits for its in-flight step on the device before it
         # reports itself paused, so the forward and backward have the device to themselves. Under tensor parallelism

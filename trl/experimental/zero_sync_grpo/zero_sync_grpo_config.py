@@ -79,10 +79,10 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`]. `return_logprobs` is always
             forced to `True`: the engine's logprobs are the behavior-policy logprobs of the completions.
         release_kv_cache_during_step (`bool`, *optional*, defaults to `True`):
-            Whether to free the KV cache's GPU memory for the training step. The rollouts in flight wait in host memory
-            and resume where they were, and the forward and backward get the cache's memory. This copies the live cache
-            to the host and back at every step: disable it for small models or short completions, where memory is not
-            the limit.
+            Whether to free the KV cache's GPU memory for the training step. The cache waits in host memory and comes
+            back before generation resumes, so the rollouts in flight carry on where they were, and the forward and
+            backward get its memory. This copies the cache to the host and back at every step: disable it for small
+            models or short completions, where memory is not the limit.
 
         > Parameters that control the training
 
@@ -201,10 +201,10 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     release_kv_cache_during_step: bool = field(
         default=True,
         metadata={
-            "help": "Whether to free the KV cache's GPU memory for the training step. The rollouts in flight wait in "
-            "host memory and resume where they were, and the forward and backward get the cache's memory. This copies "
-            "the live cache to the host and back at every step: disable it for small models or short completions, "
-            "where memory is not the limit."
+            "help": "Whether to free the KV cache's GPU memory for the training step. The cache waits in host memory "
+            "and comes back before generation resumes, so the rollouts in flight carry on where they were, and the "
+            "forward and backward get its memory. This copies the cache to the host and back at every step: disable it "
+            "for small models or short completions, where memory is not the limit."
         },
     )
 

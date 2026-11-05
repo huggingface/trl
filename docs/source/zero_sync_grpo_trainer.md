@@ -30,7 +30,7 @@ The dataset must be [conversational](dataset_formats#conversational): every prom
 
 ## Memory split
 
-The generation engine reserves its KV cache when the trainer starts, and frees it for each training step (`release_kv_cache_during_step=True`, the default): the rollouts in flight wait in host memory and resume where they were, so the forward and backward can use that memory. The optimizer state waits in host memory too. Size the cache from what generation actually needs, roughly `requests in flight x expected completion length x KV bytes per token`:
+The generation engine reserves its KV cache when the trainer starts, and frees it for each training step (`release_kv_cache_during_step=True`, the default): the cache waits in host memory and comes back before generation resumes, so the rollouts in flight carry on where they were and the forward and backward can use that memory. The optimizer state waits in host memory too. Size the cache from what generation actually needs, roughly `requests in flight x expected completion length x KV bytes per token`:
 
 ```python
 ZeroSyncGRPOConfig(
@@ -39,7 +39,7 @@ ZeroSyncGRPOConfig(
 )
 ```
 
-Releasing the cache copies the live part of it to the host and back at every step. For small models or short completions, where memory is not the limit, `release_kv_cache_during_step=False` keeps it on the device instead; an oversized pool then starves the training step, which shows up as an out-of-memory error in the backward pass, not as slow generation.
+Releasing the cache copies it to the host and back at every step. For small models or short completions, where memory is not the limit, `release_kv_cache_during_step=False` keeps it on the device instead; an oversized pool then starves the training step, which shows up as an out-of-memory error in the backward pass, not as slow generation.
 
 ## Packed training
 
