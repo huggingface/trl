@@ -1163,7 +1163,7 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
         train_dataset=dataset,
         rollout_worker=_StubRolloutWorker(tokenizer, dataset, vocab_size=len(tokenizer)),
     )
-    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
+    # The checkpoint paths only run for an `AsyncRolloutWorker`
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
     return trainer
@@ -1417,7 +1417,6 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
         with pytest.raises(ValueError, match="--max-lora-rank"):
             self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
-    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize("injected", [False, True])
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
     def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected, injected):

@@ -385,15 +385,16 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
 
 
 class TransformersVLLMServer:
-    """Answers the vLLM endpoints the trainer and its rollout worker call, generating with transformers.
+    """Answers the vLLM endpoints the rollout worker calls, generating with transformers, and takes the trainer's
+    weight syncs.
 
     `vllm serve` takes minutes to start and an accelerator of its own. This server loads the model in seconds and
     shares the trainer's accelerator. It listens on a local port from a thread of the test process, so the rollout
     worker, which runs in a spawned child process, reaches it over HTTP like the real server.
 
-    It cannot join the trainer's NCCL weight-transfer group, since NCCL refuses two ranks on one device. So it reports
-    zero inference ranks, which leaves the trainer alone in its group, and [`receive_weights`] loads the weights the
-    trainer streams in place of the NCCL broadcast. The `vllm_server` fixture wires it.
+    The trainer's [`WeightTransferClient`] streams the weights to vLLM over NCCL, which needs vLLM installed and one
+    device per rank. The `vllm_server` fixture hands the trainer this server in its place, so the trainer sends the
+    weights to it directly.
 
     Args:
         model_id (`str`):
@@ -414,14 +415,8 @@ class TransformersVLLMServer:
         self.httpd.server_close()
 
     def get(self, path: str):
-        if path == "/health":
-            return {}
         if path == "/v1/models":
             return {"data": [{"id": self.model_id, "max_model_len": self.max_model_len}]}
-        if path == "/server_info":
-            return {"vllm_config": {"model_config": {"dtype": str(self.model.dtype)}}}
-        if path == "/get_world_size":
-            return {"world_size": 0}
         if path == "/metrics":
             # No KV cache bounds this server, so it reports room for 1024 requests at full length
             return "\n".join(
@@ -438,16 +433,6 @@ class TransformersVLLMServer:
     def post(self, path: str, body: dict):
         if path == "/v1/completions":
             return self.complete(body)
-        # Nothing left to do: `receive_weights` swaps the weights under the generation lock
-        if path in (
-            "/pause",
-            "/resume",
-            "/init_weight_transfer_engine",
-            "/start_weight_update",
-            "/update_weights",
-            "/finish_weight_update",
-        ):
-            return {}
         return None
 
     def complete(self, request: dict) -> dict:
@@ -486,11 +471,23 @@ class TransformersVLLMServer:
             ]
         }
 
-    def receive_weights(self, iterator, **nccl_kwargs):
-        """Load the `(name, tensor)` pairs the trainer streams, standing in for vLLM's NCCL broadcast."""
+    # The interface of `WeightTransferClient`, which the trainer calls on each weight sync
+    def init_weight_transfer(self):
+        pass
+
+    def pause(self):
+        pass  # `send_weights` holds the generation lock instead
+
+    def send_weights(self, iterator):
         with self.generate_lock, torch.no_grad():
             for name, tensor in iterator:
                 self.model.get_parameter(name).copy_(tensor)
+
+    def resume(self):
+        pass
+
+    def destroy(self):
+        pass
 
     def _handler(self):
         server = self
@@ -523,22 +520,18 @@ class TransformersVLLMServer:
 
 @pytest.fixture
 def vllm_server(monkeypatch):
-    """A [`TransformersVLLMServer`] serving the tests' model, shut down when the test ends.
-
-    The NCCL broadcast of the weight sync is the one call replaced, since it cannot run on a single device: the
-    trainer's stream goes to the server's `receive_weights` instead.
-    """
+    """A [`TransformersVLLMServer`] serving the tests' model and taking the trainer's weight syncs, shut down when the
+    test ends."""
     server = TransformersVLLMServer("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-    monkeypatch.setattr(weight_transfer_module, "packed_nccl_broadcast_producer", server.receive_weights)
+    # Overrides `stub_weight_transfer`, which pytest runs first as an autouse fixture
+    monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", lambda **kwargs: server)
     yield server
     server.close()
 
 
 @pytest.fixture(autouse=True)
-def stub_weight_transfer(request, monkeypatch):
-    # Tests against `vllm_server` run the real weight sync
-    if "vllm_server" not in request.fixturenames:
-        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
+def stub_weight_transfer(monkeypatch):
+    monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
 
 
 @pytest.mark.skipif(
@@ -546,7 +539,6 @@ def stub_weight_transfer(request, monkeypatch):
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
-    @require_vllm
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
@@ -556,7 +548,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-    @require_vllm
     def test_train(self, vllm_server):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
@@ -952,7 +943,7 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
         train_dataset=dataset,
         rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
     )
-    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
+    # The checkpoint paths only run for an `AsyncRolloutWorker`
     trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
     trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
     return trainer
@@ -2973,7 +2964,6 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         with pytest.raises(ValueError, match="--max-lora-rank"):
             self._build(fake_vllm, self._lora_config(r=16), lora_config={"max_lora_rank": 8, "max_loras": 3})
 
-    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
     def test_the_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
@@ -2982,7 +2972,6 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=None)
         assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
 
-    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
     @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
     def test_an_injected_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # A worker the caller builds, like the harness worker of examples/async_grpo_harbor, exists before the trainer
