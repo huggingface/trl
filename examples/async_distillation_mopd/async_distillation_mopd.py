@@ -73,12 +73,15 @@ from trl.experimental.async_distillation import AsyncDistillationConfig, AsyncDi
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--student-model", default="BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT")
+    parser.add_argument("--teacher-model-prefix", default="BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B")
     parser.add_argument("--distillation-method", choices=("token", "csd"), default="token")
     parser.add_argument("--teacher-top-k", type=int)
     parser.add_argument("--beta", type=float)
     parser.add_argument("--max-steps", type=int, default=90)
     parser.add_argument("--max-completion-length", type=int, default=16384)
     parser.add_argument("--output-dir", default="async_distillation_mopd")
+    parser.add_argument("--max-concurrent-rollouts", type=int)
+    parser.add_argument("--save-steps", type=int, default=20)
     parser.add_argument("--report-to", default="trackio")
     parser.add_argument("--run-name")
     parser.add_argument("--trackio-space-id")
@@ -104,9 +107,9 @@ def main() -> None:
         beta=args.beta if args.beta is not None else (0.5 if csd else 1.0),
         teacher_top_k=args.teacher_top_k if args.teacher_top_k is not None else (64 if csd else 1),
         teacher_tokenizers={
-            "math": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math",
-            "code": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code",
-            "if": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF",
+            "math": f"{args.teacher_model_prefix}-RL-Math",
+            "code": f"{args.teacher_model_prefix}-RL-Code",
+            "if": f"{args.teacher_model_prefix}-RL-IF",
         }
         if csd
         else None,
@@ -119,8 +122,13 @@ def main() -> None:
         # 16K-token completions can take longer than the default 1800 s to generate under load
         vllm_server_timeout=3600,
         max_staleness=8,
+        max_concurrent_rollouts=args.max_concurrent_rollouts
+        if args.max_concurrent_rollouts is not None
+        else (16 if csd else None),
         max_steps=args.max_steps,
-        save_strategy="no",
+        save_strategy="steps" if csd else "no",
+        save_steps=args.save_steps,
+        save_total_limit=2,
         learning_rate=1.5e-6,
         lr_scheduler_type="constant",
         report_to=args.report_to,
@@ -136,6 +144,7 @@ def main() -> None:
         train_dataset=dataset,
     )
     trainer.train()
+    trainer.save_model()
 
     trainer.end()
 

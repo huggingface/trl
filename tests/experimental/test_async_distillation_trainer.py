@@ -2000,6 +2000,54 @@ def test_softmax_cancellation_at_and_near_matched_cross_tokenizer_events(beta):
     torch.testing.assert_close(near.grad.double(), oracle.grad, atol=2e-13, rtol=3e-5)
 
 
+def test_csd_chain_loss_and_gradients_ignore_long_masked_prefix(csd_tiny_model, csd_mixed_teachers):
+    student, _, samples = csd_mixed_teachers
+    sample = samples[2]  # Two student tokens aligned to one teacher token.
+    model = copy.deepcopy(csd_tiny_model)
+    model.resize_token_embeddings(len(student))
+    hidden = model.base_model(input_ids=torch.as_tensor(sample["input_ids"]).unsqueeze(0)).last_hidden_state[0, :-1]
+    ids = torch.as_tensor(sample["teacher_topk_ids"][1:])
+    teacher_logps = torch.as_tensor(sample["teacher_topk_logprobs"][1:]).float()
+    actual_ids = torch.tensor(sample["s_ids"])
+    lengths = torch.as_tensor(sample["csd_prefix_lengths"][1:])
+    weights = torch.as_tensor(sample["csd_weights"][1:])
+    head = model.get_output_embeddings().weight
+
+    def loss(hidden, ids, teacher_logps, actual_ids, lengths, weights):
+        return _chunked_csd_loss(
+            hidden,
+            head,
+            None,
+            1.0,
+            None,
+            ids,
+            teacher_logps,
+            actual_ids,
+            lengths,
+            weights,
+            0.5,
+            1.0,
+            None,
+            1,
+            256,
+        )[0]
+
+    reference = loss(hidden, ids, teacher_logps, actual_ids, lengths, weights)
+    (reference_grad,) = torch.autograd.grad(reference, head, retain_graph=True)
+    n_masked = 8192
+    actual = loss(
+        torch.cat([hidden[:1].expand(n_masked, -1), hidden]),
+        torch.cat([ids.new_full((n_masked, ids.size(1)), -1), ids]),
+        torch.cat([teacher_logps.new_full((n_masked, ids.size(1)), -torch.inf), teacher_logps]),
+        torch.cat([actual_ids[:1].expand(n_masked), actual_ids]),
+        torch.cat([lengths.new_zeros(n_masked), lengths]),
+        torch.cat([weights.new_zeros(n_masked), weights]),
+    )
+    (actual_grad,) = torch.autograd.grad(actual, head)
+    torch.testing.assert_close(actual, reference, atol=1e-12, rtol=1e-7)
+    torch.testing.assert_close(actual_grad, reference_grad, atol=1e-10, rtol=1e-6)
+
+
 @pytest.mark.skipif(CSDLossFn is None, reason="requires NVIDIA-NeMo/RL PR #4680 on PYTHONPATH")
 @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
 def test_mixed_tokenizers_match_official_nemo_loss_and_gradients(tmp_path, csd_tiny_model, csd_mixed_teachers, beta):
