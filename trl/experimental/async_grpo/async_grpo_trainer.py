@@ -958,8 +958,9 @@ class AsyncGRPOTrainer(_BaseTrainer):
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               with the architecture declared in its config: [`~transformers.AutoModelForImageTextToText`] for a
-              vision-language checkpoint (whose vision tower is loaded but frozen, see [Vision-language
-              models](async_grpo_trainer#vision-language-models)), [`~transformers.AutoModelForCausalLM`] otherwise.
+              vision-language checkpoint (whose vision tower is loaded but frozen, see [Training Vision Language
+              Models](async_grpo_trainer#training-vision-language-models)), [`~transformers.AutoModelForCausalLM`]
+              otherwise.
             - A [`~transformers.PreTrainedModel`] object. Its attention implementation is switched to the trainer's
               tree attention backend for packed training.
 
@@ -988,11 +989,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`], *optional*):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset are
-            ignored. The format of the samples can be either:
-
-            - [Standard](dataset_formats#standard): Each sample contains plain text.
-            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
-              and content).
+            ignored. The samples must be in [conversational](dataset_formats#conversational) format: each sample
+            contains structured messages (e.g., role and content).
 
             May be omitted only when an `environment_factory` is provided and the environment owns (or procedurally
             generates) the data, returning the prompt from its `reset()` method. In that case, `max_steps` must be set
