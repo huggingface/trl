@@ -251,6 +251,21 @@ def tree_attention(
     softcap=None,
     **kwargs,
 ):
+    """
+    Attention over a packed [`TreeRow`]: each segment's queries attend to the K/V of its root-to-segment path, gathered
+    with `tree_kv_index`, in one varlen FlashAttention call.
+
+    A segment has fewer queries than keys: its ancestors' tokens, then its own. FlashAttention aligns the causal mask
+    bottom-right, so each query sees every ancestor and its own causal past. For the segment `[p3 a1 a2]` under the
+    segment `[p1 p2]`:
+
+    ```
+            p1  p2  p3  a1  a2
+        p3   ■   ■   ■   ·   ·
+        a1   ■   ■   ■   ■   ·
+        a2   ■   ■   ■   ■   ■
+    ```
+    """
     dtype = get_target_dtype(query, module) or query.dtype
     query, key, value = (x.transpose(1, 2)[0].to(dtype) for x in (query, key, value))
     out = _flash_attn().flash_attn_varlen_func(
