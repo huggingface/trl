@@ -228,7 +228,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 SFT_DATASET,
                 attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
-                max_length=None,  # Required when padding_free=True
+                max_length=None,
                 per_device_train_batch_size=2,
             ),
             _build(
@@ -237,7 +237,7 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
                 SFT_DATASET,
                 attn=FA2_KERNEL,  # to avoid cross-contamination between samples when padding_free=True
                 bf16=True,  # required for FA2 kernels, which are bfloat16-only
-                max_length=None,  # Required when padding_free=True
+                max_length=None,
                 per_device_train_batch_size=2,
                 padding_free=True,
             ),
