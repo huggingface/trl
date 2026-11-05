@@ -381,8 +381,9 @@ class TransformersVLLMServer:
     shares the trainer's accelerator. It listens on a local port from a thread of the test process, so the rollout
     worker, which runs in a spawned child process, reaches it over HTTP like the real server.
 
-    It receives no weights. It reports zero inference ranks, so the trainer's NCCL weight-transfer group holds the
-    trainer alone and the broadcast reaches no one: the server keeps sampling from the initial weights.
+    It cannot join the trainer's NCCL weight-transfer group, since NCCL refuses two ranks on one device. So it reports
+    zero inference ranks, which leaves the trainer alone in its group, and [`receive_weights`] loads the weights the
+    trainer streams in place of the NCCL broadcast. The `vllm_server` fixture wires it.
 
     Args:
         model_id (`str`):
@@ -427,7 +428,7 @@ class TransformersVLLMServer:
     def post(self, path: str, body: dict):
         if path == "/v1/completions":
             return self.complete(body)
-        # The weight update has nothing to pause or receive, since no weights reach this server
+        # Nothing left to do: `receive_weights` swaps the weights under the generation lock
         if path in (
             "/pause",
             "/resume",
@@ -475,6 +476,12 @@ class TransformersVLLMServer:
             ]
         }
 
+    def receive_weights(self, iterator, **nccl_kwargs):
+        """Load the `(name, tensor)` pairs the trainer streams, standing in for vLLM's NCCL broadcast."""
+        with self.generate_lock, torch.no_grad():
+            for name, tensor in iterator:
+                self.model.get_parameter(name).copy_(tensor)
+
     def _handler(self):
         server = self
 
@@ -505,9 +512,14 @@ class TransformersVLLMServer:
 
 
 @pytest.fixture
-def vllm_server():
-    """A [`TransformersVLLMServer`] serving the tests' model, shut down when the test ends."""
+def vllm_server(monkeypatch):
+    """A [`TransformersVLLMServer`] serving the tests' model, shut down when the test ends.
+
+    The NCCL broadcast of the weight sync is the one call replaced, since it cannot run on a single device: the
+    trainer's stream goes to the server's `receive_weights` instead.
+    """
     server = TransformersVLLMServer("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+    monkeypatch.setattr(weight_transfer_module, "packed_nccl_broadcast_producer", server.receive_weights)
     yield server
     server.close()
 
