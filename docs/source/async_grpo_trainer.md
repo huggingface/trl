@@ -255,29 +255,27 @@ The last two are never both large. Read together with the queue size, they tell 
 
 The samples of a micro-batch are packed into one row per process, without padding. A row is a **prefix trie**, not a concatenation: a token shared by several samples is forwarded once, and attention still shows each sample exactly its own history. The rollouts of a group all repeat its prompt, and every turn of a multi-turn rollout repeats the conversation so far, so the forward shrinks by the packing ratio (`batch/packing_ratio`). It is a layout change only: every trained token keeps its own target, advantage and old log-probability, and its log-probability matches forwarding the sample on its own.
 
-On two rollouts of one prompt:
+On two rollouts of one prompt, where `p` is the prompt and `a`, `b` the two completions:
 
 ```
-1. Rollouts             r0:  p1 p2 p3 a1 a2
-                        r1:  p1 p2 p3 b1 b2                      10 raw tokens
+1. Rollouts         r0:  p1 p2 p3 a1 a2                10 tokens
+                    r1:  p1 p2 p3 b1 b2
 
-2. Trie (one per row)   S0 [p1 p2] ─┬─ S1 [p3 a1 a2]          nodes are keyed on (token, next token),
-                                   └─ S2 [p3 b1 b2]          so the fork happens one token early and
-                                                              every node predicts exactly one token;
-                                                              chains without a fork become segments
+2. Trie             S0 [p1 p2] ─┬─ S1 [p3 a1 a2]       p3 is not shared: a position predicts
+                                └─ S2 [p3 b1 b2]       one token, and p3 predicts a1 or b1
 
-3. Packed row           idx           0  1 | 2  3  4 | 5  6  7
-   (DFS order)          input_ids    p1 p2 | p3 a1 a2 | p3 b1 b2  8 tokens: MLPs, norms and projections
-                        position_ids  0  1 |  2  3  4 |  2  3  4  run once per unique token
-                        segment      S0    | S1       | S2
+3. Packed row       index         0  1 | 2  3  4 | 5  6  7
+   (depth-first)    input_ids    p1 p2 | p3 a1 a2 | p3 b1 b2    8 tokens: everything but attention
+                    position_ids  0  1 |  2  3  4 |  2  3  4    runs on 8 instead of 10
+                    segment      S0    | S1       | S2
 
-4. Attention            seg   queries      K/V gathered            kv_index
-   (one FA3 call)       S0    [p1 p2]      [p1 p2]                 0 1
-                        S1    [p3 a1 a2]   [p1 p2 | p3 a1 a2]      0 1 2 3 4
-                        S2    [p3 b1 b2]   [p1 p2 | p3 b1 b2]      0 1 5 6 7
+4. Attention        segment   queries    keys and values: the segment's path in the trie
+   (one call)       S0        p1 p2      p1 p2              index 0 1
+                    S1        p3 a1 a2   p1 p2 p3 a1 a2     index 0 1 2 3 4
+                    S2        p3 b1 b2   p1 p2 p3 b1 b2     index 0 1 5 6 7
 
-5. Loss                 p2 (idx 1) predicts p3 for both rollouts; every trained token of every rollout
-                        points at the position that predicts it
+5. Loss             r0: a1 a2 predicted at index 2 3   each trained token is predicted at the index
+                    r1: b1 b2 predicted at index 5 6   of the token before it in its rollout
 ```
 
 A few consequences:
