@@ -264,6 +264,9 @@ class TestGRPOTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
@@ -2398,7 +2401,41 @@ class TestGRPOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @require_torch_accelerator
+    def test_vllm_weight_sync_skips_ref_adapter_modules_to_save(self):
+        # With a pretrained adapter and `beta != 0`, GRPO adds a "ref" copy of the adapter. Its copy of the
+        # `modules_to_save` head must not reach vLLM, which only knows `lm_head.weight`.
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.bfloat16
+        )
+        model = get_peft_model(model, LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            beta=0.04,
+            use_vllm=True,
+            vllm_mode="colocate",
+            max_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+    @require_peft
+    @require_vllm
+    @pytest.mark.xfail(
+        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
+        strict=True,
+    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained(
@@ -2445,7 +2482,10 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @pytest.mark.xfail(
+        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes (see #7954)",
+        strict=True,
+    )
     def test_train_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2479,7 +2519,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     @pytest.mark.parametrize(
         "vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max",
         [
@@ -2560,7 +2599,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_train_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -5187,6 +5225,68 @@ class TestGRPOTrainerVLM(TrlTestCase):
         assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
         # Both completions end on one of Gemma 4's eos ids, so none is clipped
         assert trainer.state.log_history[-1]["completions/clipped_ratio"] == 0.0
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_deepseekv3(self):
+        # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=lambda completions, **kwargs: [float(len(str(c))) for c in completions],
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        def fake_generate(input_ids, **kwargs):
+            if input_ids.shape[0] == 2:  # first call
+                # fmt: off
+                completion_ids = torch.tensor(
+                    [
+                        # '</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>multiply_tool\n```json\n{"a": 3, "b": 4}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>'
+                        [128799, 271, 128806, 128808, 8701, 128814, 16640, 29717, 3682, 1458, 201, 9854, 14479, 201, 24313, 67, 3362, 223, 21, 14, 582, 68, 3362, 223, 22, 1778, 9854, 128809, 128807, 1],
+                        # "</think>\n\nI don't know any tool<｜end▁of▁sentence｜>" + padding
+                        [128799, 271, 43, 2090, 1664, 1153, 1117, 4105, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    ],
+                    device=input_ids.device,
+                )
+                # fmt: on
+            else:  # second call: 1 tool call succeeded
+                completion_ids = torch.tensor(
+                    [
+                        # 'Done!<｜end▁of▁sentence｜>'
+                        [68520, 3, 1],
+                    ],
+                    device=input_ids.device,
+                )
+            return torch.cat([input_ids, completion_ids], dim=-1)
+
+        with patch.object(trainer.model, "generate", side_effect=fake_generate):
+            trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.state.log_history[-1]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-1]["tools/failure_frequency"] == pytest.approx(0.0)
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)

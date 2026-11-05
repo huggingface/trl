@@ -99,13 +99,10 @@ class AsyncGRPOConfig(_BaseConfig):
 
         vllm_server_base_url (`str`, *optional*, defaults to `"http://localhost:8000"`):
             Base URL of the vLLM server used for generation (e.g., `"http://localhost:8000"`).
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
-            Total timeout duration in seconds to wait for the vLLM server to be ready.
-        request_timeout (`int`, *optional*, defaults to `600`):
-            Timeout in seconds for individual HTTP requests to the vLLM server.
-        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete within this
-            time raises instead of hanging the run.
+        vllm_server_timeout (`float`, *optional*, defaults to `1800.0`):
+            Timeout in seconds for calls to the vLLM server: waiting for it to be ready at startup, each generation
+            request, and each weight-sync call. Waiting for the server and weight-sync calls raise when it runs out; a
+            generation request that times out is retried.
 
         > Parameters that control the training
 
@@ -143,19 +140,20 @@ class AsyncGRPOConfig(_BaseConfig):
 
         > Parameters that control the async rollout pipeline
 
-        max_inflight_tasks (`int`, *optional*, defaults to `-1`):
-            Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to `-1` (auto), which sets
-            it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * num_processes`. If using
-            tool-use environments, you may want to set this manually based on how many parallel environments you can
-            run.
+        max_concurrent_rollouts (`int`, *optional*):
+            Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to
+            `max(max_staleness, 1)
+            * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: generating more samples than
+            this is wasteful, since they are dropped as stale before the trainer can consume them. If using tool-use
+            environments, you may want to set this manually based on how many parallel environments you can run.
         max_staleness (`int`, *optional*, defaults to `4`):
             Maximum number of weight update steps a rollout sample can lag behind the current model version before
-            being discarded.
+            being dropped.
         queue_maxsize (`int`, *optional*, defaults to `1024`):
             Maximum number of rollout samples to buffer in the rollout queue.
         weight_sync_steps (`int`, *optional*, defaults to `1`):
             Number of training steps between weight synchronizations to the vLLM server.
-        heartbeat_stale_after_s (`float`, *optional*, defaults to `300.0`):
+        rollout_worker_timeout (`float`, *optional*, defaults to `300.0`):
             Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung and aborts.
 
         > Parameters that control the logging
@@ -329,21 +327,11 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={"help": "Base URL of the vLLM server used for generation (e.g., 'http://localhost:8000')."},
     )
     vllm_server_timeout: float = field(
-        default=240.0,
+        default=1800.0,
         metadata={
-            "help": "Total timeout duration in seconds to wait for the vLLM server to be ready. If the server is not "
-            "up after the timeout, a `TimeoutError` is raised."
-        },
-    )
-    request_timeout: int = field(
-        default=600,
-        metadata={"help": "Timeout in seconds for individual HTTP requests to the vLLM server."},
-    )
-    weight_sync_timeout: int = field(
-        default=1800,
-        metadata={
-            "help": "Timeout in seconds for a weight transfer to the vLLM server. A transfer that does not complete "
-            "within this time raises instead of hanging the run."
+            "help": "Timeout in seconds for calls to the vLLM server: waiting for it to be ready at startup, each "
+            "generation request, and each weight-sync call. Waiting for the server and weight-sync calls raise when "
+            "it runs out; a generation request that times out is retried."
         },
     )
 
@@ -400,21 +388,21 @@ class AsyncGRPOConfig(_BaseConfig):
     )
 
     # Parameters that control the async rollout pipeline
-    max_inflight_tasks: int = field(
-        default=-1,
+    max_concurrent_rollouts: int | None = field(
+        default=None,
         metadata={
-            "help": "Maximum number of concurrent generation tasks sent to the vLLM server. Defaults to -1 (auto), "
-            "which sets it to `max_staleness * per_device_train_batch_size * gradient_accumulation_steps * "
-            "num_processes`. Generating more samples than this is wasteful since they will be discarded as stale "
-            "before the trainer can consume them. If using tool-use environments, you may want to set this manually "
-            "based on how many parallel environments you can run."
+            "help": "Maximum number of rollouts in flight to the vLLM server at once. If `None`, it is set to "
+            "`max(max_staleness, 1) * per_device_train_batch_size * gradient_accumulation_steps * num_processes`: "
+            "generating more samples than this is wasteful, since they are dropped as stale before the trainer can "
+            "consume them. If using tool-use environments, you may want to set this manually based on how many "
+            "parallel environments you can run."
         },
     )
     max_staleness: int = field(
         default=4,
         metadata={
             "help": "Maximum number of weight update steps a rollout sample can lag behind the current model version "
-            "before being discarded."
+            "before being dropped."
         },
     )
     queue_maxsize: int = field(
@@ -425,7 +413,7 @@ class AsyncGRPOConfig(_BaseConfig):
         default=1,
         metadata={"help": "Number of training steps between weight synchronizations to the vLLM server."},
     )
-    heartbeat_stale_after_s: float = field(
+    rollout_worker_timeout: float = field(
         default=300.0,
         metadata={
             "help": "Seconds since the rollout worker's last heartbeat after which the trainer treats it as hung "

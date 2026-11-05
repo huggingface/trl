@@ -65,14 +65,7 @@ from ..testing_utils import TrlTestCase, require_torch_accelerator
 
 @pytest.fixture(scope="module")
 def openr1_examples():
-    try:
-        dataset = load_dataset(
-            "HuggingFaceTB/OpenR1-Math-220k-default-verified",
-            "all",
-            split="train[:3]",
-        )
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"OpenR1 dataset unavailable: {exc}")
+    dataset = load_dataset("HuggingFaceTB/OpenR1-Math-220k-default-verified", "all", split="train[:3]")
     return [{"messages": row["messages"]} for row in dataset]
 
 
@@ -318,14 +311,7 @@ def qwen3_vl_processor():
 
 @pytest.fixture(scope="module")
 def vlm_dataset():
-    try:
-        return load_dataset(
-            "trl-internal-testing/zen-image",
-            "conversational_prompt_completion",
-            split="train[:3]",
-        )
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"zen-image dataset unavailable: {exc}")
+    return load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train[:3]")
 
 
 @pytest.fixture
@@ -2310,12 +2296,9 @@ _VLM_SMOKE_MAX_LENGTH = 4096
 
 def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with a finite loss."""
-    try:
-        student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny Qwen3-VL assets unavailable: {exc}")
+    student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
+    teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
+    processor = AutoProcessor.from_pretrained(_TINY_QWEN3_VL)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
@@ -2379,12 +2362,9 @@ def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     Exercises `_build_teacher_vlm_inputs` (teacher rendered through its own processor), the separate teacher image
     forward, and byte-offset ULD alignment on real logits, ending in a finite loss.
     """
-    try:
-        student = AutoModelForImageTextToText.from_pretrained(_TINY_SMOLVLM, dtype=torch.bfloat16)
-        teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
-        processor = AutoProcessor.from_pretrained(_TINY_SMOLVLM)
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"tiny VLM assets unavailable: {exc}")
+    student = AutoModelForImageTextToText.from_pretrained(_TINY_SMOLVLM, dtype=torch.bfloat16)
+    teacher = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
+    processor = AutoProcessor.from_pretrained(_TINY_SMOLVLM)
     if processor.tokenizer.pad_token is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
