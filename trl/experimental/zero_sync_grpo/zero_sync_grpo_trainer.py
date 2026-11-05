@@ -828,10 +828,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # Convert None values to NaN
             rewards_per_func[i] = torch.nan if output_reward_func[0] is None else output_reward_func[0]
 
-        # Reconcile the turn chain into training rows: one row for a conversation the template only appended to,
-        # several when a rewrite forked it.
-        # A single re-tokenized token forks a new row, so trained tokens are never rewritten as context
-        sequences, tally = _chain_to_sequences(rollout["turns"], rollout["id"], fork_threshold=1)
+        # >= 1 row per conversation; `tally` is the drift bookkeeping over the turn transitions.
+        sequences, tally = _chain_to_sequences(rollout["turns"], rollout["id"], self.args.fork_threshold_tokens)
         return {
             "sequences": sequences,
             "num_completion_tokens": len(completion_ids),
