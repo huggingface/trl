@@ -24,6 +24,7 @@ import queue
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -373,26 +374,162 @@ def fake_vllm(monkeypatch) -> FakeVLLMServer:
     return server
 
 
+class TransformersVLLMServer:
+    """Answers the vLLM endpoints the trainer and its rollout worker call, generating with transformers.
+
+    `vllm serve` takes minutes to start and an accelerator of its own. This server loads the model in seconds and
+    shares the trainer's accelerator. It listens on a local port from a thread of the test process, so the rollout
+    worker, which runs in a spawned child process, reaches it over HTTP like the real server.
+
+    It receives no weights. It reports zero inference ranks, so the trainer's NCCL weight-transfer group holds the
+    trainer alone and the broadcast reaches no one: the server keeps sampling from the initial weights.
+
+    Args:
+        model_id (`str`):
+            The model to serve, the trainer's.
+    """
+
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
+        self.max_model_len = self.model.config.max_position_embeddings  # the default of `vllm serve --max-model-len`
+        self.generate_lock = threading.Lock()  # the requests share one model
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.url = f"http://127.0.0.1:{self.httpd.server_port}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def get(self, path: str):
+        if path == "/health":
+            return {}
+        if path == "/v1/models":
+            return {"data": [{"id": self.model_id, "max_model_len": self.max_model_len}]}
+        if path == "/server_info":
+            return {"vllm_config": {"model_config": {"dtype": str(self.model.dtype)}}}
+        if path == "/get_world_size":
+            return {"world_size": 0}
+        if path == "/metrics":
+            # No KV cache bounds this server, so it reports room for 1024 requests at full length
+            return "\n".join(
+                [
+                    f'vllm:cache_config_info{{kv_cache_size_tokens="{1024 * self.max_model_len}"}} 1.0',
+                    'vllm:kv_cache_usage_perc{engine="0"} 0.0',
+                    'vllm:num_requests_running{engine="0"} 0.0',
+                    'vllm:num_requests_waiting{engine="0"} 0.0',
+                    'vllm:num_preemptions_total{engine="0"} 0.0',
+                ]
+            )
+        return None
+
+    def post(self, path: str, body: dict):
+        if path == "/v1/completions":
+            return self.complete(body)
+        # The weight update has nothing to pause or receive, since no weights reach this server
+        if path in (
+            "/pause",
+            "/resume",
+            "/init_weight_transfer_engine",
+            "/start_weight_update",
+            "/update_weights",
+            "/finish_weight_update",
+        ):
+            return {}
+        return None
+
+    def complete(self, request: dict) -> dict:
+        prompt_ids = torch.tensor([request["prompt"]], device=self.model.device)
+        with self.generate_lock:
+            output = self.model.generate(
+                prompt_ids,
+                attention_mask=torch.ones_like(prompt_ids),
+                do_sample=True,
+                max_new_tokens=min(request["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
+                temperature=request["temperature"],
+                top_p=request["top_p"],
+                top_k=request["top_k"],
+                min_p=request.get("min_p"),
+                repetition_penalty=request["repetition_penalty"],
+                output_scores=True,
+                return_dict_in_generate=True,
+            )
+        completion_ids = output.sequences[0, prompt_ids.shape[1] :]
+        # The scores are the logits after the penalty, the temperature and the truncation, so these log-probs are the
+        # ones `vllm serve --logprobs-mode processed_logprobs` returns
+        logprobs = torch.cat(output.scores).float().log_softmax(-1)
+        top = logprobs.topk(request["logprobs"])
+        return {
+            "choices": [
+                {
+                    "token_ids": completion_ids.tolist(),
+                    "logprobs": {
+                        "token_logprobs": logprobs.gather(-1, completion_ids[:, None]).squeeze(-1).tolist(),
+                        "top_logprobs": [
+                            {f"token_id:{token_id}": logprob for token_id, logprob in zip(ids, values, strict=True)}
+                            for ids, values in zip(top.indices.tolist(), top.values.tolist(), strict=True)
+                        ],
+                    },
+                }
+            ]
+        }
+
+    def _handler(self):
+        server = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.reply(server.get(urlsplit(self.path).path))
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.reply(server.post(urlsplit(self.path).path, json.loads(body or "{}")))
+
+            def reply(self, payload):
+                if payload is None:
+                    self.send_error(404)
+                    return
+                is_text = isinstance(payload, str)
+                data = (payload if is_text else json.dumps(payload)).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain" if is_text else "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format, *args):
+                pass  # one line per request otherwise
+
+        return Handler
+
+
+@pytest.fixture
+def vllm_server():
+    """A [`TransformersVLLMServer`] serving the tests' model, shut down when the test ends."""
+    server = TransformersVLLMServer("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
+    yield server
+    server.close()
+
+
 @pytest.mark.skipif(
     not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestAsyncGRPOTrainer(TrlTestCase):
+    @require_vllm
     def test_init_minimal(self):
         # Test that AsyncGRPOTrainer can be instantiated with only model, reward_model and train_dataset
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         AsyncGRPOTrainer(
-            model=model_id,
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
             reward_funcs=dummy_reward_func,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
 
-    def test_train(self):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+    @require_vllm
+    def test_train(self, vllm_server):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -400,17 +537,15 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            token_budget=64,  # set explicitly; the stub worker has no real vLLM server to query for max_model_len
-            vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
+            token_budget=64,  # reduce the tokens per micro-batch, which default to the server's 32768-token context
+            vllm_server_base_url=vllm_server.url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
-            model=model_id,
-            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires this argument
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=dummy_reward_func,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
-            weight_transfer=_StubWeightTransfer(),
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
