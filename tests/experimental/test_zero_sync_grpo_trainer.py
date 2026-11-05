@@ -224,6 +224,7 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
             max_steps=2,
             model_init_kwargs={"dtype": "bfloat16"},
             tp_size=int(os.environ["WORLD_SIZE"]),
+            save_strategy="no",  # a model sharded at load time cannot be checkpointed for resuming
             report_to="none",
         )
         trainer = ZeroSyncGRPOTrainer(
