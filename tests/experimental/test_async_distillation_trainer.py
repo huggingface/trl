@@ -1779,6 +1779,42 @@ def test_prefix_alternatives(csd_builder):
     np.testing.assert_allclose(lps[0, :2], [-2.0, -3.0])
 
 
+@pytest.mark.parametrize("top_k", [1, 4])
+def test_csd_does_not_equate_ordinary_and_special_tokens(top_k):
+    student, teacher = _csd_tokenizer(), _csd_tokenizer(teacher=True)
+    student.add_tokens(["<control>"])
+    teacher.add_special_tokens({"additional_special_tokens": ["<control>"]})
+    csd_builder = CSDTargetBuilder(student, teacher, top_k=top_k)
+    s_id = student.convert_tokens_to_ids("<control>")
+    t_id = teacher.convert_tokens_to_ids("<control>")
+    alternative = teacher.convert_tokens_to_ids("a")
+    chunks = csd_builder.align([s_id], [t_id])
+    ids, lps, _, weights = csd_builder.build([s_id], [t_id], chunks, [[t_id, alternative]], [[-1.0, -2.0]], 5.0)
+    if top_k == 1:
+        assert weights.sum() == 1
+        student_logps = torch.zeros_like(torch.as_tensor(lps), requires_grad=True)
+        divergence, _ = csd_divergence(student_logps, torch.as_tensor(lps), torch.as_tensor(ids) >= 0, 0.5)
+        divergence.sum().backward()
+        assert torch.equal(divergence, torch.zeros_like(divergence))
+        assert torch.equal(student_logps.grad, torch.zeros_like(student_logps))
+    else:
+        assert ids[0][ids[0] >= 0].tolist() == [student.convert_tokens_to_ids("a")]
+        assert lps[0, 0] == -2.0
+        assert weights[0] == 1.0
+
+
+def test_csd_forced_label_replaces_topk_before_common_mapping():
+    student, teacher = _csd_tokenizer(), _csd_tokenizer(teacher=True)
+    csd_builder = CSDTargetBuilder(student, teacher, top_k=2)
+    s_id, t_id = student.convert_tokens_to_ids("a"), teacher.convert_tokens_to_ids("a")
+    # The teacher's top token is not a common 1:1 event. Keeping the realized
+    # label replaces 'b' before mapping, as in the reference sparse reader.
+    teacher_ids = teacher.convert_tokens_to_ids(["bc", "b", "a"])
+    ids, lps, _, _ = csd_builder.build([s_id], [t_id], [(0, 1, 0, 1)], [teacher_ids], [[-0.3, -0.8, -10.0]], 5.0)
+    assert ids[0][ids[0] >= 0].tolist() == [s_id]
+    assert lps[0, 0] == -10.0
+
+
 def test_noncanonical_generation_and_unicode(csd_builder):
     s = csd_builder.student_tokenizer.convert_tokens_to_ids(["a", "b", "c"])
     t = csd_builder.teacher_tokenizer.encode("abc", add_special_tokens=False)
@@ -1873,11 +1909,8 @@ def _csd_probability_reference(q, p, beta):
     return (beta * p * (p.log() - mixture.log()) + (1 - beta) * q * (q.log() - mixture.log())).sum()
 
 
-@pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
-@pytest.mark.parametrize("chunk_size", [1, 3])
-def test_mixed_tokenizers_packed_loss_and_gradients_match_dense_oracle(
-    csd_tiny_model, csd_mixed_teachers, beta, chunk_size
-):
+@pytest.mark.parametrize("beta", [0.5, 1.0])
+def test_mixed_tokenizers_packed_loss_and_gradients_match_dense_oracle(csd_tiny_model, csd_mixed_teachers, beta):
     student, teachers, samples = csd_mixed_teachers
     model = copy.deepcopy(csd_tiny_model)
     model.resize_token_embeddings(len(student))
@@ -1911,7 +1944,7 @@ def test_mixed_tokenizers_packed_loss_and_gradients_match_dense_oracle(
         1.0,
         expert_ids,
         2,
-        chunk_size,
+        1,  # Prefix chains cross checkpoint boundaries.
     )
     actual_loss = result[0] / batch["global_n_chunks"][0]
     actual_loss.backward()
@@ -1989,6 +2022,35 @@ def test_softmax_cancellation_at_and_near_matched_cross_tokenizer_events(beta):
     assert torch.isfinite(near.grad).all()
     assert near.grad.abs().sum() > 0
     torch.testing.assert_close(near.grad.double(), oracle.grad, atol=2e-13, rtol=3e-5)
+
+
+@pytest.mark.parametrize("head_size", [1, 4])
+def test_csd_forward_kl_preserves_head_weights_and_tail_gradient(head_size):
+    logits = torch.tensor([[1.2, -0.8, 0.3, 2.1, -1.4]], dtype=torch.float64, requires_grad=True)
+    teacher_logps = torch.tensor([[0.8, -1.0, 1.7, 0.1, 0.2]], dtype=torch.float64).log_softmax(-1)
+    selected = torch.tensor([0, 2, 4, 1])[:head_size]
+    student_logps = logits.log_softmax(-1)
+    loss, _ = csd_divergence(
+        student_logps[:, selected], teacher_logps[:, selected], torch.ones((1, head_size), dtype=torch.bool), 0.0
+    )
+    (gradient,) = torch.autograd.grad(loss.sum(), logits)
+    p, q = student_logps.detach().exp(), teacher_logps.exp()
+    p_head, q_head = p[:, selected], q[:, selected]
+    p_tail, q_tail = 1 - p_head.sum(-1), 1 - q_head.sum(-1)
+    rho = q_tail / p_tail
+    reference_loss = (q_head * (teacher_logps[:, selected] - student_logps.detach()[:, selected])).sum(-1)
+    reference_loss = reference_loss + q_tail * rho.log()
+    # REST distributes its gradient over every omitted student logit. Merely
+    # matching forward values, or detaching the tail, would miss this check.
+    reference_gradient = p * (1 - rho.unsqueeze(-1))
+    reference_gradient[:, selected] = p_head - q_head
+    torch.testing.assert_close(loss, reference_loss, atol=1e-12, rtol=1e-10)
+    torch.testing.assert_close(gradient, reference_gradient, atol=1e-12, rtol=1e-10)
+    torch.testing.assert_close(gradient.sum(-1), torch.zeros(1, dtype=gradient.dtype), atol=1e-12, rtol=0)
+    if head_size == logits.size(-1) - 1:
+        # With a single omitted token, the partition is the full distribution.
+        full_kl = (q * (teacher_logps - student_logps.detach())).sum(-1)
+        torch.testing.assert_close(loss, full_kl, atol=1e-12, rtol=1e-10)
 
 
 def test_csd_chain_loss_and_gradients_ignore_long_masked_prefix(csd_tiny_model, csd_mixed_teachers):

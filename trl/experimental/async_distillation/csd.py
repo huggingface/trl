@@ -378,6 +378,15 @@ class CSDTargetBuilder:
         prefix_lengths = np.zeros(len(student_ids), dtype=np.int64)
         weights = np.zeros(len(student_ids), dtype=np.float32)
         rows = [dict(zip(ids, lps, strict=True)) for ids, lps in zip(topk_ids, topk_logprobs, strict=True)]
+        for position, row in enumerate(rows):
+            # Match the reference's K-wide sparse rows: inserting a realized
+            # label outside top-k replaces the lowest-ranked alternative
+            # before mapping to common events, rather than widening support.
+            selected = sorted(row, key=row.__getitem__, reverse=True)[: self.top_k]
+            actual = teacher_ids[position]
+            if actual in row and actual not in selected:
+                selected[-1] = actual
+            rows[position] = {token: row[token] for token in selected}
         for s0, s1, t0, t1 in chunks:
             s_chain, t_chain = student_ids[s0:s1], teacher_ids[t0:t1]
             if any(tid not in rows[pos] for pos, tid in enumerate(t_chain, start=t0)):
@@ -402,15 +411,28 @@ class CSDTargetBuilder:
                 if sid != s_chain[-1] and tid != t_chain[-1] and tid in rows[t1 - 1]
             ]
             alternatives.sort(key=lambda pair: rows[t1 - 1][pair[1]], reverse=True)
-            pairs = [(s_chain[-1], t_chain[-1])]
+            # A 1:1 observed pair is retained only when it is a common event.
+            # Equal spellings do not make an ordinary token and a hard special
+            # token equivalent. Mismatch chunks retain their observed chains.
+            common_chunk = len(s_chain) == len(t_chain) == 1
+            keep_realized = not common_chunk or self.common.get(t_chain[-1]) == s_chain[-1]
+            pairs = [(s_chain[-1], t_chain[-1])] if keep_realized else []
+            alternative_budget = self.top_k - 1
             seen_s, seen_t = {s_chain[-1]}, {t_chain[-1]}
             for sid, tid in alternatives:
-                if len(pairs) >= self.top_k:
+                if alternative_budget == 0:
                     break
                 if sid not in seen_s and tid not in seen_t:
                     pairs.append((sid, tid))
+                    alternative_budget -= 1
                     seen_s.add(sid)
                     seen_t.add(tid)
+            if not pairs:
+                # The reference counts aligned 1:1 chunks even when sparse
+                # support contains no common event; both REST buckets are 1.
+                if common_chunk:
+                    weights[s1 - 1] = 1.0
+                continue
             for k, (sid, tid) in enumerate(pairs):
                 candidates[s1 - 1, k] = sid
                 logprobs[s1 - 1, k] = teacher_prefix + rows[t1 - 1][tid]
