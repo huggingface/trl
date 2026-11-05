@@ -353,7 +353,7 @@ A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays
 
 ### Running the example
 
-Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=64` variable on your copy.
+Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=96` variable on your copy.
 
 <hfoptions id="wordle_vllm_mode">
 

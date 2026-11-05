@@ -30,7 +30,8 @@ almost never wins, which leaves GRPO little to learn from. The OpenEnv Wordle tu
 SFT, GRPO and evaluation): https://huggingface.co/docs/openenv/tutorials/wordle-grpo
 
 Each step plays 64 games, one environment session each. Duplicate the `openenv/wordle` Space, set the
-`MAX_CONCURRENT_ENVS=64` variable on your copy and pass its URL with `--env-url`.
+`MAX_CONCURRENT_ENVS=96` variable on your copy (64 games plus the sessions still being closed between games) and
+pass its URL with `--env-url`.
 
 # Option 1: Colocated vLLM (1 GPU required)
 ```sh
