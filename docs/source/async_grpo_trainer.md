@@ -235,7 +235,7 @@ Dataset row = PROMPT (message list + reward kwargs)
      └─ ROLLOUT            (1 conversation, keyed by `rollout_id`)
          ├─ TURN           (1 vLLM /v1/completions call + tool messages fed back)
          │   └─ TurnRecord (prompt_ids, output_ids, output_log_probs)
-         └─ reconcile      (`_chain_to_sequences` classifies drift per turn: CLEAN/REALIGN/FORK)
+         └─ reconcile      (a turn that doesn't extend the held tokens forks a new sequence)
              └─ SEQUENCE   (≥1 per rollout; new one per fork; dropped if no trained token)
                  └─ SAMPLE (Sequence + group advantage + reward + metrics)
 
@@ -272,7 +272,7 @@ Let's also define some terms to make token metrics unambiguous:
 
 - **generated** tokens are what the model produced (`completions/*`).
 - **forwarded** tokens are every token the _forward_ pass processes: the prompt, any tool results, and the generated tokens.
-- **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. For example, a fork or a realign can demote already-generated tokens to context, so trained ≠ generated.
+- **trained** tokens are the subset the loss is taken over where `completion_mask == 1`. They're the generated tokens, minus any that a harness capture masks.
 
 ### How the batch numbers compose
 
@@ -358,7 +358,7 @@ Judge it on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_s`. A pack
 
 <Tip warning={true}>
 
-Anything that makes rows longer or fewer removes the sharing. Check `fork_threshold_tokens` first: a turn becomes its own row only when its re-tokenization drifts by that many tokens, and agentic drift is typically tens against a default of `1024`, so nothing forks and a conversation collapses into one row per rank. `rollout/fork_frac` says which regime you are in.
+Anything that makes rows longer or fewer removes the sharing. A multi-turn conversation that never forks is one long sample, and `rollout/samples_per_rollout` says how many samples a conversation gives.
 
 </Tip>
 
@@ -400,8 +400,8 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/concurrency`                                              | rollouts in flight to vLLM.                                                                                                                                                                                                             |
 | `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
 | `rollout/samples_per_rollout`                                      | training **samples** produced per conversation. 1.0 means no forking happens; (<1.0 means some conversations produced no trainable sample at all)                                                                                            |
-| `rollout/fork_frac`, `rollout/realign_frac`                        | how re-tokenization drift was classified at each turn boundary                                                                                                                                                                               |
-| `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`            | how many held tokens a turn's re-tokenization invalidated. Compare against `fork_threshold_tokens`                                                                                                                                           |
+| `rollout/fork_frac`                                                | fraction of turn boundaries where the re-tokenized prompt didn't extend the held tokens, so the turn started a new sample                                                                                                                    |
+| `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`            | how many held tokens a fork re-rendered, averaged over turn boundaries (a clean boundary counts as 0). It's what each fork adds to the trainer's forward, since the new sample shares the tokens before the divergence                       |
 | `rollout/score_queue_size`                                         | completed groups waiting to be scored.                                                                                                                                                                                                       |
 | `rollout/score_s`, `rollout/score_wait_s`, `rollout/score_block_s` | scoring: time to score a group, group wait time to be scored, and how long generation was blocked because the scoring queue was full                                                                                                         |
 | `rollout/vllm_retry_total`                                         | retried vLLM requests. A degraded server otherwise looks like unexplained slowness. It sits here rather than in `completions/` because it counts requests to the server, not generated text: a retried request produced no completion at all |

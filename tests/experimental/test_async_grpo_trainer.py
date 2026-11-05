@@ -60,7 +60,6 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutLoop,
     AsyncRolloutWorker,
-    DriftKind,
     Rollout,
     RolloutGroup,
     RolloutSample,
@@ -68,7 +67,6 @@ from trl.experimental.async_grpo.async_rollout_worker import (
     TurnRecord,
     _chain_to_sequences,
     _common_prefix_len,
-    _SampleBuilder,
     _spawn_stop_watcher,
 )
 from trl.experimental.async_grpo.packing import TREE_ATTENTION, TreeRow
@@ -1770,8 +1768,8 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
             )
 
 
-def _finalize(turns, rollout_id="r0", fork_threshold=1024):
-    rows, _tally = _chain_to_sequences(turns, rollout_id, fork_threshold)
+def _finalize(turns, rollout_id="r0"):
+    rows, _drifts = _chain_to_sequences(Rollout([], [], turns, rollout_id=rollout_id))
     return rows
 
 
@@ -1932,17 +1930,17 @@ class TestReconciler(TrlTestCase):
         assert rows[0].rollout_id == "r0"
 
     def test_sampling_mask_follows_the_sampled_tokens(self):
-        # Candidate sets ride with the sampled tokens; the prompt and a realigned tail are context and carry none.
+        # Candidate sets ride with the sampled tokens; the prompt and the tool result are context and carry none.
         turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2], output_sampling_mask=[[10, 12], [11]])
-        turn2 = TurnRecord([1, 2, 3, 10, 99, 20], [30], [-0.3], output_sampling_mask=[[30, 31, 32]])
+        turn2 = TurnRecord([1, 2, 3, 10, 11, 20], [30], [-0.3], output_sampling_mask=[[30, 31, 32]])
         rows = _finalize([turn1, turn2])
         assert len(rows) == 1
-        assert rows[0].input_ids == [1, 2, 3, 10, 99, 20, 30]
-        assert rows[0].completion_mask == [0, 0, 0, 1, 0, 0, 1]
-        assert rows[0].sampling_mask == [[], [], [], [10, 12], [], [], [30, 31, 32]]
+        assert rows[0].input_ids == [1, 2, 3, 10, 11, 20, 30]
+        assert rows[0].completion_mask == [0, 0, 0, 1, 1, 0, 1]
+        assert rows[0].sampling_mask == [[], [], [], [10, 12], [11], [], [30, 31, 32]]
 
     def test_clean_chain_stays_one_row(self):
-        # Turn 2's re-tokenized prompt starts with the held tokens (gen [10,11] + tool [20,21]) -> CLEAN.
+        # Turn 2's re-tokenized prompt starts with the held tokens (gen [10,11] + tool [20,21]), so it extends the row.
         turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2])
         turn2 = TurnRecord([1, 2, 3, 10, 11, 20, 21], [30, 31], [-0.3, -0.4])
         rows = _finalize([turn1, turn2])
@@ -1952,64 +1950,36 @@ class TestReconciler(TrlTestCase):
         assert rows[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, -0.2, 0.0, 0.0, -0.3, -0.4]
 
     def test_rewrite_forks_into_two_rows(self):
-        # Divergence inside turn 1's answer + a turn >= fork_threshold -> FORK. Every generated token is
-        # trained in exactly one row (turn 1's tokens are context in row 2).
+        # Turn 2's prompt rewrites turn 1's answer, so turn 2 starts a new row. Every generated token is trained in
+        # exactly one row (turn 1's tokens are context in row 2).
         turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
         turn2 = TurnRecord([1, 2, 3, 10, 99, 88, 77], [30, 31, 32], [-0.2] * 3)
-        rows = _finalize([turn1, turn2], fork_threshold=2)
+        rows = _finalize([turn1, turn2])
         assert len(rows) == 2
         assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13]
         assert rows[0].completion_mask == [0, 0, 0, 1, 1, 1, 1]
         assert rows[1].input_ids == [1, 2, 3, 10, 99, 88, 77, 30, 31, 32]
         assert rows[1].completion_mask == [0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
 
-    def test_fork_when_divergence_precedes_last_response(self):
-        # matched < last_response_start_idx -> FORK regardless of threshold (distinct from the length trigger).
-        builder = _SampleBuilder(fork_threshold=1024)
-        builder.append_turn(
-            TurnRecord([1, 2, 3], [10, 11], [-0.2] * 2), DriftKind.CLEAN
-        )  # last_response_start_idx == 3
-        # 5 held tokens, only the first matches -> 4 tokens of drift, reported alongside the kind.
-        assert builder.classify_token_drift(TurnRecord([1, 9, 3, 10, 11], [30], [-0.2] * 1)) == (DriftKind.FORK, 4)
-
-    def test_drift_tally_counts_transitions(self):
-        # The tally is what makes `fork_threshold_tokens` tunable: it reports the drift the threshold is compared
-        # against. It counts turn TRANSITIONS, so a single-turn rollout has none.
+    def test_reports_the_drift_of_each_fork(self):
         turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13], [-0.2] * 4)
         clean = TurnRecord([1, 2, 3, 10, 11, 12, 13], [20], [-0.2] * 1)
         forked = TurnRecord([1, 2, 3, 10, 99, 88, 77, 20], [30], [-0.2] * 1)
+        assert _chain_to_sequences(Rollout([], [], [turn1]))[1] == []
+        # The fork diverges at the 5th held token (11 -> 99), so 4 of the 8 held tokens re-rendered.
+        assert _chain_to_sequences(Rollout([], [], [turn1, clean, forked]))[1] == [4]
 
-        _rows, tally = _chain_to_sequences([turn1], "r0", 2)
-        assert tally == {"clean": 0, "realign": 0, "fork": 0, "transitions": 0, "drift_tokens": 0, "drift_max": 0}
-
-        _rows, tally = _chain_to_sequences([turn1, clean, forked], "r0", 2)
-        assert (tally["transitions"], tally["clean"], tally["fork"]) == (2, 1, 1)
-        assert tally["drift_max"] == 4  # the forking transition invalidated 4 held tokens
-
-    def test_tail_wobble_realigns_to_context(self):
-        # Last generated token re-renders (11 -> 12): a short wobble in the last answer -> REALIGN. Only the drifted
-        # token is masked to context; the matched part of the answer (10) keeps its training signal and logprob.
+    def test_tail_wobble_forks(self):
+        # Last generated token re-renders (11 -> 12). Turn 1 keeps its row and both its trained tokens; turn 2 starts
+        # a new row where the re-rendered answer is context.
         turn1 = TurnRecord([1, 2, 3], [10, 11], [-0.1, -0.2])
         turn2 = TurnRecord([1, 2, 3, 10, 12], [30, 31], [-0.3, -0.4])
         rows = _finalize([turn1, turn2])
-        assert len(rows) == 1
-        assert rows[0].input_ids == [1, 2, 3, 10, 12, 30, 31]
-        assert rows[0].completion_mask == [0, 0, 0, 1, 0, 1, 1]
-        assert rows[0].old_log_probs == [0.0, 0.0, 0.0, -0.1, 0.0, -0.3, -0.4]
-
-    def test_large_drift_forks_even_when_next_turn_is_short(self):
-        # The Qwen3 case: turn 1 is a long trained answer (a reasoning block); the template drops it on turn 2, so
-        # the prompt diverges at the answer start (large drift) while turn 2's own answer is tiny. The decision must
-        # key on the drift (6 tokens invalidated), not the incoming turn's length (1) -> FORK, so turn 1 keeps its
-        # training signal. (fork_threshold sits between the two: gating on output length would wrongly REALIGN.)
-        turn1 = TurnRecord([1, 2, 3], [10, 11, 12, 13, 14, 15], [-0.2] * 6)  # long trained answer
-        turn2 = TurnRecord([1, 2, 3, 99, 88], [30], [-0.2] * 1)  # answer dropped by the template; short next turn
-        rows = _finalize([turn1, turn2], fork_threshold=3)
         assert len(rows) == 2
-        assert rows[0].input_ids == [1, 2, 3, 10, 11, 12, 13, 14, 15]
-        assert rows[0].completion_mask == [0, 0, 0, 1, 1, 1, 1, 1, 1]  # long answer stays trained
-        assert rows[1].input_ids == [1, 2, 3, 99, 88, 30]
-        assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1]
+        assert rows[0].completion_mask == [0, 0, 0, 1, 1]
+        assert rows[1].input_ids == [1, 2, 3, 10, 12, 30, 31]
+        assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1, 1]
+        assert rows[1].old_log_probs == [0.0, 0.0, 0.0, 0.0, 0.0, -0.3, -0.4]
 
 
 # The vLLM server's turns, opened by Qwen3's empty thinking block: a tool call continues the loop, an answer ends it
@@ -2039,7 +2009,7 @@ def _run(*, turns, max_iters=None):
 
     loop.generate_one_turn = generate_one_turn
     rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], [t]))
-    rows, _tally = _chain_to_sequences(rollout.turns, "r", loop._fork_threshold_tokens)
+    rows, _drifts = _chain_to_sequences(rollout)
     return rollout, rows
 
 

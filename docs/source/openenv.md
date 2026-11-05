@@ -732,7 +732,7 @@ For example, prompt `[10, 11]`, completion `[20, 21, 22]` and mask `[0, 0, 1, 0,
 
 The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. The task's verifier remains independent of token eligibility.
 
-Malformed captures fail at the OpenEnv boundary and stop training. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
+Malformed captures fail at the OpenEnv boundary and stop training. Transport failures remain unscorable. Rewritten histories start separate rows, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
 ### Requirements
 
