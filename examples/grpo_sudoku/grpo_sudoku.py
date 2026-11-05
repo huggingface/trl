@@ -181,7 +181,7 @@ def main() -> None:
             learning_rate=args.learning_rate,
             lr_scheduler_type="constant",
             num_generations=16,
-            # One game per forward pass: games reach 16k tokens, since every move returns the whole grid.
+            # One game per forward pass: games can reach 16k tokens, since every move returns the whole grid.
             per_device_train_batch_size=1,
             gradient_accumulation_steps=64,
             gradient_checkpointing=True,
@@ -194,6 +194,7 @@ def main() -> None:
             # One call per empty cell, plus the moves rejected along the way.
             max_tool_calling_iterations=40,
             save_steps=25,
+            save_total_limit=1,
             push_to_hub=args.push_to_hub,
         ),
         environment_factory=SudokuEnv,

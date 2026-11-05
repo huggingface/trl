@@ -38,7 +38,7 @@ The training curves are on [Trackio](https://huggingface.co/spaces/openenv/sudok
 
 ![Base model, SFT and SFT + GRPO playing the same puzzles](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/openenv/sudoku-progress.gif)
 
-Puzzles 7 to 12 of `puzzles_c55.json` (26 empty cells), where the SFT model solves 2 and SFT + GRPO 4, close to their rates over all 30.
+Puzzles 7 to 12 of [`puzzles_c55.json`](https://github.com/openenv/OpenEnv/blob/main/examples/sudoku/puzzles_c55.json) (26 empty cells), where the SFT model solves 2 and SFT + GRPO 4, close to their rates over all 30.
 
 | Model | 26 empty cells: solved | cells filled | 16 empty cells: solved | cells filled |
 | --- | --- | --- | --- | --- |
