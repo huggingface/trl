@@ -35,7 +35,7 @@ from accelerate.logging import get_logger
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from ...import_utils import is_aiohttp_available, is_vllm_available
+from ...import_utils import is_aiohttp_available
 from ...trainer.utils import print_prompt_completions_sample
 
 
@@ -685,8 +685,6 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available():
-            raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
         if not is_aiohttp_available():
             raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")

@@ -51,7 +51,7 @@ from ...chat_template_utils import (
     is_chat_template_prefix_preserving,
     parse_response,
 )
-from ...import_utils import is_aiohttp_available, is_vllm_available
+from ...import_utils import is_aiohttp_available
 from ...trainer.utils import get_callable_name, is_async_callable, print_prompt_completions_sample
 from .async_grpo_config import AsyncGRPOConfig
 
@@ -1381,8 +1381,6 @@ class AsyncRolloutWorker:
         child_ready_timeout: int = 300,
         **loop_kwargs: Any,
     ):
-        if not is_vllm_available():
-            raise ImportError("vLLM is required to use AsyncRolloutWorker. Install it with: pip install vllm")
         if not is_aiohttp_available():
             raise ImportError("aiohttp is not installed. Please install it with `pip install aiohttp`.")
         ctx = mp.get_context("spawn")
