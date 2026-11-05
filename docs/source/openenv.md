@@ -727,6 +727,14 @@ The producer excludes auxiliary calls and discarded retries. There are no `train
 
 Malformed captures fail at the OpenEnv boundary and stop the worker. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
+### Logged metrics
+
+The `tools/` metrics keep the names they have with the built-in tool loop (see [Logged metrics](async_grpo_trainer#logged-metrics)), but some are measured differently:
+
+- `tools/failure_frequency` and `tools/{tool_name}/failure_total`: in loop-owning mode, a failure is a tool result whose text contains "error", "failed", "traceback" or "exception".
+- `tools/latency_s` and `tools/{tool_name}/latency_s`: in white-box mode (with a `harness_adapter`), the time between a turn's reply and the next turn's request, harness overhead included. Loop-owning mode logs no latency, since the OpenEnv trace does not timestamp its entries.
+- `tools/unknown_name_total` and `tools/parallel_calls_mean` come from the built-in tool loop and are not logged.
+
 ### Requirements
 
 The OpenEnv Harbor server owns the dataset and the sandboxes. It needs the credential of the sandbox backend (for example `E2B_API_KEY`):
