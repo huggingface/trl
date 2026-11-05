@@ -94,3 +94,60 @@ jobs:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
           title: Tests (experimental)
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
+
+  # The async trainers sync weights through vLLM's client, so their tests need vLLM installed. They run against a
+  # transformers-backed stand-in for `vllm serve`, so one GPU is enough.
+  tests-async:
+    permissions:
+      contents: read
+    name: Tests (experimental, async trainers)
+    runs-on:
+      group: aws-g6e-4xlarge
+    container:
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
+      options: --gpus all
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Make and Git
+        run: |
+          apt-get update && apt-get install -y make git curl
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+
+      - name: Create Python virtual environment
+        run: |
+          uv venv
+          uv pip install --upgrade setuptools wheel
+
+      - name: Install dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install ".[dev,vllm]"
+
+      - name: Test with pytest
+        run: |
+          source .venv/bin/activate
+          pytest -n auto -s -v tests/experimental/test_async_grpo_trainer.py tests/experimental/test_async_distillation_trainer.py
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
+
+      - name: Post to Slack
+        if: github.ref == 'refs/heads/main' && !cancelled()  # Check if the branch is main
+        uses: ./.github/actions/post-slack
+        with:
+          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
+          title: Tests (experimental, async trainers)
+          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
