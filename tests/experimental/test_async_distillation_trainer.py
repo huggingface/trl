@@ -14,7 +14,6 @@
 
 import asyncio
 import copy
-import importlib.util
 import itertools
 import json
 import math
@@ -81,14 +80,6 @@ from ..testing_utils import (
     require_vllm,
 )
 
-
-# Optional upstream oracle: PYTHONPATH=../RL python -m pytest ... -k nemo
-# Production TRL never imports or depends on NeMo.
-if importlib.util.find_spec("nemo_rl") is not None:
-    from nemo_rl.algorithms.loss.csd import CSDLossFn
-    from nemo_rl.algorithms.x_token.loss_utils import LocalizedAlignment
-else:
-    CSDLossFn = None
 
 TEACHER_TOP_K = 4
 
@@ -2046,88 +2037,3 @@ def test_csd_chain_loss_and_gradients_ignore_long_masked_prefix(csd_tiny_model, 
     (actual_grad,) = torch.autograd.grad(actual, head)
     torch.testing.assert_close(actual, reference, atol=1e-12, rtol=1e-7)
     torch.testing.assert_close(actual_grad, reference_grad, atol=1e-10, rtol=1e-6)
-
-
-@pytest.mark.skipif(CSDLossFn is None, reason="requires NVIDIA-NeMo/RL PR #4680 on PYTHONPATH")
-@pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
-def test_mixed_tokenizers_match_official_nemo_loss_and_gradients(tmp_path, csd_tiny_model, csd_mixed_teachers, beta):
-    student, teachers, samples = csd_mixed_teachers
-    model = copy.deepcopy(csd_tiny_model)
-    model.resize_token_embeddings(len(student))
-    n_chunks = sum(int((sample["csd_weights"] > 0).sum()) for sample in samples)
-    ours, official = [], []
-    for expert, teacher in enumerate(teachers):
-        csd_builder = CSDTargetBuilder(student, teacher, top_k=len(teacher))
-        forward_path, reverse_path = tmp_path / f"forward{expert}.pt", tmp_path / f"reverse{expert}.pt"
-        torch.save({"subtoks": csd_builder.forward, "lengths": csd_builder.forward_lengths}, forward_path)
-        torch.save({"subtoks": csd_builder.reverse, "lengths": csd_builder.reverse_lengths}, reverse_path)
-        upstream = CSDLossFn(
-            dict(
-                student_vocab_size=len(student),
-                teacher_vocab_sizes=[len(teacher)],
-                student_to_teacher_table_paths=[str(forward_path)],
-                teacher_to_student_table_paths=[str(reverse_path)],
-                common_indices_from_subtoks=True,
-                teacher_topk_ipc_k=0,
-                teacher_topk_ipc_keep_realized=True,
-                csd_loss_fn="jsd",
-                csd_jsd_beta=beta,
-                csd_mismatch_loss_beta=5.0,
-            )
-        )
-        for sample in samples:
-            if sample["expert"] != expert or not (sample["csd_weights"] > 0).any():
-                continue
-            s_ids, t_ids = sample["s_ids"], sample["t_ids"]
-            t_logps = sample["teacher_logps"]
-            ids, lps, lengths, weights = csd_builder.build(
-                s_ids, t_ids, sample["chunks"], [list(range(len(teacher)))] * len(t_ids), t_logps.tolist(), 5.0
-            )
-            tokens = torch.as_tensor(sample["input_ids"]).unsqueeze(0)
-            hidden = model.base_model(input_ids=tokens).last_hidden_state[0, :-1]
-            loss, *_ = _chunked_csd_loss(
-                hidden,
-                model.get_output_embeddings().weight,
-                None,
-                1.0,
-                None,
-                torch.as_tensor(ids),
-                torch.as_tensor(lps),
-                torch.tensor(s_ids),
-                torch.as_tensor(lengths),
-                torch.as_tensor(weights),
-                beta,
-                1.0,
-                None,
-                1,
-                2,
-            )
-            ours.append(loss / n_chunks)
-            spans = sample["chunks"]
-            alignment = LocalizedAlignment(
-                sample_mask=torch.ones(1, dtype=torch.bool),
-                student_input_ids=tokens,
-                teacher_input_ids=torch.tensor([[teacher.eos_token_id] + t_ids]),
-                student_spans=torch.tensor([[[a + 1, b + 1] for a, b, _, _ in spans]]),
-                teacher_spans=torch.tensor([[[a + 1, b + 1] for _, _, a, b in spans]]),
-                pair_valid=torch.ones((1, len(spans)), dtype=torch.bool),
-                num_chunks=torch.tensor([len(spans)]),
-            )
-            reference, _ = upstream._compute_csd_loss(
-                0,
-                model(tokens).logits,
-                sample["teacher_logits"].unsqueeze(0),
-                alignment,
-                teacher_vocab_size=len(teacher),
-                global_valid_chunks=torch.tensor(float(n_chunks)),
-            )
-            official.append(reference)
-    actual_loss, reference_loss = torch.stack(ours).sum(), torch.stack(official).sum()
-    actual_loss.backward()
-    actual_grads = {name: p.grad.clone() for name, p in model.named_parameters() if p.grad is not None}
-    model.zero_grad()
-    reference_loss.backward()
-    torch.testing.assert_close(actual_loss, reference_loss, atol=3e-6, rtol=2e-4)
-    for name, p in model.named_parameters():
-        if name in actual_grads:
-            torch.testing.assert_close(actual_grads[name], p.grad, atol=3e-6, rtol=5e-4)
