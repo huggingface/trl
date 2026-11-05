@@ -2301,6 +2301,10 @@ class TestCustomRolloutLoop(TrlTestCase):
         with pytest.raises(RuntimeError, match="rejected every prompt of epoch 0"):
             loop._run()
 
+    def test_the_built_in_generate_one_needs_a_reward_source(self):
+        with pytest.raises(ValueError, match="No reward source provided"):
+            _rollout_loop(reward_funcs=[], vllm_server_base_url="http://127.0.0.1:9")
+
     def test_generate_one_can_score_its_own_rollouts(self):
         loop = _rollout_loop(
             _SelfScoredLoop, num_generations=2, reward_funcs=[], vllm_server_base_url="http://127.0.0.1:9"
