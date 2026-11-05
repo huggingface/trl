@@ -121,7 +121,7 @@ def apply_model_revisions(monkeypatch):
         def wrapper(cls, pretrained_model_name_or_path, *args, **kwargs):
             # Direct lookup: only inject if model_id is in the override dict
             if pretrained_model_name_or_path in MODEL_REVISIONS:
-                if "revision" not in kwargs:
+                if kwargs.get("revision") is None:
                     kwargs["revision"] = MODEL_REVISIONS[pretrained_model_name_or_path]
                     # Clear _commit_hash: Auto classes resolve it from the default branch before calling
                     # sub-loaders, so the cached hash points to main. If we don't clear it, it silently
@@ -137,7 +137,7 @@ def apply_model_revisions(monkeypatch):
     def create_method_wrapper(original_method):
         @wraps(original_method)
         def wrapper(self, model_id, *args, **kwargs):
-            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_method(self, model_id, *args, **kwargs)
 
@@ -164,7 +164,7 @@ def apply_model_revisions(monkeypatch):
 
         @wraps(original_func)
         def wrapper(cls, model, model_id, *args, **kwargs):
-            if model_id in MODEL_REVISIONS and "revision" not in kwargs:
+            if model_id in MODEL_REVISIONS and kwargs.get("revision") is None:
                 kwargs["revision"] = MODEL_REVISIONS[model_id]
             return original_func(cls, model, model_id, *args, **kwargs)
 

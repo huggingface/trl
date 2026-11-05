@@ -186,7 +186,7 @@ def _serve_cmd(args: argparse.Namespace) -> list[str]:
 def start_harbor_server(args: argparse.Namespace, log: pathlib.Path) -> str:
     """Start the server and return its verified public proxy URL."""
     # The factory keeps one metadata connection in addition to its rollout sessions.
-    _spawn(_serve_cmd(args), log, env={"MAX_CONCURRENT_ENVS": str(args.max_inflight + 1)})
+    _spawn(_serve_cmd(args), log, env={"MAX_CONCURRENT_ENVS": str(args.max_concurrent_rollouts + 1)})
     return wait_for_public_proxy(log, args.capture_port)
 
 
@@ -274,7 +274,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     p.add_argument("--split", default="AdithyaSK/data_agent_rl_environment_train")
     p.add_argument("--harness", default="mini-swe-agent")
     p.add_argument("--sandbox", default="e2b")
-    p.add_argument("--max-inflight", type=int, default=8)
+    p.add_argument("--max-concurrent-rollouts", type=int, default=8)
     p.add_argument("--server-port", type=int, default=8200)
     p.add_argument("--capture-port", type=int, default=8300)
     p.add_argument("--vllm-port", type=int, default=8000)
@@ -392,7 +392,7 @@ def main() -> None:
         "--split", args.split,
         "--harness", args.harness,
         "--sandbox", args.sandbox,
-        "--max-inflight", str(args.max_inflight),
+        "--max-concurrent-rollouts", str(args.max_concurrent_rollouts),
         "--run-name", run_name,
         "--output-dir", str(data_root / "runs" / run_name),
         *forwarded,
