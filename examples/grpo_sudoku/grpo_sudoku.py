@@ -167,10 +167,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trackio-space-id", default="Sudoku-GRPO")
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument(
-        "--gradient-checkpointing",
+        "--activation-checkpointing",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Enable gradient checkpointing to save memory",
+        help="Enable activation checkpointing to save memory",
     )
 
     # LoRA / PEFT
@@ -639,7 +639,7 @@ def main() -> None:
     grpo_config.run_name = args.run_name or f"run-{timestamp}"
     grpo_config.project = args.project or f"group-{sanitize_name(args.model_id)}"
     grpo_config.trackio_space_id = args.trackio_space_id
-    grpo_config.gradient_checkpointing = args.gradient_checkpointing
+    grpo_config.activation_checkpointing = args.activation_checkpointing
 
     peft_config = None
     if args.use_lora:

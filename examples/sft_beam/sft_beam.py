@@ -57,7 +57,7 @@ training_args = SFTConfig(
     },
     per_device_train_batch_size=1,
     # B300s have the memory to keep the activations: 1.4x faster than recomputing them.
-    gradient_checkpointing=False,
+    activation_checkpointing=False,
     num_train_epochs=1,
     max_length=4096,
     # bfd packing flattens the batch (padding-free) and passes position_ids, which the attention uses to keep the
