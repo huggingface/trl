@@ -16,13 +16,14 @@ import contextlib
 import threading
 import time
 
+import torch
 from accelerate.logging import get_logger
 
 from ...import_utils import is_vllm_available
 from .vllm_client import VLLMClient
 
 
-if is_vllm_available(min_version="0.22.0"):
+if is_vllm_available():
     from vllm.utils.network_utils import get_ip, get_open_port
 
 # vLLM 0.28.0 (vllm-project/vllm#50902) replaced the static `NCCLWeightTransferEngine.trainer_init` /
@@ -32,7 +33,7 @@ _HAS_STATEFUL_TRAINER_ENGINE = is_vllm_available(min_version="0.28.0")
 if _HAS_STATEFUL_TRAINER_ENGINE:
     from vllm.distributed.weight_transfer.nccl_common import trainer_init as open_trainer_endpoint
     from vllm.distributed.weight_transfer.packed_tensor import packed_nccl_broadcast_producer
-elif is_vllm_available(min_version="0.22.0"):
+elif is_vllm_available():
     from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
 
@@ -55,25 +56,16 @@ class WeightTransferClient:
         weight_update_info (`dict`):
             Names, dtypes and shapes of the parameters to send. The server sizes its receive buffers from it, so it
             must describe exactly what [`send_weights`] streams.
-        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Seconds allowed for the steps that scale with model size: the NCCL handshake, the transfer itself, and the
-            finalisation that follows it. Pause, resume and the reload setup are bounded by `_CONTROL_TIMEOUT` instead.
     """
-
-    _CONTROL_TIMEOUT = 300
 
     def __init__(
         self,
         vllm_client: VLLMClient,
         weight_update_info: dict,
-        weight_sync_timeout: int = 1800,
     ):
-        if not is_vllm_available(min_version="0.22.0"):
-            raise ImportError(
-                "vLLM >= 0.22.0 is required to use WeightTransferClient. Install it with: pip install 'vllm>=0.22.0'"
-            )
+        if not is_vllm_available():
+            raise ImportError("vLLM is required to use WeightTransferClient. Install it with: pip install vllm")
         self.vllm = vllm_client
-        self.weight_sync_timeout = weight_sync_timeout
         self._weight_update_info = weight_update_info
         if not _HAS_STATEFUL_TRAINER_ENGINE:
             self._weight_update_info = {**weight_update_info, "packed": True}
@@ -108,7 +100,7 @@ class WeightTransferClient:
         thread = threading.Thread(target=trainer_init, daemon=True)
         thread.start()
         try:
-            self.vllm.init_weight_transfer_engine(init_info, timeout=self.weight_sync_timeout)
+            self.vllm.init_weight_transfer_engine(init_info)
             thread.join()
             if error:
                 raise error[0]
@@ -126,7 +118,11 @@ class WeightTransferClient:
             return
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
-        self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        self.vllm.start_weight_update()
+        # The manifest is collected before FSDP2 upcasts low-precision parameters to fp32, and the server sizes its
+        # receive buffers from it, so each tensor is sent in the dtype the manifest declares.
+        dtypes = [getattr(torch, dtype_name) for dtype_name in self._weight_update_info["dtype_names"]]
+        iterator = ((name, tensor.to(dtype)) for (name, tensor), dtype in zip(iterator, dtypes, strict=True))
 
         error: list[BaseException] = []
 
@@ -147,31 +143,31 @@ class WeightTransferClient:
         thread = threading.Thread(target=trainer_send_weights, daemon=True)
         thread.start()
         try:
-            self.vllm.update_weights(self._weight_update_info, timeout=self.weight_sync_timeout)
+            self.vllm.update_weights(self._weight_update_info)
             thread.join()
             if error:
                 raise error[0]
         except Exception as exc:
             # Best-effort: a failure to clean up must not mask the error below.
             with contextlib.suppress(Exception):
-                self.vllm.finish_weight_update(timeout=self.weight_sync_timeout)
+                self.vllm.finish_weight_update()
             raise RuntimeError(
                 f"Weight sync to the vLLM server at {self.vllm.server_url} failed. The server keeps the partially "
                 "updated weights but stays paused, and a new run re-sends every parameter at start-up. If the "
                 "underlying error is a CUDA OOM on the server, restart it with a lower `--gpu-memory-utilization`: "
                 "receiving a transfer needs a few GB of headroom on top of the weights and the KV cache."
             ) from exc
-        self.vllm.finish_weight_update(timeout=self.weight_sync_timeout)
+        self.vllm.finish_weight_update()
         logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 
     def pause(self) -> None:
         t0 = time.time()
-        self.vllm.pause(timeout=self._CONTROL_TIMEOUT)
+        self.vllm.pause()
         logger.debug(f"[weight_sync] pause HTTP took {time.time() - t0:.1f}s")
 
     def resume(self) -> None:
         t0 = time.time()
-        self.vllm.resume(timeout=self._CONTROL_TIMEOUT)
+        self.vllm.resume()
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def destroy(self) -> None:

@@ -23,7 +23,7 @@ This example demonstrates how to train a model using the GRPO method. We train a
   height="560px"
 ></iframe>
 
-Below is the script to train the model.
+Below is the script to train the model. `accuracy_reward` needs math-verify, which you can install with `pip install trl[math_verify]`.
 
 ```python
 # train_grpo.py
@@ -218,7 +218,7 @@ pip install trl[vllm]
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
 > [!TIP]
-> By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
+> By default, sequence-level Masked Importance Sampling (`vllm_importance_sampling_mode="sequence_mask"`) is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Masked Importance Sampling](paper_index#masked-importance-sampling) and [Sequence-level Importance Sampling](paper_index#sequence-level-importance-sampling)
 
 #### Option 1: Colocate mode
 
@@ -496,8 +496,8 @@ You can test this function as follows:
 
 ```python
 >>> prompts = [
-...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
-...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+...     [{"role": "user", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "user", "content": "What is the result of (3 + 1) * 2?"}],
 ... ]
 >>> completions = [
 ...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
@@ -569,7 +569,7 @@ def math_reward_func(prompts, completions, task, **kwargs):
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
     for prompt, completion, t in zip(prompts, completions, task):
-        if t == "coding":
+        if t == "code":
             # Calculate coding-specific reward
             works = test_code_solution(prompt, completion)
             reward = 1.0 if works else -1.0
@@ -961,6 +961,8 @@ The returned images are automatically injected into the conversation and passed 
 
 Tested with:
 
+- **Beam** — e.g., `reflection/Beam-1.0-501B-A23B`
+- [**DeepSeek-R1**](https://huggingface.co/collections/deepseek-ai/deepseek-r1) — e.g., `deepseek-ai/DeepSeek-R1`
 - [**Gemma4**](https://huggingface.co/collections/google/gemma-4) — e.g., `google/gemma-4-E2B-it`
 - **GLM-4-MoE** ([4.5](https://huggingface.co/collections/zai-org/glm-45), [4.6](https://huggingface.co/collections/zai-org/glm-46) or [4.7](https://huggingface.co/collections/zai-org/glm-47)) — e.g., `zai-org/GLM-4.7`
 - [**GPT-OSS**](https://huggingface.co/collections/openai/gpt-oss) — e.g., `openai/gpt-oss-20b`

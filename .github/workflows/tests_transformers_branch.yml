@@ -34,10 +34,10 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
@@ -64,6 +64,10 @@ jobs:
         run: |
           source .venv/bin/activate
           make test
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()
@@ -91,10 +95,10 @@ jobs:
       - name: Git checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Make and Git
         run: |
@@ -121,6 +125,10 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest -v tests/distributed/test_distributed.py
+          touch .pytest-completed
+
+      - name: Check that pytest completed
+        run: test -f .pytest-completed  # The runner can report a cut-off test step as passed: #8004
 
       - name: Post to Slack
         if: github.ref == 'refs/heads/main' && always()

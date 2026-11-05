@@ -49,19 +49,27 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     BitsAndBytesConfig,
+    FineGrainedFP8Config,
+    Mxfp4Config,
     PretrainedConfig,
     PreTrainedModel,
     is_comet_available,
     is_trackio_available,
 )
 from transformers.models.auto.auto_factory import _BaseAutoModelClass
-from transformers.utils import ModelOutput, is_peft_available, is_rich_available
+from transformers.utils import ModelOutput, is_peft_available, is_rich_available, is_triton_available
 
+from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
+from ..kernels.chunked_logprob import _use_triton
 from ..trainer.model_config import ModelConfig
 
 
 if is_comet_available():
     import comet_ml
+
+
+if is_triton_available():
+    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
 
 
 if is_peft_available():
@@ -281,22 +289,17 @@ def get_peft_config(model_args: ModelConfig) -> "PeftConfig | None":
             "Make sure to run `pip install -U peft`."
         )
 
-    # `target_parameters` was added in PEFT 0.17.0, so only pass it when the user asked for it
-    lora_config_kwargs = {}
-    if model_args.lora_target_parameters is not None:
-        lora_config_kwargs["target_parameters"] = model_args.lora_target_parameters
-
     peft_config = LoraConfig(
         task_type=model_args.lora_task_type,
         r=model_args.lora_r,
         target_modules=model_args.lora_target_modules,
+        target_parameters=model_args.lora_target_parameters,
         lora_alpha=model_args.lora_alpha,
         lora_dropout=model_args.lora_dropout,
         bias="none",
         use_rslora=model_args.use_rslora,
         use_dora=model_args.use_dora,
         modules_to_save=model_args.lora_modules_to_save,
-        **lora_config_kwargs,
     )
 
     return peft_config
@@ -363,7 +366,7 @@ def generate_model_card(
     template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
+        template_str=pkg_resources.files("trl").joinpath(f"templates/{template_file}").read_text(encoding="utf-8"),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
@@ -501,14 +504,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> torch.Tensor | tup
     return flushed_mask, *flushed_tensors
 
 
-try:
-    from ..kernels import ChunkedLogProbFunction as _ChunkedLogProbFunction
-    from ..kernels import selective_log_softmax_and_entropy as _fused_logprob_entropy
-except ImportError:  # Triton ships with PyTorch on Linux only
-    _ChunkedLogProbFunction = None
-    _fused_logprob_entropy = None
-
-
 def _supports_trl_loss_kernel(
     logits: torch.Tensor, index: torch.Tensor | None = None, row_mask: torch.Tensor | None = None
 ) -> bool:
@@ -571,7 +566,7 @@ def selective_log_softmax(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, _ = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs
 
@@ -624,7 +619,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits):
+    if is_triton_available() and _supports_trl_loss_kernel(logits):
         index = torch.zeros(logits.shape[:-1], device=logits.device, dtype=torch.long)
         _, entropy = _fused_logprob_entropy(logits, index)
         return entropy
@@ -698,7 +693,7 @@ def selective_log_softmax_and_entropy(
     """
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if _fused_logprob_entropy is not None and _supports_trl_loss_kernel(logits, index, row_mask):
+    if is_triton_available() and _supports_trl_loss_kernel(logits, index, row_mask):
         logprobs, entropy = _fused_logprob_entropy(logits, index, temperature=temperature, row_mask=row_mask)
         return logprobs, entropy if entropy_requires_grad else entropy.detach()
     if temperature != 1.0:
@@ -1325,12 +1320,25 @@ def create_model_from_path(
         kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
-            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`.
+            or `'auto'`. If not explicitly set, `dtype` defaults to `'float32'`. A checkpoint quantized in MXFP4 or FP8
+            is loaded dequantized, unless `'quantization_config'` is set.
 
     Returns:
         [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
+    # The config decides how the weights load, so it comes from the revision they load from
+    config = AutoConfig.from_pretrained(
+        model_id, revision=kwargs.get("revision"), trust_remote_code=kwargs.get("trust_remote_code", False)
+    )
+    # A quantized checkpoint is a serving artifact: neither MXFP4 nor FP8 weights train in place, so the checkpoint is
+    # loaded dequantized, unless the caller chose how to load it with `quantization_config`
+    dequantizers = {"mxfp4": Mxfp4Config, "fp8": FineGrainedFP8Config}
+    quant_method = config.to_dict().get("quantization_config", {}).get("quant_method")
+    if quant_method in dequantizers and "quantization_config" not in kwargs:
+        if quant_method == "fp8" and Version(transformers.__version__) < Version("5.0.0"):
+            raise ValueError(f"`{model_id}` is quantized in FP8, and dequantizing it needs transformers>=5.0.0.")
+        kwargs["quantization_config"] = dequantizers[quant_method](dequantize=True)
     dtype = kwargs.get("dtype", "float32")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
@@ -1353,7 +1361,6 @@ def create_model_from_path(
         kwargs["device_map"] = None if PartialState().device.type in ("cpu", "mps") else "auto"
     if architecture is None:
         # Best effort to infer architecture from config, but we fall back to AutoModelForCausalLM if we can't find it
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=kwargs.get("trust_remote_code", False))
         architecture = getattr(transformers, config.architectures[0], None)
         if architecture is None:
             # Remote-code checkpoint: the architecture name lives in the dynamic module, not in
@@ -1396,6 +1403,28 @@ def get_config_model_id(config: PretrainedConfig) -> str:
             The model identifier associated with the model configuration.
     """
     return getattr(config, "_name_or_path", "")
+
+
+def model_accepts_images(model: PreTrainedModel) -> bool:
+    """
+    Whether a model takes images as input, so that its processing class is a processor rather than a tokenizer.
+
+    A multimodal checkpoint loaded as a language model alone (e.g. Qwen3.5 with `AutoModelForCausalLM`) does not.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`]):
+            Model to inspect.
+
+    Returns:
+        `bool`:
+            Whether the model takes images as input.
+    """
+    # Before transformers 5.21, several VLMs (e.g. Qwen3.5) report `input_modalities == "text"`, see
+    # huggingface/transformers#49677
+    if Version(transformers.__version__) < Version("5.21.0"):
+        return "vision_config" in model.config.sub_configs
+    else:
+        return "image" in model.input_modalities
 
 
 @contextmanager
@@ -1530,6 +1559,9 @@ class FusedCausalLMOutput(ModelOutput):
             Mean of the temperature-scaled next-token logits over the vocabulary, without gradient.
         is_top1 (`torch.Tensor`, same shape as `log_probs`):
             Whether the label is the most likely next token.
+        score_log_probs (`torch.Tensor` of shape `(*log_probs.shape, K)`):
+            Log-probability of each token of the `score_ids` given to the forward, normalized like `log_probs`, `0` at
+            padding.
         label_mask (`torch.Tensor`, same shape as `log_probs`):
             Whether the label is not `-100`. Prompt-learning PEFT pads the labels, so this can count one more token per
             sequence than the caller's labels.
@@ -1543,6 +1575,7 @@ class FusedCausalLMOutput(ModelOutput):
     log_sum_sq_probs: torch.Tensor | None = None
     mean_logits: torch.Tensor | None = None
     is_top1: torch.Tensor | None = None
+    score_log_probs: torch.Tensor | None = None
     label_mask: torch.Tensor | None = None
     aux_loss: torch.Tensor | None = None
 
@@ -1562,6 +1595,14 @@ def add_fused_lm_head(
     as passed under context or sequence parallelism, are scored without shifting. Without it, the forward is the
     original one, so generation is unchanged. Add the head before wrapping the model with PEFT.
 
+    `support_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, is the support each token was sampled
+    from: the tokens left after top-k/top-p truncation. Given, the log-probabilities are normalized over that set
+    rather than the whole vocabulary, as the sampler's were. It is aligned with `input_ids` and shifted like `labels`.
+
+    `score_ids`, a `(batch, seq_len, K)` tensor of token ids padded with `-1`, asks for the log-probability of those
+    tokens at each position as well, returned as `score_log_probs` and normalized like `log_probs`. It is aligned and
+    shifted like `support_ids`.
+
     Args:
         model ([`~transformers.PreTrainedModel`]):
             Causal language model to patch.
@@ -1574,12 +1615,6 @@ def add_fused_lm_head(
             `"log_sum_sq_probs"`, `"mean_logits"` and `"is_top1"`. The others are `None`. `log_probs` (and so `loss`)
             is always computed; each extra field costs a little on every call.
     """
-    if _ChunkedLogProbFunction is None:
-        raise ImportError(
-            "Triton is not installed. Please install it with `pip install triton`. The fused LM head requires it, "
-            "and it is only available on Linux with a CUDA, ROCm or XPU GPU."
-        )
-
     original_forward = model.forward
     text_config = model.config.get_text_config()
     final_logit_softcapping = getattr(text_config, "final_logit_softcapping", None)
@@ -1605,7 +1640,15 @@ def add_fused_lm_head(
     # Keep the original signature: `generate` validates its model kwargs against it
     @functools.wraps(type(model).forward)
     def _fused_forward(
-        self, *args, fused_lm_head=False, labels=None, shift_labels=None, num_items_in_batch=None, **kwargs
+        self,
+        *args,
+        fused_lm_head=False,
+        labels=None,
+        shift_labels=None,
+        num_items_in_batch=None,
+        support_ids=None,
+        score_ids=None,
+        **kwargs,
     ):
         if not fused_lm_head:
             if labels is not None:
@@ -1625,6 +1668,10 @@ def add_fused_lm_head(
         if shift_labels is None:
             hidden_states = backbone_outputs.last_hidden_state[:, :-1]
             labels = labels[:, 1:]
+            if support_ids is not None:
+                support_ids = support_ids[:, 1:]
+            if score_ids is not None:
+                score_ids = score_ids[:, 1:]
         else:
             hidden_states = backbone_outputs.last_hidden_state
             labels = shift_labels
@@ -1645,23 +1692,50 @@ def add_fused_lm_head(
             weight = weight.full_tensor()
             if bias is not None:
                 bias = bias.full_tensor()
+        # On Triton devices, only the valid positions are scored. Elsewhere (e.g. Neuron), the number of valid positions
+        # would change the tile shapes on every batch and trigger a recompilation, so every position is scored instead.
+        compact = _use_triton(hidden_states.device)
+        if support_ids is not None:
+            support_ids = support_ids.to(lm_head.weight.device)
+            support_ids = (
+                support_ids[mask] if compact else support_ids.masked_fill(~mask.unsqueeze(-1), 0).flatten(0, 1)
+            )
+        if score_ids is not None:
+            score_ids = score_ids.to(lm_head.weight.device)
+            score_ids = score_ids[mask] if compact else score_ids.masked_fill(~mask.unsqueeze(-1), 0).flatten(0, 1)
         with autocast_ctx, maybe_gather_lm_head_ctx(weight, bias):
             per_token = _ChunkedLogProbFunction.apply(
-                hidden_states[mask],
+                hidden_states[mask] if compact else hidden_states.reshape(-1, hidden_states.size(-1)),
                 weight,
                 bias,
-                labels[mask],
+                labels[mask] if compact else labels.clamp(min=0).reshape(-1),
                 temperature,
                 _CHUNKED_LOGPROB_CHUNK_SIZE,
                 final_logit_softcapping,
                 logit_scale,
                 outputs,
+                support_ids,
+                score_ids,
             )
-        # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
-        # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
-        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1 = (
-            None if x is None else x.new_zeros(mask.shape).masked_scatter(mask, x) for x in per_token
-        )
+        if compact:
+            # `masked_scatter` keeps the output connected to the model even when no label is valid. This lets an
+            # all-masked microbatch contribute a differentiable zero instead of failing in `backward()`.
+            per_token = (
+                None
+                if x is None
+                else x.new_zeros(mask.shape + x.shape[1:]).masked_scatter(
+                    mask.view(mask.shape + (1,) * (x.dim() - 1)), x
+                )
+                for x in per_token
+            )
+        else:
+            per_token = (
+                None
+                if x is None
+                else x.view(mask.shape + x.shape[1:]).masked_fill(~mask.view(mask.shape + (1,) * (x.dim() - 1)), 0)
+                for x in per_token
+            )
+        log_probs, entropy, log_sum_sq_probs, mean_logits, is_top1, score_log_probs = per_token
         loss = -log_probs.sum() / (mask.sum().clamp(min=1) if num_items_in_batch is None else num_items_in_batch)
 
         aux_loss = None
@@ -1669,22 +1743,22 @@ def add_fused_lm_head(
             # Mixtral's load-balancing loss is the one every MoE family pulls in through the modular system.
             from transformers.models.mixtral.modeling_mixtral import load_balancing_loss_func
 
-            if Version(transformers.__version__) < Version("5.0.0"):
-                num_experts = self.num_experts
-                num_experts_per_tok = self.num_experts_per_tok
-            else:
-                # Upstream bug AttributeError: 'GptOssConfig' object has no attribute 'num_experts'; see #5754
-                if text_config.model_type == "gpt_oss" and Version("5.0.0") <= Version(
-                    transformers.__version__
-                ) < Version("5.6.0"):
-                    num_experts = self.num_experts
+            router_logits = backbone_outputs.router_logits
+            if router_logits:
+                if Version(transformers.__version__) < Version("5.0.0"):
+                    num_experts_per_tok = self.num_experts_per_tok
                 else:
-                    num_experts = text_config.num_experts
-                num_experts_per_tok = text_config.num_experts_per_tok
-            # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token counts.
-            aux_loss = load_balancing_loss_func(
-                backbone_outputs.router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
-            )
+                    num_experts_per_tok = text_config.num_experts_per_tok
+                # Configs name the expert count `num_experts` or `num_local_experts`, so read it off the router logits
+                num_experts = router_logits[0].shape[-1]
+                # Padding-free packs all real tokens into a single row, so `attention_mask` is None and every token
+                # counts.
+                aux_loss = load_balancing_loss_func(
+                    router_logits, num_experts, num_experts_per_tok, kwargs.get("attention_mask")
+                )
+            else:
+                # Some models return no router logits, e.g. granite-4.0-h-350m, which has no experts
+                aux_loss = loss.new_zeros(())
             loss = loss + getattr(text_config, "router_aux_loss_coef", 0.0) * aux_loss
 
         return FusedCausalLMOutput(
@@ -1694,6 +1768,7 @@ def add_fused_lm_head(
             log_sum_sq_probs=log_sum_sq_probs,
             mean_logits=mean_logits,
             is_top1=is_top1,
+            score_log_probs=score_log_probs,
             label_mask=mask,
             aux_loss=aux_loss,
         )

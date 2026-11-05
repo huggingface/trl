@@ -30,14 +30,13 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
+from trl.import_utils import is_vllm_available
 
 from .testing_utils import (
     TrlTestCase,
     is_ampere_or_newer,
     require_bitsandbytes,
-    require_liger_kernel,
     require_peft,
-    require_peft_target_parameters,
     require_torch_accelerator,
     require_vision,
     require_vllm,
@@ -71,8 +70,18 @@ class TestRLOOTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            pytest.param(
+                "trl-internal-testing/tiny-BeamForCausalLM",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.20.1"),
+                    reason="Beam was introduced in transformers-5.20.1",
+                ),
+            ),
             pytest.param(
                 "trl-internal-testing/tiny-NemotronHForCausalLM-nano",
                 marks=pytest.mark.skipif(
@@ -109,40 +118,6 @@ class TestRLOOTrainer(TrlTestCase):
         # MoE models log the load-balancing auxiliary loss (on by default)
         if trainer.aux_loss_enabled:
             assert trainer.state.log_history[-1]["aux_loss"] is not None
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
-
-    @require_liger_kernel
-    def test_train_with_liger(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = RLOOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,
-            per_device_train_batch_size=3,
-            num_generations=3,
-            max_completion_length=8,
-            use_liger_kernel=True,
-            report_to="none",
-        )
-        with pytest.warns(FutureWarning, match="`use_liger_kernel=True` is deprecated"):
-            trainer = RLOOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
-        # Liger's fused linear cross-entropy would replace the forward that carries the fused LM head
-        assert trainer.args.liger_kernel_config["fused_linear_cross_entropy"] is False
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -784,7 +759,7 @@ class TestRLOOTrainer(TrlTestCase):
             elif "base_layer" not in n and "ref" not in n:  # and the peft params to be different (except base and ref)
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @require_peft_target_parameters
+    @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
@@ -1443,7 +1418,42 @@ class TestRLOOTrainer(TrlTestCase):
 
     @require_peft
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @require_torch_accelerator
+    def test_vllm_weight_sync_skips_ref_adapter_modules_to_save(self):
+        # With a pretrained adapter, RLOO adds a "ref" copy of the adapter. Its copy of the `modules_to_save` head must
+        # not reach vLLM, which only knows `lm_head.weight`.
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.bfloat16
+        )
+        model = get_peft_model(model, LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            beta=0.04,
+            use_vllm=True,
+            vllm_mode="colocate",
+            max_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+        )
+        trainer = RLOOTrainer(
+            model=model,
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+    @require_peft
+    @require_vllm
+    @pytest.mark.xfail(
+        condition=is_vllm_available(min_version="0.29.0"),
+        reason="Syncing the `modules_to_save` copy of a tied `lm_head` to vLLM>=0.29 raises (see #7955)",
+        strict=True,
+    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained(
@@ -1490,7 +1500,6 @@ class TestRLOOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_train_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1559,7 +1568,6 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_train_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1602,9 +1610,9 @@ class TestRLOOTrainer(TrlTestCase):
         reason="transformers continuous batching requires transformers>=5.8.0",
     )
     @pytest.mark.skipif(
-        not is_ampere_or_newer() and torch_device != "xpu",
+        not is_ampere_or_newer() and torch_device != "xpu" and torch.version.hip is None,
         reason="transformers continuous batching switches attention to Flash Attention, which requires an Ampere or "
-        "newer GPU, or XPU (see https://github.com/huggingface/transformers/issues/47926)",
+        "newer GPU, XPU, or ROCm (see https://github.com/huggingface/transformers/issues/47926)",
     )
     def test_train_with_transformers_continuous_batching(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1618,6 +1626,7 @@ class TestRLOOTrainer(TrlTestCase):
             max_steps=2,  # continuous batching adds about 1s per step
             report_to="none",
             use_transformers_continuous_batching=True,
+            transformers_continuous_batching_config={"num_blocks": 16},  # reduce the KV cache size, see #7824
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/small-Qwen3ForCausalLM",
@@ -2311,6 +2320,19 @@ class TestRLOOTrainerVLM(TrlTestCase):
             else:
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
+    def test_generation_suppresses_image_token(self):
+        # Gemma3: its processor's `image_token_id` is not the placeholder token, unlike its config's
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
+
     def test_train_vlm_with_pad_to_multiple_of(self):
         # Models like Gemma3 use other forward keyword arguments like token_type_ids that also need to be padded when
         # using pad_to_multiple_of, so we test that the trainer correctly pads all the necessary inputs in this case.
@@ -2637,6 +2659,8 @@ class TestRLOOTrainerVLM(TrlTestCase):
             args=training_args,
             train_dataset=dataset,
         )
+        # Some samples have no image: their batches leave the vision tower without gradients
+        assert trainer.args.ddp_find_unused_parameters
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 

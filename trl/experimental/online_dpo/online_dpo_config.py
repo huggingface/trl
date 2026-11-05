@@ -40,7 +40,7 @@ class OnlineDPOConfig(_BaseConfig):
         max_length (`int`, *optional*, defaults to `512`):
             Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If the
             sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the completion as
-            possible.
+            possible. Not applied when the inputs contain images, as truncation would drop image tokens.
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         missing_eos_penalty (`float`, *optional*):
@@ -185,7 +185,8 @@ class OnlineDPOConfig(_BaseConfig):
         metadata={
             "help": "Maximum total length of the sequence (prompt + completion) used to compute log probabilities. If "
             "the sequence exceeds this limit, the leftmost tokens will be truncated to preserve as much of the "
-            "completion as possible."
+            "completion as possible. Not applied when the inputs contain images, as truncation would drop image "
+            "tokens."
         },
     )
     temperature: float = field(

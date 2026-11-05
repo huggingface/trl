@@ -18,10 +18,10 @@ pip install trl[harbor]
 ```
 
 > [!IMPORTANT]
-> Harbor drives generation through vLLM and uses `environment_factory`, which requires `vllm>=0.22.0` and `transformers>=5.2.0`.
+> Harbor drives generation through vLLM and uses `environment_factory`, which requires `vllm` and `transformers>=5.2.0`.
 >
 > ```bash
-> pip install 'vllm>=0.22.0'
+> pip install vllm
 > ```
 
 This installs the `harbor` framework (Python >= 3.12). The integration imports `harbor` lazily and runs it **in-process**, so users who don't touch `trl.experimental.harbor` aren't affected.
