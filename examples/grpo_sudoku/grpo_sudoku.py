@@ -119,6 +119,8 @@ def main() -> None:
             self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
 
         def reset(self, **kwargs) -> str | None:
+            # One connection per game, so the Space's periodic WebSocket drops don't land mid-game, see
+            # https://huggingface.co/docs/trl/openenv#long-runs-against-a-space
             self.client.close()
             self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
             result = self.client.reset()
