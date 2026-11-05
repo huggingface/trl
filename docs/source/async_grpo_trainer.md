@@ -16,7 +16,7 @@ This trainer was contributed by [Amine Dirhoussi](https://huggingface.co/aminedi
 
 ## Quick start
 
-This example demonstrates how to train a model using the Async GRPO method. We train a [Qwen2.5 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
+This example demonstrates how to train a model using the Async GRPO method. We train a [Qwen3.5 2B model](https://huggingface.co/Qwen/Qwen3.5-2B) with the prompts from the [DeepMath-103K dataset](https://huggingface.co/datasets/trl-lib/DeepMath-103K). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/DeepMath-103K/embed/viewer/default/train?row=0"
@@ -36,7 +36,7 @@ from trl.rewards import accuracy_reward
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
+    model="Qwen/Qwen3.5-2B",
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
 )
@@ -46,7 +46,7 @@ trainer.train()
 Generation runs on a vLLM server, on different GPUs than the trainer. Start it on GPU 0:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen2.5-0.5B-Instruct \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3.5-2B \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --api-server-count 8 \
@@ -341,7 +341,7 @@ from trl.rewards import accuracy_reward
 dataset = load_dataset("trl-lib/DeepMath-103K", split="train")
 
 trainer = AsyncGRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B-Instruct",
+    model="Qwen/Qwen3.5-2B",
     reward_funcs=accuracy_reward,
     train_dataset=dataset,
     peft_config=LoraConfig(r=32, lora_alpha=64, target_modules="all-linear"),
