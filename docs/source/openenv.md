@@ -36,7 +36,7 @@ This installs the **environment client** (e.g., `EchoEnv`) that communicates wit
 > You can find the install command for any environment on its HF Space page. Click the **⋮ (three dots)** menu and select **"Use this Space"** to see the install instructions.
 
 > [!TIP]
-> You can also install the core package from PyPI with `pip install "openenv[core]>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
+> You can also install the core package from PyPI with `pip install "openenv>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
 
 For development, you can clone the OpenEnv repo and install locally:
 
@@ -656,7 +656,7 @@ TRL does not sample each turn here. The agent runs to completion on its own, and
 2. When the agent stops, the task's own verifier scores the result, and TRL receives the validated `TrainingTrace` from OpenEnv and builds the training rows from its token ids and masks. TRL does not re-tokenize the captured prompts.
 3. GRPO trains on those rows. The reward is propagated to every trained token through the group-relative advantage, and the new weights are synced back into the same vLLM server.
 
-Each rollout runs in its own isolated session, with its own sandbox and its own capture session. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight_tasks` setting controls how many rollouts run at the same time, and the server's `MAX_CONCURRENT_ENVS` must be at least `max_inflight_tasks + 1` (the factory keeps one extra connection for task metadata).
+Each rollout runs in its own isolated session, with its own sandbox and its own capture session. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_concurrent_rollouts` setting controls how many rollouts run at the same time, and the server's `MAX_CONCURRENT_ENVS` must be at least `max_concurrent_rollouts + 1` (the factory keeps one extra connection for task metadata).
 
 ### Wiring
 
@@ -679,7 +679,9 @@ factory = partial(
     llm_url=vllm_url,
     model=model,
 )
+config = AsyncGRPOConfig(num_generations=8, max_concurrent_rollouts=8, vllm_server_base_url=vllm_url)
 worker = HarnessRolloutWorker(
+    config,                           # the worker reads its sampling and server settings from the config
     harness_session_factory=factory,  # called by the worker with its sampling policy
     harness_adapter=None,             # loop-owning: the agent runs its own loop
     rollout_reward_fn=my_reward,      # outcome -> float | None
@@ -687,9 +689,7 @@ worker = HarnessRolloutWorker(
     dataset=dataset,
     reward_funcs=[],
     processing_class=tokenizer,
-    num_generations=8,
-    max_inflight_tasks=8,
-    vllm_server_url=vllm_url,
+    eos_token_ids=[tokenizer.eos_token_id],
 )
 trainer = AsyncGRPOTrainer(model=model, args=config, train_dataset=dataset, rollout_worker=worker)
 trainer.train()

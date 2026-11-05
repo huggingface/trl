@@ -1,6 +1,6 @@
 # Examples
 
-The [`examples/`](https://github.com/huggingface/trl/tree/main/examples) directory contains a collection of self-contained examples that demonstrate how to use the TRL library for various applications. **Each example lives in its own folder** named after the method and the task it demonstrates (e.g. `grpo_wordle`, `sft_gpt_oss`), and holds everything the example needs: scripts, notebooks, prompts, chat templates, and evaluation code.
+The [`examples/`](https://github.com/huggingface/trl/tree/main/examples) directory contains a collection of self-contained examples that demonstrate how to use the TRL library for various applications. **Each example lives in its own folder** named after the method and the task it demonstrates (e.g. `grpo_wordle`, `sft_gpt_oss_chess`), and holds everything the example needs: scripts, notebooks, prompts, chat templates, and evaluation code.
 
 Basic single-trainer training scripts are not examples: they live in [`trl/scripts`](https://github.com/huggingface/trl/tree/main/trl/scripts) and are exposed through the [command line interface](clis) (`trl sft`, `trl dpo`, `trl grpo`, …). Each trainer's documentation page also contains a complete runnable snippet.
 
@@ -59,7 +59,7 @@ Check for additional optional dependencies [here](https://github.com/huggingface
 | [`sft_diffusion_gemma`](https://github.com/huggingface/trl/tree/main/examples/sft_diffusion_gemma) | SFT of the DiffusionGemma block-diffusion language model on GSM8K by extending the [`SFTTrainer`] with a block-diffusion objective. | |
 | [`sft_gemma3`](https://github.com/huggingface/trl/tree/main/examples/sft_gemma3) | SFT of Gemma 3 on the Codeforces COTS dataset. | |
 | [`sft_gemma3_vision`](https://github.com/huggingface/trl/tree/main/examples/sft_gemma3_vision) | SFT of Gemma 3 on vision to text tasks. | |
-| [`sft_gpt_oss`](https://github.com/huggingface/trl/tree/main/examples/sft_gpt_oss) | SFT of openai/gpt-oss-20b. | |
+| [`sft_gpt_oss_chess`](https://github.com/huggingface/trl/tree/main/examples/sft_gpt_oss_chess) | Full fine-tuning of openai/gpt-oss-20b on chess puzzles with [`SFTTrainer`]: TRL loads its MXFP4 experts dequantized, and the fine-tuned experts are quantized back to MXFP4 to serve like the original. | |
 | [`sft_ministral3_vl`](https://github.com/huggingface/trl/tree/main/examples/sft_ministral3_vl) | SFT Ministral 3 with QLoRA on free Colab. | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sft_ministral3_vl/sft_ministral3_vl.ipynb) |
 | [`sft_mistral_large_4`](https://github.com/huggingface/trl/tree/main/examples/sft_mistral_large_4) | LoRA SFT of mistralai/Mistral-Large-4-1T-A52B on top of its FP8 weights on one 8xB300 node with [`SFTTrainer`], sharded at load time by transformers' `DistributedConfig` (expert parallelism with token dispatch). | |
 | [`sft_nemotron_3`](https://github.com/huggingface/trl/tree/main/examples/sft_nemotron_3) | SFT of NVIDIA Nemotron 3 models (script and LoRA notebook). | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/trl/blob/main/examples/sft_nemotron_3/sft_nemotron_3.ipynb) |

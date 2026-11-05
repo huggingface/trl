@@ -15,8 +15,6 @@
 from functools import partial
 
 import torch
-import transformers
-from packaging.version import Version
 from torch import nn
 from torch.utils.checkpoint import CheckpointPolicy, create_selective_checkpoint_contexts
 
@@ -75,27 +73,23 @@ def enable_selective_activation_checkpointing(model: nn.Module) -> None:
         model (`nn.Module`):
             Model on which to enable selective activation checkpointing. Must support `gradient_checkpointing_enable`.
     """
-    # `Trainer` calls `activation_checkpointing_enable` since transformers 5.23, and the deprecated
-    # `gradient_checkpointing_enable` delegates to it (see https://github.com/huggingface/trl/issues/8093)
-    if Version(transformers.__version__) >= Version("5.23.0.dev0"):
-        enable_name, kwargs_name = "activation_checkpointing_enable", "activation_checkpointing_kwargs"
-    else:
-        enable_name, kwargs_name = "gradient_checkpointing_enable", "gradient_checkpointing_kwargs"
-    original_checkpointing_enable = getattr(model, enable_name)
-    if getattr(original_checkpointing_enable, "_is_sac_wrapped", False):
+    if getattr(model.gradient_checkpointing_enable, "_is_sac_wrapped", False):
         return
 
     policy_fn = _build_policy_fn(_aten_attention_ops())
     context_fn = partial(create_selective_checkpoint_contexts, policy_fn)
+    original_gradient_checkpointing_enable = model.gradient_checkpointing_enable
 
-    def checkpointing_enable(*args, **kwargs):
-        checkpointing_kwargs = dict((args[0] if args else kwargs.pop(kwargs_name, None)) or {})
+    def gradient_checkpointing_enable(gradient_checkpointing_kwargs: dict | None = None, **kwargs):
+        gradient_checkpointing_kwargs = dict(gradient_checkpointing_kwargs or {})
         # TRL-only key that turns SAC on in `SFTTrainer`, torch's `checkpoint` doesn't accept it
-        checkpointing_kwargs.pop("selective", None)
+        gradient_checkpointing_kwargs.pop("selective", None)
         # SAC intercepts saved tensors, which only happens under non-reentrant checkpointing.
-        checkpointing_kwargs["use_reentrant"] = False
-        checkpointing_kwargs["context_fn"] = context_fn
-        return original_checkpointing_enable(checkpointing_kwargs, *args[1:], **kwargs)
+        gradient_checkpointing_kwargs["use_reentrant"] = False
+        gradient_checkpointing_kwargs["context_fn"] = context_fn
+        return original_gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs=gradient_checkpointing_kwargs, **kwargs
+        )
 
-    checkpointing_enable._is_sac_wrapped = True
-    setattr(model, enable_name, checkpointing_enable)
+    gradient_checkpointing_enable._is_sac_wrapped = True
+    model.gradient_checkpointing_enable = gradient_checkpointing_enable
