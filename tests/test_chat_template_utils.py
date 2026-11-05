@@ -762,15 +762,18 @@ class TestAddResponseSchemaTrainingTemplate:
         sorted(path.name.removesuffix("_training.jinja") for path in _CHAT_TEMPLATES_DIR.glob("*_training.jinja")),
     )
     def test_add_response_schema_training_template(self, name):
-        # The training variant renders a generated turn like the original, so it gets the same parser
+        # The training variant renders a generated turn like the original, so it gets the same parser, or fails the
+        # same way when the original isn't parsed
         original = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         original.chat_template = (_CHAT_TEMPLATES_DIR / f"{name}.jinja").read_text(encoding="utf-8")
-        try:
-            original = add_response_schema(original)
-        except ValueError:
-            pytest.skip("The original template isn't parsed with the installed transformers")
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
         tokenizer.chat_template = (_CHAT_TEMPLATES_DIR / f"{name}_training.jinja").read_text(encoding="utf-8")
+        try:
+            original = add_response_schema(original)
+        except ValueError as error:
+            with pytest.raises(ValueError, match=re.escape(str(error))):
+                add_response_schema(tokenizer)
+            return
         tokenizer = add_response_schema(tokenizer)
         if _SUPPORTS_RESPONSE_TEMPLATE:
             assert tokenizer.response_template == original.response_template
