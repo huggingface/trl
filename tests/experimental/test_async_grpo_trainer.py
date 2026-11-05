@@ -2393,7 +2393,6 @@ class TestCustomRolloutLoop(TrlTestCase):
                 report_to="none",
             ),
             train_dataset=dataset,
-            weight_transfer=_StubWeightTransfer(),
         )
         trainer.rollout_worker.start()
         try:
