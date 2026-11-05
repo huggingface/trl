@@ -215,11 +215,11 @@ EQUIVALENCE_CLASSES: dict[str, dict] = {
     },
     "sft_fa2": {
         # loss_type not pinned; this class exercises the current SFTConfig default ("nll").
-        # The class stops at step 4. A relative 1e-6 change to the gradients moves the step-5 grad_norm anywhere between
-        # 12.5 and 25.2, while steps 1-4 stay within 0.2. Tolerances are ~2x the largest gap between padded and
-        # padding-free runs, before and after #7882.
-        "tol": {"loss": 3e-3, "grad_norm": 3e-1},
-        "residual_tol": {"loss": 5e-4, "grad_norm": 1e-1},
+        # Step 5 is chaotic under bf16: a relative 1e-6 change to the gradients moves its grad_norm anywhere between 12.5
+        # and 25.2. So the class stops at step 4 (`max_steps=4`, so the LR decays to 0 there), where the same change moves
+        # loss by up to 3.3e-3 and grad_norm by up to 0.22. Tolerances are ~2x that.
+        "tol": {"loss": 7e-3, "grad_norm": 5e-1},
+        "residual_tol": {"loss": 1.5e-3, "grad_norm": 1.5e-1},
         "members": [
             _build(
                 "sft_fa2",
