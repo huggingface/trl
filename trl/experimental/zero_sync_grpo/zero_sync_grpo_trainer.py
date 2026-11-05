@@ -1088,43 +1088,55 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
             self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
 
-        def move(tensor, device):
-            # In place, so the optimizer's references to the tensor and its state stay valid
-            local = tensor.to_local() if isinstance(tensor, DTensor) else tensor
-            local.data = local.data.to(device, non_blocking=True)
+        def local_tensors(master):
+            # The copy and its optimizer state as the plain tensors that hold this rank's shard. Moving them means
+            # swapping their storage, so the optimizer's references stay valid. Scalars such as Adam's step count stay
+            # where the optimizer put them.
+            tensors = [master, *(value for value in self.optimizer.state[master].values() if value.dim() > 0)]
+            return [tensor.to_local() if isinstance(tensor, DTensor) else tensor for tensor in tensors]
 
         masters = []  # (parameter, its fp32 copy)
         with torch.no_grad():
             for group in self.optimizer.param_groups:
                 for i, param in enumerate(group["params"]):
                     group["params"][i] = param.detach().to(torch.float32, copy=True)
-                    move(group["params"][i], "cpu")
+                    for local in local_tensors(group["params"][i]):
+                        local.data = local.data.to("cpu", non_blocking=True)
                     masters.append((param, group["params"][i]))
 
         step = self.optimizer.step
+        # Copies come in and go out on two side streams, so the transfers in both directions overlap the updates
+        copy_in, copy_out = torch.Stream(device=self.accelerator.device), torch.Stream(device=self.accelerator.device)
 
         def step_and_share(*args, **kwargs):
+            compute = torch.accelerator.current_stream()
+            work = [(param, master) for param, master in masters if param.grad is not None]
+
+            def fetch(param, master):
+                with copy_in:
+                    for local in local_tensors(master):
+                        local.data = local.data.to(param.device, non_blocking=True)
+                        local.data.record_stream(compute)
+                return copy_in.record_event()
+
             out = None
-            for param, master in masters:
-                if param.grad is None:
-                    continue
-                # The step updates only the copies that hold a gradient, here this one. Scalars such as Adam's step
-                # count stay where the optimizer put them.
-                with torch.no_grad():
-                    move(master, param.device)
-                    for value in self.optimizer.state[master].values():
-                        if value.dim() > 0:
-                            move(value, param.device)
+            ready = fetch(*work[0]) if work else None
+            for k, (param, master) in enumerate(work):
+                compute.wait_event(ready)
+                if k + 1 < len(work):
+                    ready = fetch(*work[k + 1])
+                # The step updates only the copies that hold a gradient, here this one
                 master.grad = param.grad.float()
                 param.grad = None
                 out = step(*args, **kwargs)
+                master.grad = None
                 with torch.no_grad():
                     param.copy_(master)
-                    master.grad = None
-                    move(master, "cpu")
-                    for value in self.optimizer.state[master].values():
-                        if value.dim() > 0:
-                            move(value, "cpu")
+                copy_out.wait_stream(compute)
+                with copy_out:
+                    for local in local_tensors(master):
+                        local.data.record_stream(copy_out)
+                        local.data = local.data.to("cpu", non_blocking=True)
             # The copies to host memory must land before anything reads them there, such as a checkpoint
             torch.accelerator.synchronize()
             if self._replica_group is not None:
