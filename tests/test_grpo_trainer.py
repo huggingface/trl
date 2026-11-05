@@ -264,6 +264,9 @@ class TestGRPOTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
             pytest.param(
@@ -2396,9 +2399,47 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="top_k"):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", **sampling_kwargs)
 
+    def test_vllm_repetition_penalty_requires_no_importance_sampling_correction(self):
+        with pytest.raises(ValueError, match="repetition_penalty"):
+            GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", repetition_penalty=1.2)
+
     @require_peft
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @require_torch_accelerator
+    def test_vllm_weight_sync_skips_ref_adapter_modules_to_save(self):
+        # With a pretrained adapter and `beta != 0`, GRPO adds a "ref" copy of the adapter. Its copy of the
+        # `modules_to_save` head must not reach vLLM, which only knows `lm_head.weight`.
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen3ForCausalLM", dtype=torch.bfloat16
+        )
+        model = get_peft_model(model, LoraConfig(target_modules=["q_proj", "v_proj"], modules_to_save=["lm_head"]))
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            beta=0.04,
+            use_vllm=True,
+            vllm_mode="colocate",
+            max_steps=1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+        )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs=lambda completions, **kwargs: [float(len(completion)) for completion in completions],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+    @require_peft
+    @require_vllm
+    @pytest.mark.xfail(
+        reason="The `modules_to_save` copies of a tied `lm_head` don't reach vLLM: vLLM<0.29 drops one, vLLM>=0.29 raises (see #7955)",
+        strict=True,
+    )
     def test_train_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained(
@@ -2445,7 +2486,10 @@ class TestGRPOTrainer(TrlTestCase):
                 assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
+    @pytest.mark.xfail(
+        reason="vLLM computes the log-probs after the regex mask, so the importance sampling ratio vanishes (see #7954)",
+        strict=True,
+    )
     def test_train_vllm_structured_outputs(self):
         """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2479,7 +2523,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     @pytest.mark.parametrize(
         "vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max",
         [
@@ -2560,7 +2603,6 @@ class TestGRPOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_train_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -2577,6 +2619,7 @@ class TestGRPOTrainer(TrlTestCase):
             top_k=10,
             min_p=0.01,
             repetition_penalty=1.1,
+            vllm_importance_sampling_correction=False,  # vLLM applies `repetition_penalty` to its log-probs
         )
 
         trainer = GRPOTrainer(
