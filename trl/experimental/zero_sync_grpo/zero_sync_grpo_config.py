@@ -83,6 +83,9 @@ class ZeroSyncGRPOConfig(_BaseConfig):
 
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
+        epsilon_high (`float`, *optional*):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
 
     > [!NOTE]
     > These parameters have default values different from [`~transformers.TrainingArguments`]:
@@ -206,4 +209,11 @@ class ZeroSyncGRPOConfig(_BaseConfig):
     epsilon: float = field(
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
+    )
+    epsilon_high: float | None = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
     )
