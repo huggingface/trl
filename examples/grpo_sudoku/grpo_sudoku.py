@@ -117,13 +117,13 @@ def main() -> None:
 
     class SudokuEnv:
         def __init__(self):
-            self.client = TextArenaEnv(base_url=env_url, headers=headers)
+            self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
 
         def reset(self, **kwargs) -> str | None:
             # A new connection per game. A Space closes WebSockets after about 2 hours, and a game cut in the middle is
             # lost.
             self.client.close()
-            self.client = TextArenaEnv(base_url=env_url, headers=headers)
+            self.client = TextArenaEnv(base_url=env_url, headers=headers).sync()
             result = self.client.reset()
             # The game returns the whole log each turn, so we store the previous full response and slice out only the
             # newly appended part.

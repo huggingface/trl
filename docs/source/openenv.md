@@ -215,12 +215,12 @@ If episodes are being cut short (model stops mid-game), this is likely the cause
 
 ### Long runs against a Space
 
-A Space can close WebSockets that stay open for hours (we saw it about every 2 hours). OpenEnv clients up to 0.11.0 then reconnect to a new environment session, and if a game was in progress, the next `step()` runs on a game the client never reset, with no error. The next OpenEnv release raises `SessionLostError` instead (already on OpenEnv `main`), so the game fails. To keep the drops away from training, open a new client in `reset()`, so each connection lasts one episode, and set `MAX_CONCURRENT_ENVS` a bit above the number of games played at once, since the old sessions are released asynchronously:
+A Space can close WebSockets that stay open for hours (we saw it about every 2 hours). OpenEnv clients up to 0.11.0 then reconnect to a new environment session, and if a game was in progress, the next `step()` runs on a game the client never reset, with no error. Since OpenEnv 0.12.0, clients raise `SessionLostError` instead, so the game fails. To keep the drops away from training, open a new client in `reset()`, so each connection lasts one episode, and set `MAX_CONCURRENT_ENVS` a bit above the number of games played at once, since the old sessions are released asynchronously:
 
 ```python
 def reset(self, **kwargs) -> str | None:
     self.client.close()
-    self.client = TextArenaEnv(base_url=env_url)
+    self.client = TextArenaEnv(base_url=env_url).sync()
     result = self.client.reset()
     ...
 ```
