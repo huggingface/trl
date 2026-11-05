@@ -54,27 +54,20 @@ class WeightTransferClient:
         weight_update_info (`dict`):
             Names, dtypes and shapes of the parameters to send. The server sizes its receive buffers from it, so it
             must describe exactly what [`send_weights`] streams.
-        weight_sync_timeout (`int`, *optional*, defaults to `1800`):
-            Seconds allowed for the steps that scale with model size: the NCCL handshake, the transfer itself, and the
-            finalisation that follows it. Pause, resume and the reload setup are bounded by `_CONTROL_TIMEOUT` instead.
         compute_dtype (`str`, *optional*):
             Dtype the trainer's forward runs in under mixed precision (`"bfloat16"` or `"float16"`). The server's dtype
             is checked against it rather than against the fp32 master weights.
     """
 
-    _CONTROL_TIMEOUT = 300
-
     def __init__(
         self,
         vllm_client: VLLMClient,
         weight_update_info: dict,
-        weight_sync_timeout: int = 1800,
         compute_dtype: str | None = None,
     ):
         if not is_vllm_available():
             raise ImportError("vLLM is required to use WeightTransferClient. Install it with: pip install vllm")
         self.vllm = vllm_client
-        self.weight_sync_timeout = weight_sync_timeout
         self.compute_dtype = compute_dtype
         self._weight_update_info = weight_update_info
         if not _HAS_STATEFUL_TRAINER_ENGINE:
@@ -120,7 +113,7 @@ class WeightTransferClient:
         thread = threading.Thread(target=trainer_init, daemon=True)
         thread.start()
         try:
-            self.vllm.init_weight_transfer_engine(init_info, timeout=self.weight_sync_timeout)
+            self.vllm.init_weight_transfer_engine(init_info)
             thread.join()
             if error:
                 raise error[0]
@@ -138,7 +131,7 @@ class WeightTransferClient:
             return
         t0 = time.time()
         # Prepare the workers for the reload; must complete before any weights are sent.
-        self.vllm.start_weight_update(timeout=self._CONTROL_TIMEOUT)
+        self.vllm.start_weight_update()
         # The manifest is collected before FSDP2 upcasts low-precision parameters to fp32, and the server sizes its
         # receive buffers from it, so each tensor is sent in the dtype the manifest declares.
         dtypes = [getattr(torch, dtype_name) for dtype_name in self._weight_update_info["dtype_names"]]
@@ -163,31 +156,31 @@ class WeightTransferClient:
         thread = threading.Thread(target=trainer_send_weights, daemon=True)
         thread.start()
         try:
-            self.vllm.update_weights(self._weight_update_info, timeout=self.weight_sync_timeout)
+            self.vllm.update_weights(self._weight_update_info)
             thread.join()
             if error:
                 raise error[0]
         except Exception as exc:
             # Best-effort: a failure to clean up must not mask the error below.
             with contextlib.suppress(Exception):
-                self.vllm.finish_weight_update(timeout=self.weight_sync_timeout)
+                self.vllm.finish_weight_update()
             raise RuntimeError(
                 f"Weight sync to the vLLM server at {self.vllm.server_url} failed. The server keeps the partially "
                 "updated weights but stays paused, and a new run re-sends every parameter at start-up. If the "
                 "underlying error is a CUDA OOM on the server, restart it with a lower `--gpu-memory-utilization`: "
                 "receiving a transfer needs a few GB of headroom on top of the weights and the KV cache."
             ) from exc
-        self.vllm.finish_weight_update(timeout=self.weight_sync_timeout)
+        self.vllm.finish_weight_update()
         logger.debug(f"[weight_sync] send_weights took {time.time() - t0:.1f}s")
 
     def pause(self) -> None:
         t0 = time.time()
-        self.vllm.pause(timeout=self._CONTROL_TIMEOUT)
+        self.vllm.pause()
         logger.debug(f"[weight_sync] pause HTTP took {time.time() - t0:.1f}s")
 
     def resume(self) -> None:
         t0 = time.time()
-        self.vllm.resume(timeout=self._CONTROL_TIMEOUT)
+        self.vllm.resume()
         logger.debug(f"[weight_sync] resume HTTP took {time.time() - t0:.1f}s")
 
     def destroy(self) -> None:
