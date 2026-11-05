@@ -252,6 +252,21 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
+    def test_optimizer_cls_and_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        optimizer_cls_and_kwargs = (torch.optim.SGD, {"lr": 0.1})
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
+        )
+        assert trainer.optimizer_cls_and_kwargs == optimizer_cls_and_kwargs
+        trainer.create_optimizer()
+        assert isinstance(trainer.optimizer, torch.optim.SGD)
+        assert trainer.optimizer.defaults["lr"] == pytest.approx(0.1)
+
     @pytest.mark.parametrize(
         "model_id",
         [

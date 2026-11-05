@@ -297,6 +297,22 @@ class TestKTOTrainer(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
+    def test_optimizer_cls_and_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        optimizer_cls_and_kwargs = (torch.optim.SGD, {"lr": 0.1})
+        trainer = KTOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            args=KTOConfig(output_dir=self.tmp_dir, report_to="none"),
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
+        )
+        assert trainer.optimizer_cls_and_kwargs == optimizer_cls_and_kwargs
+        trainer.create_optimizer()
+        assert isinstance(trainer.optimizer, torch.optim.SGD)
+        assert trainer.optimizer.defaults["lr"] == pytest.approx(0.1)
+
     @pytest.mark.parametrize(
         "config_name, loss_type, pre_compute, eval_dataset",
         [

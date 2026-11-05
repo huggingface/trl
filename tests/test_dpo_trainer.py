@@ -168,6 +168,20 @@ class TestDataCollatorForVisionPreference(TrlTestCase):
 
 
 class TestDPOTrainer(TrlTestCase):
+    def test_optimizer_cls_and_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        optimizer_cls_and_kwargs = (torch.optim.SGD, {"lr": 0.1})
+        trainer = DPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=DPOConfig(output_dir=self.tmp_dir, report_to="none"),
+            train_dataset=dataset,
+            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
+        )
+        assert trainer.optimizer_cls_and_kwargs == optimizer_cls_and_kwargs
+        trainer.create_optimizer()
+        assert isinstance(trainer.optimizer, torch.optim.SGD)
+        assert trainer.optimizer.defaults["lr"] == pytest.approx(0.1)
+
     @pytest.mark.parametrize(
         "model_id",
         [
