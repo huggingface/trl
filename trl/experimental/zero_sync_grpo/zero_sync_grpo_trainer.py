@@ -267,15 +267,15 @@ class _RolloutStream(torch.utils.data.IterableDataset):
 
 class ZeroSyncGRPOTrainer(_BaseTrainer):
     """
-    Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and
-    training share ONE copy of the weights: a transformers continuous batching manager generates from the same
-    parameter tensors the optimizer updates in place, so there is no second engine, no weight synchronization and no
-    generation/training memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of
-    the completions and are used as the old policy in the clipped loss.
+    Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and training
+    share ONE copy of the weights: a transformers continuous batching manager generates from the same parameter tensors
+    the optimizer updates in place, so there is no second engine, no weight synchronization and no generation/training
+    memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of the completions and
+    are used as the old policy in the clipped loss.
 
     Generation and training take turns on those weights. Prompts are submitted to the engine continuously, each
-    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands,
-    and a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
+    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands, and
+    a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
     forward, backward and optimizer step and resumes where it left off, its in-flight requests intact. A slow group
     never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a
     bounded number of optimizer steps; the measured logprob gap this introduces is small and concentrated in each
@@ -317,9 +317,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             - A [`~transformers.PreTrainedModel`] object.
         reward_funcs (`Callable` or `list[Callable]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
-            functions with the prompts and completions and sum the rewards. The functions are provided with one
-            group's prompts, completions and completion ids, plus any additional columns in the dataset, and must
-            return a list of floats (or `None` for samples the function does not apply to).
+            functions with the prompts and completions and sum the rewards. The functions are provided with one group's
+            prompts, completions and completion ids, plus any additional columns in the dataset, and must return a list
+            of floats (or `None` for samples the function does not apply to).
         args ([`~trl.experimental.zero_sync_grpo.ZeroSyncGRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -329,14 +329,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         eval_dataset ([`~datasets.Dataset`], *optional*):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If `None`, the processing class is loaded from the model's
-            name with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's
-            tokenizer is used; only text-only data is supported.
+            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
+            with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's tokenizer
+            is used; only text-only data is supported.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
-            None)`):
-            A tuple containing the optimizer and the scheduler to use.
+            None)`): A tuple containing the optimizer and the scheduler to use.
     """
 
     _tag_names = ["trl", "zero-sync-grpo"]
@@ -703,9 +702,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         A decode step costs about the same whatever number of sequences it carries: it reads the whole model and pays
         the per-layer all-reduces either way. Letting the batch drain between optimizer steps and refill in one burst
-        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free
-        rather than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so
-        the members of a group already see more than one version of the policy.
+        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free rather
+        than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so the
+        members of a group already see more than one version of the policy.
         """
         while len(self._inflight) < self.rollouts_in_flight and self._pending:
             rollout = self._pending.popleft()
@@ -727,10 +726,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def _pause_generation(self, mode: str) -> None:
         """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
 
-        Generation and training take turns: the forward, backward and optimizer step get the device to themselves,
-        and under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the
-        pause at the same step on every rank of a tensor parallel group, whichever rank asked first, so once it is
-        granted every rank of the group holds the same completions; what each rank had read by then can differ.
+        Generation and training take turns: the forward, backward and optimizer step get the device to themselves, and
+        under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the pause
+        at the same step on every rank of a tensor parallel group, whichever rank asked first, so once it is granted
+        every rank of the group holds the same completions; what each rank had read by then can differ.
         """
         if self._pause is not None:
             return
@@ -880,9 +879,9 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def _take_from_pool(self, num_samples: int) -> list[dict[str, Any]]:
         """Hand this replica its share of the samples every replica has ready.
 
-        A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built
-        for balance instead of for locality, so the replicas reach their forward together and carry the same load.
-        Every rank runs the same assignment over the same pool, so no one has to be told the result.
+        A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built for
+        balance instead of for locality, so the replicas reach their forward together and carry the same load. Every
+        rank runs the same assignment over the same pool, so no one has to be told the result.
         """
         pool: list[Any] = [None] * self.dp_size
         torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
@@ -920,8 +919,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def _next_rollout_batch(self, prompts) -> list[dict[str, Any]]:
         """Keep the engine fed and return one batch of finished rollouts, or nothing once the prompts run out.
 
-        Called once per training batch by `_RolloutStream`, on every rank, which is what keeps the collectives
-        below aligned.
+        Called once per training batch by `_RolloutStream`, on every rank, which is what keeps the collectives below
+        aligned.
         """
         mode = "train" if self.model.training else "eval"
         num_samples = self._train_batch_size
@@ -1049,12 +1048,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
     def create_optimizer(self, model=None):
         """Give each replica the optimizer state of only its share of the parameters.
 
-        Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The
-        replicas split the parameters between them, each updates its own share, and passes the result back to the
-        others. The parameters themselves stay whole everywhere, which is what generation reads.
+        Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The replicas
+        split the parameters between them, each updates its own share, and passes the result back to the others. The
+        parameters themselves stay whole everywhere, which is what generation reads.
 
-        Measured on a 14B at tp=4 with two replicas: 9.2 GiB less per GPU at the peak, and the step itself takes
-        half as long, since each replica now updates half the parameters.
+        Measured on a 14B at tp=4 with two replicas: 9.2 GiB less per GPU at the peak, and the step itself takes half
+        as long, since each replica now updates half the parameters.
         """
         if self._replica_group is None or self.optimizer is not None:
             return super().create_optimizer(model)

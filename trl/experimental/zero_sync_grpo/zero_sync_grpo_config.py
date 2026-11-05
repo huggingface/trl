@@ -58,8 +58,8 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
             Maximum number of tool-calling turns when training an agent. If `None`, there is no limit and generation
-            stops when the model generates a response turn with no tool calls or when the total response length
-            reaches `max_completion_length`.
+            stops when the model generates a response turn with no tool calls or when the total response length reaches
+            `max_completion_length`.
         fork_threshold_tokens (`int`, *optional*, defaults to `1024`):
             A multi-turn conversation is turned into training rows by re-tokenizing the whole conversation every turn
             and reconciling the result against the tokens held so far: a clean append stays one row, a rewrite (dropped
@@ -73,8 +73,8 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             immediately by the next one, so the decode batch stays full instead of emptying and refilling once per
             optimizer step. The cost of a decode step is mostly reading the weights and the per-layer all-reduces,
             which do not depend on how many sequences are decoded, so a fuller batch is close to free throughput. Set
-            it as high as the KV cache holds: past that, rollouts crowd the cache and decode slows. Completions lag
-            the policy by roughly this many rollouts divided by the batch trained on per step.
+            it as high as the KV cache holds: past that, rollouts crowd the cache and decode slows. Completions lag the
+            policy by roughly this many rollouts divided by the batch trained on per step.
         continuous_batching_config (`dict`, *optional*):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`]. `return_logprobs` is always
             forced to `True`: the engine's logprobs are the behavior-policy logprobs of the completions.
