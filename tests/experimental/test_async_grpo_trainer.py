@@ -14,6 +14,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import itertools
 import json
 import math
@@ -58,6 +59,7 @@ from trl.experimental.async_grpo.async_grpo_trainer import (
 from trl.experimental.async_grpo.async_rollout_worker import (
     AsyncRolloutWorker,
     DriftKind,
+    Rollout,
     RolloutGroup,
     RolloutSample,
     TrainingSequence,
@@ -911,6 +913,12 @@ def _rollout_loop(**kwargs):
     # `_AsyncRolloutLoop.__init__` only sets up state (no vLLM connection / generation happens here).
     model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config_fields = {f.name for f in dataclasses.fields(AsyncGRPOConfig)}
+    config_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in config_fields}
+    config_kwargs.setdefault("max_completion_length", 32)
+    config_kwargs.setdefault("max_concurrent_rollouts", 128)
+    config_kwargs.setdefault("score_centering", "num_sampler_logprobs" in config_kwargs)
+    config = AsyncGRPOConfig(report_to="none", **config_kwargs)
     kwargs = {
         "model_name": model_id,
         "dataset": load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train"),
@@ -925,7 +933,7 @@ def _rollout_loop(**kwargs):
         "metrics_queue": mp.Queue(),
         **kwargs,
     }
-    return _AsyncRolloutLoop(**kwargs)
+    return _AsyncRolloutLoop(config, **kwargs)
 
 
 class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
@@ -935,7 +943,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         if dataset is None:
             dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         return _rollout_loop(
-            dataset=dataset, environment_factory=environment_factory, num_generations=2, max_inflight_tasks=4
+            dataset=dataset, environment_factory=environment_factory, num_generations=2, max_concurrent_rollouts=4
         )
 
     def test_multiple_environments_expose_only_their_own_tools(self):
@@ -1010,8 +1018,8 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         finally:
             loop._loop.close()
 
-    def test_inflight_cap_follows_vllm_load(self):
-        # The in-flight cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
+    def test_concurrency_cap_follows_vllm_load(self):
+        # The concurrency cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
         # when KV usage passes 0.8 and holds until the pool has drained below it.
         import aiohttp
         from aiohttp import web
@@ -1038,15 +1046,15 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         app = web.Application()
         app.router.add_get("/metrics", metrics)
         app.router.add_get("/v1/models", models)
-        loop = _rollout_loop(num_generations=2, max_inflight_tasks=8, score_queue_maxsize=1000)
+        loop = _rollout_loop(num_generations=2, max_concurrent_rollouts=8, score_queue_maxsize=1000)
         loop._metrics_poll_s = 0.02
-        inflight = {"now": 0, "peak": 0}
+        running = {"now": 0, "peak": 0}
 
         async def fake_generate_one(prompt, tool_dict, tools, group_id=0):
-            inflight["now"] += 1
-            inflight["peak"] = max(inflight["peak"], inflight["now"])
+            running["now"] += 1
+            running["peak"] = max(running["peak"], running["now"])
             await asyncio.sleep(0.05)
-            inflight["now"] -= 1
+            running["now"] -= 1
             sequence = TrainingSequence(
                 input_ids=[1, 2, 3],
                 completion_mask=[0, 1, 1],
@@ -1055,9 +1063,9 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
                 sampler_logprobs=[{}, {}, {}],
                 rollout_id="r",
             )
-            return [{"role": "assistant", "content": "x"}], [2, 3], [sequence], 0, 0, None
+            return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [sequence])
 
-        loop._generate_one = fake_generate_one
+        loop.generate_one = fake_generate_one
 
         async def wait_until(condition):
             deadline = time.monotonic() + 5
@@ -1069,26 +1077,26 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             async with TestServer(app) as server, aiohttp.ClientSession() as session:
                 loop.vllm_server_url = str(server.make_url("")).rstrip("/")
                 loop.session = session
-                await loop._init_inflight_cap()
-                assert loop._inflight_cap == 4
+                await loop._init_concurrency_cap()
+                assert loop._concurrency_cap == 4
                 stop_event = asyncio.Event()
                 tasks = [
                     asyncio.create_task(loop._generate_loop(stop_event)),
                     asyncio.create_task(loop._control_loop(stop_event)),
                 ]
-                await wait_until(lambda: loop._inflight_cap == 8)
-                await wait_until(lambda: inflight["peak"] == 8 and load["polls"] >= 2)
+                await wait_until(lambda: loop._concurrency_cap == 8)
+                await wait_until(lambda: running["peak"] == 8 and load["polls"] >= 2)
                 load["usage"] = 0.7
                 load["spike"] = 0.9
-                await wait_until(lambda: loop._inflight_cap < 8)
-                assert loop._inflight_cap == 5
-                await wait_until(lambda: inflight["now"] <= 5)
-                inflight["peak"] = 0
+                await wait_until(lambda: loop._concurrency_cap < 8)
+                assert loop._concurrency_cap == 5
+                await wait_until(lambda: running["now"] <= 5)
+                running["peak"] = 0
                 await asyncio.sleep(0.3)
-                assert inflight["peak"] <= 5
-                assert loop._inflight_cap == 5
+                assert running["peak"] <= 5
+                assert loop._concurrency_cap == 5
                 load["usage"] = 0.1
-                await wait_until(lambda: loop._inflight_cap == 8)
+                await wait_until(lambda: loop._concurrency_cap == 8)
                 stop_event.set()
                 await asyncio.gather(*tasks)
 
@@ -1128,11 +1136,11 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         tool_call = loop.tokenizer.encode(_TOOL_CALL.replace('"t"', '"step"'), add_special_tokens=False)
         final = loop.tokenizer.encode(_FINAL, add_special_tokens=False)
 
-        async def _generate_one_turn(prompt_ids):
+        async def generate_one_turn(prompt_ids):
             ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
-            return ids, [-0.1] * len(ids), None, None
+            return TurnRecord(prompt_ids, ids, [-0.1] * len(ids))
 
-        loop._generate_one_turn = _generate_one_turn
+        loop.generate_one_turn = generate_one_turn
         PartialState()
         try:
             loop._loop.run_until_complete(loop._run_loops(stop_event=loop._stop_event))
@@ -1853,7 +1861,7 @@ class TestToolExecution(TrlTestCase):
         async def failing_tool(value: int) -> str:
             raise RuntimeError(f"boom:{value}")
 
-        loop = _rollout_loop(max_inflight_tasks=4)
+        loop = _rollout_loop(max_concurrent_rollouts=4)
         tool_dict = {
             "sync_tool": sync_tool,
             "async_tool": async_tool,
@@ -1883,7 +1891,7 @@ class TestToolExecution(TrlTestCase):
             time.sleep(0.5)
             return "done"
 
-        loop = _rollout_loop(max_inflight_tasks=4)
+        loop = _rollout_loop(max_concurrent_rollouts=4)
 
         async def scenario():
             ticks = 0
@@ -2027,20 +2035,18 @@ def t() -> str:
 
 def _run(*, turns, max_iters=None):
     """
-    Drive `_AsyncRolloutLoop._generate_one` with the real tokenizer, chat template and response parser, scripting only
+    Drive `_AsyncRolloutLoop.generate_one` with the real tokenizer, chat template and response parser, scripting only
     the vLLM server, which generates the text of `turns` one turn after the other.
     """
     loop = _rollout_loop(tools=[t], max_tool_calling_iterations=max_iters)
     outputs = [loop.tokenizer.encode(text, add_special_tokens=False) for text in turns]
 
-    async def _generate_one_turn(prompt_ids):
+    async def generate_one_turn(prompt_ids):
         ids = outputs.pop(0)
-        return ids, [-0.1] * len(ids), None, None
+        return TurnRecord(prompt_ids, ids, [-0.1] * len(ids))
 
-    loop._generate_one_turn = _generate_one_turn
-
-    # _generate_one returns (completion, completion_ids, sequences, n_calls, n_failures, rollout_reward).
-    return asyncio.run(loop._generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
+    loop.generate_one_turn = generate_one_turn
+    return asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], {"t": t}, [t]))
 
 
 class TestGenerateOneTurn(TrlTestCase):
@@ -2052,15 +2058,15 @@ class TestGenerateOneTurn(TrlTestCase):
             return response
 
         loop._post = fake_post
-        return requests, asyncio.run(loop._generate_one_turn([1, 2, 3]))
+        return requests, asyncio.run(loop.generate_one_turn([1, 2, 3]))
 
     def test_full_vocabulary_sampling_uses_the_completions_endpoint(self):
         loop = _rollout_loop()
         response = {"choices": [{"token_ids": [4, 5], "logprobs": {"token_logprobs": [-0.1, -0.2]}}]}
-        requests, (ids, logprobs, sampling_mask, sampling_log_probs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["prompt"] == [1, 2, 3]
-        assert (ids, logprobs, sampling_mask, sampling_log_probs) == ([4, 5], [-0.1, -0.2], None, None)
+        assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2])
 
     def test_truncated_sampling_returns_the_candidate_sets(self):
         loop = _rollout_loop(top_p=0.9, top_k=4)
@@ -2075,13 +2081,13 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask, sampling_log_probs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][0] == "/inference/v1/generate"
         assert requests[0][1]["token_ids"] == [1, 2, 3]
         assert requests[0][1]["sampling_params"]["top_p"] == 0.9
         assert requests[0][1]["sampling_params"]["top_k"] == 4
         assert requests[0][1]["sampling_params"]["logprobs"] == 0
-        assert (ids, logprobs, sampling_mask, sampling_log_probs) == ([4, 5], [-0.1, -0.2], [[4, 7], [5]], None)
+        assert turn == TurnRecord([1, 2, 3], [4, 5], [-0.1, -0.2], output_sampling_mask=[[4, 7], [5]])
 
     def test_sampler_logprobs_from_the_completions_endpoint(self):
         # Each token's top log-probs come back keyed `token_id:<id>`, the sampled token among them
@@ -2097,11 +2103,11 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask, sampler_logprobs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][1]["logprobs"] == 2
         assert requests[0][1]["return_tokens_as_token_ids"] is True
-        assert (ids, logprobs, sampling_mask) == ([4, 5], [-0.1, -0.2], None)
-        assert sampler_logprobs == [{7: -0.05, 4: -0.1}, {5: -0.2}]
+        assert (turn.output_ids, turn.output_log_probs, turn.output_sampling_mask) == ([4, 5], [-0.1, -0.2], None)
+        assert turn.output_sampler_logprobs == [{7: -0.05, 4: -0.1}, {5: -0.2}]
 
     def test_sampler_logprobs_from_the_candidate_set_endpoint(self):
         loop = _rollout_loop(top_p=0.9, top_k=4, num_sampler_logprobs=2)
@@ -2121,10 +2127,14 @@ class TestGenerateOneTurn(TrlTestCase):
                 }
             ]
         }
-        requests, (ids, logprobs, sampling_mask, sampler_logprobs) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][1]["sampling_params"]["logprobs"] == 2
-        assert (ids, logprobs, sampling_mask) == ([4, 5], [-1.0, 0.0], [[4, 7, 6], [5]])
-        assert sampler_logprobs == [{7: -0.5, 4: -1.0}, {5: 0.0, 8: -9999.0}]
+        assert (turn.output_ids, turn.output_log_probs, turn.output_sampling_mask) == (
+            [4, 5],
+            [-1.0, 0.0],
+            [[4, 7, 6], [5]],
+        )
+        assert turn.output_sampler_logprobs == [{7: -0.5, 4: -1.0}, {5: 0.0, 8: -9999.0}]
 
     def _check(self, loop, model_config, paths, version="0.31.0"):
         class FakeSession:
@@ -2175,10 +2185,10 @@ class TestGenerateOneTurn(TrlTestCase):
             self._check(loop, {}, {"/v1/completions": {}}, version="0.27.1")
         assert "vLLM 0.27.1" in caplog.text
         response = {"choices": [{"token_ids": [4], "logprobs": {"token_logprobs": [-0.1]}}]}
-        requests, (ids, logprobs, sampling_mask, _) = self._generate(loop, response)
+        requests, turn = self._generate(loop, response)
         assert requests[0][0] == "/v1/completions"
         assert requests[0][1]["top_p"] == 0.9
-        assert sampling_mask is None
+        assert turn.output_sampling_mask is None
 
     @pytest.mark.parametrize("sampling_kwargs", [{"top_p": 0.9}, {"min_p": 0.05}])
     def test_top_p_and_min_p_require_top_k(self, sampling_kwargs):
@@ -2189,30 +2199,32 @@ class TestGenerateOneTurn(TrlTestCase):
 @require_response_parsing
 class TestRolloutLoop(TrlTestCase):
     def test_single_turn_no_tool_call(self):
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_FINAL])
-        assert len(sequences) == 1
-        n = len(completion_ids)
-        assert sequences[0].input_ids[-n:] == completion_ids
-        assert sequences[0].completion_mask == [0] * (len(sequences[0].input_ids) - n) + [1] * n
-        assert sequences[0].old_log_probs[-n:] == [-0.1] * n
-        assert [m["role"] for m in completion] == ["assistant"]
-        assert n_calls == 0 and n_failures == 0
+        rollout = _run(turns=[_FINAL])
+        assert len(rollout.sequences) == 1
+        n = len(rollout.completion_ids)
+        assert rollout.sequences[0].input_ids[-n:] == rollout.completion_ids
+        assert rollout.sequences[0].completion_mask == [0] * (len(rollout.sequences[0].input_ids) - n) + [1] * n
+        assert rollout.sequences[0].old_log_probs[-n:] == [-0.1] * n
+        assert [m["role"] for m in rollout.completion] == ["assistant"]
+        assert rollout.tool_call_count == 0 and rollout.tool_failure_count == 0
 
     def test_clean_two_turns_stay_one_row(self):
         # The training chat template is prefix-preserving, so turn 2's re-tokenized prompt extends turn 1 -> one row
-        completion, completion_ids, sequences, n_calls, n_failures, _ = _run(turns=[_TOOL_CALL, _FINAL])
-        assert len(sequences) == 1
-        assert sum(sequences[0].completion_mask) == len(completion_ids)  # every generated token is trained once
-        assert [m["role"] for m in completion] == ["assistant", "tool", "assistant"]
-        assert completion[1]["content"] == "ok"
-        assert n_calls == 1 and n_failures == 0
+        rollout = _run(turns=[_TOOL_CALL, _FINAL])
+        assert len(rollout.sequences) == 1
+        assert sum(rollout.sequences[0].completion_mask) == len(
+            rollout.completion_ids
+        )  # every generated token is trained once
+        assert [m["role"] for m in rollout.completion] == ["assistant", "tool", "assistant"]
+        assert rollout.completion[1]["content"] == "ok"
+        assert rollout.tool_call_count == 1 and rollout.tool_failure_count == 0
 
     def test_max_tool_calling_iterations_caps_turns(self):
         # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
-        completion, _, sequences, n_calls, _, _ = _run(turns=[_TOOL_CALL], max_iters=0)
-        assert len(sequences) == 1
-        assert [m["role"] for m in completion] == ["assistant"]  # no tool message appended
-        assert n_calls == 0
+        rollout = _run(turns=[_TOOL_CALL], max_iters=0)
+        assert len(rollout.sequences) == 1
+        assert [m["role"] for m in rollout.completion] == ["assistant"]  # no tool message appended
+        assert rollout.tool_call_count == 0
 
 
 def two_reward(completions, **kwargs):
@@ -2833,7 +2845,7 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
     def test_an_injected_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
         # A worker the caller builds, like the harness worker of examples/async_grpo_harbor, exists before the trainer
         # probes the server, so it cannot have been given the adapter name at construction.
-        worker = AsyncRolloutWorker(model_name=self.model_id)
+        worker = AsyncRolloutWorker(AsyncGRPOConfig(report_to="none"), model_name=self.model_id)
         trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=worker)
         assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 
@@ -2965,13 +2977,13 @@ def _tensors_handed_to_producer(info, stream):
     class _Server:
         server_url = "http://127.0.0.1:9"
 
-        def start_weight_update(self, timeout):
+        def start_weight_update(self):
             return None
 
-        def update_weights(self, update_info, timeout):
+        def update_weights(self, update_info):
             return None
 
-        def finish_weight_update(self, timeout):
+        def finish_weight_update(self):
             return None
 
     client = WeightTransferClient(_Server(), info)
