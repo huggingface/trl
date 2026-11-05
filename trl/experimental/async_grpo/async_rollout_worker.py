@@ -1217,6 +1217,13 @@ class _AsyncRolloutLoop:
                 for reward_func in self.reward_funcs
             ]
         )
+        for reward_func_name, rewards in zip(self.reward_func_names, all_rewards, strict=False):
+            if len(rewards) != len(group.completions):
+                raise ValueError(
+                    f"The reward function '{reward_func_name}' returned {len(rewards)} rewards, but "
+                    f"{len(group.completions)} were expected (one per prompt-completion pair). Make sure the reward "
+                    f"function returns exactly one reward per completion."
+                )
         # Each environment that owns its reward contributes one reward column (named after its env class, in
         # `_env_reward_types` order to match `reward_func_names`), summed in with weight 1 like any reward func. Scores
         # were captured per rollout at generation time in `group.env_rewards` as `(env class, reward)`; a rollout is
@@ -1229,8 +1236,21 @@ class _AsyncRolloutLoop:
             all_rewards = [*all_rewards, list(group.rollout_rewards)]
 
         # Reward funcs may return None per-sample (unparseable gold). Convert to NaN.
-        all_rewards = [[r if r is not None else float("nan") for r in row] for row in all_rewards]
-        return np.array(all_rewards, dtype=float)
+        all_rewards = np.array(
+            [[r if r is not None else float("nan") for r in row] for row in all_rewards], dtype=float
+        )
+
+        # If all reward functions return None for a given row, issue a detailed warning
+        if np.isnan(all_rewards).all(axis=0).any():
+            nan_row_idx = int(np.isnan(all_rewards).all(axis=0).nonzero()[0][0])
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in group.reward_kwargs.items()}
+            row_reward_kwargs["prompt"] = group.prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = group.completions[nan_row_idx]
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        return all_rewards
 
     def compute_advantages(self, group: RolloutGroup) -> np.ndarray:
         """One advantage per rollout of `group`, from `group.rewards`: the reward standardized within the group.
