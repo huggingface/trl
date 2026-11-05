@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -90,10 +91,11 @@ class AsyncDistillationConfig(_BaseConfig):
             Teacher vLLM server(s), each started with `vllm serve <teacher-model> --logprobs-mode processed_logprobs
             --max-logprobs -1`. Every teacher is static: this trainer never streams weight updates to any of them, so a
             teacher needs neither `VLLM_SERVER_DEV_MODE` nor a weight-transfer backend, only those two flags, which
-            make its scoring exact (see `teacher_temperature` and `teacher_top_k`). Every teacher must share the
+            make its scoring exact (see `teacher_temperature` and `teacher_top_k`). With `distillation_method="token"`, every teacher must share the
             student's tokenizer: completions are sent as raw token ids, and the ids a teacher reports back are used
             directly to index the student's own vocabulary in `compute_loss`. A teacher with a different vocabulary
-            trains against the wrong tokens, silently if its vocabulary is no larger than the student's. Scoring is a
+            trains against the wrong tokens, silently if its vocabulary is no larger than the student's. Use
+            `distillation_method="csd"` and `teacher_tokenizers` for cross-tokenizer teachers. Scoring is a
             teacher-forced request against the student's own completion tokens (`max_tokens=1`,
             `prompt_logprobs=teacher_top_k`, `temperature=teacher_temperature`), the same request
             [`~trl.generation.vllm_client.VLLMClient.get_sequence_logprobs`] issues for the synchronous server-teacher
@@ -106,6 +108,19 @@ class AsyncDistillationConfig(_BaseConfig):
 
         > Parameters that control the distillation loss
 
+        distillation_method (`str`, *optional*, defaults to `"token"`):
+            `"token"` compares shared-tokenizer distributions. `"csd"` uses Common-Support Distillation for teachers
+            with different tokenizers. CSD retains common events and REST at every `beta`, scores observed prefixes
+            for tokenization mismatches, and normalizes by valid chunks across the optimizer step. It optimizes KD
+            on student rollouts without adding CE on the student's own answers.
+        teacher_tokenizers (`dict[str, str]`, *optional*):
+            Tokenizer name or local path for every `teacher_server_urls` key. Required for CSD and loaded in the CPU
+            worker. Each teacher uses its own chat template and token IDs. CSD currently requires fast BPE tokenizers
+            with ByteLevel decoders, as in the NeMo implementation. Tokenizers must match the served model revisions;
+            use local snapshot paths to pin them.
+        csd_mismatch_weight (`float`, *optional*, defaults to `5.0`):
+            Relative weight of a chunk spanning multiple tokens on either side, following NeMo CSD's
+            `csd_mismatch_loss_beta`. Only used with `distillation_method="csd"`.
         beta (`float`, *optional*, defaults to `0.0`):
             Interpolation coefficient for the generalized Jensen-Shannon Divergence. `0.0` is forward KL
             (mean-seeking), `1.0` is reverse KL (mode-seeking), and values in between interpolate, following the same
@@ -189,8 +204,24 @@ class AsyncDistillationConfig(_BaseConfig):
     _VALID_DICT_FIELDS = _BaseConfig._VALID_DICT_FIELDS + [
         "model_init_kwargs",
         "teacher_server_urls",
+        "teacher_tokenizers",
         "chat_template_kwargs",
     ]
+
+    distillation_method: str = field(
+        default="token",
+        metadata={
+            "help": "Distillation objective: 'token' for shared tokenizers, or 'csd' for common-support chunks."
+        },
+    )
+    teacher_tokenizers: dict[str, str] | None = field(
+        default=None,
+        metadata={"help": "Tokenizer name or local path for every teacher_server_urls key. Required for CSD."},
+    )
+    csd_mismatch_weight: float = field(
+        default=5.0,
+        metadata={"help": "CSD loss weight for chunks spanning multiple student or teacher tokens."},
+    )
 
     # Parameters that control the model
     model_init_kwargs: dict[str, Any] | str | None = field(
@@ -426,6 +457,20 @@ class AsyncDistillationConfig(_BaseConfig):
             self.teacher_server_urls = {"default": "http://localhost:8001"}
         if not self.teacher_server_urls:
             raise ValueError("teacher_server_urls must have at least one entry.")
+
+        if self.distillation_method not in ("token", "csd"):
+            raise ValueError("distillation_method must be 'token' or 'csd'.")
+        if self.distillation_method == "csd":
+            if self.teacher_tokenizers is None or self.teacher_tokenizers.keys() != self.teacher_server_urls.keys():
+                raise ValueError("CSD requires teacher_tokenizers with exactly the same keys as teacher_server_urls.")
+            if not self.add_tail_bucket:
+                raise ValueError("CSD requires add_tail_bucket=True for its REST category.")
+            if self.teacher_top_k < 1:
+                raise ValueError("CSD requires teacher_top_k >= 1.")
+            if not math.isfinite(self.csd_mismatch_weight) or self.csd_mismatch_weight <= 0:
+                raise ValueError("csd_mismatch_weight must be finite and positive.")
+        elif self.teacher_tokenizers is not None:
+            raise ValueError("teacher_tokenizers requires distillation_method='csd'.")
 
         # Accelerator config: required for the async IterableDataset-backed dataloader to work correctly.
         # split_batches=True and dispatch_batches=True ensure that the main process drives the dataloader

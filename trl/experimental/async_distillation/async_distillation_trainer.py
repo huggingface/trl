@@ -63,6 +63,7 @@ from ...trainer.utils import (
 )
 from .async_distillation_config import AsyncDistillationConfig
 from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
+from .csd import csd_divergence
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
 
@@ -368,6 +369,97 @@ def _chunked_jsd_loss(
         teacher_entropy_sum = teacher_entropy_sum + chunk_teacher_entropy_sum
         per_teacher_stats = per_teacher_stats + chunk_per_teacher_stats
     return loss, jsd_sum, entropy_sum, teacher_entropy_sum, per_teacher_stats
+
+
+def _csd_logps_chunk(hidden, weight, bias, logit_scale, softcap, target_ids, actual_ids, temperature):
+    """Project a student tile and retain only sparse support and realized-token log-probabilities."""
+    logits = hidden.float() @ weight.float().t()
+    if bias is not None:
+        logits = logits + bias.float()
+    logits = logits * logit_scale
+    if softcap is not None:
+        logits = softcap * torch.tanh(logits / softcap)
+    logits = logits / temperature
+    max_index = logits.argmax(-1, keepdim=True)
+    shifted = (logits - logits.gather(-1, max_index)).scatter(-1, max_index, 0.0)
+    other_exp = shifted.exp().scatter(-1, max_index, 0.0)
+    logps = shifted - torch.log1p(other_exp.sum(-1, keepdim=True))
+    support = logps.gather(-1, target_ids.clamp_min(0))
+    actual = logps.gather(-1, actual_ids.unsqueeze(-1)).squeeze(-1)
+    with torch.no_grad():
+        entropy = -(logps.exp() * logps).sum(-1)
+    return support, actual, entropy
+
+
+def _chunked_csd_loss(
+    hidden,
+    weight,
+    bias,
+    logit_scale,
+    softcap,
+    target_ids,
+    teacher_logps,
+    actual_ids,
+    prefix_lengths,
+    chunk_weights,
+    beta,
+    temperature,
+    teacher_id_idx,
+    num_teachers,
+    chunk_size,
+):
+    """Compute CSD over observed chains while bounding student projection memory.
+
+    Prefix lengths and weights live at each chunk's final student label. Other
+    completion tokens still need realized-token log-probabilities for the chain
+    products. Prefix sums retain gradients through every predictor in a chain.
+    Samples must be packed without allowing a chunk to cross a sample boundary.
+    """
+    supports, actuals, entropies = [], [], []
+    for start in range(0, hidden.size(0), chunk_size):
+        end = start + chunk_size
+        support, actual, entropy = torch.utils.checkpoint.checkpoint(
+            _csd_logps_chunk,
+            hidden[start:end],
+            weight,
+            bias,
+            logit_scale,
+            softcap,
+            target_ids[start:end],
+            actual_ids[start:end],
+            temperature,
+            use_reentrant=False,
+        )
+        supports.append(support)
+        actuals.append(actual)
+        entropies.append(entropy)
+    student_logps = torch.cat(supports)
+    actual_logps = torch.cat(actuals)
+    prefix_sum = F.pad(actual_logps.cumsum(0), (1, 0))
+    anchor = chunk_weights > 0
+    positions = torch.arange(hidden.size(0), device=hidden.device)[anchor]
+    prefix_logps = prefix_sum[positions] - prefix_sum[positions - prefix_lengths[anchor]]
+    candidate_mask = target_ids[anchor] >= 0
+    student_logps = student_logps[anchor] + prefix_logps.unsqueeze(-1)
+    student_logps = student_logps.masked_fill(~candidate_mask, -torch.inf)
+    teacher_logps = teacher_logps[anchor].masked_fill(~candidate_mask, -torch.inf)
+    divergence, teacher_entropy = csd_divergence(student_logps, teacher_logps, candidate_mask, beta)
+    loss = (divergence * chunk_weights[anchor]).sum() * temperature**2
+    with torch.no_grad():
+        stats = hidden.new_zeros(3 * num_teachers)
+        if teacher_id_idx is not None:
+            stats = torch.stack(
+                [
+                    value
+                    for idx in range(num_teachers)
+                    for value in (
+                        (teacher_id_idx[anchor] == idx).sum().float(),
+                        divergence[teacher_id_idx[anchor] == idx].sum(),
+                        teacher_entropy[teacher_id_idx[anchor] == idx].sum(),
+                    )
+                ]
+            )
+    return loss, divergence.detach().sum(), torch.cat(entropies)[anchor].sum(), teacher_entropy.sum(), stats
 
 
 def _balance_by_squared_length(examples: list[dict[str, Any]], num_groups: int) -> list[list[dict[str, Any]]]:
@@ -688,7 +780,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                     self._trace_buf = []
                     self._last_traced_version = version
 
-            yield {
+            example = {
                 "input_ids": sample.input_ids,
                 "completion_mask": sample.completion_mask,
                 "teacher_topk_ids": sample.teacher_topk_ids,
@@ -697,6 +789,10 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "prompt_id": sample.prompt_id,  # counted by the collator, never sent to the model
                 "metrics": sample.metrics,  # per-sample scalars a custom worker stamped; aggregated by the collator
             }
+            if sample.csd_prefix_lengths is not None:
+                example["csd_prefix_lengths"] = sample.csd_prefix_lengths
+                example["csd_weights"] = sample.csd_weights
+            yield example
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
@@ -823,6 +919,12 @@ class DataCollatorForRollout(DataCollatorMixin):
         }
         if teacher_id_idx is not None:
             batch["teacher_id_idx"] = teacher_id_idx
+        if "csd_prefix_lengths" in all_examples[0]:
+            for key in ("csd_prefix_lengths", "csd_weights"):
+                values = [torch.as_tensor(np.concatenate([example[key] for example in group])) for group in groups]
+                batch[key] = pad(values, padding_value=0)
+            n_chunks = sum(int((example["csd_weights"] > 0).sum()) for example in all_examples)
+            batch["global_n_chunks"] = torch.full((self.num_processes,), float(n_chunks))
         return batch
 
     def _log_metrics(
@@ -1495,6 +1597,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
                     teacher_server_urls=self.args.teacher_server_urls,
                     teacher_top_k=self.args.teacher_top_k,
                     teacher_temperature=self.args.teacher_temperature,
+                    distillation_method=self.args.distillation_method,
+                    teacher_tokenizers=self.args.teacher_tokenizers,
+                    csd_mismatch_weight=self.args.csd_mismatch_weight,
+                    trust_remote_code=self.args.trust_remote_code,
                     max_tokens=self.args.max_completion_length,
                     temperature=self.args.temperature,
                     top_p=self.args.top_p,
@@ -1580,6 +1686,16 @@ class AsyncDistillationTrainer(_BaseTrainer):
             )
         )
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches, device)
+        if self.args.distillation_method == "csd" and batch_samples:
+            # Normalize the optimizer step by its global chunk count, rather
+            # than averaging microbatch means with unequal numbers of chunks.
+            global_n_chunks = sum(batch["global_n_chunks"][0] for batch in batch_samples)
+            for batch in batch_samples:
+                batch["global_n_chunks"] = global_n_chunks.expand_as(batch["global_n_chunks"])
+        return batch_samples, num_items_in_batch
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed. In
         # AsyncDistillationTrainer, we need additional columns to compute the loss, hence the override.
@@ -1594,6 +1710,9 @@ class AsyncDistillationTrainer(_BaseTrainer):
                 "teacher_id",
                 "teacher_id_idx",
                 "global_n_tokens",
+                "global_n_chunks",
+                "csd_prefix_lengths",
+                "csd_weights",
                 "global_n_forward_tokens",
                 "mean_seq_len",
             ]
@@ -1634,7 +1753,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # Which candidate ids the student needs a log-prob at, and the teacher's log-prob at those same ids — pure
         # teacher-side/input_ids bookkeeping, no student logits needed yet, so this happens before the forward pass.
         valid_candidate_mask_wide = teacher_topk_ids != -1
-        if self.args.beta == 0.0:
+        if self.args.beta == 0.0 or self.args.distillation_method == "csd":
             # Forward KL: the teacher's own top-k support (its weighting is exactly what this sum needs).
             valid_candidate_mask = valid_candidate_mask_wide
             target_ids = teacher_topk_ids
@@ -1661,6 +1780,12 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # excludes a position above; a run with such gaps is very slightly under-scaled rather than exactly
         # renormalized, which is an acceptable trade-off for what should be a rare, teacher-side data gap.
         token_mask_1d = (completion_mask.bool() & has_teacher_signal)[0]  # (seq_len - 1,), batch dim always 1
+        if self.args.distillation_method == "csd":
+            # Prefix predictors are needed even where there is no chunk-final
+            # support. The CSD loss selects chunk anchors after projection.
+            token_mask_1d = completion_mask.bool()[0]
+            csd_prefix_lengths = inputs["csd_prefix_lengths"][mask_bool][1:][token_mask_1d]
+            csd_weights = inputs["csd_weights"][mask_bool][1:][token_mask_1d]
 
         # Memory-efficient path: get the student's backbone hidden states (skip `lm_head`, so this alone never
         # materializes a vocab-sized tensor), then project only the *valid* positions' hidden states through
@@ -1734,6 +1859,26 @@ class AsyncDistillationTrainer(_BaseTrainer):
             local_entropy_sum = hidden_valid.new_zeros(())
             local_teacher_entropy_sum = hidden_valid.new_zeros(())
             local_per_teacher_stats = hidden_valid.new_zeros(3 * num_teachers)
+        elif self.args.distillation_method == "csd":
+            loss, local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_per_teacher_stats = (
+                _chunked_csd_loss(
+                    hidden_valid,
+                    lm_head_weight,
+                    lm_head_bias,
+                    logit_scale,
+                    final_logit_softcapping,
+                    target_ids,
+                    teacher_target_logps,
+                    input_ids[0, 1:][token_mask_1d],
+                    csd_prefix_lengths,
+                    csd_weights,
+                    self.args.beta,
+                    self.args.teacher_temperature,
+                    teacher_id_idx_valid,
+                    num_teachers,
+                    _CHUNKED_LM_HEAD_CHUNK_SIZE,
+                )
+            )
         else:
             loss, local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_per_teacher_stats = (
                 _chunked_jsd_loss(
@@ -1756,9 +1901,13 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         global_n_tokens = inputs["global_n_tokens"][0]
         world_size = self.accelerator.num_processes
+        denominator = inputs["global_n_chunks"][0] if self.args.distillation_method == "csd" else global_n_tokens
         tokens_per_rank = (global_n_tokens / world_size).clamp(min=1.0)
+        if self.args.distillation_method == "csd":
+            tokens_per_rank = denominator.clamp(min=1.0) / world_size
         loss = loss / tokens_per_rank.to(torch.float32)
-        loss = loss / self.current_gradient_accumulation_steps
+        if self.args.distillation_method != "csd":
+            loss = loss / self.current_gradient_accumulation_steps
 
         # The divergence loss above is scaled for gradient accumulation (HF auto-scaling is off here), so scale aux too
         if self.aux_loss_enabled:
@@ -1783,6 +1932,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
 
         with torch.no_grad():
             local_count = token_mask_1d.sum().float()
+            if self.args.distillation_method == "csd":
+                local_count = (csd_weights > 0).sum().float()
             stats = torch.stack([local_jsd_sum, local_entropy_sum, local_teacher_entropy_sum, local_count])
             stats = self.accelerator.reduce(stats, reduction="sum")
             global_jsd_sum, global_entropy_sum, global_teacher_entropy_sum, global_count = stats.unbind(0)
@@ -1809,15 +1960,26 @@ class AsyncDistillationTrainer(_BaseTrainer):
             # together or skips it together — required for `accelerator.reduce` below to stay in sync across ranks.
             if teacher_id_idx is not None:
                 per_teacher_stats = self.accelerator.reduce(local_per_teacher_stats, reduction="sum")
+                if self.args.distillation_method == "csd":
+                    token_counts = torch.stack([(teacher_id_idx_valid == i).sum() for i in range(num_teachers)])
+                    token_counts = self.accelerator.reduce(token_counts, reduction="sum")
                 for i, teacher_id in enumerate(self._teacher_ids):
                     t_count, t_jsd_sum, t_teacher_entropy_sum = per_teacher_stats[3 * i : 3 * i + 3]
                     # Logged as a `(numerator, denominator)` rate so the window reduces to the true share of tokens
                     # each teacher scored, rather than a mean of per-step shares that micro-batches of unequal size
                     # would skew. A teacher that scored nothing this step gets a real 0 share, not the NaN the
                     # averages below use, since zero tokens is itself the answer here.
-                    self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
-                        (t_count.item(), global_count.item())
-                    )
+                    if self.args.distillation_method == "csd":
+                        self._metrics["train"][f"teacher_chunk_frac/{teacher_id}"].append(
+                            (t_count.item(), global_count.item())
+                        )
+                        self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                            (token_counts[i].item(), global_n_tokens.item())
+                        )
+                    else:
+                        self._metrics["train"][f"teacher_token_frac/{teacher_id}"].append(
+                            (t_count.item(), global_count.item())
+                        )
                     if t_count > 0:
                         self._metrics["train"][f"teacher_jsd/{teacher_id}"].append((t_jsd_sum / t_count).item())
                         self._metrics["train"][f"teacher_entropy/{teacher_id}"].append(

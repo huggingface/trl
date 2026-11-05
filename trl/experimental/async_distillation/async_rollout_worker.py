@@ -33,10 +33,11 @@ from typing import Any, TypeAlias
 import numpy as np
 from accelerate.logging import get_logger
 from datasets import Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from ...import_utils import is_aiohttp_available, is_vllm_available
 from ...trainer.utils import print_prompt_completions_sample
+from .csd import CSDTargetBuilder
 
 
 if is_aiohttp_available():
@@ -74,6 +75,8 @@ class RolloutSample:
     teacher_id: str  # which teacher_server_urls entry scored this sample (see _resolve_teacher_server_url)
     prompt_id: int  # index of the dataset row this came from, counted across epochs; drives the epoch-driven stop
     enqueued_at: float | None = None
+    csd_prefix_lengths: np.ndarray | None = None
+    csd_weights: np.ndarray | None = None
 
 
 # Env vars the child must drop so accelerate's `PartialState()` initialises in
@@ -216,6 +219,10 @@ class _AsyncRolloutLoop:
         teacher_server_urls: dict[str, str] | None = None,
         teacher_top_k: int = 8,
         teacher_temperature: float = 1.0,
+        distillation_method: str = "token",
+        teacher_tokenizers: dict[str, str] | None = None,
+        csd_mismatch_weight: float = 5.0,
+        trust_remote_code: bool = False,
         max_tokens: int = 32,
         temperature: float = 1.0,
         top_p: float = 1.0,
@@ -269,6 +276,11 @@ class _AsyncRolloutLoop:
         self.teacher_server_urls = {k: v.rstrip("/") for k, v in teacher_server_urls.items()}
         self.teacher_top_k = teacher_top_k
         self.teacher_temperature = teacher_temperature
+        self.distillation_method = distillation_method
+        self.teacher_tokenizers = teacher_tokenizers
+        self.csd_mismatch_weight = csd_mismatch_weight
+        self.trust_remote_code = trust_remote_code
+        self.csd_builders = {}
 
         # Served model id per teacher, resolved from each teacher server's `/v1/models` in `_run_loops`, since
         # `/v1/completions` names the model it is addressing and a teacher serves a different one than the student.
@@ -324,6 +336,14 @@ class _AsyncRolloutLoop:
                 f"repetition_penalty={self.repetition_penalty}"
             )
             await self._resolve_teacher_model_names()
+            if self.distillation_method == "csd":
+                for teacher_id, tokenizer_name in self.teacher_tokenizers.items():
+                    teacher_tokenizer = AutoTokenizer.from_pretrained(
+                        tokenizer_name, trust_remote_code=self.trust_remote_code
+                    )
+                    self.csd_builders[teacher_id] = CSDTargetBuilder(
+                        self.tokenizer, teacher_tokenizer, self.teacher_top_k
+                    )
             await self._generate_loop(stop_event=stop_event)
 
     async def _resolve_teacher_model_names(self) -> None:
@@ -540,9 +560,26 @@ class _AsyncRolloutLoop:
         completion = [{"role": "assistant", "content": completion_text}]
 
         teacher_id, teacher_server_url = self._resolve_teacher_server_url(row)
+        teacher_prompt_ids, teacher_completion_ids = prompt_ids, completion_ids
+        chunks = None
+        if self.distillation_method == "csd":
+            builder = self.csd_builders[teacher_id]
+            teacher_tokenizer = builder.teacher_tokenizer
+            teacher_prompt_ids = teacher_tokenizer.apply_chat_template(
+                prompt, return_dict=False, add_generation_prompt=True, **self.chat_template_kwargs
+            )
+            has_eos = bool(completion_ids) and completion_ids[-1] in self.eos_token_ids
+            content_ids = completion_ids[:-1] if has_eos else completion_ids
+            content = self.tokenizer.decode(content_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+            teacher_completion_ids = teacher_tokenizer.encode(content, add_special_tokens=False)
+            chunks = builder.align(content_ids, teacher_completion_ids)
+            if has_eos and teacher_tokenizer.eos_token_id is not None:
+                t_end = len(teacher_completion_ids)
+                teacher_completion_ids.append(teacher_tokenizer.eos_token_id)
+                chunks.append((len(content_ids), len(completion_ids), t_end, t_end + 1))
         # Scoring sends the whole sequence and asks for one throwaway token. A teacher without room for that rejects
         # the request with a 400 that `_retry` retries for minutes before surfacing it without the cause.
-        sequence_length = len(prompt_ids) + len(completion_ids)
+        sequence_length = len(teacher_prompt_ids) + len(teacher_completion_ids)
         max_model_len = self.teacher_max_model_lens[teacher_id]
         if max_model_len is not None and sequence_length >= max_model_len:
             raise ValueError(
@@ -552,7 +589,7 @@ class _AsyncRolloutLoop:
             )
         t_score = time.monotonic()
         teacher_topk_ids, teacher_topk_logprobs = await self._score_with_teacher(
-            prompt_ids, completion_ids, teacher_server_url, self.teacher_model_names[teacher_id]
+            teacher_prompt_ids, teacher_completion_ids, teacher_server_url, self.teacher_model_names[teacher_id]
         )
         score_s = time.monotonic() - t_score
 
@@ -560,9 +597,28 @@ class _AsyncRolloutLoop:
         completion_mask = np.asarray([0] * len(prompt_ids) + [1] * len(completion_ids), dtype=np.int64)
         full_teacher_ids = np.full((len(input_ids), self.teacher_top_k + 1), -1, dtype=np.int64)
         full_teacher_logprobs = np.full((len(input_ids), self.teacher_top_k + 1), -np.inf, dtype=np.float32)
-        for i, (cand_ids, cand_lps) in enumerate(zip(teacher_topk_ids, teacher_topk_logprobs, strict=True)):
-            full_teacher_ids[len(prompt_ids) + i, : len(cand_ids)] = cand_ids
-            full_teacher_logprobs[len(prompt_ids) + i, : len(cand_lps)] = cand_lps
+        csd_prefix_lengths = csd_weights = None
+        metrics = {}
+        if self.distillation_method == "csd":
+            ids, lps, lengths, weights = builder.build(
+                completion_ids,
+                teacher_completion_ids,
+                chunks,
+                teacher_topk_ids,
+                teacher_topk_logprobs,
+                self.csd_mismatch_weight,
+            )
+            # CSD candidates are STUDENT IDs; teacher values score the matching
+            # whole events, including their observed teacher prefixes.
+            full_teacher_ids[len(prompt_ids) :] = ids
+            full_teacher_logprobs[len(prompt_ids) :] = lps
+            csd_prefix_lengths = np.concatenate([np.zeros(len(prompt_ids), dtype=np.int64), lengths])
+            csd_weights = np.concatenate([np.zeros(len(prompt_ids), dtype=np.float32), weights])
+            metrics["csd/alignment_coverage"] = float((lengths[weights > 0] + 1).sum()) / max(len(completion_ids), 1)
+        else:
+            for i, (cand_ids, cand_lps) in enumerate(zip(teacher_topk_ids, teacher_topk_logprobs, strict=True)):
+                full_teacher_ids[len(prompt_ids) + i, : len(cand_ids)] = cand_ids
+                full_teacher_logprobs[len(prompt_ids) + i, : len(cand_lps)] = cand_lps
 
         self._push_rollout_metrics(
             completion_ids=completion_ids,
@@ -580,7 +636,9 @@ class _AsyncRolloutLoop:
             model_version=model_version,
             teacher_id=teacher_id,
             prompt_id=prompt_id,
-            metrics={},
+            metrics=metrics,
+            csd_prefix_lengths=csd_prefix_lengths,
+            csd_weights=csd_weights,
         )
 
     async def _generate_one_turn(self, prompt_ids: list[int]) -> list[int]:
