@@ -172,7 +172,7 @@ training_args = SFTConfig(assistant_only_loss=True)
 ![train_on_assistant](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
 
 > [!WARNING]
-> This functionality requires the chat template to include `&#123;% generation %&#125;` and `&#123;% endgeneration %&#125;` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. See [Chat Templates](chat_templates#training-templates) for the full list of bundled training templates. For other models, check that your chat template includes these keywords. See [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
+> This functionality requires the chat template to include `{% generation %}` and `{% endgeneration %}` keywords. For known model families (e.g. Qwen3), TRL automatically patches the template when `assistant_only_loss=True`. See [Chat Templates](chat_templates#training-templates) for the full list of bundled training templates. For other models, check that your chat template includes these keywords. See [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82) for an example.
 
 > [!NOTE]
 > With a [vision dataset](#training-vision-language-models), assistant-only loss requires `transformers>=5.18.0` and a conversational [language modeling](dataset_formats#language-modeling) dataset.

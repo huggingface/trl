@@ -26,8 +26,7 @@ import time
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from multiprocessing.queues import Queue as MPQueue
-from typing import Any, Protocol
+from typing import Any
 
 import numpy as np
 import torch
@@ -444,49 +443,6 @@ class TokenBudgetBatcher(torch.utils.data.IterableDataset):
             token_counts[i] += n
 
 
-class RolloutWorkerProtocol(Protocol):
-    """Interface a rollout worker must implement to be passed as `rollout_worker` to
-    [`experimental.async_distillation.AsyncDistillationTrainer`].
-
-    Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol`].
-
-    Attributes:
-        rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it. The two queue types are
-            structurally identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the
-            default [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while
-            an in-process worker uses `queue.Queue`.
-        metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
-            Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
-            like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
-            for a rate — so draining it is an append. A worker that measures nothing exposes an empty queue.
-    """
-
-    rollout_buffer: queue.Queue | MPQueue
-    metrics_queue: queue.Queue | MPQueue
-
-    def start(self) -> None: ...
-    def stop(self) -> None: ...
-    def update_model_version(self, model_version: int) -> None: ...
-    def check_health(self, stale_after_s: float) -> None: ...
-
-
-class WeightTransferProtocol(Protocol):
-    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`experimental.async_distillation.AsyncDistillationTrainer`].
-
-    Same contract as [`~trl.experimental.async_grpo.async_grpo_trainer.WeightTransferProtocol`]. The default
-    [`WeightTransferClient`] streams the student's weights into its vLLM server over NCCL; pass a no-op implementation
-    (as tests do) to exercise the trainer without a real vLLM server.
-    """
-
-    def init_weight_transfer(self) -> None: ...
-    def pause(self) -> None: ...
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None: ...
-    def resume(self) -> None: ...
-    def destroy(self) -> None: ...
-
-
 class StepIntervalCallback(TrainerCallback):
     """A callback that calls a function every N optimization steps."""
 
@@ -711,7 +667,7 @@ class RolloutQueueDataset(torch.utils.data.IterableDataset):
                 "teacher_topk_logprobs": sample.teacher_topk_logprobs,
                 "teacher_id": sample.teacher_id,
                 "prompt_id": sample.prompt_id,  # counted by the collator, never sent to the model
-                "metrics": sample.metrics,  # per-sample scalars a custom worker stamped; aggregated by the collator
+                "metrics": sample.metrics,  # per-sample scalars, none for distillation; aggregated by the collator
             }
 
 
@@ -860,9 +816,8 @@ class DataCollatorForRollout(DataCollatorMixin):
         self.metrics["sample/trained_tokens_mean"].append(sum(trained) / len(trained))
         self.metrics["batch/masked_token_frac"].append((sum(forwarded) - sum(trained), sum(forwarded)))
 
-        # Per-sample scalars, nan-aware. Empty for the built-in worker — distillation has no reward function, so it
-        # measures nothing per sample — but a custom worker can stamp its own, and each key averages over the samples
-        # that carry it rather than over the whole micro-batch.
+        # Per-sample scalars, nan-aware: each key averages over the samples that carry it rather than over the whole
+        # micro-batch. Always empty for now, since distillation has no reward function and measures nothing per sample.
         keys = dict.fromkeys(key for example in all_examples for key in example["metrics"])
         for key in keys:
             values = [example["metrics"][key] for example in all_examples if key in example["metrics"]]
@@ -1191,15 +1146,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped. When the student's vLLM
             server was started with `--enable-lora`, a LoRA adapter is synced to it as an adapter rather than as merged
             weights; see the LoRA section of the AsyncDistillation documentation.
-        rollout_worker (`RolloutWorkerProtocol`, *optional*):
-            Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
-            is created, spawning a CUDA-free child process that generates from the student's vLLM server and scores
-            against the teacher's.
-        weight_transfer (`WeightTransferProtocol`, *optional*):
-            Custom weight-sync backend implementing [`WeightTransferProtocol`]. If `None`, a default
-            [`WeightTransferClient`] is created that streams the student's weights into its vLLM server over NCCL. Pass
-            a no-op implementation to disable trainer-side weight sync (e.g. in tests, or when a custom
-            `rollout_worker` updates the policy itself).
     """
 
     loss_is_scaled_for_ga = True
@@ -1229,8 +1175,6 @@ class AsyncDistillationTrainer(_BaseTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         peft_config: "PeftConfig | None" = None,
-        rollout_worker: RolloutWorkerProtocol | None = None,
-        weight_transfer: WeightTransferProtocol | None = None,
     ):
         if args is None:
             model_name = model if isinstance(model, str) else get_config_model_id(model.config)
@@ -1460,7 +1404,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
         # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
         # alone would leave the others waiting in this collective.
-        if weight_transfer is None and is_peft_model(model):
+        if is_peft_model(model):
             lora_sync = None
             if self.accelerator.is_main_process:
                 try:
@@ -1476,64 +1420,51 @@ class AsyncDistillationTrainer(_BaseTrainer):
             if self.train_dataset is None:
                 raise ValueError("train_dataset is required for AsyncDistillationTrainer")
 
-            if weight_transfer is not None:
-                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
-                # entirely, so the server is not probed and adapter sync stays off.
-                self.weight_transfer = weight_transfer
+            if self._lora_sync:
+                # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer group to
+                # build and no manifest to collect.
+                self.weight_transfer = None
             else:
-                if self._lora_sync:
-                    # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
-                    # group to build and no manifest to collect.
-                    self.weight_transfer = None
-                else:
-                    # Collect weight metadata once, names/dtypes/shapes are fixed for the lifetime of training.
-                    # DTensor.shape returns the global shape without triggering any all-gather.
-                    weight_names, weight_dtype_names, weight_shapes = [], [], []
-                    for name, param in _iter_vllm_named_params(model):
-                        weight_names.append(name)
-                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                        weight_shapes.append(list(param.shape))
-                    self.weight_transfer = WeightTransferClient(
-                        vllm_client=self.vllm_client,
-                        weight_update_info={
-                            "names": weight_names,
-                            "dtype_names": weight_dtype_names,
-                            "shapes": weight_shapes,
-                        },
-                    )
-
-            if rollout_worker is not None:
-                # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
-                self.rollout_worker = rollout_worker
-                if self._lora_sync:
-                    # The worker was built before the server was probed, so it does not know the adapter name yet.
-                    # Without it, its requests name the base model and keep sampling the base policy.
-                    self.rollout_worker._loop_kwargs["lora_name"] = self._lora_name
-            else:
-                self.rollout_worker = AsyncRolloutWorker(
-                    model_name=get_config_model_id(model.config),
-                    lora_name=self._lora_name if self._lora_sync else None,
-                    dataset=train_dataset,
-                    processing_class=processing_class,
-                    eos_token_ids=self.eos_token_ids,
-                    max_concurrent_rollouts=self.args.max_concurrent_rollouts,
-                    queue_maxsize=self.args.queue_maxsize,
-                    vllm_server_url=self.args.vllm_server_base_url,
-                    teacher_server_urls=self.args.teacher_server_urls,
-                    teacher_top_k=self.args.teacher_top_k,
-                    teacher_temperature=self.args.teacher_temperature,
-                    max_tokens=self.args.max_completion_length,
-                    temperature=self.args.temperature,
-                    top_p=self.args.top_p,
-                    top_k=self.args.top_k,
-                    min_p=self.args.min_p,
-                    repetition_penalty=self.args.repetition_penalty,
-                    vllm_server_timeout=self.args.vllm_server_timeout,
-                    chat_template_kwargs=self.args.chat_template_kwargs,
-                    log_completions=self.args.log_completions,
-                    log_completions_steps=self.args.log_completions_steps,
-                    num_completions_to_print=self.args.num_completions_to_print,
+                # Collect weight metadata once, names/dtypes/shapes are fixed for the lifetime of training.
+                # DTensor.shape returns the global shape without triggering any all-gather.
+                weight_names, weight_dtype_names, weight_shapes = [], [], []
+                for name, param in _iter_vllm_named_params(model):
+                    weight_names.append(name)
+                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                    weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_client=self.vllm_client,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                    },
                 )
+
+            self.rollout_worker = AsyncRolloutWorker(
+                model_name=get_config_model_id(model.config),
+                lora_name=self._lora_name if self._lora_sync else None,
+                dataset=train_dataset,
+                processing_class=processing_class,
+                eos_token_ids=self.eos_token_ids,
+                max_concurrent_rollouts=self.args.max_concurrent_rollouts,
+                queue_maxsize=self.args.queue_maxsize,
+                vllm_server_url=self.args.vllm_server_base_url,
+                teacher_server_urls=self.args.teacher_server_urls,
+                teacher_top_k=self.args.teacher_top_k,
+                teacher_temperature=self.args.teacher_temperature,
+                max_tokens=self.args.max_completion_length,
+                temperature=self.args.temperature,
+                top_p=self.args.top_p,
+                top_k=self.args.top_k,
+                min_p=self.args.min_p,
+                repetition_penalty=self.args.repetition_penalty,
+                vllm_server_timeout=self.args.vllm_server_timeout,
+                chat_template_kwargs=self.args.chat_template_kwargs,
+                log_completions=self.args.log_completions,
+                log_completions_steps=self.args.log_completions_steps,
+                num_completions_to_print=self.args.num_completions_to_print,
+            )
             self.rollout_queue = self.rollout_worker.rollout_buffer
         else:
             self.rollout_queue = None
@@ -2116,7 +2047,7 @@ class AsyncDistillationTrainer(_BaseTrainer):
             config.save_pretrained(output_dir)
 
     def _save_checkpoint(self, model, trial):
-        if self.accelerator.is_main_process and isinstance(self.rollout_worker, AsyncRolloutWorker):
+        if self.accelerator.is_main_process:
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             checkpoint_dir = os.path.join(self._get_output_dir(trial=trial), checkpoint_folder)
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -2134,10 +2065,10 @@ class AsyncDistillationTrainer(_BaseTrainer):
         # When resuming, pass the saved prompt position to the worker before _TrainBeginCallback fires.
         # Skipped for IterableDataset since len() isn't available on streaming datasets.
         # Always reset first so a stale value from a prior train() call is never carried over. The trained ids are
-        # cleared whatever the worker, since the collator fills them regardless and the worker's `prompt_id` restarts
-        # at 0, so leftovers from an earlier run would collide with this one's.
+        # cleared too: the worker's `prompt_id` restarts at 0, so leftovers from an earlier run would collide with this
+        # one's.
         self._trained_prompts.clear()
-        if isinstance(self.rollout_worker, AsyncRolloutWorker):
+        if self.accelerator.is_main_process:
             self.rollout_worker._loop_kwargs["dataset_start_index"] = 0
             self._prompts_before_resume = 0
             resume_from_checkpoint = kwargs.get("resume_from_checkpoint")

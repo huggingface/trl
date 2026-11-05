@@ -39,12 +39,12 @@ from openenv.core.harness.capture.upstream import training_sampling
 from openenv.core.llm_client import LLMResponse, ToolCall
 
 from ...chat_template_utils import parse_response
+from .async_grpo_config import AsyncGRPOConfig
 from .async_rollout_worker import (
+    AsyncRolloutLoop,
     AsyncRolloutWorker,
     Rollout,
     TurnRecord,
-    _AsyncRolloutLoop,
-    _chain_to_sequences,
 )
 
 
@@ -96,10 +96,8 @@ def _msg_to_llm_response(msg: Message) -> LLMResponse:
     return LLMResponse(content=msg.get("content") or "", tool_calls=tool_calls)
 
 
-class _HarnessRolloutLoop(_AsyncRolloutLoop):
-    """`_AsyncRolloutLoop` whose `generate_one` drives an OpenEnv session instead of TRL's own turn loop."""
-
-    _provides_rollout_reward = True
+class _HarnessRolloutLoop(AsyncRolloutLoop):
+    """`AsyncRolloutLoop` whose `generate_one` drives an OpenEnv session instead of TRL's own turn loop."""
 
     # Unscorable rollouts are excluded from the group baseline.
     _EMPTY_ROLLOUT = Rollout([], [], [])
@@ -145,7 +143,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
             sampling={"temperature": self.config.temperature, "max_tokens": self.config.max_completion_length},
         )
         self._rollout_reward_fn = rollout_reward_fn
-        self.reward_func_names.append("harness_reward")
 
         self._session_pool = ThreadPoolExecutor(
             max_workers=max(1, self.config.max_concurrent_rollouts), thread_name_prefix="harness-session"
@@ -155,7 +152,7 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         self._max_session_backoff_s = max_session_backoff_s
         self._consecutive_session_failures = 0
 
-    async def generate_one(self, prompt, tool_dict, tools, group_id=0):
+    async def generate_one(self, prompt, tools, group_id=0):
         # OpenEnv sessions are synchronous; metrics stay on the event loop.
         loop = asyncio.get_running_loop()
         result, metrics = await loop.run_in_executor(self._session_pool, self._run_session, prompt, group_id)
@@ -173,7 +170,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 self._rates["tools/latency_s"][1] += 1
                 self._rates[f"tools/{name}/latency_s"][0] += elapsed
                 self._rates[f"tools/{name}/latency_s"][1] += 1
-            self._push_rollout_metrics(**metrics)
         if result is not self._EMPTY_ROLLOUT:
             self._consecutive_session_failures = 0
         elif not self._stop_event.is_set():
@@ -221,7 +217,6 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
         Session failures and rejected captures of failed agents are unscorable. Other invalid training captures stop
         the worker.
         """
-        t_dispatch = time.monotonic()
         rollout_id = uuid.uuid4().hex
         # Every generation in a group must select the same task.
         seed = group_id
@@ -302,25 +297,15 @@ class _HarnessRolloutLoop(_AsyncRolloutLoop):
                 timed_out=timed_out,
             )
             reward = self._rollout_reward_fn(outcome) if self._rollout_reward_fn else env_reward
-            try:
-                sequences, tally = _chain_to_sequences(turns, rollout_id, self._fork_threshold_tokens)
-            except (ValueError, TypeError, KeyError) as exc:
-                raise CaptureContractError(str(exc)) from exc
             completion_ids = [tid for turn in turns for tid in turn.output_ids]
             metrics = dict(
-                turns=len(turns),
-                sequences=len(sequences),
-                completion_ids=completion_ids,
-                tally=tally,
-                loop_exhausted=timed_out,
-                duration_s=time.monotonic() - t_dispatch,
                 tool_calls_by_name=tool_calls_by_name,
                 tool_failures_by_name=tool_failures_by_name,
                 tool_latency=tool_latency,
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
-            return Rollout(completion, completion_ids, sequences, tool_call_count, tool_failure_count, reward), metrics
+            return Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward), metrics
         except CaptureContractError:
             raise
         except Exception:
@@ -435,4 +420,5 @@ class HarnessRolloutWorker(AsyncRolloutWorker):
     unscorable sessions in a row per in-flight slot, the worker stops with an error.
     """
 
-    _loop_cls = _HarnessRolloutLoop
+    def __init__(self, config: AsyncGRPOConfig, **kwargs):
+        super().__init__(config, loop_cls=_HarnessRolloutLoop, **kwargs)
