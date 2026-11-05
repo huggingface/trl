@@ -11,6 +11,9 @@ on:
       - "Makefile"
       - "trl/experimental/**"
       - "tests/experimental/**"
+      # The experimental tests use the shared test infrastructure
+      - "tests/conftest.py"
+      - "tests/testing_utils.py"
       - "pyproject.toml"
   pull_request:
     paths:
@@ -20,6 +23,9 @@ on:
       - "Makefile"
       - "trl/experimental/**"
       - "tests/experimental/**"
+      # The experimental tests use the shared test infrastructure
+      - "tests/conftest.py"
+      - "tests/testing_utils.py"
       - "pyproject.toml"
   workflow_dispatch:
   schedule:
