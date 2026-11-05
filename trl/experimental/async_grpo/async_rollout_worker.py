@@ -1124,7 +1124,8 @@ class AsyncRolloutLoop:
     def filter_prompt(self, row_index: int, row: dict[str, Any], epoch: int) -> bool:
         """
         Whether to generate for a prompt. A rejected prompt is skipped for this epoch and counts as consumed, like a
-        dropped group. Admits every prompt by default.
+        dropped group. Admits every prompt by default. Rejecting every prompt of a full epoch raises, since no batch
+        can reach the trainer after that.
 
         Args:
             row_index (`int`):
@@ -1143,14 +1144,22 @@ class AsyncRolloutLoop:
         """Yield `(group_id, row_index, row)` once per generation of each prompt, or `(group_id, row_index, None)` once
         for a prompt that `filter_prompt` rejects."""
         group_id = 0
+        accepted_in_epoch = self._row_index > 0
         while True:
             try:
                 row = next(self._dataset_iter)
             except StopIteration:
+                if not accepted_in_epoch:
+                    raise RuntimeError(
+                        f"`filter_prompt` rejected every prompt of epoch {self._epoch}, so no batch can reach the "
+                        "trainer."
+                    ) from None
                 self._dataset_iter = iter(self.dataset)
                 self._row_index, self._epoch = 0, self._epoch + 1
+                accepted_in_epoch = False
                 row = next(self._dataset_iter)
             if self.filter_prompt(self._row_index, row, self._epoch):
+                accepted_in_epoch = True
                 for _ in range(self.config.num_generations):
                     yield group_id, self._row_index, row
             else:
