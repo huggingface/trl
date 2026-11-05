@@ -2251,11 +2251,6 @@ class _SelfScoredLoop(_FixedRolloutLoop):
         return dataclasses.replace(rollout, reward=float(self.calls % 2))
 
 
-class _NoPromptsLoop(_FixedRolloutLoop):
-    def filter_prompt(self, row_index, row, epoch):
-        return False
-
-
 class _LifecycleLoop(_FixedRolloutLoop):
     async def setup(self):
         self.events.append("setup")
@@ -2325,9 +2320,9 @@ class TestCustomRolloutLoop(TrlTestCase):
 
     def test_warns_when_no_group_reaches_the_trainer(self, caplog):
         loop = _rollout_loop(
-            _NoPromptsLoop,
+            _FixedRolloutLoop,
             num_generations=2,
-            reward_funcs=[two_reward],
+            reward_funcs=[constant_reward],
             vllm_server_base_url="http://127.0.0.1:9",
             rollout_buffer=mp.Queue(maxsize=100),
         )
