@@ -180,7 +180,7 @@ def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | Non
 class _AsyncRolloutLoop:
     """Asyncio generate-and-score loop. Lives entirely inside the spawned child process.
 
-    Structurally this is [`~trl.experimental.async_grpo.async_rollout_worker._AsyncRolloutLoop`] with the
+    Structurally this is [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop`] with the
     group-relative-advantage machinery removed (distillation has no group baseline: each prompt yields exactly one
     on-policy sample) and the reward scoring step replaced by a teacher-scoring HTTP call. Because there is no
     grouping, generation and scoring happen in a single task per sample (`_generate_and_score_one`) rather than two
@@ -432,7 +432,7 @@ class _AsyncRolloutLoop:
     async def _retry(self, coro_factory: Callable[[], Awaitable], *, label: str, max_attempts: int = 1):
         """Retry an aiohttp coroutine on transport errors with bounded exponential backoff, counting the retries.
 
-        Ported from [`~trl.experimental.async_grpo.async_rollout_worker._AsyncRolloutLoop._retry`]. Every retried call
+        Ported from [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._retry`]. Every retried call
         in this loop targets a vLLM server — the student's or a teacher's — so the counter is named for the dependency
         rather than for the transport.
         """
@@ -467,8 +467,8 @@ class _AsyncRolloutLoop:
         """One rollout: what the student generated, and the teacher call that scored it.
 
         A rollout yields exactly one training sample here — one turn, no group baseline, no re-tokenization forking —
-        so unlike [`~trl.experimental.async_grpo.async_rollout_worker._AsyncRolloutLoop._push_rollout_metrics`] there
-        is no `rollout/samples_per_rollout`, `rollout/turns_*`, drift tally or tool tally to report.
+        so unlike [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._push_rollout_metrics`] there is
+        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift tally or tool tally to report.
         """
         completion_tokens = len(completion_ids)
         self._rates["completions/mean_length"][0] += completion_tokens
