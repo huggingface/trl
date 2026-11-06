@@ -1575,7 +1575,7 @@ class DPOTrainer(_BaseTrainer):
                 mean_logps = aligned_logps.sum(dim=1) / completion_lengths
                 weights = torch.exp(mean_logps)
                 chosen_weights, rejected_weights = weights.chunk(2, dim=0)
-                per_sequence_loss *= chosen_weights * rejected_weights
+                per_sequence_loss = per_sequence_loss * (chosen_weights * rejected_weights)
 
             loss += per_sequence_loss.mean() * loss_weight
 
