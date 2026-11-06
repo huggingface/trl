@@ -2347,6 +2347,21 @@ def test_generation_suppresses_image_token(tmp_path, vlm_dataset):
     assert trainer.generation_config.suppress_tokens == [trainer.model.config.image_token_id]
 
 
+def test_generation_suppresses_vision_start_token(tmp_path, vlm_dataset):
+    # transformers<5.3.0 crashes when a completion ends with <|vision_start|> (see #8163)
+    trainer = GOLDTrainer(
+        model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        teacher_model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+        args=GOLDConfig(output_dir=str(tmp_path), report_to="none", use_uld_loss=False),
+        train_dataset=vlm_dataset,
+    )
+
+    expected = [trainer.model.config.image_token_id]
+    if Version(transformers.__version__) < Version("5.3.0"):
+        expected.append(trainer.model.config.vision_start_token_id)
+    assert trainer.generation_config.suppress_tokens == expected
+
+
 _TINY_LLAMA = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
 _TINY_SMOLLM3 = "trl-internal-testing/tiny-SmolLM3ForCausalLM"
 
