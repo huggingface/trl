@@ -256,9 +256,10 @@ class _RolloutStream(torch.utils.data.IterableDataset):
     def __iter__(self):
         prompts = iter(self._prompt_loader)
         while True:
-            # A whole batch at a time, because the wait, the pause and the pool exchange are collectives: every rank
-            # runs them once per batch, so the cadence is the same on all of them and none can arrive at a collective
-            # its peers have already left.
+            # A whole optimizer step at a time. The `Trainer` collects every micro-batch of a step before it trains on
+            # the first, so one pause per step is all training needs. The wait, the pause and the pool exchange are
+            # also collectives: every rank runs them once per step, so the cadence is the same on all of them and none
+            # can arrive at a collective its peers have already left.
             samples = self._trainer._next_rollout_batch(prompts)
             if not samples:
                 return
@@ -918,16 +919,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._metrics["train"]["batch/from_other_replicas"].append(
             sum(1 for owner, _, _ in assigned[replica] if owner != replica) / max(len(assigned[replica]), 1)
         )
-        return [sample for _, _, sample in assigned[replica]]
+        # Arrival order within the replica's share: the step is split into micro-batches in this order, and the length
+        # order used above would put all the longest samples into the first one.
+        return [sample for _, _, sample in sorted(assigned[replica], key=lambda item: (item[0], item[1]))]
 
     def _next_rollout_batch(self, prompts) -> list[dict[str, Any]]:
-        """Keep the engine fed and return one batch of finished rollouts, or nothing once the prompts run out.
+        """Keep the engine fed and return one optimizer step's worth of finished rollouts, or nothing once the prompts
+        run out.
 
-        Called once per training batch by `_RolloutStream`, on every rank, which is what keeps the collectives below
+        Called once per optimizer step by `_RolloutStream`, on every rank, which is what keeps the collectives below
         aligned.
         """
         mode = "train" if self.model.training else "eval"
-        num_samples = self._train_batch_size
+        num_samples = self._train_batch_size * self.args.gradient_accumulation_steps
 
         if self._manager is None:
             self._init_manager()
@@ -964,7 +968,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 if int(counts.item()) >= num_samples * self.dp_size:
                     break
                 self._drain(timeout=0.2)
-        # Summed over the accumulation micro-steps and logged once per optimizer step, in `training_step`
+        # Logged once per optimizer step, in `training_step`
         self._step_generation_wait += time.perf_counter() - wait_start
         # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
         # and the training step are fighting over memory, which slows both.
