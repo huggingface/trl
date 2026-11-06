@@ -76,10 +76,6 @@ class AsyncGRPOConfig(_BaseConfig):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range. Above `0.0`, `top_k` must be set too,
             with the server flags described under `top_p`.
-        repetition_penalty (`float`, *optional*, defaults to `1.0`):
-            Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
-            Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model to repeat
-            tokens.
         chat_template_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to the `apply_chat_template` function when generating completions.
         max_tool_calling_iterations (`int`, *optional*):
@@ -286,14 +282,6 @@ class AsyncGRPOConfig(_BaseConfig):
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
-        },
-    )
-    repetition_penalty: float = field(
-        default=1.0,
-        metadata={
-            "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
-            "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
-            "to repeat tokens."
         },
     )
     chat_template_kwargs: dict | str | None = field(
