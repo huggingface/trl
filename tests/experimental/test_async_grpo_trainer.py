@@ -603,7 +603,6 @@ def vllm_server(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-@pytest.fixture(autouse=True)
 def stub_weight_transfer(monkeypatch):
     monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
 
