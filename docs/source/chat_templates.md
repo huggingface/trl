@@ -91,7 +91,7 @@ Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
 
 Close each assistant turn inside the generation block with the role marker that opens the next turn (`<|observation|>` after tool calls, otherwise `<|user|>` or `<|system|>`). GLM's original template has no end-of-turn token: a turn is ended by the next message's role marker, and GLM declares `<|user|>` and `<|observation|>` as end-of-sequence tokens, so the training template appends the marker to the assistant turn to keep the stop token in the loss mask, and the following message no longer renders its own marker.
 
-Wrap assistant message output (including the thinking block and tool calls) with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss.
+Wrap assistant message output (including the thinking block and tool calls) with `{% generation %}` / `{% endgeneration %}` markers for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
 ### `qwen3_training.jinja`
 
