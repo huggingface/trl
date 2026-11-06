@@ -24,8 +24,9 @@ import queue
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from functools import partial
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
@@ -48,7 +49,6 @@ from trl.experimental.async_grpo import weight_transfer as weight_transfer_modul
 from trl.experimental.async_grpo.async_grpo_trainer import (
     DataCollatorForRollout,
     FixedCountBatcher,
-    RolloutWorkerProtocol,
     TokenBudgetBatcher,
     _iter_vllm_named_params,
     _reduce_metric,
@@ -99,25 +99,25 @@ class _StubRolloutWorker:
 
     def __init__(
         self,
-        tokenizer,
+        config,
+        *,
         dataset,
-        num_generations: int = 8,
+        processing_class,
         samples_per_weight_sync: int = 10,
         fork_k: int = 1,
-        candidate_sets: bool = False,
         drop_every: int = 0,
+        **kwargs,
     ):
         self.rollout_buffer = queue.Queue()
-        # What a real worker forwards to its child; the trainer writes the adapter name here under adapter sync
-        self._loop_kwargs = {}
-        self._candidate_sets = candidate_sets
+        self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
+        self._candidate_sets = config.top_k > 0
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
         self._model_version = 0
         self._fork_k = fork_k
         self._drop_every = drop_every
         self._model = None
-        self._sample_iter = self._make_sample_iter(tokenizer, dataset, num_generations)
+        self._sample_iter = self._make_sample_iter(processing_class, dataset, config.num_generations)
 
     def _sample(self, tokenizer, ids, n_prompt):
         """The sampler is the initial model: per completion token its log-prob, candidate set and top log-probs."""
@@ -205,6 +205,11 @@ class _StubRolloutWorker:
 
     def check_health(self, stale_after_s):
         pass
+
+
+@pytest.fixture(autouse=True)
+def stub_rollout_worker(monkeypatch):
+    monkeypatch.setattr(async_grpo_trainer_module, "AsyncRolloutWorker", _StubRolloutWorker)
 
 
 class _StubWeightTransfer:
@@ -396,7 +401,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             model=model_id,
             reward_funcs=dummy_reward_func,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
 
     def test_train(self):
@@ -415,10 +419,9 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         )
         trainer = AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires this argument
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
 
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -463,7 +466,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             peft_config=peft_config,
         )
         trainer.train()
@@ -525,7 +527,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
         assert trainer.model is model
         assert trainer.model.config._attn_implementation == TREE_ATTENTION
@@ -548,7 +549,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
     def test_train_off_policy_correction(self, correction, peft_config=None):
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
@@ -566,9 +566,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(
-                tokenizer, dataset, num_generations=3, candidate_sets=training_args.top_k > 0
-            ),
             peft_config=peft_config,
         )
         previous_trainable_params = {
@@ -594,12 +591,10 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         self.test_train_off_policy_correction({}, peft_config=LoraConfig(target_modules=["q_proj", "v_proj"], r=8))
 
     def test_resume_from_checkpoint(self):
-        # Checks that ignore_data_skip is True and that resume doesn't crash. The stub worker is not an
-        # AsyncRolloutWorker, so the checkpoint-write and resume-read paths stay inert here — those are
+        # Checks that ignore_data_skip is True and that resume doesn't crash. The rollout-state file itself is
         # covered by TestRolloutStateCheckpoint.
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         training_args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -619,7 +614,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
         )
         assert trainer.args.ignore_data_skip is True
         trainer.train()
@@ -643,7 +637,6 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             reward_funcs=dummy_reward_func,
             args=training_args2,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(tokenizer, dataset, num_generations=3),
         )
         assert trainer2.args.ignore_data_skip is True
         trainer2.train(resume_from_checkpoint=checkpoint_dir)
@@ -742,10 +735,9 @@ class TestAsyncGRPOTrainerVLM(TrlTestCase):
         )
         return AsyncGRPOTrainer(
             model=model_id,
-            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards, but the trainer requires it
+            reward_funcs=dummy_reward_func,  # unused: the stub pre-computes rewards
             args=training_args,
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
 
     def test_vision_tower_is_frozen(self, model_id):
@@ -804,11 +796,8 @@ def _checkpoint_trainer(output_dir, dataset_start_index=0):
         reward_funcs=dummy_reward_func,
         args=AsyncGRPOConfig(output_dir=output_dir, report_to="none"),
         train_dataset=dataset,
-        rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
     )
-    # The checkpoint paths only run for an `AsyncRolloutWorker`, which requires vLLM
-    trainer.rollout_worker = MagicMock(spec=AsyncRolloutWorker)
-    trainer.rollout_worker._loop_kwargs = {"dataset_start_index": dataset_start_index}
+    trainer.rollout_worker._loop_kwargs["dataset_start_index"] = dataset_start_index
     return trainer
 
 
@@ -832,7 +821,7 @@ class TestRolloutStartIndex(TrlTestCase):
     reason="Flash Attention requires Ampere or newer GPU, XPU, or ROCm",
 )
 class TestRolloutStateCheckpoint(TrlTestCase):
-    """Prompt-index checkpoint/resume logic, on a real trainer whose rollout worker is stood in (it needs vLLM)."""
+    """Prompt-index checkpoint/resume logic, on a real trainer with the stub rollout worker."""
 
     def _trainer_at_step_5(self, trained_groups, dataset_start_index=10):
         trainer = _checkpoint_trainer(self.tmp_dir, dataset_start_index)
@@ -907,7 +896,7 @@ class TestRolloutStateCheckpoint(TrlTestCase):
         # under a name a still-running vLLM server already holds, and strand the previous run's directories outside
         # the eviction window.
         assert trainer.model_version == 42
-        trainer.rollout_worker.update_model_version.assert_called_once_with(42)
+        assert trainer.rollout_worker._model_version == 42
 
     def test_inner_training_loop_defaults_model_version_for_old_checkpoints(self):
         # Checkpoints written before `model_version` was serialized must still resume, restarting numbering at 0.
@@ -1699,7 +1688,6 @@ class TestTreePackingParity(TrlTestCase):
                 report_to="none",
             ),
             train_dataset=dataset,
-            rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
         )
         trainer.current_gradient_accumulation_steps = 1
         model = trainer.model.to(torch_device)
@@ -1764,7 +1752,6 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
-                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             )
 
     def test_init_raises_on_gated_deltanet_before_transformers_5_15(self):
@@ -1776,21 +1763,12 @@ class TestTreePackingRefusesUnsupportedModels(TrlTestCase):
                 reward_funcs=dummy_reward_func,
                 args=AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none"),
                 train_dataset=dataset,
-                rollout_worker=_StubRolloutWorker(AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3),
             )
 
 
 def _finalize(turns, rollout_id="r0", fork_threshold=1024):
     rows, _tally = _chain_to_sequences(turns, rollout_id, fork_threshold)
     return rows
-
-
-class TestRolloutWorkerProtocol(TrlTestCase):
-    def test_stub_worker_exposes_every_protocol_attribute(self):
-        # A stub that falls behind the protocol breaks training, and only the GPU-gated `test_train` would notice.
-        stub = _StubRolloutWorker(None, [])
-        missing = [name for name in RolloutWorkerProtocol.__annotations__ if not hasattr(stub, name)]
-        assert not missing
 
 
 class TestMetricReduction(TrlTestCase):
@@ -2393,18 +2371,19 @@ class TestCustomRolloutLoop(TrlTestCase):
             loop_cls = _FixedRolloutLoop
 
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
-        trainer = FixedTrainer(
-            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-            reward_funcs=two_reward,
-            args=AsyncGRPOConfig(
-                output_dir=self.tmp_dir,
-                num_generations=2,
-                max_steps=1,
-                vllm_server_base_url="http://127.0.0.1:9",
-                report_to="none",
-            ),
-            train_dataset=dataset,
-        )
+        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", AsyncRolloutWorker):
+            trainer = FixedTrainer(
+                model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+                reward_funcs=two_reward,
+                args=AsyncGRPOConfig(
+                    output_dir=self.tmp_dir,
+                    num_generations=2,
+                    max_steps=1,
+                    vllm_server_base_url="http://127.0.0.1:9",
+                    report_to="none",
+                ),
+                train_dataset=dataset,
+            )
         trainer.rollout_worker.start()
         try:
             sample = trainer.rollout_queue.get(timeout=120)
@@ -2606,16 +2585,14 @@ class TestEpochStop(TrlTestCase):
             vllm_server_timeout=5.0,
             report_to="none",
         )
-        worker = _StubRolloutWorker(
-            AutoTokenizer.from_pretrained(model_id), dataset, num_generations=3, fork_k=fork_k, drop_every=drop_every
-        )
-        trainer = AsyncGRPOTrainer(
-            model=model_id,
-            reward_funcs=dummy_reward_func,
-            args=args,
-            train_dataset=dataset,
-            rollout_worker=worker,
-        )
+        rollout_worker = partial(_StubRolloutWorker, fork_k=fork_k, drop_every=drop_every)
+        with patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", rollout_worker):
+            trainer = AsyncGRPOTrainer(
+                model=model_id,
+                reward_funcs=dummy_reward_func,
+                args=args,
+                train_dataset=dataset,
+            )
         trainer.train()
         return trainer, len(dataset)
 
@@ -2937,19 +2914,18 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         lora_config=None,
         data_parallel_size=1,
         weight_transfer=_StubWeightTransfer,
-        rollout_worker="stub",
+        rollout_worker=_StubRolloutWorker,
         **config_kwargs,
     ):
         """Build a trainer against `fake`, configured to look like a server started with the given flags.
 
-        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker="stub"` injects
-        `_StubRolloutWorker`; `None` lets the trainer build the real `AsyncRolloutWorker`, which is cheap until
-        `start()` and useful for reading what it was told.
+        `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker` is the class the trainer
+        builds as its worker: the real `AsyncRolloutWorker` is cheap until `start()` and useful for reading what it was
+        told.
         """
         fake.lora_config = lora_config
         fake.data_parallel_size = data_parallel_size
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         config_kwargs.setdefault("max_staleness", 1)
         args = AsyncGRPOConfig(
             output_dir=self.tmp_dir,
@@ -2963,16 +2939,16 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
             report_to="none",
             **config_kwargs,
         )
-        if rollout_worker == "stub":
-            rollout_worker = _StubRolloutWorker(tokenizer, dataset, num_generations=3)
-        with patch.object(async_grpo_trainer_module, "WeightTransferClient", weight_transfer):
+        with (
+            patch.object(async_grpo_trainer_module, "WeightTransferClient", weight_transfer),
+            patch.object(async_grpo_trainer_module, "AsyncRolloutWorker", rollout_worker),
+        ):
             return AsyncGRPOTrainer(
                 model=self.model_id,
                 reward_funcs=dummy_reward_func,
                 args=args,
                 train_dataset=dataset,
                 peft_config=peft_config,
-                rollout_worker=rollout_worker,
             )
 
     def test_train_peft_config(self, fake_vllm):
@@ -3014,17 +2990,10 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         # In vLLM's API an adapter *is* a model name: a rollout request that does not name it is served by the base
         # model, silently, with plausible rewards. The real worker is built here (it spawns nothing until `start()`)
         # to read the `lora_name` the trainer hands it.
-        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=None)
+        trainer = self._build(
+            fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=AsyncRolloutWorker
+        )
         assert trainer.rollout_worker._loop_kwargs["lora_name"] == expected
-
-    @require_vllm  # `AsyncRolloutWorker.__init__` refuses to build without vLLM installed
-    @pytest.mark.parametrize(("lora_config", "expected"), [(SERVER_LORA_CONFIG, "trl-policy"), (None, None)])
-    def test_an_injected_rollout_worker_is_told_the_vllm_adapter_name(self, fake_vllm, lora_config, expected):
-        # A worker the caller builds, like the harness worker of examples/async_grpo_harbor, exists before the trainer
-        # probes the server, so it cannot have been given the adapter name at construction.
-        worker = AsyncRolloutWorker(AsyncGRPOConfig(report_to="none"), model_name=self.model_id)
-        trainer = self._build(fake_vllm, self._lora_config(), lora_config=lora_config, rollout_worker=worker)
-        assert trainer.rollout_worker._loop_kwargs.get("lora_name") == expected
 
     # --- adapter sync, as the server sees it -----------------------------------------------------------------------
 
