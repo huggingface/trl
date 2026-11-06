@@ -665,9 +665,17 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # reports itself paused, so the forward and backward have the device to themselves. Under tensor parallelism
         # this is also what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the
         # operations on its communicators in the same host-side order.
+        continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
+        if continuous_batching_config.max_blocks_per_request is None:
+            # The engine decodes a batch on its fast path only if every sequence in it fits the block table, which
+            # otherwise holds 8192 tokens: past that, a single long completion moves every decode step to the slow
+            # path. Size it for the longest sequence the model takes, rounded up to an even number of blocks as the
+            # engine does.
+            max_length = model.config.get_text_config().max_position_embeddings
+            num_blocks = math.ceil(max_length / continuous_batching_config.page_size) + 1
+            continuous_batching_config.max_blocks_per_request = num_blocks + num_blocks % 2
         self._manager = model.init_continuous_batching(
-            generation_config=generation_config,
-            continuous_batching_config=ContinuousBatchingConfig(**cb_kwargs),
+            generation_config=generation_config, continuous_batching_config=continuous_batching_config
         )
         self._manager.start()
 
