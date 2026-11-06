@@ -1,0 +1,1299 @@
+# Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import enum
+import math
+import os
+import sys
+import time
+import uuid
+import warnings
+from collections import defaultdict, deque
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, TypeAlias
+
+import torch
+from accelerate.logging import get_logger
+from accelerate.parallelism_config import ParallelismConfig
+from datasets import Dataset, IterableDataset
+from torch import nn
+from torch.distributed.tensor import DTensor
+from torch.utils.data import DataLoader
+from transformers import (
+    AutoProcessor,
+    AutoTokenizer,
+    GenerationConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+    TrainerCallback,
+)
+from transformers.distributed.configuration_utils import DistributedConfig
+from transformers.generation import ContinuousBatchingConfig
+from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
+
+from ...chat_template_utils import (
+    _SUPPORTS_RESPONSE_TEMPLATE,
+    add_response_schema,
+    parse_response,
+    supports_tool_calling,
+)
+from ...trainer.base_trainer import _BaseTrainer
+from ...trainer.utils import (
+    add_fused_lm_head,
+    create_model_from_path,
+    get_callable_name,
+    get_config_model_id,
+    identity,
+    model_accepts_images,
+    nanmax,
+    nanmin,
+    nanstd,
+)
+from .zero_sync_grpo_config import ZeroSyncGRPOConfig
+
+
+logger = get_logger(__name__)
+
+
+# Functions with this signature can be used as reward functions
+RewardFunc = Callable[[list, list], list[float]]
+
+RolloutId: TypeAlias = str
+
+
+@dataclass(frozen=True)
+class TurnRecord:
+    """One generation call: the whole prompt this turn, the tokens the model produced, their logprobs."""
+
+    prompt_ids: list[int]
+    output_ids: list[int]
+    output_log_probs: list[float] = field(default_factory=list)
+    # Completion-token eligibility. None supervises all output tokens; zeros retain context only.
+    output_mask: list[int] | None = None
+    # Per output token, the token ids the sampler could draw (top-k/top-p truncation); None without truncation.
+    output_sampling_mask: list[list[int]] | None = None
+    # Per output token, the sampler's log-prob of its most likely tokens, by token id; None when not requested.
+    output_sampler_logprobs: list[dict[int, float]] | None = None
+
+
+@dataclass
+class TrainingSequence:
+    """One training row. Maps 1:1 onto the array fields of `RolloutSample`."""
+
+    input_ids: list[int]  # full tokens (prompt included)
+    completion_mask: list[int]  # 1 = train this token, 0 = context
+    old_log_probs: list[float]  # sampled logprobs; prompt-only context is zero-filled
+    sampling_mask: list[list[int]]  # per token, the sampler's candidate set; empty for context and without truncation
+    sampler_logprobs: list[dict[int, float]]  # per token, the sampler's top log-probs by id; empty when not asked
+    rollout_id: RolloutId  # which conversation this row came from
+
+
+def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
+    """How many tokens at the start are identical in `a` and `b`."""
+    limit = min(len(a), len(b))
+    matched = 0
+    while matched < limit:
+        end = min(matched + chunk, limit)
+        if a[matched:end] == b[matched:end]:
+            matched = end
+        else:
+            while matched < end and a[matched] == b[matched]:
+                matched += 1
+            return matched
+    return matched
+
+
+class DriftKind(enum.Enum):
+    CLEAN = "clean"  # new prompt starts exactly with held tokens -> append the new part
+    REALIGN = "realign"  # small change in the last answer -> overwrite it as context
+    FORK = "fork"  # bigger change -> start a new row
+
+
+class _SampleBuilder:
+    def __init__(self, fork_threshold: int):
+        self._fork_threshold = fork_threshold
+        self.tokens: list[int] = []
+        self.loss_mask: list[int] = []
+        self.logprobs: list[float] = []
+        self.sampling_mask: list[list[int]] = []
+        self.sampler_logprobs: list[dict[int, float]] = []
+        self.last_response_start_idx: int | None = None
+
+    def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
+        """Classify this turn's re-tokenization against the held tokens, and report by how many tokens it drifted."""
+        matched = _common_prefix_len(self.tokens, turn.prompt_ids)
+        drift = len(self.tokens) - matched
+        if drift == 0:
+            return DriftKind.CLEAN, 0
+        start = self.last_response_start_idx
+        if start is not None and matched >= start and drift < self._fork_threshold:
+            return DriftKind.REALIGN, drift
+        return DriftKind.FORK, drift
+
+    def append_turn(self, turn: TurnRecord, kind: DriftKind) -> None:
+        assert kind is not DriftKind.FORK
+        if kind is DriftKind.REALIGN:
+            self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
+        else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
+            self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
+        self.last_response_start_idx = len(self.tokens)
+        self._append(
+            turn.output_ids,
+            mask=turn.output_mask if turn.output_mask is not None else 1,
+            logprobs=turn.output_log_probs,
+            sampling_mask=turn.output_sampling_mask,
+            sampler_logprobs=turn.output_sampler_logprobs,
+        )
+
+    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
+        matched = _common_prefix_len(self.tokens, prompt_ids)
+        tail = prompt_ids[matched:]
+        self.tokens[matched:] = tail
+        self.loss_mask[matched:] = [0] * len(tail)
+        self.logprobs[matched:] = [0.0] * len(tail)
+        self.sampling_mask[matched:] = [[] for _ in tail]
+        self.sampler_logprobs[matched:] = [{} for _ in tail]
+
+    def _append(
+        self,
+        ids: list[int],
+        *,
+        mask: int | list[int],
+        logprobs: list[float] | None = None,
+        sampling_mask: list[list[int]] | None = None,
+        sampler_logprobs: list[dict[int, float]] | None = None,
+    ) -> None:
+        """Append tokens with a uniform or per-token supervision mask."""
+        masks = [mask] * len(ids) if isinstance(mask, int) else mask
+        if len(masks) != len(ids):
+            raise ValueError("loss mask must contain one entry per token")
+        if any(masks) and logprobs is None:
+            raise ValueError("trainable tokens require one sampled logprob per token")
+        if logprobs is not None and len(logprobs) != len(ids):
+            raise ValueError("logprobs must contain one entry per token")
+        if sampling_mask is not None and len(sampling_mask) != len(ids):
+            raise ValueError("sampling mask must contain one entry per token")
+        self.tokens.extend(ids)
+        self.loss_mask.extend(masks)
+        self.logprobs.extend(logprobs if logprobs is not None else [0.0] * len(ids))
+        self.sampling_mask.extend(sampling_mask if sampling_mask is not None else [[] for _ in ids])
+        self.sampler_logprobs.extend(sampler_logprobs if sampler_logprobs is not None else [{} for _ in ids])
+
+    def has_trained_token(self) -> bool:
+        return any(self.loss_mask)
+
+    def to_training_sequence(self, rollout_id: RolloutId) -> TrainingSequence:
+        return TrainingSequence(
+            list(self.tokens),
+            list(self.loss_mask),
+            list(self.logprobs),
+            list(self.sampling_mask),
+            list(self.sampler_logprobs),
+            rollout_id,
+        )
+
+
+def _chain_to_sequences(
+    turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int
+) -> tuple[list[TrainingSequence], dict[str, float]]:
+    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
+
+    Also returns the drift tally over the T-1 turn *transitions*: how many appended cleanly, realigned or forked, and
+    the total and largest drift in tokens. That tally is the only observability on `fork_threshold_tokens`, which is
+    otherwise a threshold tuned blind.
+    """
+    builders: list[_SampleBuilder] = []
+    tally = {"clean": 0.0, "realign": 0.0, "fork": 0.0, "transitions": 0.0, "drift_tokens": 0.0, "drift_max": 0.0}
+    for turn in turns:
+        if not builders:
+            builders.append(_SampleBuilder(fork_threshold))
+            builders[-1].append_turn(turn, DriftKind.CLEAN)
+            continue
+        kind, drift = builders[-1].classify_token_drift(turn)
+        tally[kind.value] += 1
+        tally["transitions"] += 1
+        tally["drift_tokens"] += drift
+        tally["drift_max"] = max(tally["drift_max"], drift)
+        if kind is DriftKind.FORK:
+            builder = _SampleBuilder(fork_threshold)
+            builder.append_turn(turn, DriftKind.CLEAN)
+            builders.append(builder)
+        else:
+            builders[-1].append_turn(turn, kind)
+    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()], tally
+
+
+class _RolloutStream(torch.utils.data.IterableDataset):
+    """Prompts in, finished rollouts out: what the training loop iterates.
+
+    One pass over the prompt dataset yields `num_generations` rollouts per prompt, so the stream is that many items
+    long. That length is all the `Trainer` needs to size its epochs, its schedule and its progress, which is why
+    feeding the engine and waiting on it can live here instead of in the training step.
+
+    Each rank generates its own rollouts, so the stream is already rank-local and must not be sharded again.
+    """
+
+    def __init__(self, trainer, prompt_loader):
+        self._trainer = trainer
+        self._prompt_loader = prompt_loader
+
+    def __len__(self):
+        return len(self._prompt_loader.dataset) * self._trainer.num_generations
+
+    def __iter__(self):
+        prompts = iter(self._prompt_loader)
+        while True:
+            # A whole optimizer step at a time. The `Trainer` collects every micro-batch of a step before it trains on
+            # the first, so one pause per step is all training needs. The wait, the pause and the pool exchange are
+            # also collectives: every rank runs them once per step, so the cadence is the same on all of them and none
+            # can arrive at a collective its peers have already left.
+            samples = self._trainer._next_rollout_batch(prompts)
+            if not samples:
+                return
+            yield from samples
+
+
+class ZeroSyncGRPOTrainer(_BaseTrainer):
+    """
+    Trainer for the Group Relative Policy Optimization (GRPO) method with zero-sync generation. Generation and training
+    share ONE copy of the weights: a transformers continuous batching manager generates from the same parameter tensors
+    the optimizer updates in place, so there is no second engine, no weight synchronization and no generation/training
+    memory duplication. The engine's per-token logprobs are the exact behavior-policy logprobs of the completions and
+    are used as the old policy in the clipped loss.
+
+    Generation and training take turns on those weights. Prompts are submitted to the engine continuously, each
+    completion is collected as it finishes, a group's advantages are computed as soon as its last completion lands, and
+    a training batch is formed from whichever scored samples are ready first; the engine is then paused for the
+    forward, backward and optimizer step and resumes where it left off, its in-flight requests intact. A slow group
+    never blocks a batch of fast ones; it simply lands in a later batch. Completions therefore lag the policy by a
+    bounded number of optimizer steps; the measured logprob gap this introduces is small and concentrated in each
+    completion's earliest tokens, and the clipped loss against the engine's own logprobs accounts for it.
+
+    Groups are formed per process: each process generates and scores its own prompts, so advantages require no
+    cross-process communication.
+
+    Example:
+
+    ```python
+    from datasets import load_dataset
+    from trl.experimental.zero_sync_grpo import ZeroSyncGRPOTrainer
+
+    dataset = load_dataset("trl-lib/tldr-chat", split="train")
+
+
+    def reward_num_unique_chars(completions, **kwargs):
+        return [len(set(c[0]["content"])) for c in completions]
+
+
+    trainer = ZeroSyncGRPOTrainer(
+        model="Qwen/Qwen3-0.6B",
+        reward_funcs=reward_num_unique_chars,
+        train_dataset=dataset,
+    )
+    trainer.train()
+    ```
+
+    Args:
+        model (`str` or [`~transformers.PreTrainedModel`]):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object.
+        reward_funcs (`Callable` or `list[Callable]`):
+            Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
+            functions with the prompts and completions and sum the rewards. The functions are provided with one group's
+            prompts, completions and completion ids, plus any additional columns in the dataset, and must return a list
+            of floats (or `None` for samples the function does not apply to).
+        args ([`~trl.experimental.zero_sync_grpo.ZeroSyncGRPOConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+            Dataset to use for training. It must include a column `"prompt"` in the
+            [conversational](dataset_formats#conversational) format (a list of messages). Any additional columns are
+            passed to the reward functions.
+        eval_dataset ([`~datasets.Dataset`], *optional*):
+            Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
+            with [`~transformers.AutoProcessor.from_pretrained`]. For vision-language models the processor's tokenizer
+            is used; only text-only data is supported.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
+            List of callbacks to customize the training loop.
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+            None)`): A tuple containing the optimizer and the scheduler to use.
+    """
+
+    _tag_names = ["trl", "zero-sync-grpo"]
+    _name = "Zero-Sync GRPO"
+
+    def __init__(
+        self,
+        model: str | PreTrainedModel,
+        reward_funcs: RewardFunc | list[RewardFunc],
+        args: ZeroSyncGRPOConfig | None = None,
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | None = None,
+        processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
+        tools: list[Callable] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+    ):
+        # Args
+        if args is None:
+            model_name = model if isinstance(model, str) else get_config_model_id(model.config)
+            model_name = model_name.split("/")[-1]
+            args = ZeroSyncGRPOConfig(f"{model_name}-ZeroSyncGRPO")
+
+        # Model. The architecture (causal LM or vision-language model) is inferred from the checkpoint; VLMs are
+        # supported with text-only data.
+        if isinstance(model, str):
+            model_init_kwargs = dict(args.model_init_kwargs or {})  # copy to avoid mutating model_init_kwargs
+            # The same weights both generate and train, so default to the checkpoint dtype rather than fp32
+            model_init_kwargs.setdefault("dtype", "auto")
+            # Distributed training requires device_map=None ("auto" fails)
+            if args.distributed_state.distributed_type in ["MULTI_GPU", "DEEPSPEED"]:
+                model_init_kwargs["device_map"] = None
+            if args.tp_size > 1:
+                # The model is split across the processes rather than placed on one device, and the two ways of
+                # deciding where parameters go are mutually exclusive.
+                model_init_kwargs["distributed_config"] = DistributedConfig(tp_size=args.tp_size)
+                model_init_kwargs["device_map"] = None
+            model_revision = model_init_kwargs.get("revision")
+            model = create_model_from_path(model, **model_init_kwargs)
+            if "attn_implementation" not in model_init_kwargs:
+                # Training packs the samples of a micro-batch in one flat row whose boundaries travel as the flash
+                # varlen kwargs; sdpa reads them from the position ids instead. Linear attention layers (hybrid
+                # models like Qwen3.5) scan the row with varlen kernels and have no sdpa path.
+                if is_flash_attn_3_available(kernels_fallback_ok=True):
+                    model.set_attn_implementation("flash_attention_3")
+                elif is_flash_attn_2_available(kernels_fallback_ok=True):
+                    model.set_attn_implementation("flash_attention_2")
+                elif "linear_attention" in (getattr(model.config.get_text_config(), "layer_types", None) or []):
+                    raise ValueError("Packed training on a hybrid model requires flash attention")
+                else:
+                    model.set_attn_implementation("sdpa")
+        else:
+            model_revision = None
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `ZeroSyncGRPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
+
+        # Processing class
+        if processing_class is None:
+            processor_class = AutoProcessor if model_accepts_images(model) else AutoTokenizer
+            processing_class = processor_class.from_pretrained(
+                get_config_model_id(model.config),
+                revision=model_revision,
+                truncation_side="left",
+                padding_side="left",
+            )
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            self._tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            self._tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # A text-only sample (a text-only dataset, or a text-only batch of a mixed one) leaves the vision tower of a
+        # vision-language model without gradients, so DDP must look for unused parameters. transformers only enables
+        # this by default without gradient checkpointing, which TRL turns on by default
+        # (huggingface/transformers#49443). Reentrant checkpointing fails with it, so it stays off there.
+        if (
+            self._is_vlm
+            and args.ddp_find_unused_parameters is None
+            and not (args.gradient_checkpointing_kwargs or {}).get("use_reentrant")
+        ):
+            args.ddp_find_unused_parameters = True
+
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        # The model must agree with the tokenizer on the pad token from construction, so mirror it onto the model
+        # configs.
+        model.config.get_text_config().pad_token_id = self._tokenizer.pad_token_id
+        model.generation_config.pad_token_id = self._tokenizer.pad_token_id
+
+        # Every eos id the model declares (e.g. an end-of-turn token) ends a completion, not only the tokenizer's
+        eos_token_ids = model.generation_config.eos_token_id
+        if eos_token_ids is None:
+            eos_token_ids = []
+        elif isinstance(eos_token_ids, int):
+            eos_token_ids = [eos_token_ids]
+        if self._tokenizer.eos_token_id not in eos_token_ids:
+            eos_token_ids = [self._tokenizer.eos_token_id, *eos_token_ids]
+        self.eos_token_ids = eos_token_ids
+
+        # Reward functions
+        if reward_funcs is None:
+            reward_funcs = []
+        elif not isinstance(reward_funcs, list):
+            reward_funcs = [reward_funcs]
+        self.reward_func_names = [get_callable_name(reward_func) for reward_func in reward_funcs]
+        self.reward_funcs = reward_funcs
+
+        # Training arguments
+        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
+        self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.max_tool_calling_iterations = (
+            args.max_tool_calling_iterations if args.max_tool_calling_iterations is not None else sys.maxsize
+        )
+        self.temperature = args.temperature
+        self.top_p = args.top_p
+        self.top_k = args.top_k
+        self.chat_template_kwargs = args.chat_template_kwargs or {}
+        self.epsilon_low = args.epsilon
+        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.rollouts_in_flight = args.rollouts_in_flight
+        self.tp_size = args.tp_size
+
+        # The ranks a model is not split across hold replicas of it, which train on their own prompts and have to
+        # agree on the update. Their gradients are summed over a group holding one rank per replica: the ranks that
+        # carry the same tensor parallel shard. Parameters stay whole, which is what lets generation read them in
+        # place, so this is ZeRO-0 over the replicas; the optimizer states are what a ZeRO-2 step would split next.
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        if world_size % args.tp_size != 0:
+            raise ValueError(
+                f"The world ({world_size} processes) must divide into replicas of `tp_size` ({args.tp_size}) "
+                "processes each."
+            )
+        self.dp_size = world_size // args.tp_size
+        if self.dp_size > 1 and args.parallelism_config is None:
+            # The split of the world into replicas follows from `tp_size`, so there is nothing for the caller to
+            # decide. Accelerate needs to be told it, or it wraps the model for data parallelism itself, which it
+            # cannot do to a tensor-parallel one.
+            args.parallelism_config = ParallelismConfig(dp_replicate_size=self.dp_size, tp_size=args.tp_size)
+        self._replica_group = None
+        self._replica_cpu_group = None
+        self._parameter_owner: dict[str, int] = {}
+        rank = int(os.environ.get("RANK", "0"))
+        if self.dp_size > 1:
+            # Every rank builds every group, in the same order, and keeps the one it belongs to. The gradients and
+            # the updated parameters travel over NCCL inside the pause; the sample counts the replicas exchange while
+            # the engine is decoding travel over gloo, so that no NCCL work of the trainer's is ever in flight next
+            # to the engine's.
+            ranks = [[r for r in range(world_size) if r % args.tp_size == shard] for shard in range(args.tp_size)]
+            groups = [torch.distributed.new_group(group_ranks) for group_ranks in ranks]
+            cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in ranks]
+            self._replica_group = groups[rank % args.tp_size]
+            self._replica_cpu_group = cpu_groups[rank % args.tp_size]
+        # The ranks of a tensor parallel group generate together and must train on the same batch, so one of them runs
+        # the rollouts: the first rank alone submits the requests, reads the completions, runs the tools and the reward
+        # functions, computes the advantages and picks the batch, which it sends to the others over gloo.
+        self._tp_driver = rank - rank % args.tp_size
+        self._is_tp_driver = rank == self._tp_driver
+        self._tp_cpu_group = None
+        if args.tp_size > 1:
+            tp_ranks = [list(range(start, start + args.tp_size)) for start in range(0, world_size, args.tp_size)]
+            tp_cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in tp_ranks]
+            self._tp_cpu_group = tp_cpu_groups[rank // args.tp_size]
+        # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
+        # step, see `_pause_generation`.
+        self._pause = None
+        self._step_generation_wait = 0.0
+
+        # Tools
+        self.tools = tools
+        self.tool_dict = {tool.__name__: tool for tool in tools} if tools else {}
+        if tools:
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+        # `add_response_schema` sets the response template (transformers >= 5.13) or legacy schema for known chat
+        # templates, so tool calls can be parsed. Skip if one is already set; warn if it's a migratable legacy schema.
+        if self.tools:
+            has_template = getattr(self._tokenizer, "response_template", None) is not None
+            has_schema = getattr(self._tokenizer, "response_schema", None) is not None
+            if not has_template and not has_schema:
+                processing_class = add_response_schema(processing_class)
+            elif has_schema and not has_template and _SUPPORTS_RESPONSE_TEMPLATE:
+                warnings.warn(
+                    "The tokenizer has a legacy `response_schema` set but no `response_template`. The installed "
+                    "transformers supports the new-style `response_template`; consider migrating, as `response_schema` "
+                    "support will eventually be removed. See the Transformers response-parsing docs.",
+                    FutureWarning,
+                )
+
+        # Under tensor parallelism the vocabulary projection is replicated rather than split. The chunked lm_head
+        # below multiplies by the weight directly, which a sharded weight cannot serve, and the projection is the one
+        # place where splitting buys least: it costs one copy of that matrix per process and removes a gather from
+        # every forward. Everything else stays split.
+        if args.tp_size > 1:
+            output_embeddings = model.get_output_embeddings()
+            input_embeddings = model.get_input_embeddings()
+            tied = input_embeddings.weight is output_embeddings.weight
+            # A plain full tensor: the chunked lm_head multiplies by the weight directly, and the gradient norm
+            # spans sharded and plain parameters on its own, so there is nothing to gain from a DTensor here.
+            weight = output_embeddings.weight
+            # Some models keep the projection out of their tensor parallel plan, so it is already a full tensor
+            local_weight = weight.full_tensor().contiguous() if isinstance(weight, DTensor) else weight.data
+            replicated = nn.Parameter(local_weight)
+            output_embeddings.weight = replicated
+            # The transform installed for the split weight would now mix a plain weight with a DTensor input.
+            output_embeddings.__dict__.pop("forward", None)
+            if tied:
+                input_embeddings.weight = replicated
+                # The transform installed for the split weight would now mix a plain weight with a DTensor input.
+                input_embeddings.__dict__.pop("forward", None)
+            # An untied input embedding loads outside the plan, as a plain tensor, and the sweep below replicates it
+
+        # Compute per-token logprobs without ever materializing the [batch, seq, vocab] logits: the lm_head projects
+        # in tiles, only at the scored positions. Long completions make this the difference between training and an
+        # OOM. The forward is only fused when asked for with `fused_lm_head=True`, so the generation engine, which
+        # decodes through this same object, keeps the standard one.
+        add_fused_lm_head(model, temperature=self.temperature, outputs=("log_probs", "entropy"))
+
+        super().__init__(
+            model=model,
+            args=args,
+            data_collator=identity,  # No data collation is needed in GRPO
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processing_class,
+            callbacks=callbacks,
+            optimizers=optimizers,
+        )
+
+        # Zero-sync generation state. The continuous batching manager is created lazily on the first generation (the
+        # model must be on its final device first). `_inflight` maps every pending request id to its group; a group's
+        # advantages are computed as soon as its last completion lands, and its samples join `_ready`, from which
+        # training batches are drawn.
+        self._manager = None
+        self._pending: deque[dict[str, Any]] = deque()
+        self._inflight = {}
+        self._ready = deque()
+
+        # Metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
+        # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt"]
+
+    def get_train_dataloader(self):
+        return self._build_train_dataloader()
+
+    def _build_train_dataloader(self):
+        # The prompts keep the sampler and the per-replica sharding; every prompt produces `num_generations`
+        # rollouts, so this feeds `per_device_train_batch_size / num_generations` prompts for each batch of samples.
+        prompt_loader = self._get_dataloader(
+            dataset=self.train_dataset,
+            description="Training",
+            batch_size=self._train_batch_size // self.num_generations,
+            sampler_fn=self._get_train_sampler,
+            is_training=True,
+        )
+        # What the loop iterates is the rollouts, not the prompts. This loader is deliberately not prepared by
+        # accelerate: every rank generates its own rollouts, so there is nothing to shard, and the dispatcher
+        # accelerate wraps an iterable dataset in would have rank zero alone walk the stream and broadcast the
+        # batches, leaving its peers out of the engine's collectives.
+        return DataLoader(
+            _RolloutStream(self, prompt_loader),
+            batch_size=self._train_batch_size,
+            collate_fn=self.data_collator,
+            num_workers=0,  # the engine lives in this process
+        )
+
+    def train(self, *args, **kwargs):
+        try:
+            return super().train(*args, **kwargs)
+        finally:
+            if self._manager is not None:
+                # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
+                # the process would never exit. A flush would wait for every rollout still in flight, and there are
+                # always some, since the trainer keeps `rollouts_in_flight` rollouts generating; none of them will be
+                # trained on now. The engine cannot stop while it is paused, so generation resumes first.
+                self._resume_generation()
+                self._manager.stop(block=True, timeout=30, hard_stop=True)
+                self._manager = None
+
+    def _init_manager(self):
+        # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
+        # optimizer updates in place.
+        model = self.accelerator.unwrap_model(self.model)
+        generation_kwargs = {
+            "max_new_tokens": self.max_completion_length,
+            "do_sample": True,
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self.eos_token_ids,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+        }
+        generation_config = GenerationConfig(**generation_kwargs)
+        cb_kwargs = dict(self.args.continuous_batching_config or {})
+        cb_kwargs["return_logprobs"] = True  # the engine's logprobs are the behavior-policy logprobs
+        # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
+        # and activations; the engine's own default claims most of the free memory.
+        cb_kwargs.setdefault("max_memory_percent", 0.2)
+        if self.tp_size > 1:
+            # The engine turns NCCL's graph-mixing support off, which fits a pure-decode server but slows the
+            # training collectives here (measured 3.62 against 3.71 s/step at batch 128). Generation is paused while
+            # the training collectives run, so captured and eager collectives are never in flight together and the
+            # NCCL default, which is also the safe setting, can stay.
+            cb_kwargs.setdefault("disable_nccl_graph_mixing", False)
+        # The engine decodes in its own thread, from the very tensors the optimizer updates, and the trainer pauses
+        # it for its step (`_pause_generation`): the engine waits for its in-flight step on the device before it
+        # reports itself paused, so the forward and backward have the device to themselves. Under tensor parallelism
+        # this is also what keeps the two NCCL communicators from racing: NCCL requires every rank to issue the
+        # operations on its communicators in the same host-side order.
+        continuous_batching_config = ContinuousBatchingConfig(**cb_kwargs)
+        if continuous_batching_config.max_blocks_per_request is None:
+            # The engine decodes a batch on its fast path only if every sequence in it fits the block table, which
+            # otherwise holds 8192 tokens: past that, a single long completion moves every decode step to the slow
+            # path. Size it for the longest sequence the model takes, rounded up to an even number of blocks as the
+            # engine does.
+            max_length = model.config.get_text_config().max_position_embeddings
+            num_blocks = math.ceil(max_length / continuous_batching_config.page_size) + 1
+            continuous_batching_config.max_blocks_per_request = num_blocks + num_blocks % 2
+        self._manager = model.init_continuous_batching(
+            generation_config=generation_config, continuous_batching_config=continuous_batching_config
+        )
+        self._manager.start()
+
+    def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
+        # Re-tokenize the WHOLE conversation each turn: the reconciler in `_chain_to_sequences` catches template
+        # rewrites of earlier turns precisely because the prompt is rebuilt from the message list instead of glued
+        # onto held tokens.
+        return self.processing_class.apply_chat_template(
+            [messages],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            tools=self.tools or None,
+            **self.chat_template_kwargs,
+        )["input_ids"][0]
+
+    def _enqueue_group(self, example: dict[str, Any]) -> None:
+        # Queue `num_generations` rollouts of the prompt. Each rollout is a chain of turns: a completed turn that
+        # calls tools spawns the next turn's request, and the rollout is scored when its final turn lands. They are
+        # queued rather than started: `_fill_slots` starts them as the engine has room.
+        group = {"example": example, "scored": [], "size": self.num_generations}
+        for _ in range(self.num_generations):
+            self._pending.append(
+                {
+                    "id": uuid.uuid4().hex,
+                    "group": group,
+                    "messages": list(example["prompt"]),
+                    "completion": [],
+                    "turns": [],
+                    "prompt_ids": self._tokenize_conversation(example["prompt"]),
+                    "iterations": 0,
+                    "tool_calls": 0,
+                }
+            )
+
+    def _enqueue_group_batch(self, batch) -> None:
+        for example in batch:
+            self._enqueue_group(example)
+
+    def _fill_slots(self) -> None:
+        """Keep `rollouts_in_flight` rollouts generating, starting the next one the moment one finishes.
+
+        A decode step costs about the same whatever number of sequences it carries: it reads the whole model and pays
+        the per-layer all-reduces either way. Letting the batch drain between optimizer steps and refill in one burst
+        therefore wastes decode steps on a batch that is half empty. The rollouts of a group start as slots free rather
+        than all at once, which is no change in kind: zero-sync updates the weights while generation runs, so the
+        members of a group already see more than one version of the policy.
+        """
+        while len(self._inflight) < self.rollouts_in_flight and self._pending:
+            rollout = self._pending.popleft()
+            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
+            self._inflight[request_id] = rollout
+
+    def _pause_generation(self, mode: str) -> None:
+        """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
+
+        Generation and training take turns: the forward, backward and optimizer step get the device to themselves, and
+        under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the pause
+        at the same step on every rank of a tensor parallel group, and resumes only once every rank of the group has
+        released it: the group's first rank asks, and the others join once it has sent them the batch.
+        """
+        if self._pause is not None:
+            return
+        # The pause is granted at the engine's next step boundary, so this is the length of the step it had in flight
+        pause_start = time.perf_counter()
+        self._pause = self._manager.pause()
+        self._pause.__enter__()
+        if self.args.release_kv_cache_during_step:
+            self._manager.release_memory()
+        self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
+
+    def _resume_generation(self) -> None:
+        if self._pause is not None:
+            if self.args.release_kv_cache_during_step:
+                self._manager.restore_memory()
+            self._pause.__exit__(None, None, None)
+            self._pause = None
+
+    def _receive(self, timeout: float) -> None:
+        # Read one finished completion, if one lands within `timeout`, and score it; a group's advantages are computed
+        # once its last completion lands. One at a time, so the caller sees the ready count after every completion. A
+        # dead background thread never raises from `get_result` (it returns None forever, transformers#48334), so
+        # poll `fatal_error` to fail fast instead of spinning.
+        result = self._manager.get_result(timeout=timeout)
+        if result is None:
+            fatal_error = self._manager.background_thread_status.fatal_error
+            if fatal_error is not None:
+                raise RuntimeError("The continuous batching background thread died.") from fatal_error
+            return
+        self._advance_rollout(self._inflight.pop(result.request_id), result)
+        # A rollout that ended freed a slot; a rollout that called a tool took its own slot back
+        self._fill_slots()
+
+    def _advance_rollout(self, rollout: dict[str, Any], result) -> None:
+        # One turn just finished: record it, and either spawn the next turn (the model called tools) or score the
+        # rollout (it produced a final answer). Scoring happens the moment the rollout finishes, so reward
+        # computation overlaps generation.
+        turn_ids = list(result.generated_tokens)
+        rollout["turns"].append(TurnRecord(rollout["prompt_ids"], turn_ids, list(result.logprobs[: len(turn_ids)])))
+        if self.tools:
+            assistant_message = parse_response(self._tokenizer, turn_ids, prefix=rollout["prompt_ids"])
+        else:
+            assistant_message = {
+                "role": "assistant",
+                "content": self._tokenizer.decode(turn_ids, skip_special_tokens=True),
+            }
+        rollout["messages"].append(assistant_message)
+        rollout["completion"].append(assistant_message)
+
+        tool_calls = assistant_message.get("tool_calls")
+        if tool_calls and rollout["iterations"] < self.max_tool_calling_iterations:
+            tool_messages = self._execute_tool_calls(tool_calls)
+            rollout["tool_calls"] += len(tool_calls)
+            rollout["messages"].extend(tool_messages)  # tool result goes back as a MESSAGE, re-tokenized next turn
+            rollout["completion"].extend(tool_messages)
+            rollout["iterations"] += 1
+            rollout["prompt_ids"] = self._tokenize_conversation(rollout["messages"])
+            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
+            self._inflight[request_id] = rollout
+            return
+
+        group = rollout["group"]
+        group["scored"].append(self._score_rollout(group["example"], rollout))
+        if len(group["scored"]) == group["size"]:
+            self._finalize_group(group)
+
+    def _execute_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, str]]:
+        tool_messages = []
+        for tool_call in tool_calls:
+            function = tool_call["function"]
+            name = function["name"]
+            tool = self.tool_dict.get(name)
+            if tool is None:
+                # A hallucinated tool name is a policy error that should decay with training
+                tool_messages.append({"role": "tool", "name": name, "content": str({"error": f"unknown tool {name}"})})
+                continue
+            try:
+                arguments = function.get("arguments", {})
+                result = tool(**arguments)
+            except Exception as error:
+                result = {"error": str(error)}
+            tool_messages.append({"role": "tool", "name": name, "content": str(result)})
+        return tool_messages
+
+    def _score_rollout(self, example: dict[str, Any], rollout: dict[str, Any]) -> dict[str, Any]:
+        # The reward functions receive the whole conversation's completion (assistant and tool messages) as
+        # one-element lists, with the same signature as everywhere else in TRL.
+        completion_ids = [token for turn in rollout["turns"] for token in turn.output_ids]
+        reward_kwargs = {key: [example[key]] for key in example if key not in ["prompt"]}
+
+        rewards_per_func = torch.zeros(len(self.reward_funcs))
+        for i, reward_func in enumerate(self.reward_funcs):
+            output_reward_func = reward_func(
+                prompts=[example["prompt"]],
+                completions=[rollout["completion"]],
+                completion_ids=[completion_ids],
+                **reward_kwargs,
+            )
+            # Convert None values to NaN
+            rewards_per_func[i] = torch.nan if output_reward_func[0] is None else output_reward_func[0]
+
+        # >= 1 row per conversation; `tally` is the drift bookkeeping over the turn transitions.
+        sequences, tally = _chain_to_sequences(rollout["turns"], rollout["id"], self.args.fork_threshold_tokens)
+        return {
+            "sequences": sequences,
+            "num_completion_tokens": len(completion_ids),
+            "tool_calls": rollout["tool_calls"],
+            "forks": tally["fork"],
+            "rewards_per_func": rewards_per_func,
+        }
+
+    def _finalize_group(self, group: dict[str, Any]) -> None:
+        rewards_per_func = torch.stack([scored["rewards_per_func"] for scored in group["scored"]])
+
+        # A completion for which every reward function returned None is unscorable. nansum would collapse it to 0,
+        # which both biases the per-group baseline and hands the completion a spurious advantage. Mark these rows NaN
+        # so they're excluded from the (nan-aware) baseline below; their advantage is forced to 0 afterwards.
+        unscorable_mask = torch.isnan(rewards_per_func).all(dim=1)
+        rewards = rewards_per_func.nansum(dim=1)
+        rewards[unscorable_mask] = torch.nan
+        advantages = (rewards - torch.nanmean(rewards)) / (nanstd(rewards) + 1e-4)
+
+        # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
+        # so zero their advantage to keep them from moving the policy.
+        advantages = torch.nan_to_num(advantages, nan=0.0)
+
+        # A rollout produces one row, or several when the chat template rewrote history. They all carry the rollout's
+        # advantage, and its metrics ride along on the first one so a fork isn't counted twice.
+        for scored, reward, reward_per_func, advantage in zip(
+            group["scored"], rewards, rewards_per_func, advantages, strict=True
+        ):
+            metrics = {
+                "reward": reward,
+                "rewards_per_func": reward_per_func,
+                "completion_length": scored["num_completion_tokens"],
+                "tool_calls": scored["tool_calls"],
+                "forks": scored["forks"],
+            }
+            for sequence in scored["sequences"]:
+                row = {
+                    "input_ids": sequence.input_ids,
+                    "completion_mask": sequence.completion_mask,
+                    "old_log_probs": sequence.old_log_probs,
+                }
+                self._ready.append({**row, "advantage": advantage, "metrics": metrics})
+                metrics = None  # only the rollout's first row carries them
+
+    def _take_from_pool(self, num_samples: int) -> list[dict[str, Any]]:
+        """Hand this replica its share of the samples every replica has ready.
+
+        A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built for
+        balance instead of for locality, so the replicas reach their forward together and carry the same load. Every
+        replica's first rank runs the same assignment over the same pool, so no one has to be told the result.
+        """
+        pool: list[Any] = [None] * self.dp_size
+        torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
+        replica = self.accelerator.process_index // self.tp_size
+
+        # Which samples to train on is decided by age, not by length. Preferring the long ones leaves the short
+        # ones sitting in the ready lists, and since a rollout is either in flight or waiting there, a growing
+        # backlog is fewer sequences decoding at once, which is exactly what makes the engine efficient. Each
+        # replica gives up its oldest, and whoever has a surplus covers a replica that is short.
+        taking = [min(num_samples, len(samples)) for samples in pool]
+        while sum(taking) < num_samples * self.dp_size:
+            spare = [r for r in range(self.dp_size) if taking[r] < len(pool[r])]
+            taking[min(spare, key=lambda r: taking[r])] += 1
+        chosen = [
+            (owner, index, pool[owner][index]) for owner in range(self.dp_size) for index in range(taking[owner])
+        ]
+
+        # Longest first into the emptiest replica, by the sum of squared lengths: attention is quadratic, so that
+        # is what predicts both the step time and the activation peak, and it is the quantity worth equalizing.
+        loads = [0] * self.dp_size
+        assigned: list[list[Any]] = [[] for _ in range(self.dp_size)]
+        for owner, index, sample in sorted(chosen, key=lambda item: -len(item[2]["input_ids"])):
+            open_replicas = [r for r in range(self.dp_size) if len(assigned[r]) < num_samples]
+            target = min(open_replicas, key=lambda r: loads[r])
+            assigned[target].append((owner, index, sample))
+            loads[target] += len(sample["input_ids"]) ** 2
+        taken = {index for group in assigned for owner, index, _ in group if owner == replica}
+        self._ready = deque(sample for index, sample in enumerate(self._ready) if index not in taken)
+        self._metrics["train"]["batch/row_imbalance"].append(max(loads) / (sum(loads) / len(loads)))
+        self._metrics["train"]["batch/from_other_replicas"].append(
+            sum(1 for owner, _, _ in assigned[replica] if owner != replica) / max(len(assigned[replica]), 1)
+        )
+        # Arrival order within the replica's share: the step is split into micro-batches in this order, and the length
+        # order used above would put all the longest samples into the first one.
+        return [sample for _, _, sample in sorted(assigned[replica], key=lambda item: (item[0], item[1]))]
+
+    def _next_rollout_batch(self, prompts) -> list[dict[str, Any]]:
+        """Keep the engine fed and return one optimizer step's worth of finished rollouts, or nothing once the prompts
+        run out.
+
+        Called once per optimizer step by `_RolloutStream`, on every rank, which is what keeps the collectives below
+        aligned.
+        """
+        mode = "train" if self.model.training else "eval"
+        num_samples = self._train_batch_size * self.args.gradient_accumulation_steps
+
+        if self._manager is None:
+            self._init_manager()
+        self._resume_generation()
+
+        if not self._is_tp_driver:
+            # The group's first rank runs the rollouts and sends the batch once it has paused the engine. This rank
+            # then joins the pause: the engine leaves it only once every rank of the group has released it.
+            wait_start = time.perf_counter()
+            batch = [None]
+            torch.distributed.broadcast_object_list(batch, src=self._tp_driver, group=self._tp_cpu_group)
+            self._step_generation_wait += time.perf_counter() - wait_start
+            samples = batch[0]
+            if samples:
+                self._pause_generation(mode)
+                # The engine delivers every completion on every rank of the group, and only the first rank reads them
+                while self._manager.get_result(timeout=0) is not None:
+                    pass
+            return samples
+
+        # Prompts arrive a batch at a time while rollouts finish one at a time, so the queue is kept a batch deeper
+        # than the slots: without that spare a burst of completions would leave slots idle until the next batch.
+        exhausted = False
+        while len(self._pending) < self.rollouts_in_flight + num_samples:
+            try:
+                self._enqueue_group_batch(next(prompts))
+            except StopIteration:
+                exhausted = True
+                break
+        self._fill_slots()
+        if exhausted and not self._pending and not self._inflight and len(self._ready) < num_samples:
+            if self._tp_cpu_group is not None:
+                torch.distributed.broadcast_object_list([[]], src=self._tp_driver, group=self._tp_cpu_group)
+            return []
+
+        # Time spent waiting for the engine. Near zero means the samples were ready before the trainer asked; a large
+        # value means the engine is the bottleneck, so raise `rollouts_in_flight` (more requests generating at once)
+        # or give it a bigger KV pool.
+        wait_start = time.perf_counter()
+        if self._replica_group is None:
+            while len(self._ready) < num_samples:
+                self._receive(timeout=1.0)
+        else:
+            # The replicas draw one pool between them. A replica whose completions come back short would otherwise
+            # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
+            # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
+            # count to cover every replica, then handing the samples out, is what keeps the steps aligned. The sum of
+            # the ready counts travels while each replica keeps scoring, so one busy with a slow reward never holds up
+            # the other, and both see the same sums in the same order, so they stop on the same one.
+            total = 0
+            while total < num_samples * self.dp_size:
+                counts = torch.tensor([len(self._ready)])
+                summed = torch.distributed.all_reduce(counts, group=self._replica_cpu_group, async_op=True)
+                self._receive(timeout=0.01)
+                while not summed.is_completed():
+                    self._receive(timeout=0.01)
+                summed.wait()
+                total = int(counts.item())
+        # Logged once per optimizer step, in `training_step`
+        self._step_generation_wait += time.perf_counter() - wait_start
+        # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
+        # and the training step are fighting over memory, which slows both.
+        self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
+        self._pause_generation(mode)
+        if self._replica_group is not None:
+            pool_start = time.perf_counter()
+            samples = self._take_from_pool(num_samples)
+            self._metrics[mode]["batch/pool_exchange_s"].append(time.perf_counter() - pool_start)
+        else:
+            # Packing already removes the padding, and picking like-length samples would concentrate the long
+            # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
+            # the length cap is over twice the tokens of a mixed one). Arrival order keeps the mix.
+            samples = [self._ready.popleft() for _ in range(num_samples)]
+        if self._tp_cpu_group is not None:
+            torch.distributed.broadcast_object_list([samples], src=self._tp_driver, group=self._tp_cpu_group)
+        return samples
+
+    def _prepare_inputs(self, samples: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+
+        # Metrics of the rollouts this step trains on. They are per replica: the replica's first rank forms and scores
+        # the groups and sends the metrics along with the samples, and `Trainer.log` reports process zero.
+        rollout_metrics = [sample["metrics"] for sample in samples if sample["metrics"] is not None]
+        rewards = torch.stack([metrics["reward"] for metrics in rollout_metrics])
+        rewards_per_func = torch.stack([metrics["rewards_per_func"] for metrics in rollout_metrics])
+        # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
+        for i, reward_func_name in enumerate(self.reward_func_names):
+            mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
+            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
+        self._metrics[mode]["reward"].append(torch.nanmean(rewards).item())
+        self._metrics[mode]["reward_std"].append(nanstd(rewards).item())
+        self._metrics[mode]["completions/mean_length"].append(
+            sum(metrics["completion_length"] for metrics in rollout_metrics) / len(rollout_metrics)
+        )
+        if self.tools:
+            self._metrics[mode]["tools/call_frequency"].append(
+                sum(metrics["tool_calls"] for metrics in rollout_metrics) / len(rollout_metrics)
+            )
+            self._metrics[mode]["completions/forks"].append(
+                sum(metrics["forks"] for metrics in rollout_metrics) / len(rollout_metrics)
+            )
+
+        # Build the training tensors. Each row already carries its full token sequence, the mask over the trained
+        # (model-generated) tokens and the engine's behavior-policy logprobs aligned to them, 0.0 on context.
+        # One flat row, no padding: samples go back to back and the boundaries travel as cu_seq_lens_q, which the
+        # varlen attention kernels and the gated delta rule of linear attention layers consume directly, and as
+        # seq_idx, which their causal convolution needs; sdpa builds its block-diagonal mask from the position ids,
+        # which restart at every sample. Flash attention reads packing from the position
+        # ids only when the batch has a single row, so several rows would attend across their samples. The global
+        # shift in the loss stays sound at the seams: the first token of a sample is always context (mask 0), so no
+        # term ever crosses two samples. Advantages and behavior logprobs are per token, since the row holds several
+        # samples.
+        lengths = torch.tensor([len(s["input_ids"]) for s in samples])
+        cu_seq_lens = torch.cat([torch.zeros(1, dtype=torch.int32), lengths.cumsum(0).to(torch.int32)])
+        return {
+            "input_ids": torch.tensor([t for s in samples for t in s["input_ids"]]).unsqueeze(0).to(device),
+            "position_ids": torch.cat([torch.arange(len(s["input_ids"])) for s in samples]).unsqueeze(0).to(device),
+            "completion_mask": torch.tensor([m for s in samples for m in s["completion_mask"]], dtype=torch.long)
+            .unsqueeze(0)
+            .to(device),
+            "old_per_token_logps": torch.tensor(
+                [lp for s in samples for lp in s["old_log_probs"]], dtype=torch.float32
+            )
+            .unsqueeze(0)
+            .to(device),
+            "advantages": torch.cat([s["advantage"].repeat(len(s["input_ids"])) for s in samples])
+            .to(torch.float32)
+            .unsqueeze(0)
+            .to(device),
+            "cu_seq_lens_q": cu_seq_lens.to(device),
+            "cu_seq_lens_k": cu_seq_lens.to(device),
+            "max_length_q": int(lengths.max()),
+            "max_length_k": int(lengths.max()),
+            "seq_idx": torch.repeat_interleave(torch.arange(len(samples), dtype=torch.int32), lengths)
+            .unsqueeze(0)
+            .to(device),
+        }
+
+    def create_optimizer(self, model=None):
+        """Step fp32 copies of the parameters kept in host memory, and give each replica the state of only its share.
+
+        Generation reads the model's own parameters, so they stay in the checkpoint dtype, and bf16 cannot absorb small
+        updates: a weight of 1.0 moved by 1e-6 rounds back to 1.0. Stepping them directly, one AdamW step at
+        `learning_rate=1e-6` lands 5% of its size on Qwen3.5-2B. The optimizer therefore updates fp32 copies and writes
+        them back to the parameters after each step. The copies and the optimizer state live in pinned host memory and
+        come onto the GPU one parameter at a time during the step, so the GPU holds only the parameters and their
+        gradients, 4 bytes per parameter in bf16, next to generation's KV cache and training's activations.
+
+        Adam carries two moments per parameter, so its state is what usually decides whether a model fits. The replicas
+        split the parameters between them, each updates its own share, and passes the result back to the others. The
+        parameters themselves stay whole everywhere, which is what generation reads.
+
+        Measured on a 14B at tp=4 with two replicas: 9.2 GiB less per GPU at the peak, and the step itself takes half
+        as long, since each replica now updates half the parameters.
+        """
+        if self.optimizer is not None:
+            return self.optimizer
+
+        opt_model = self.model if model is None else model
+        if self._replica_group is None:
+            super().create_optimizer(model)
+        else:
+            trainable = [(name, param) for name, param in opt_model.named_parameters() if param.requires_grad]
+            # Largest first into the emptiest replica, so the shares come out even whatever the parameter sizes are.
+            self._parameter_owner = {}
+            held = [0] * self.dp_size
+            for name, param in sorted(trainable, key=lambda item: -item[1].numel()):
+                owner = min(range(self.dp_size), key=lambda replica: held[replica])
+                self._parameter_owner[name] = owner
+                held[owner] += param.numel()
+
+            replica = self.accelerator.process_index // self.tp_size
+            decay = set(self.get_decay_parameter_names(opt_model))
+            mine = [(name, param) for name, param in trainable if self._parameter_owner[name] == replica]
+            groups = [
+                {"params": [p for n, p in mine if n in decay], "weight_decay": self.args.weight_decay},
+                {"params": [p for n, p in mine if n not in decay], "weight_decay": 0.0},
+            ]
+            optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
+            self.optimizer = optimizer_cls(groups, **optimizer_kwargs)
+
+        def local_tensors(master):
+            # The copy and its optimizer state as the plain tensors that hold this rank's shard (under no_grad,
+            # to_local() returns the DTensor's own). Moving them means swapping their storage, so the optimizer's
+            # references stay valid. Scalars such as Adam's step count stay where the optimizer put them.
+            tensors = [master, *(value for value in self.optimizer.state[master].values() if value.dim() > 0)]
+            return [tensor.to_local() if isinstance(tensor, DTensor) else tensor for tensor in tensors]
+
+        masters = []  # (parameter, its fp32 copy)
+        with torch.no_grad():
+            for group in self.optimizer.param_groups:
+                for i, param in enumerate(group["params"]):
+                    group["params"][i] = param.detach().to(torch.float32, copy=True)
+                    for local in local_tensors(group["params"][i]):
+                        local.data = local.data.to("cpu", non_blocking=True)
+                    masters.append((param, group["params"][i]))
+
+        step = self.optimizer.step
+        # Copies come in and go out on two side streams, so the transfers in both directions overlap the updates
+        copy_in, copy_out = torch.Stream(device=self.accelerator.device), torch.Stream(device=self.accelerator.device)
+
+        @torch.no_grad()
+        def step_and_share(*args, **kwargs):
+            compute = torch.accelerator.current_stream()
+            work = [(param, master) for param, master in masters if param.grad is not None]
+
+            def fetch(param, master):
+                with copy_in:
+                    for local in local_tensors(master):
+                        local.data = local.data.to(param.device, non_blocking=True)
+                        local.data.record_stream(compute)
+                return copy_in.record_event()
+
+            out = None
+            ready = fetch(*work[0]) if work else None
+            for k, (param, master) in enumerate(work):
+                compute.wait_event(ready)
+                if k + 1 < len(work):
+                    ready = fetch(*work[k + 1])
+                # The step updates only the copies that hold a gradient, here this one
+                master.grad = param.grad.float()
+                param.grad = None
+                out = step(*args, **kwargs)
+                master.grad = None
+                param.copy_(master)
+                copy_out.wait_stream(compute)
+                with copy_out:
+                    for local in local_tensors(master):
+                        local.data.record_stream(copy_out)
+                        local.data = local.data.to("cpu", non_blocking=True)
+            # The copies to host memory must land before anything reads them there, such as a checkpoint
+            torch.accelerator.synchronize()
+            if self._replica_group is not None:
+                self._share_updated_parameters()
+                # The optimizer only knows this replica's share, so its zero_grad would leave the rest holding
+                # gradients that the next step would accumulate onto.
+                opt_model.zero_grad(set_to_none=True)
+            return out
+
+        self.optimizer.step = step_and_share
+        return self.optimizer
+
+    def _share_updated_parameters(self) -> None:
+        """Send each parameter from the replica that updated it to the others."""
+        model = self.accelerator.unwrap_model(self.model)
+        shard = self.accelerator.process_index % self.tp_size
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                owner = self._parameter_owner.get(name)
+                if owner is None:
+                    continue
+                # Every rank in the group holds the same slice of the model, so the local views line up
+                local = param.data.to_local() if isinstance(param.data, DTensor) else param.data
+                torch.distributed.broadcast(local, src=owner * self.tp_size + shard, group=self._replica_group)
+
+    def training_step(self, *args, **kwargs):
+        output = super().training_step(*args, **kwargs)
+        if self.accelerator.sync_gradients:
+            mode = "train" if self.model.training else "eval"
+            self._metrics[mode]["generation_wait_s"].append(self._step_generation_wait)
+            self._step_generation_wait = 0.0
+        # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
+        # optimizer step rather than one per accumulation micro-step.
+        # Without tensor parallelism the model is a plain DDP one and accelerate already reduced the gradients;
+        # DDP cannot wrap a tensor-parallel model, which is why the reduction is done here instead.
+        if self.tp_size > 1 and self._replica_group is not None and self.accelerator.sync_gradients:
+            for param in self.accelerator.unwrap_model(self.model).parameters():
+                if param.grad is None:
+                    continue
+                # A sharded gradient is summed shard by shard: every rank in the group holds the same shard of the
+                # model, so summing their local views is the same as summing the whole gradients.
+                grad = param.grad.to_local() if isinstance(param.grad, DTensor) else param.grad
+                torch.distributed.all_reduce(grad, group=self._replica_group)
+                grad /= self.dp_size
+        return output
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        completion_mask = inputs["completion_mask"]
+        advantages = inputs["advantages"]
+
+        # Per-token logprobs of the sampled tokens under the current policy, computed by the chunked lm_head, so
+        # only completion positions are scored and the full-vocab logits never materialize.
+        boundary_kwargs = {
+            key: inputs[key]
+            for key in ("cu_seq_lens_q", "cu_seq_lens_k", "max_length_q", "max_length_k", "seq_idx")
+            if key in inputs
+        }
+        # The fused head scores the positions whose next-token label is not -100, which is the completion tokens.
+        labels = inputs["input_ids"].masked_fill(completion_mask == 0, -100)
+        outputs = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs.get("attention_mask"),
+            position_ids=inputs.get("position_ids"),
+            labels=labels,
+            fused_lm_head=True,
+            **boundary_kwargs,
+        )
+        per_token_logps = outputs["log_probs"]
+        mask = completion_mask[:, 1:].to(per_token_logps.dtype)
+
+        # Clipped surrogate loss. The old policy is the generation engine itself: its logprobs are exact for the
+        # sampled tokens, so no extra forward pass is needed to obtain them.
+        old_per_token_logps = inputs["old_per_token_logps"][:, 1:]
+        log_ratio = per_token_logps - old_per_token_logps
+        coef_1 = torch.exp(log_ratio)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        # Packed rows hold several samples, so the advantage is per token there; padded rows hold one each
+        advantages = advantages[:, 1:] if advantages.dim() == 2 else advantages.unsqueeze(1)
+        per_token_loss1 = coef_1 * advantages
+        per_token_loss2 = coef_2 * advantages
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1.0)
+
+        # Log the metrics
+        mode = "train" if self.model.training else "eval"
+
+        def masked_seq_mean(x):
+            return (x * mask).sum(-1) / mask.sum(-1)
+
+        def global_masked_mean(x):
+            local_sum, local_count = (x * mask).sum(), mask.sum().float()
+            totals = self.accelerator.reduce(torch.stack([local_sum, local_count]), reduction="sum")
+            return (totals[0] / totals[1].clamp(min=1.0)).item()
+
+        # Compute the clipped probability ratios
+        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
+        is_region_clipped = is_low_clipped | is_high_clipped
+        self._metrics[mode]["clip_ratio/low_mean"].append(global_masked_mean(is_low_clipped.float()))
+        self._metrics[mode]["clip_ratio/high_mean"].append(global_masked_mean(is_high_clipped.float()))
+        self._metrics[mode]["clip_ratio/region_mean"].append(global_masked_mean(is_region_clipped.float()))
+        gathered_low_clip = self.accelerator.gather(masked_seq_mean(is_low_clipped.float()))
+        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
+        gathered_high_clip = self.accelerator.gather(masked_seq_mean(is_high_clipped.float()))
+        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
+        self._metrics[mode]["entropy"].append(
+            self.accelerator.gather((outputs["entropy"] * mask).sum() / mask.sum().clamp(min=1.0)).mean().item()
+        )
+        return loss
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        mode = "train" if self.model.training else "eval"
+        # Average the metrics
+        metrics = {}
+        for key, val in self._metrics[mode].items():
+            # Filter out NaN values before averaging. A reward function that returns None for all samples
+            # in a batch produces NaN for that batch's metric. With logging_steps > 1, a naive sum()/len()
+            # would let a single NaN contaminate valid data from other batches. Only return None when no
+            # valid values remain (e.g. JSON loggers crash on float NaN).
+            valid = [v for v in val if not math.isnan(v)]
+            metrics[key] = sum(valid) / len(valid) if valid else None
+
+        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
+        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        if mode == "eval":
+            metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        logs.update(metrics)
+        super().log(logs, start_time)
+        self._metrics[mode].clear()
