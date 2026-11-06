@@ -2426,6 +2426,10 @@ class GRPOTrainer(_BaseTrainer):
             tool_images,
         )
 
+    def _transform_advantages(self, advantages: torch.Tensor) -> torch.Tensor:
+        """Transform gathered advantages before logging and process-local slicing."""
+        return advantages
+
     def _generate_and_score_completions(
         self, inputs: list[dict[str, torch.Tensor | Any]]
     ) -> dict[str, torch.Tensor | Any]:
@@ -2927,6 +2931,7 @@ class GRPOTrainer(_BaseTrainer):
         # Unscorable completions (every reward func returned None) carry no learning signal: their reward is NaN here,
         # so zero their advantage to keep them from moving the policy.
         advantages = torch.nan_to_num(advantages, nan=0.0)
+        advantages = self._transform_advantages(advantages)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
