@@ -77,22 +77,24 @@ The [MOPD blog post](https://huggingface.co/blog/sergiopaniego/mopd-trl) covers 
 
 ## 7. Fuse the same experts into a Qwen student with CSD
 
-Keep the three Open-MOPD experts and the same domain-routed 40/40/20 prompt mix, but start the student from `Qwen/Qwen3-4B`. Common-Support Distillation ([NeMo reference implementation](https://github.com/NVIDIA-NeMo/RL/pull/4680)) aligns the teacher and student tokenizations of each student-generated answer. Shared token events and prefix-compatible chains are compared together with a REST category for remaining probability mass. The teacher never generates the answer.
+Keep the three Open-MOPD experts and the same domain-routed 40/40/20 prompt mix, but start the student from `Qwen/Qwen3-0.6B`. Common-Support Distillation ([NeMo reference implementation](https://github.com/NVIDIA-NeMo/RL/pull/4680)) aligns the teacher and student tokenizations of each student-generated answer. Shared token events and prefix-compatible chains are compared together with a REST category for remaining probability mass. The teacher never generates the answer. Evaluate each expert against the starting student in its domain before training: matching a weaker teacher can reduce the student's accuracy.
 
 From this checkout, on four GPUs, run:
 
 ```sh
 python examples/async_distillation_mopd/launcher.py \
     --train-script examples/async_distillation_mopd/async_distillation_mopd.py \
-    --student-model Qwen/Qwen3-4B \
+    --student-model Qwen/Qwen3-0.6B \
     --distillation-method csd \
-    --teacher-max-model-len 32768 \
+    --max-completion-length 32768 \
+    --max-model-len 40960 \
+    --teacher-max-model-len 65536 \
     --logs logs/mopd-csd-qwen
 ```
 
 The GPU layout and expert checkpoints remain the same. The student's server now serves Qwen. Each teacher uses its own tokenizer and chat template. Allow more context on the teachers: a fixed `+64` token allowance does not cover differences between tokenizer families. The worker checks each actual teacher sequence length before scoring.
 
-For a 60-step experiment, add `--max-steps 60 --output-dir /path/to/checkpoint --run-name qwen3-4b-csd-60steps`. CSD defaults to 16 concurrent rollouts to bound the larger top-k scoring responses, saves every 20 steps, and retains two checkpoints. Both modes save the final model to `output_dir`. Use `--resume-from-checkpoint /path/to/checkpoint-N` to resume. The launcher respects `CUDA_VISIBLE_DEVICES`, including GPUs assigned by Slurm. Trackio uses the `async-distillation-mopd-csd` project; `--trackio-space-id username/space` selects its dashboard.
+For a 60-step experiment, add `--max-steps 60 --output-dir /path/to/checkpoint --run-name qwen3-06b-csd-60steps`. CSD defaults to 16 concurrent rollouts to bound the larger top-k scoring responses, saves every 20 steps, and retains two checkpoints. Both modes save the final model to `output_dir`. Use `--resume-from-checkpoint /path/to/checkpoint-N` to resume. The launcher respects `CUDA_VISIBLE_DEVICES`, including GPUs assigned by Slurm. Trackio uses the `async-distillation-mopd-csd` project; `--trackio-space-id username/space` selects its dashboard.
 
 The CSD setting is equivalent to:
 
