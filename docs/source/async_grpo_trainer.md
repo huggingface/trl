@@ -533,6 +533,3 @@ MFU is reported only when peak compute capacity is known for the local training 
 
 [[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
 
-## RolloutWorkerProtocol
-
-[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol
