@@ -71,14 +71,7 @@ def openr1_examples():
 
 @pytest.fixture(scope="module")
 def countdown_examples():
-    try:
-        dataset = load_dataset(
-            "HuggingFaceTB/Countdown-Tasks-3to4",
-            "gkd_verified_Qwen2.5-7B-Instruct",
-            split="train[:3]",
-        )
-    except Exception as exc:  # pragma: no cover - network/environment dependent
-        pytest.skip(f"Countdown dataset unavailable: {exc}")
+    dataset = load_dataset("HuggingFaceTB/Countdown-Task-GOLD", "verified_Qwen2.5-7B-Instruct", split="train[:3]")
     return [{"messages": row["messages"]} for row in dataset]
 
 
