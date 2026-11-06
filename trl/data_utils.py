@@ -147,15 +147,13 @@ def is_conversational(example: dict[str, Any]) -> bool:
     False
     ```
     """
-    supported_keys = ["prompt", "chosen", "rejected", "completion", "messages"]
-    example_keys = {key for key in example.keys() if key in supported_keys}
+    supported_keys = ["messages", "prompt", "chosen", "rejected", "completion"]
 
-    # It must have one of the supported keys
-    if example_keys:
-        key = example_keys.pop()  # take the first supported key
-        maybe_messages = example[key]
-        # It must be a list of messages
-        if isinstance(maybe_messages, list):
+    # Iterate in a fixed order: collecting the keys in a `set` made the result depend on `PYTHONHASHSEED`.
+    for key in supported_keys:
+        maybe_messages = example.get(key)
+        # It must be a non-empty list of messages
+        if isinstance(maybe_messages, list) and maybe_messages:
             maybe_message = maybe_messages[0]
             # Each message must be a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message:
@@ -201,6 +199,12 @@ def apply_chat_template(
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
+        if not isinstance(example["prompt"], list):
+            raise TypeError(
+                "`prompt` must be a list of messages to apply a chat template, got "
+                f"{type(example['prompt']).__name__}. Mixed formats such as a string `prompt` with conversational "
+                "`chosen`/`rejected` are not supported."
+            )
         last_role = example["prompt"][-1]["role"]
         if last_role in ["user", "tool"]:
             add_generation_prompt = True
