@@ -1599,10 +1599,10 @@ class AsyncRolloutWorker:
         except (pickle.PicklingError, AttributeError, TypeError) as e:
             # fails fast with an actionable message instead of an opaque traceback
             raise TypeError(
-                "AsyncRolloutWorker forwards reward_funcs / tools / environment_factory to a spawned "
-                "child process, so they must be picklable. Lambdas and closures are not: use a "
-                "module-level function, functools.partial, or a callable class instance instead "
-                "(tools are registered under their __name__, so they must be module-level functions)."
+                "AsyncRolloutWorker forwards the rollout loop's arguments (reward_funcs, tools, "
+                "environment_factory, harness callables) to a spawned child process, so they must be picklable. "
+                "Lambdas and closures are not: use a module-level function, functools.partial, or a callable class "
+                "instance instead (tools are registered under their __name__, so they must be module-level functions)."
             ) from e
         self._process = self._mp_ctx.Process(
             target=_child_main,
