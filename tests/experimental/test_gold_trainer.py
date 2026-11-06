@@ -1578,6 +1578,10 @@ def test_uldloss_hybrid_config_beta_zero(llama_tokenizer, qwen_tokenizer):
     torch.testing.assert_close(loss, expected, atol=1e-6, rtol=1e-5)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     student_tokenizer = smolvlm_processor.tokenizer
     teacher_tokenizer = qwen3_vl_processor.tokenizer
@@ -1595,6 +1599,10 @@ def test_vlm_alignment_groups_cover_all_tokens_smolvlm_qwen3vl(smolvlm_processor
     _assert_alignment_covers_completion(loss, batch, teacher_input_ids, teacher_labels, teacher_byte_offsets)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_build_teacher_vlm_inputs_feeds_images_and_completion_byte_offsets(tmp_path, vlm_dataset, vlm_examples):
     """Cross-architecture VLM ULD must render the teacher prompt through the teacher processor (so it
     actually sees the image via pixel_values) while keeping completion byte offsets relative to the original completion
@@ -1678,6 +1686,10 @@ def _get_prompt_turn_texts(example):
     return texts
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     # 2048 to not truncate the completion tokens
     collator = DataCollatorForVisionLanguageChatML(processor=smolvlm_processor, max_length=2048)
@@ -1739,6 +1751,10 @@ def test_vlm_chatml_collator_preserves_completion_smolvlm(smolvlm_processor, qwe
     assert torch.isfinite(loss)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_chatml_collator_preserves_completion_qwen3vl(smolvlm_processor, qwen3_vl_processor, vlm_examples):
     collator = DataCollatorForVisionLanguageChatML(processor=qwen3_vl_processor, max_length=2048)
     batch = collator(vlm_examples)
@@ -1942,6 +1958,10 @@ def test_gold_trainer_vlm_vllm_init_uses_identity_collator(monkeypatch, tmp_path
     assert isinstance(trainer._vlm_collator, DataCollatorForVisionLanguageChatML)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=False, GOLDTrainer should raise
     a ValueError telling the user to enable ULD loss."""
@@ -1955,6 +1975,10 @@ def test_cross_architecture_vlm_without_uld_raises_error(tmp_path, vlm_dataset):
             )
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_cross_architecture_vlm_with_uld_sets_teacher_processor(tmp_path, vlm_dataset):
     """When student and teacher have different model_type and use_uld_loss=True, GOLDTrainer should store
     the teacher's processor and emit a warning about cross-architecture distillation."""
@@ -2294,6 +2318,10 @@ _TINY_LFM2_VL = "trl-internal-testing/tiny-Lfm2VlForConditionalGeneration-2.5"
 _VLM_SMOKE_MAX_LENGTH = 4096
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
+)
 def test_vlm_jsd_same_family_train_step_smoke(tmp_path, vlm_dataset):
     """Same-family VLM (tiny Qwen3-VL → tiny Qwen3-VL) runs one off-policy JSD step with a finite loss."""
     student = AutoModelForImageTextToText.from_pretrained(_TINY_QWEN3_VL, dtype=torch.bfloat16)
@@ -2355,6 +2383,10 @@ _TINY_SMOLLM3 = "trl-internal-testing/tiny-SmolLM3ForCausalLM"
     condition=Version("5.20.1") <= Version(transformers.__version__) < Version("5.21.0"),
     reason="SmolVLM forward with images is broken in transformers>=5.20.1,<5.21 (see #7790)",
     strict=True,
+)
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("4.57.0"),
+    reason="Qwen3-VL series were introduced in transformers-4.57.0",
 )
 def test_vlm_uld_cross_arch_train_step_smoke(tmp_path, vlm_dataset):
     """Cross-arch VLM (tiny SmolVLM student → tiny Qwen3-VL teacher) runs one off-policy ULD step.
