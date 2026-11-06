@@ -44,6 +44,8 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, SaveStrategy
 from transformers.utils import is_peft_available
 
+from ...chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE, supports_tool_calling
+from ...import_utils import is_jmespath_available
 from ...trainer.base_trainer import _BaseTrainer
 from ...trainer.utils import (
     add_fused_lm_head,
@@ -1210,6 +1212,21 @@ class AsyncGRPOTrainer(_BaseTrainer):
         if is_peft_model(model) and args.gradient_checkpointing:
             model.enable_input_require_grads()
 
+        if tools or environment_factory:
+            # jmespath is only needed by the legacy `response_schema` parser, which is all transformers < 5.13 ships.
+            # The new-style `response_template` parser doesn't use it, so don't require it on newer versions.
+            if not _SUPPORTS_RESPONSE_TEMPLATE and not is_jmespath_available():
+                raise ImportError(
+                    "Using tools with AsyncGRPOTrainer on transformers below 5.13.0 requires the jmespath library for "
+                    "response parsing. Please install it with `pip install jmespath`, or upgrade transformers to "
+                    "5.13.0 or higher, which doesn't need it."
+                )
+            if not supports_tool_calling(processing_class):
+                raise ValueError(
+                    "The provided chat template does not support tool calling. The template must be able to render a "
+                    "full tool-calling conversation (user -> assistant with tool_calls -> tool)."
+                )
+
         # Reward functions
         if reward_funcs is None:
             reward_funcs = []
@@ -1236,6 +1253,10 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 )
             num_placeholder_rows = args.per_device_train_batch_size * args.gradient_accumulation_steps
             train_dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": ""}]] * num_placeholder_rows})
+        elif not isinstance(train_dataset, (Dataset, IterableDataset)):
+            raise TypeError(
+                f"`train_dataset` must be a `Dataset` or `IterableDataset`, got `{type(train_dataset).__name__}`."
+            )
 
         # Initialize the Trainer
         super().__init__(
