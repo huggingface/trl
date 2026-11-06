@@ -810,7 +810,7 @@ class TestIWOPDTrainer(TrlTestCase):
 
             def generate(self, prompts, images, num_generations):
                 events.append("generate")
-                return None, [[eos_token_id] for _ in prompts], None, None
+                return None, [[eos_token_id] for _ in prompts], None, None, None
 
         # CI does not install vLLM
         monkeypatch.setattr(iw_opd_trainer_module, "is_vllm_available", lambda: True)
