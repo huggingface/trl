@@ -1547,7 +1547,15 @@ class DPOTrainer(_BaseTrainer):
             elif loss_type == "sft":
                 chosen_mask, _ = shift_completion_mask.chunk(2, dim=0)
                 chosen_per_token_logps, _ = per_token_logps.chunk(2, dim=0)
-                batch_loss = -chosen_per_token_logps[chosen_mask.bool()].mean()
+                chosen_mask_bool = chosen_mask.bool()
+                if chosen_mask_bool.any():
+                    batch_loss = -chosen_per_token_logps[chosen_mask_bool].mean()
+                else:
+                    logger.warning(
+                        "Skipping 'sft' loss for a batch where all chosen completion tokens were truncated. "
+                        "Consider increasing `max_length`."
+                    )
+                    batch_loss = chosen_per_token_logps.sum() * 0.0
                 batch_size = chosen_per_token_logps.size(0)
                 # Implementation convenience: expand the scalar SFT loss to a per-sequence tensor so it matches the
                 # shape of other losses; only the mean is used, so this is a no-op numerically.
