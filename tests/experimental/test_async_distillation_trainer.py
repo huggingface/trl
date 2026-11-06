@@ -21,6 +21,7 @@ import multiprocessing as mp
 import os
 import queue
 import threading
+import time
 from collections import OrderedDict, defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
@@ -63,6 +64,7 @@ from trl.experimental.async_distillation.async_rollout_worker import (
     RolloutSample,
     _AsyncRolloutLoop,
     _parse_teacher_logprobs_at_position,
+    _spawn_stop_watcher,
 )
 from trl.experimental.async_distillation.csd import CSDTargetBuilder, csd_divergence
 from trl.experimental.async_distillation.weight_transfer import WeightTransferClient
@@ -2099,3 +2101,34 @@ def test_csd_chain_loss_and_gradients_ignore_long_masked_prefix(csd_tiny_model, 
     (actual_grad,) = torch.autograd.grad(actual, head)
     torch.testing.assert_close(actual, reference, atol=1e-12, rtol=1e-7)
     torch.testing.assert_close(actual_grad, reference_grad, atol=1e-10, rtol=1e-6)
+
+
+def _start_stop_watcher_and_exit(stop_event):
+    _spawn_stop_watcher(_rollout_loop(teacher_server_urls=ONE_TEACHER), stop_event)
+    time.sleep(0.5)  # let the watcher start before the process exits
+
+
+class TestStopWatcher:
+    def test_stop_event_can_be_set_after_the_worker_exited(self):
+        # A worker that dies (e.g. on an exception) leaves its stop watcher behind, and the trainer's `stop()` then
+        # sets the stop event
+        ctx = mp.get_context("spawn")
+        stop_event = ctx.Event()
+        worker = ctx.Process(target=_start_stop_watcher_and_exit, args=(stop_event,))
+        worker.start()
+        worker.join(timeout=60)
+        # In a process rather than a thread, so a hanging `set()` can be killed and the test fails instead of hanging
+        setter = ctx.Process(target=stop_event.set)
+        setter.start()
+        setter.join(timeout=10)
+        hung = setter.is_alive()
+        setter.kill()
+        assert not hung
+
+    def test_watcher_exits_once_the_stop_event_is_set(self):
+        # `_child_main` sets the stop event and joins the watcher when `run()` returns or raises
+        stop_event = mp.get_context("spawn").Event()
+        watcher = _spawn_stop_watcher(_rollout_loop(teacher_server_urls=ONE_TEACHER), stop_event)
+        stop_event.set()
+        watcher.join(timeout=5)
+        assert not watcher.is_alive()

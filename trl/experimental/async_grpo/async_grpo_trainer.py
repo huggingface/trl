@@ -1026,6 +1026,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
     """
 
     loop_cls: type[AsyncRolloutLoop] = AsyncRolloutLoop
+    _rollout_loop_kwargs: dict[str, Any] = {}
     loss_is_scaled_for_ga = True
 
     _tag_names = ["trl", "async-grpo"]
@@ -1390,6 +1391,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
+                    **self._rollout_loop_kwargs,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer

@@ -47,7 +47,6 @@ from trl.chat_template_utils import (
     glm5_1_chat_template,
     glm5_2_chat_template,
     glm5_3_chat_template,
-    glm5_3_flash_chat_template,
     glm5_chat_template,
     has_generation_markers,
     is_chat_template_prefix_preserving,
@@ -451,14 +450,14 @@ class TestAddResponseSchema:
         assert parsed == expected
 
     @pytest.mark.parametrize(
-        "chat_template",
+        "tokenizer_name, chat_template",
         [
-            pytest.param(glm4_7_chat_template, id="glm4.7"),
-            pytest.param(glm5_chat_template, id="glm5"),
-            pytest.param(glm5_1_chat_template, id="glm5.1"),
-            pytest.param(glm5_2_chat_template, id="glm5.2"),
-            pytest.param(glm5_3_chat_template, id="glm5.3"),
-            pytest.param(glm5_3_flash_chat_template, id="glm5.3-flash"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm4_7_chat_template, id="glm4.7"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_chat_template, id="glm5"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_1_chat_template, id="glm5.1"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_2_chat_template, id="glm5.2"),
+            pytest.param("trl-internal-testing/tiny-Glm4MoeForCausalLM", glm5_3_chat_template, id="glm5.3"),
+            pytest.param("trl-internal-testing/tiny-Glm5NextForConditionalGeneration", None, id="glm5.3-flash"),
         ],
     )
     @pytest.mark.parametrize(
@@ -488,11 +487,12 @@ class TestAddResponseSchema:
         not _SUPPORTS_RESPONSE_TEMPLATE,
         reason="Later GLM templates only get a new-style response template, which requires transformers>=5.13",
     )
-    def test_add_response_schema_glm_think_prefill(self, chat_template, completion, expected):
+    def test_add_response_schema_glm_think_prefill(self, tokenizer_name, chat_template, completion, expected):
         # Later GLM generation prompts end with `<think>`, which rendered turns without reasoning lack, so the
         # completion can't be sliced off a rendered conversation.
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Glm4MoeForCausalLM")
-        tokenizer.chat_template = chat_template
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if chat_template is not None:  # GLM release without a tiny model of its own
+            tokenizer.chat_template = chat_template
         tokenizer = add_response_schema(tokenizer)
         messages = [{"role": "user", "content": "What is 3*4?"}]
         prefix = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
