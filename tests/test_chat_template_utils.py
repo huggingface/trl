@@ -1809,7 +1809,6 @@ class TestGetTrainingChatTemplate:
             )
         # The enable_thinking values for which the training template trains tokens the generation prompt ends with
         trains_generation_prompt = [
-            ("trl-internal-testing/tiny-Glm4MoeForCausalLM", [False]),
             ("trl-internal-testing/tiny-GptOssForCausalLM", [None]),
             ("trl-internal-testing/tiny-MuseGlimmerForConditionalGeneration", [None]),
             ("trl-internal-testing/tiny-MuseSparkForConditionalGeneration", [None]),
@@ -1819,13 +1818,6 @@ class TestGetTrainingChatTemplate:
             ("trl-internal-testing/tiny-NemotronHForCausalLM-3.5-lightning", [False]),
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", [None]),
             (("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", qwen2_5_base_chat_template), [None]),
-            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM", [False]),
-            (("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_v2_chat_template), [False]),
-            (("trl-internal-testing/tiny-Qwen3MoeForCausalLM", qwen3_thinking_2507_chat_template), [None]),
-            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink", [None, False, True]),
-            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think", [None, False, True]),
-            ("trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6", [None, False, True]),
-            ("trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-3.8", [None, False, True]),
         ]
         if any(name == tokenizer_name and enable_thinking in values for name, values in trains_generation_prompt):
             reason = "Trains tokens the generation prompt ends with: https://github.com/huggingface/trl/issues/8109"
