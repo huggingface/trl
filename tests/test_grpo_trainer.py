@@ -265,6 +265,7 @@ class TestGRPOTrainer(TrlTestCase):
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
             "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
             "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -2426,6 +2427,10 @@ class TestGRPOTrainer(TrlTestCase):
         with pytest.raises(ValueError, match="top_k"):
             GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", **sampling_kwargs)
 
+    def test_vllm_repetition_penalty_requires_no_importance_sampling_correction(self):
+        with pytest.raises(ValueError, match="repetition_penalty"):
+            GRPOConfig(output_dir=self.tmp_dir, use_vllm=True, report_to="none", repetition_penalty=1.2)
+
     @require_peft
     @require_vllm
     @require_torch_accelerator
@@ -2642,6 +2647,7 @@ class TestGRPOTrainer(TrlTestCase):
             top_k=10,
             min_p=0.01,
             repetition_penalty=1.1,
+            vllm_importance_sampling_correction=False,  # vLLM applies `repetition_penalty` to its log-probs
         )
 
         trainer = GRPOTrainer(
