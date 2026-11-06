@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -21,6 +22,7 @@ import torch
 import transformers
 from datasets import load_dataset
 from packaging.version import Version
+from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
 
 from trl import (
@@ -62,6 +64,40 @@ def get_config_path(lazy_shared_datadir):
 
 @require_torch_multi_accelerator
 class TestDistributed(TrlTestCase):
+    @pytest.mark.parametrize("test_file", ["test_async_grpo_trainer", "test_async_distillation_trainer"])
+    def test_async_checkpoint_saved_in_compute_dtype(self, test_file, get_config_path):
+        run_command(
+            [
+                "accelerate",
+                "launch",
+                "--config_file",
+                get_config_path("fsdp2"),
+                "--mixed_precision",
+                "bf16",
+                "--fsdp_state_dict_type",
+                "FULL_STATE_DICT",
+                "-m",
+                "pytest",
+                f"tests/experimental/{test_file}.py",
+                "-k",
+                "test_fsdp_checkpoint_body",
+                "-x",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ],
+            {**os.environ, "TRL_TEST_FSDP_OUTPUT_DIR": self.tmp_dir},
+        )
+
+        checkpoint = os.path.join(self.tmp_dir, "checkpoint-1")
+        with safe_open(os.path.join(checkpoint, "model.safetensors"), "pt") as f:
+            assert {f.get_slice(key).get_dtype() for key in f.keys()} == {"BF16"}
+        with open(os.path.join(checkpoint, "config.json")) as f:
+            assert json.load(f)["dtype"] == "bfloat16"
+        assert AutoModelForCausalLM.from_pretrained(checkpoint, dtype="auto").dtype == torch.bfloat16
+        master = torch.load(os.path.join(checkpoint, "pytorch_model_fsdp.bin"), map_location="cpu", weights_only=True)
+        assert {tensor.dtype for tensor in master.values() if tensor.is_floating_point()} == {torch.float32}
+
     @pytest.mark.parametrize(
         "config",
         [

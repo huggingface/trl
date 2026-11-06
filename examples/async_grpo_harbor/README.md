@@ -6,10 +6,10 @@ logprobs, and loss masks, then updates the same vLLM instance.
 ## Local setup
 
 Use Python 3.12 and this TRL checkout. The typed capture API was merged in
-[OpenEnv #1280](https://github.com/huggingface/OpenEnv/pull/1280). Install the pinned upstream revision:
+[OpenEnv #1280](https://github.com/openenv/OpenEnv/pull/1280). Install the pinned upstream revision:
 
 ```sh
-git clone https://github.com/huggingface/OpenEnv.git OpenEnv
+git clone https://github.com/openenv/OpenEnv.git OpenEnv
 git -C OpenEnv checkout --detach 86a180ede21e044f7929b9a7783ad83aa67d83a3
 pip install -e . trackio datasets ./OpenEnv[harbor] kernels
 export PYTHONPATH="$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}"
@@ -21,7 +21,7 @@ The source path is required because this revision's environment wheel does not p
 Run the OpenEnv server with its sandbox credentials, then start vLLM and the trainer using the commands
 in [async_grpo_harbor.py](async_grpo_harbor.py). The server additionally needs `pip install './OpenEnv[harbor]'`;
 the trainer can use an existing server. Use the same model and vLLM endpoint for rollouts and weight updates.
-Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-inflight + 1` (9 for the defaults); the factory
+Set the server's `MAX_CONCURRENT_ENVS` to at least `--max-concurrent-rollouts + 1` (9 for the defaults); the factory
 keeps one connection for task metadata. The Jobs launcher sets this capacity automatically.
 
 Training saves a checkpoint every 50 steps, keeps the latest three, and saves the final model and
@@ -53,15 +53,15 @@ python -c "import pathlib, harbor.environments.tar_transfer as t; p = pathlib.Pa
   zeros and ones. TRL maps the completion span to its generic `TurnRecord.output_mask`.
 - For example, prompt `[10, 11]`, completion `[12, 13, 14]`, and mask `[0, 0, 1, 0, 1]` train on tokens
   `12` and `14`, while retaining `13` as context.
-- The worker constructs the session factory with its sampling policy. Pass a callable such as
+- The trainer constructs the session factory with its sampling policy. Pass a callable such as
   `partial(HarborSessionFactory, server_url, ...)`; do not configure sampling separately on the factory.
   OpenEnv applies the policy to captured requests.
-- Invalid captures stop the worker. Transport failures remain unscorable; an agent timeout retains
+- Invalid captures stop training. Transport failures remain unscorable; an agent timeout retains
   valid captured turns and the verifier's score.
 
 Execution status and structured tool outcomes are follow-up OpenEnv API work. Today, TRL recognizes
 timeouts through `TimeoutError` and reconstructs conversation and tool diagnostics from captures.
-Set agent turn and time budgets on the session factory; the worker only forwards sampling.
+Set agent turn and time budgets on the session factory; the trainer only forwards sampling.
 
 Rewritten histories can produce multiple training rows. Token retention does not guarantee equal
 rollout weighting or a suitable memory budget for every harness.

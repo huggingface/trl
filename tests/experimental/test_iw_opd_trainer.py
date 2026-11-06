@@ -14,8 +14,6 @@
 
 import math
 import os
-from collections import defaultdict
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -638,12 +636,8 @@ class TestIWOPDTrainer(TrlTestCase):
         torch.testing.assert_close(local_loss, server_loss)
 
     def test_iw_opd_prefix_weights_and_loss(self):
-        trainer = IWOPDTrainer.__new__(IWOPDTrainer)
-        trainer.temperature = 1.0
-        trainer.iw_opd_gamma = 0.5
-        trainer.iw_opd_epsilon = 1e-8
-        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        trainer.model = SimpleNamespace(training=True)
+        trainer = self._make_local_trainer(distillation_objective="iw_opd", lmbda=1.0, iw_opd_gamma=0.5)
+        trainer.model.train()
 
         student_logits = torch.zeros(2, 3, 4, requires_grad=True)
         completion_tokens = torch.tensor([[0, 1, 2], [1, 2, 3]])
@@ -686,12 +680,10 @@ class TestIWOPDTrainer(TrlTestCase):
         assert torch.isfinite(student_logits.grad).all()
 
     def test_iw_opd_uses_cached_rollout_logprobs(self):
-        trainer = IWOPDTrainer.__new__(IWOPDTrainer)
-        trainer.temperature = 1.0
-        trainer.iw_opd_gamma = 0.0
-        trainer.iw_opd_epsilon = 1e-8
-        trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
-        trainer.model = SimpleNamespace(training=True)
+        trainer = self._make_local_trainer(
+            distillation_objective="iw_opd", lmbda=1.0, iw_opd_gamma=0.0, max_completion_length=3
+        )
+        trainer.model.train()
 
         student_logits = torch.zeros(1, 2, 4, requires_grad=True)
         completion_tokens = torch.tensor([[0, 1]])
@@ -715,17 +707,6 @@ class TestIWOPDTrainer(TrlTestCase):
         # Buffer layout: with mixed prompt lengths, prompt_length (shortest real prompt) is smaller than the
         # padded prompt width, so rollout logprobs must be stored at full sequence width to survive the
         # labels-style slice in compute_loss.
-        class _Tok:
-            pad_token_id = 0
-
-            @staticmethod
-            def batch_decode(sequences, skip_special_tokens=False, clean_up_tokenization_spaces=False):
-                return [" ".join(str(int(t)) for t in seq) for seq in sequences]
-
-        trainer = IWOPDTrainer.__new__(IWOPDTrainer)
-        trainer.accelerator = SimpleNamespace(device=torch.device("cpu"))
-        trainer.processing_class = _Tok()
-        trainer.generation_config = SimpleNamespace(max_new_tokens=3)
         trainer._buffered_inputs = [None]
         trainer._buffered_text_logs = [None]
 
