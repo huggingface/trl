@@ -24,6 +24,7 @@ import queue
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -46,6 +47,7 @@ from transformers.testing_utils import torch_device
 
 pytest.importorskip("transformers", minversion="5.2.0")
 
+from trl.chat_template_utils import _SUPPORTS_RESPONSE_TEMPLATE
 from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
 from trl.experimental.async_grpo import async_grpo_trainer as async_grpo_trainer_module
 from trl.experimental.async_grpo import weight_transfer as weight_transfer_module
@@ -143,6 +145,324 @@ def first_none_reward(completions, **kwargs):
     # None for the first completion of each group only: a group whose rewards are all None is dropped, and with every
     # group dropped no step completes
     return [None] + [float(i) for i in range(1, len(completions))]
+
+
+def str_length_reward(completions, **kwargs):
+    """Reward function that rewards longer completions, whatever their format."""
+    return [float(len(str(completion))) for completion in completions]
+
+
+def last_message_length_reward(completions, **kwargs):
+    """Reward function that rewards a longer last message."""
+    return [float(len(completion[-1]["content"])) for completion in completions]
+
+
+# Tools and environments of the tool tests. Like the reward functions, they are module-level so that the rollout
+# worker's process can unpickle them.
+def multiply_tool(a: int, b: int) -> int:
+    """
+    Multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+
+async def async_multiply_tool(a: int, b: int) -> int:
+    """
+    Asynchronously multiplies two integers.
+
+    Args:
+        a: The first integer.
+        b: The second integer.
+
+    Returns:
+        The product of the two integers.
+    """
+    return a * b
+
+
+def lookup_tool(query: str) -> list:
+    """
+    Looks up the items matching a query.
+
+    Args:
+        query: What to look up.
+
+    Returns:
+        The matching items, as text content blocks.
+    """
+    return [{"type": "text", "text": "crate"}]
+
+
+def screenshot_tool() -> str:
+    """Simple text-returning tool."""
+    return "The image shows a red square."
+
+
+def record(key: str, value):
+    """Append `value` under `key` to the file `TRL_TEST_RECORD` names.
+
+    Tools and environments run in the rollout worker's process, so they report what they see through a file rather than
+    through the test's variables.
+    """
+    with open(os.environ["TRL_TEST_RECORD"], "a") as f:
+        f.write(json.dumps([key, value]) + "\n")
+
+
+def recorded(path: str) -> dict[str, list]:
+    """Read back what [`record`] wrote to `path`, as `{key: [value, ...]}`."""
+    records = defaultdict(list)
+    with open(path) as f:
+        for line in f:
+            key, value = json.loads(line)
+            records[key].append(value)
+    return records
+
+
+class ScriptedTurns:
+    """A [`TransformersVLLMServer`] script that replays the fake generations of GRPO's tool tests, one request at a time.
+
+    GRPO's tests fake one batched generate call per turn. Here each rollout is its own request, so the k-th first turn
+    of a prompt gets `first_turns[k % len(first_turns)]`, and a turn after a tool result gets `after_tool`.
+
+    Args:
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
+            Tokenizer of the served model.
+        first_turns (`list[str]` or `Callable[[str], list[str]]`):
+            Completions of the first turn, or a function of the prompt's text returning them.
+        after_tool (`str`, *optional*, defaults to `"Done!<|im_end|>"`):
+            Completion of a turn after a tool result.
+        tool_response_marker (`str`, *optional*, defaults to `"<tool_response>"`):
+            Text the chat template renders a tool result with, which tells the turns apart.
+
+    Attributes:
+        turns_after_tool (`int`):
+            Number of turns answered after a tool result.
+    """
+
+    def __init__(self, tokenizer, first_turns, after_tool="Done!<|im_end|>", tool_response_marker="<tool_response>"):
+        self.tokenizer = tokenizer
+        self.first_turns = first_turns
+        self.after_tool = after_tool
+        self.tool_response_marker = tool_response_marker
+        self.seen = defaultdict(int)
+        self.turns_after_tool = 0
+
+    def __call__(self, prompt_ids: list[int]) -> list[int]:
+        prompt = self.tokenizer.decode(prompt_ids)
+        if self.tool_response_marker in prompt:
+            self.turns_after_tool += 1
+            text = self.after_tool
+        else:
+            first_turns = self.first_turns(prompt) if callable(self.first_turns) else self.first_turns
+            text = first_turns[self.seen[prompt] % len(first_turns)]
+            self.seen[prompt] += 1
+        return self.tokenizer(text, add_special_tokens=False).input_ids
+
+
+class CounterEnvironment:
+    def reset(self, **kwargs):
+        record("reset_counter", kwargs)
+        return "Count."
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        record("increment", step)
+        return step
+
+
+class EchoEnvironment:
+    def reset(self, **kwargs):
+        record("reset_echo", kwargs)
+        return "Echo."
+
+    def shout(self, text: str) -> str:
+        """
+        Shout the given text.
+
+        Args:
+            text: Text to shout.
+
+        Returns:
+            The text in upper case.
+        """
+        record("shout", text)
+        return text.upper()
+
+
+class ZipEnvironment:
+    def reset(self, **kwargs):
+        return "Give the zip code."
+
+    def submit(self, answer: str) -> str:
+        """
+        Submit the zip code.
+
+        Args:
+            answer: The zip code.
+
+        Returns:
+            A confirmation.
+        """
+        record("zip", answer)
+        return "ok"
+
+
+class CountEnvironment:
+    def reset(self, **kwargs):
+        return "Count."
+
+    def submit(self, answer: int) -> str:
+        """
+        Submit the count.
+
+        Args:
+            answer: The count.
+
+        Returns:
+            A confirmation.
+        """
+        record("count", answer)
+        return "ok"
+
+
+class IncrementEnvironment:
+    def reset(self, **kwargs):
+        self._counter = 0
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self._counter += step
+        return self._counter
+
+
+class IncrementRewardEnvironment:
+    def reset(self, **kwargs):
+        self._counter = 0
+
+    def increment(self, step: int) -> int:
+        """
+        Increment the internal counter.
+
+        Args:
+            step: Value to add to the counter.
+
+        Returns:
+            The updated counter value.
+        """
+        self._counter += step
+        return self._counter
+
+    def get_reward(self) -> float:
+        return float(self._counter)
+
+
+class GuessRewardEnvironment:
+    def reset(self, **kwargs):
+        self._solved = False
+
+    def guess(self, word: str) -> str:
+        """
+        Submit a guess.
+
+        Args:
+            word: The guessed word.
+
+        Returns:
+            Feedback about the guess.
+        """
+        return "nope"
+
+    def get_reward(self) -> float:
+        return 1.0 if self._solved else 0.0
+
+
+class PropertyEnvironment:
+    def __init__(self):
+        self.is_reset = False
+
+    def reset(self, **kwargs):
+        self.is_reset = True
+
+    @property
+    def reward(self) -> float:
+        if self.is_reset:
+            raise RuntimeError("`reward` must not be evaluated while discovering tools")
+        return 0.0
+
+    def echo(self, text: str) -> str:
+        """
+        Echo the text back.
+
+        Args:
+            text: Text to echo.
+
+        Returns:
+            The text, unchanged.
+        """
+        return text
+
+
+class ScoredEnvironment:  # owns its reward
+    def reset(self, **kwargs): ...
+
+    def act(self, x: int) -> int:
+        """
+        Act.
+
+        Args:
+            x: A value.
+
+        Returns:
+            The value.
+        """
+        return x
+
+    def get_reward(self) -> float:
+        return 1.0
+
+
+class PlainEnvironment:  # no `get_reward`; scored by `reward_funcs`
+    def reset(self, **kwargs): ...
+
+    def play(self, x: int) -> int:
+        """
+        Play.
+
+        Args:
+            x: A value.
+
+        Returns:
+            The value.
+        """
+        return x
+
+
+class GuessTheWordEnvironment:
+    def reset(self, **kwargs):
+        return "Guess the 5-letter word."  # the env owns the data and returns the prompt
 
 
 class _StubRolloutWorker:
@@ -444,11 +764,19 @@ class TransformersVLLMServer:
     Args:
         model_id (`str`):
             The model to serve, the trainer's.
+
+    Attributes:
+        script (`Callable[[list[int]], list[int]]`, *optional*):
+            Set it to answer each request with the completion `script(prompt_ids)` returns instead of sampling one, for
+            the tests whose rollouts must follow a fixed path, like a tool call.
     """
 
     def __init__(self, model_id: str):
         self.model_id = model_id
-        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
+        config = AutoConfig.from_pretrained(model_id)
+        loader = AutoModelForImageTextToText if config.get_text_config() is not config else AutoModelForCausalLM
+        self.model = loader.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
+        self.script = None
         # As `vllm serve --max-model-len 512`. The trainer sizes its micro-batches from it, and at the model's context
         # length, one would wait for about a thousand samples
         self.max_model_len = 512
@@ -548,6 +876,13 @@ class TransformersVLLMServer:
                 them.
         """
         prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
+        if self.script is not None:
+            with self.generate_lock, torch.no_grad():
+                completion_ids = torch.tensor(self.script(prompt_ids[0].tolist()), device=self.model.device)
+                logits = self.model(torch.cat([prompt_ids[0], completion_ids])[None]).logits[
+                    0, prompt_ids.shape[1] - 1 : -1
+                ]
+            return completion_ids, (logits.float() / sampling_params["temperature"]).log_softmax(-1)
         with self.generate_lock:
             output = self.model.generate(
                 prompt_ids,
@@ -1419,6 +1754,670 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_response_parsing
+    @pytest.mark.parametrize("tools", [[multiply_tool], [async_multiply_tool]])
+    def test_train_with_tools(self, tools: list[Callable], vllm_server):
+        # In this test, we define a simple tool that multiplies two integers. Regardless of the input prompt,
+        # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
+        # succeed and the other will fail (because of a wrong argument name).
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=tools,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        tool_name = tools[0].__name__
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                f'<tool_call>\n{{"name": "{tool_name}", "arguments": {{"a": 3, "b": 4}}}}\n</tool_call><|im_end|>',
+                # an invalid tool call with wrong argument name
+                f'<tool_call>\n{{"name": "{tool_name}", "arguments": {{"a": 3, "c": 4}}}}\n</tool_call><|im_end|>',
+                "I don't know any tool<|im_end|>",
+            ],
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] is not None
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] is not None
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_response_parsing
+    def test_train_with_tools_log_completions(self, vllm_server):
+        # The logged completions mix types within a field: the tool returns content blocks while assistant content is
+        # a string, and `query` is a string in one call and a list in the other. The completions table must still be
+        # written (#7674).
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            max_steps=1,
+            logging_steps=1,
+            log_completions=True,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[lookup_tool],
+        )
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[  # two tool calls, then a text answer
+                '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": "crate"}}\n</tool_call><|im_end|>',
+                '<tool_call>\n{"name": "lookup_tool", "arguments": {"query": ["crate"]}}\n</tool_call><|im_end|>',
+                "No tool needed.<|im_end|>",
+            ],
+        )
+        trainer.train()
+
+        completions = Dataset.from_parquet(os.path.join(self.tmp_dir, "completions", "completions_00001.parquet"))
+        assert completions.num_rows == 3
+        tool_messages = [message for row in completions["completion"] for message in row if message["role"] == "tool"]
+        assert [message["content"] for message in tool_messages] == [[{"type": "text", "text": "crate"}]] * 2
+
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.13.0.dev0"),
+        reason="Tool parsing relies on the legacy jmespath-based `response_schema` parser below transformers 5.13.0",
+    )
+    def test_tools_without_jmespath(self):
+        # jmespath is only used by the legacy `response_schema` parser (transformers < 5.13); the new-style
+        # `response_template` parser doesn't need it. The guard must therefore not fire on newer transformers, where
+        # jmespath is never imported. Guards against an over-broad regression: none of the openenv examples install
+        # jmespath, so a spurious guard breaks them before training starts.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with patch("trl.experimental.async_grpo.async_grpo_trainer.is_jmespath_available", return_value=False):
+            AsyncGRPOTrainer(  # must construct without raising
+                model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+                reward_funcs=varied_reward,
+                args=training_args,
+                train_dataset=dataset,
+                tools=[multiply_tool],
+            )
+
+    @require_response_parsing
+    def test_train_with_multiple_environments(self, vllm_server, monkeypatch):
+        # When `environment_factory` is a dict, each rollout selects its environment via its `environment` field, and
+        # only that environment's tools are exposed. Here we build a dataset with both environments and check that a
+        # tool call from a "counter" example dispatches to the CounterEnvironment's `increment`, while a tool call
+        # from an "echo" example dispatches to the EchoEnvironment's `shout`.
+        dataset = Dataset.from_dict({"environment": ["counter", "echo"] * 8})
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                [
+                    # counter example: valid `increment` tool call (only CounterEnvironment exposes it)
+                    '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                    # counter example: no tool call (gives reward variance within the group)
+                    "I won't<|im_end|>",
+                ]
+                if "Count." in prompt
+                else [
+                    # echo example: valid `shout` tool call (only EchoEnvironment exposes it)
+                    '<tool_call>\n{"name": "shout", "arguments": {"text": "hi"}}\n</tool_call><|im_end|>',
+                    # echo example: no tool call
+                    "Done!<|im_end|>",
+                ]
+            ),
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The tool call from the counter example ran `increment` (defined only on CounterEnvironment) and the one from
+        # the echo example ran `shout` (defined only on EchoEnvironment): each rollout dispatched to its own tools.
+        records = recorded(record_path)
+        assert records["increment"]
+        assert records["shout"]
+        # Half of the rollouts issued a tool call, and every call succeeded. Metrics are logged at every step: the last
+        # entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 4)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both environments were selected and reset, and `environment` is a control field not forwarded to `reset`.
+        assert records["reset_counter"] and records["reset_echo"]
+        assert all("environment" not in kwargs for kwargs in records["reset_counter"] + records["reset_echo"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_response_parsing
+    def test_train_with_multiple_environments_same_tool_name(self, vllm_server, monkeypatch):
+        # Two environments expose a `submit` tool with different argument types. Each tool call must be parsed with the
+        # schema of its own environment's `submit`: the zip code stays the string "42", the count is the integer 42.
+        dataset = Dataset.from_dict({"environment": ["zip", "count"] * 8})
+        record_path = os.path.join(self.tmp_dir, "record.jsonl")
+        monkeypatch.setenv("TRL_TEST_RECORD", record_path)
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,  # 2 prompts x 2 generations, so a batch mixes both environments
+            num_generations=2,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"zip": ZipEnvironment, "count": CountEnvironment},
+        )
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=lambda prompt: (
+                [
+                    '<tool_call>\n{"name": "submit", "arguments": {"answer": "42"}}\n</tool_call><|im_end|>',
+                    "I won't<|im_end|>",
+                ]
+                if "zip code" in prompt
+                else [
+                    '<tool_call>\n{"name": "submit", "arguments": {"answer": 42}}\n</tool_call><|im_end|>',
+                    "Done!<|im_end|>",
+                ]
+            ),
+        )
+        trainer.train()
+
+        records = recorded(record_path)
+        assert records["zip"] and all(answer == "42" for answer in records["zip"])
+        assert records["count"] and all(answer == 42 for answer in records["count"])
+
+    @pytest.mark.skip(reason="The trainer hangs when the rollout worker dies (#8038)")
+    @require_response_parsing
+    def test_train_with_unknown_environment_raises(self, vllm_server):
+        # With a dict `environment_factory`, an example whose `environment` field doesn't match any configured
+        # environment should fail with a clear error rather than a bare KeyError mid-rollout.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            vllm_server_base_url=vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM").url,
+            report_to="none",
+        )
+
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            environment_factory={"counter": CounterEnvironment},
+        )
+
+        # The rollout worker runs in a child process: the trainer raises its error as the cause of its own
+        with pytest.raises(RuntimeError, match="Rollout worker child has failed") as excinfo:
+            trainer.train()
+        assert "not among the environments" in str(excinfo.value.__cause__)
+
+    @require_response_parsing
+    def test_train_with_environment_factory(self, vllm_server):
+        # In this test, we define a simple tool that increments an internal counter. Regardless of the input prompt,
+        # the model will generate 3 completions, 2 of which will be valid tool calls. Among the 2 tool calls, one will
+        # succeed and the other will fail (because of a wrong tool name).
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # required with environment_factory
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            environment_factory=IncrementEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                # an invalid tool call with wrong tool name
+                '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+            ],
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] is not None
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(2 / 3)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] is not None
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(1 / 2)
+
+        # Check the states of the environment
+        assert trainer.environments[0]._counter == 1  # should have been incremented once
+        assert trainer.environments[1]._counter == 0  # shouldn't have been incremented because the tool call failed
+        assert trainer.environments[2]._counter == 0  # shouldn't have been incremented because no tool call was made
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_response_parsing
+    def test_tool_discovery_does_not_evaluate_environment_properties(self, vllm_server):
+        # Tool discovery must list the environment's methods on its class. `inspect.getmembers` calls `getattr` on
+        # every name before applying the predicate, so listing the instance evaluates its properties, and a property
+        # may be expensive or have side effects (a Harbor env scores the rollout from one). Here `reward` is inert on
+        # a fresh instance and raises once the environment has been reset: the first batch resets the pooled
+        # instances, so a second batch that listed the instance would raise before generating anything.
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=2,  # the first batch resets the pooled instances, the second re-lists their tools
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=constant_reward,  # never reads `environments`: nothing but tool discovery touches `reward`
+            args=training_args,
+            environment_factory=PropertyEnvironment,
+        )
+
+        # No tool call, so one generation round per rollout
+        server.script = ScriptedTurns(trainer.processing_class, first_turns=["I won't increment<|im_end|>"])
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # The regression is only exercised if the instances the last batch listed had really been reset before it.
+        assert all(environment.is_reset for environment in trainer.environments)
+
+    @require_response_parsing
+    def test_train_with_environment_owned_reward(self, vllm_server):
+        # Same setup as `test_train_with_environment_factory`, but the environment owns the reward via a `get_reward`
+        # method and no `reward_funcs` is passed. The reward equals the final counter, so the 3 generations
+        # (counters 1, 0, 0) get rewards 1.0, 0.0, 0.0.
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # required with environment_factory
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+
+        # No `reward_funcs`: the reward is supplied entirely by the environment.
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            args=training_args,
+            environment_factory=IncrementRewardEnvironment,
+        )
+
+        # The env-owned reward is registered as the sole reward source (logged under the env class name) with weight 1,
+        # and `get_reward` is not exposed as a tool.
+        assert trainer.reward_func_names == ["IncrementRewardEnvironment"]
+        assert trainer.reward_weights.tolist() == [1.0]
+        tool_names = [tool.__name__ for tool in trainer.tools]
+        assert "increment" in tool_names
+        assert "get_reward" not in tool_names
+        assert "reset" not in tool_names
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"name": "increment", "arguments": {"step": 1}}\n</tool_call><|im_end|>',
+                # an invalid tool call with wrong tool name
+                '<tool_call>\n{"name": "decrement", "arguments": {"step": 2}}\n</tool_call><|im_end|>',
+                "I won't increment<|im_end|>",
+            ],
+        )
+        trainer.train()
+
+        # The environment-owned reward is logged like any reward func, under the env class name. Counters are 1, 0, 0
+        # -> rewards 1.0, 0.0, 0.0. Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["rewards/IncrementRewardEnvironment/mean"] == pytest.approx(1 / 3)
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_response_parsing
+    def test_environment_owned_reward_coexists_with_reward_funcs(self):
+        # When both `reward_funcs` and an environment-owned `get_reward` are present, `get_reward` is appended as an
+        # extra reward source (weight 1) after the trainer-owned reward functions.
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # required with environment_factory
+            reward_weights=[0.5],  # weight only applies to the trainer-owned reward func
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=constant_reward,
+            args=training_args,
+            environment_factory=GuessRewardEnvironment,
+        )
+
+        # The env-owned reward is appended after the trainer-owned reward func (logged under the env class name), with
+        # a fixed weight of 1.
+        assert trainer.reward_func_names == ["constant_reward", "GuessRewardEnvironment"]
+        assert trainer.reward_weights.tolist() == [0.5, 1.0]
+        assert len(trainer.reward_funcs) == 2
+        # `get_reward` is not exposed as a tool; `guess` is.
+        tool_names = [tool.__name__ for tool in trainer.tools]
+        assert "guess" in tool_names
+        assert "get_reward" not in tool_names
+
+    @require_response_parsing
+    def test_environment_owned_reward_mixed_environments(self):
+        # With a dict `environment_factory`, only some environments may own their reward via `get_reward`. Each such
+        # env *class* contributes one reward column (named after its class); a rollout is scored only when its
+        # environment is that class, so mixing a reward-owning env with a plain one must not raise. Reward columns are
+        # deduplicated by class: two names mapping to the same `get_reward` class share a single column (no
+        # double-counting).
+
+        # A dict `environment_factory` routes each example via its `environment` column, so a dataset is required.
+        dataset = Dataset.from_dict({"environment": ["scored", "scored2", "plain"]})
+
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=constant_reward,
+            args=training_args,
+            train_dataset=dataset,
+            # `scored` and `scored2` both build `ScoredEnvironment`, so they must collapse to a single reward column.
+            environment_factory={"scored": ScoredEnvironment, "scored2": ScoredEnvironment, "plain": PlainEnvironment},
+        )
+
+        # Only `ScoredEnvironment` owns a reward, and despite two names mapping to it, a single (deduplicated) env-reward
+        # column is appended after the trainer-owned reward func, with a fixed weight of 1.
+        assert trainer.reward_func_names == ["constant_reward", "ScoredEnvironment"]
+        assert trainer.reward_weights.tolist() == [1.0, 1.0]
+
+        # The env-reward func scores only rollouts bound to `ScoredEnvironment`; a `PlainEnvironment` rollout returns
+        # `None` (turned into NaN and ignored) instead of raising `AttributeError`.
+        env_reward_func = trainer.reward_funcs[-1]
+        rewards = env_reward_func(environments=[ScoredEnvironment(), PlainEnvironment()])
+        assert rewards == [1.0, None]
+
+    def test_no_reward_source_raises(self):
+        # `reward_funcs` is optional, but a reward must come from somewhere: with neither `reward_funcs` nor an
+        # environment-owned `get_reward`, construction fails fast instead of training on an all-zero reward.
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = AsyncGRPOConfig(output_dir=self.tmp_dir, report_to="none")
+        with pytest.raises(ValueError, match="No reward source provided"):
+            AsyncGRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+    @require_response_parsing
+    def test_train_with_environment_owned_data(self, vllm_server):
+        # The environment owns the data — no external `train_dataset` is needed. `reset()` returns the prompt, and
+        # `max_steps` drives the training loop. A placeholder dataset is built internally.
+        server = vllm_server("trl-internal-testing/tiny-Qwen3ForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_steps=5,  # the environment owns the data, so `max_steps` sets the training length
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            reward_funcs=last_message_length_reward,
+            args=training_args,
+            environment_factory=GuessTheWordEnvironment,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Distinct-length completions within the group give reward variance, so advantages are non-zero.
+        server.script = ScriptedTurns(
+            trainer.processing_class, first_turns=["DoneDone!<|im_end|>", "DoneDoneDone!<|im_end|>"]
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @require_response_parsing
+    def test_train_with_malformed_tool_calls(self, vllm_server):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-Qwen3MoeForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM",
+            reward_funcs=varied_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                '<tool_call>\n{"arguments": {"a": 3, "b": 4}}\n</tool_call><|im_end|>',
+                '<toolcall>\n{"arguments": {"a": 3, "b": 4}}\n</toolcall><|im_end|>',
+                '<tool_call>\n{"arguments": {a: 3, b: 4}}\n</tool_call><|im_end|>',
+            ],
+        )
+        trainer.train()
+
+        # No malformed call is run as a tool, so no rollout has a second turn
+        assert server.script.turns_after_tool == 0
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="Gemma 4 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @require_response_parsing
+    def test_train_with_tools_gemma4(self, vllm_server):
+        # Gemma 4 ends a tool call with `<|tool_response>` and a turn with `<turn|>`, not with its tokenizer's eos
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-Gemma4ForConditionalGeneration")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # VLM training is memory intensive, reduce batch size to avoid OOM
+            num_generations=2,  # VLM training is memory intensive, reduce num_generations to avoid OOM
+            max_completion_length=512,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-Gemma4ForConditionalGeneration",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[screenshot_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "<|tool_call>call:screenshot_tool{}<tool_call|><|tool_response>",
+                "I don't know any tool<turn|>",
+            ],
+            after_tool="Done!<turn|>",
+            tool_response_marker="<tool_response|>",
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+        # Both completions end on one of Gemma 4's eos ids, so none is clipped
+        assert trainer.state.log_history[-2]["completions/clipped_ratio"] == 0.0
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    @pytest.mark.skipif(
+        not _SUPPORTS_RESPONSE_TEMPLATE,
+        reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
+    )
+    @pytest.mark.skipif(
+        torch.version.hip is not None
+        or not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 9),
+        reason="DeepSeek's MLA has a V head dim different from Q/K, which FlashAttention-3 supports on Hopper only",
+    )
+    @require_response_parsing
+    def test_train_with_tools_deepseekv3(self, vllm_server):
+        # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        server = vllm_server("trl-internal-testing/tiny-DeepseekV3ForCausalLM")
+        training_args = AsyncGRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+            num_generations=2,  # reduce the number of generations to reduce memory usage
+            max_completion_length=128,
+            vllm_server_base_url=server.url,
+            report_to="none",
+        )
+        trainer = AsyncGRPOTrainer(
+            model="trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+            # Reward must vary across completions, otherwise GRPO advantages are all zero and no parameters update
+            reward_funcs=str_length_reward,
+            args=training_args,
+            train_dataset=dataset,
+            tools=[multiply_tool],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        server.script = ScriptedTurns(
+            trainer.processing_class,
+            first_turns=[
+                "</think>\n\n<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>multiply_tool\n```json\n"
+                '{"a": 3, "b": 4}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜><｜end▁of▁sentence｜>',
+                "</think>\n\nI don't know any tool<｜end▁of▁sentence｜>",
+            ],
+            after_tool="Done!<｜end▁of▁sentence｜>",
+            tool_response_marker="<｜tool▁output▁begin｜>",
+        )
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        # Metrics are logged at every step: the last entry is the run's summary
+        assert trainer.state.log_history[-2]["tools/call_frequency"] == pytest.approx(1 / 2)
+        assert trainer.state.log_history[-2]["tools/failure_frequency"] == pytest.approx(0.0)
+
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
