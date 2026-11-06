@@ -233,6 +233,7 @@ class _LogProbEntropyFunction(torch.autograd.Function):
             grad_entropy = expected_logit
         else:
             grad_entropy = grad_entropy.contiguous()
+        # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
         _backward_kernel[(n_rows, triton.cdiv(n_cols, _BLOCK_SIZE))](
             logits,
             index,

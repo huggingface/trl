@@ -697,6 +697,7 @@ class ChunkedLogProbFunction(torch.autograd.Function):
                         if ctx.softcap is not None:
                             chain = chain * (1 - torch.tanh(y / ctx.softcap) ** 2)
                         sparse_grad = grad_score[token_start:token_end] * chain * in_tile
+                    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
                     fold = (
                         partial(_backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))], enable_fp_fusion=True)
                         if _use_triton(hidden.device)

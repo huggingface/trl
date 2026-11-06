@@ -693,6 +693,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     if end != vocab:
                         _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                         _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
+                    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
                     fold = partial(_ratio_kernel[(n,)], enable_fp_fusion=True) if _use_triton(device) else _ratio_tile
                     fold(
                         s_tile,
@@ -726,6 +727,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                         if start != 0:
                             _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                             _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
+                        # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
                         fold = partial(_jsd_kernel[(n,)], enable_fp_fusion=True) if _use_triton(device) else _jsd_tile
                         fold(
                             s_tile,
@@ -833,6 +835,7 @@ class ChunkedDivergenceFunction(torch.autograd.Function):
                     s_tile, t_tile = s_buf[:n, : end - start], t_buf[:n, : end - start]
                     _project(s_tile, h_s, student_weight, student_bias, start, end, s_dtype)
                     _project(t_tile, h_t, teacher_weight, teacher_bias, start, end, t_dtype)
+                    # Pin FP fusion, which Triton 3.10 disables by default (see #8136)
                     fold = (
                         partial(_backward_kernel[(n, triton.cdiv(end - start, _BLOCK_SIZE))], enable_fp_fusion=True)
                         if _use_triton(student_hidden.device)
