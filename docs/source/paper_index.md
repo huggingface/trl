@@ -1693,6 +1693,25 @@ training_args = GKDConfig(
 
 Structures post-training as three stages: general SFT, independent per-domain RL training of one expert per domain (e.g. verifiable-answer RL for math, sandboxed agent RL for software engineering), and a final MOPD stage that fuses the frozen domain experts into a single unified student. In that final stage, the student generates a trajectory per prompt, each trajectory is dispatched to its corresponding domain teacher (never averaged or ensembled across teachers), and the student is updated by minimizing the per-token reverse KL against that one teacher's distribution along the trajectory. Used in TRL via [`experimental.async_distillation.AsyncDistillationTrainer`], which implements this third, fusion stage: passing more than one entry in `teacher_server_urls` enables MOPD, with each row's `teacher_id` column selecting which (already-trained) teacher scores it. Use `beta=1.0` to match the paper's reverse-KL objective.
 
+Cross-tokenizer fusion is available through `distillation_method="csd"` and per-teacher `teacher_tokenizers`, adapting the KD term from [NeMo Common-Support Distillation](https://github.com/NVIDIA-NeMo/RL/pull/4680) to student-generated rollouts. This is an extension of MOPD rather than the paper's shared-tokenizer reverse-KL setting. The MOPD example includes a Qwen student fused from the Open-MOPD SmolLM3 experts.
+
+### A Fix for Softmax and Cross-Entropy
+
+**📜 Paper**: https://huggingface.co/papers/2610.31642
+
+Identifies softmax collapse at high confidence and cancellation when student and teacher distributions nearly match. The CSD path in [`experimental.async_distillation.AsyncDistillationTrainer`] uses max-excluded `log1p` normalization for the student projection, then evaluates KL/JSD over aligned events and REST through paired log-ratios and an `expm1` formulation with its linear term removed. The small event distributions use fp64, giving zero loss and gradient at identical event log-probabilities without materializing full-vocabulary fp64 logits. HTTP teacher log-probabilities limit the precision that can be recovered; this mitigates cancellation after scoring rather than implementing the paper's full paired-logit loss.
+
+```python
+from trl.experimental.async_distillation import AsyncDistillationConfig
+
+# The numerical formulation is automatic in CSD; this is not a reproduction
+# of the paper's training benchmarks or a paper-specified hyperparameter setup.
+args = AsyncDistillationConfig(
+    distillation_method="csd",
+    teacher_tokenizers={"default": "Qwen/Qwen3-4B"},
+)
+```
+
 ### On the Position Bias of On-Policy Distillation
 
 **📜 Paper**: https://huggingface.co/papers/2606.22600
