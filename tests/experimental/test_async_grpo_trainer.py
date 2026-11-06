@@ -2908,8 +2908,8 @@ class TestAsyncGRPOTrainerPeft(TrlTestCase):
         """Build a trainer against `fake`, configured to look like a server started with the given flags.
 
         `weight_transfer` is the class the trainer builds for a merged sync. `rollout_worker` is the class the trainer
-        builds as its worker: the real `AsyncRolloutWorker` is cheap until `start()` and useful for reading what it
-        was told.
+        builds as its worker: the real `AsyncRolloutWorker` is cheap until `start()` and useful for reading what it was
+        told.
         """
         fake.lora_config = lora_config
         fake.data_parallel_size = data_parallel_size
