@@ -58,7 +58,7 @@ from ...trainer.utils import (
     pad,
 )
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import AsyncRolloutWorker, RolloutSample
+from .async_rollout_worker import AsyncRolloutLoop, AsyncRolloutWorker, RolloutSample
 from .packing import TREE_ATTENTION, TreeRow, patch_tree_gdn, register_tree_attention, unpad_tree
 from .vllm_client import VLLMClient
 from .weight_transfer import WeightTransferClient
@@ -126,11 +126,11 @@ class RolloutWorkerProtocol(Protocol):
     Attributes:
         rollout_buffer (`queue.Queue` or `multiprocessing.queues.Queue`):
             Queue the trainer drains; the worker pushes scored `RolloutSample`s onto it, or the bare `int` group id of
-            a group it scored but has nothing to train on (every advantage zero), so the prompt still counts as
-            consumed for epochs and checkpoint resume. The two queue types are structurally identical (`get` /
-            `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default [`AsyncRolloutWorker`]
-            runs its loop in a spawned process and uses `multiprocessing.Queue`, while an in-process worker uses
-            `queue.Queue`.
+            a group with nothing to train on (all its scored rewards equal) or of a prompt `filter_prompt` rejected, so
+            the prompt still counts as consumed for epochs and checkpoint resume. The two queue types are structurally
+            identical (`get` / `put_nowait` / `qsize`) but nominally unrelated, so both are allowed: the default
+            [`AsyncRolloutWorker`] runs its loop in a spawned process and uses `multiprocessing.Queue`, while an
+            in-process worker uses `queue.Queue`.
         metrics_queue (`queue.Queue` or `multiprocessing.queues.Queue`):
             Queue the trainer drains in `log()` for metrics the worker measured itself. Each item is one dict shaped
             like the trainer's metric sink — `{key: float}` for a gauge or a counter, `{key: (numerator, denominator)}`
@@ -154,36 +154,6 @@ class RolloutWorkerProtocol(Protocol):
 
     def check_health(self, stale_after_s: float) -> None:
         """Raise if the worker has crashed or stopped producing within `stale_after_s` seconds."""
-        ...
-
-
-class WeightTransferProtocol(Protocol):
-    """Interface a weight-sync backend must implement to be passed as `weight_transfer` to
-    [`experimental.async_grpo.AsyncGRPOTrainer`].
-
-    The default [`WeightTransferClient`] streams the trainer's weights into the vLLM server over NCCL. Implement this
-    protocol to plug in a different sync mechanism, or pass a no-op implementation to disable trainer-side weight sync
-    (e.g. when a custom `rollout_worker` updates the policy itself).
-    """
-
-    def init_weight_transfer(self) -> None:
-        """Set up the transfer (e.g. the NCCL group). Called once on train begin, before the first sync."""
-        ...
-
-    def pause(self) -> None:
-        """Pause the inference server before weights are swapped in."""
-        ...
-
-    def send_weights(self, iterator: Iterator[tuple[str, torch.Tensor]]) -> None:
-        """Stream `(name, tensor)` pairs from `iterator` to the inference server."""
-        ...
-
-    def resume(self) -> None:
-        """Resume the inference server after the weights are updated."""
-        ...
-
-    def destroy(self) -> None:
-        """Release transfer resources. Called on train end."""
         ...
 
 
@@ -243,10 +213,10 @@ class _EpochStopCallback(TrainerCallback):
     """Stop after `num_train_epochs` full passes over the prompt dataset.
 
     An epoch is counted in distinct prompt-groups consumed: trained (accumulated in the collator, which runs on the
-    main process just before the model forward) or dropped for zero advantage. This is fork-independent: all
-    generations of a prompt and all forked rows of a conversation share one `group_id`, so a conversation forking into
-    many rows still counts once. Only the main process collates (`dispatch_batches=True`), so the stop decision is
-    reduced across ranks to keep data-parallel workers in lockstep.
+    main process just before the model forward), dropped because all its scored rewards were equal, or rejected by
+    `filter_prompt`. This is fork-independent: all generations of a prompt and all forked rows of a conversation share
+    one `group_id`, so a conversation forking into many rows still counts once. Only the main process collates
+    (`dispatch_batches=True`), so the stop decision is reduced across ranks to keep data-parallel workers in lockstep.
     """
 
     def __init__(self, trainer: "AsyncGRPOTrainer", target_groups: int):
@@ -1043,14 +1013,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
             Custom rollout worker implementing [`RolloutWorkerProtocol`]. If `None`, a default [`AsyncRolloutWorker`]
             is created, which spawns a CUDA-free child process and scores completions with the trainer's
             `reward_funcs`. Pass a custom worker to plug in a different rollout/scoring backend instead — for example,
-            one that runs reward models on their own GPUs.
-        weight_transfer (`WeightTransferProtocol`, *optional*):
-            Custom weight-sync backend implementing [`WeightTransferProtocol`]. If `None`, a default
-            [`WeightTransferClient`] is created that streams the trainer's weights into the config's vLLM server over
-            NCCL. This is independent of `rollout_worker`: a custom rollout worker still gets weight sync. Pass a no-op
-            implementation to disable trainer-side weight sync.
+            one that runs reward models on their own GPUs. A custom worker ignores the trainer's `loop_cls`.
+
+    To customize which prompts are sampled, how a rollout is generated or how advantages are computed, subclass
+    [`experimental.async_grpo.AsyncRolloutLoop`] and set it as the trainer's `loop_cls`. TRL builds the loop in the
+    rollout process:
+
+    ```python
+    >>> class CurriculumTrainer(AsyncGRPOTrainer):
+    ...     loop_cls = CurriculumRolloutLoop
+    ```
     """
 
+    loop_cls: type[AsyncRolloutLoop] = AsyncRolloutLoop
+    _rollout_loop_kwargs: dict[str, Any] = {}
     loss_is_scaled_for_ga = True
 
     _tag_names = ["trl", "async-grpo"]
@@ -1081,7 +1057,6 @@ class AsyncGRPOTrainer(_BaseTrainer):
         tools: list[Callable] | None = None,
         environment_factory: EnvironmentFactory | dict[str, EnvironmentFactory] | None = None,
         rollout_worker: RolloutWorkerProtocol | None = None,
-        weight_transfer: WeightTransferProtocol | None = None,
     ):
         # Args
         if args is None:
@@ -1362,7 +1337,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         # adapter save, the other a collective parameter gather, and a split decision hangs both. A failed probe is
         # broadcast in its place and raised on every rank before rank 0 builds anything else, since raising on rank 0
         # alone would leave the others waiting in this collective.
-        if weight_transfer is None and is_peft_model(model):
+        if is_peft_model(model):
             lora_sync = None
             if self.accelerator.is_main_process:
                 try:
@@ -1375,32 +1350,27 @@ class AsyncGRPOTrainer(_BaseTrainer):
             self._lora_sync = lora_sync
         # Create worker and queue on rank 0
         if self.accelerator.is_main_process:
-            if weight_transfer is not None:
-                # Injected backend (e.g. a no-op stub in tests, or a custom sync mechanism). It owns weight sync
-                # entirely, so the server is not probed and adapter sync stays off.
-                self.weight_transfer = weight_transfer
+            if self._lora_sync:
+                # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer group to
+                # build and no manifest to collect.
+                self.weight_transfer = None
             else:
-                if self._lora_sync:
-                    # The adapter reaches the server as a directory path over HTTP, so there is no NCCL transfer
-                    # group to build and no manifest to collect.
-                    self.weight_transfer = None
-                else:
-                    # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
-                    # DTensor.shape returns the global shape without triggering any all-gather.
-                    weight_names, weight_dtype_names, weight_shapes = [], [], []
-                    for name, param in _iter_vllm_named_params(model):
-                        weight_names.append(name)
-                        weight_dtype_names.append(str(param.dtype).split(".")[-1])
-                        weight_shapes.append(list(param.shape))
-                    self.weight_transfer = WeightTransferClient(
-                        vllm_client=self.vllm_client,
-                        weight_update_info={
-                            "names": weight_names,
-                            "dtype_names": weight_dtype_names,
-                            "shapes": weight_shapes,
-                        },
-                        compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
-                    )
+                # Collect weight metadata once — names/dtypes/shapes are fixed for the lifetime of training.
+                # DTensor.shape returns the global shape without triggering any all-gather.
+                weight_names, weight_dtype_names, weight_shapes = [], [], []
+                for name, param in _iter_vllm_named_params(model):
+                    weight_names.append(name)
+                    weight_dtype_names.append(str(param.dtype).split(".")[-1])
+                    weight_shapes.append(list(param.shape))
+                self.weight_transfer = WeightTransferClient(
+                    vllm_client=self.vllm_client,
+                    weight_update_info={
+                        "names": weight_names,
+                        "dtype_names": weight_dtype_names,
+                        "shapes": weight_shapes,
+                    },
+                    compute_dtype="bfloat16" if self.args.bf16 else "float16" if self.args.fp16 else None,
+                )
 
             if rollout_worker is not None:
                 # Use the injected worker (e.g. a stub in tests). The queue is owned by the worker.
@@ -1412,6 +1382,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             else:
                 self.rollout_worker = AsyncRolloutWorker(
                     self.args,
+                    loop_cls=self.loop_cls,
                     model_name=get_config_model_id(model.config),
                     lora_name=self._lora_name if self._lora_sync else None,
                     dataset=train_dataset,
@@ -1420,6 +1391,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
                     eos_token_ids=self.eos_token_ids,
                     tools=tools,
                     environment_factory=environment_factory,
+                    **self._rollout_loop_kwargs,
                 )
             # TODO(@aminediro): decide if this is returned by the worker or common API that is passed to the worker later.
             self.rollout_queue = self.rollout_worker.rollout_buffer

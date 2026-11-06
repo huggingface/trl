@@ -26,6 +26,7 @@ import torch
 from huggingface_hub import CommitOperationAdd, HfApi, ModelCard
 from huggingface_hub.errors import NotASafetensorsRepoError
 from packaging.version import Version
+from safetensors import safe_open
 from torch import nn
 from transformers import AutoConfig, ProcessorMixin
 from transformers import set_seed as _set_seed
@@ -166,12 +167,13 @@ _TORCH_TO_SAFETENSORS_DTYPE = {
 def check_dtype_pattern(reference_id, model):
     """Flag tensors whose dtype diverges from the reference checkpoint.
 
-    Reads the reference safetensors header via the Hub API (no weight download). Useful to catch cases
-    like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is bf16.
+    Reads the reference safetensors header via the Hub API (no weight download) and compares it with the checkpoint
+    that `model` saves, whose names follow the reference layout (in memory, transformers may rename or fuse tensors).
+    Useful to catch cases like Qwen3.5 where specific params (e.g. linear_attn.A_log) are kept in fp32 while the rest is
+    bf16.
 
-    `model` can also be the state dict that gets saved, when it differs from the loaded model's (quantized weights).
+    `model` can also be the state dict that gets saved, when the script writes the checkpoint itself (quantized weights).
     """
-    state_dict = model.state_dict() if isinstance(model, nn.Module) else model
     try:
         metadata = api.get_safetensors_metadata(reference_id)
     except NotASafetensorsRepoError:
@@ -179,15 +181,27 @@ def check_dtype_pattern(reference_id, model):
         return
     ref_dtypes = {name: info.dtype for fm in metadata.files_metadata.values() for name, info in fm.tensors.items()}
 
-    mismatches = []
-    for name, tensor in state_dict.items():
-        ref_dtype = ref_dtypes.get(name)
-        if ref_dtype is None:
-            continue  # tensor has no counterpart in the reference (e.g. scale-down, PEFT wrapper, tying)
-        tiny_dtype = _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype)
-        if tiny_dtype != ref_dtype:
-            mismatches.append((name, ref_dtype, tiny_dtype))
+    if isinstance(model, nn.Module):
+        tiny_dtypes = {}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir)
+            for path in Path(tmp_dir).glob("*.safetensors"):
+                with safe_open(path, "pt") as f:
+                    tiny_dtypes.update({name: f.get_slice(name).get_dtype() for name in f.keys()})
+    else:
+        tiny_dtypes = {name: _TORCH_TO_SAFETENSORS_DTYPE.get(tensor.dtype) for name, tensor in model.items()}
 
+    unmatched = [name for name in tiny_dtypes if name not in ref_dtypes]
+    if unmatched:
+        print(f"[dtype_check] {reference_id}: {len(unmatched)} tensors have no counterpart in the reference:")
+        for name in unmatched:
+            print(f"  {name}")
+
+    mismatches = [
+        (name, ref_dtypes[name], dtype)
+        for name, dtype in tiny_dtypes.items()
+        if name in ref_dtypes and ref_dtypes[name] != dtype
+    ]
     if not mismatches:
         print(f"[dtype_check] {reference_id}: all matched tensors have the reference dtype")
         return

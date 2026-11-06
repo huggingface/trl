@@ -174,6 +174,53 @@ vLLM loads adapters from disk rather than over the network, so the trainer write
 > [!TIP]
 > Adapter sync is not always faster. vLLM generates roughly 1.33–1.39x slower per token when it serves a LoRA adapter than when it serves merged weights, and generation is usually what dominates wall-clock time in RL. What you get in return is a much shorter pause at each sync and about 1% of the sync bandwidth. If generation throughput is your bottleneck, merged sync is often still the better choice.
 
+## Customizing the rollout loop
+
+Generation, rewards, advantages and filtering run in the rollout process, in [`experimental.async_grpo.AsyncRolloutLoop`]. To change one of them, subclass the loop, override the method for that step, and set the subclass as `loop_cls` on a trainer subclass. The trainer's constructor doesn't change.
+
+| Method | Called | Default |
+|---|---|---|
+| `filter_prompt(row_index, row, epoch)` | once per prompt, before generation | admits every prompt |
+| `generate_one(prompt, tools, group_id)` | once per rollout | the multi-turn tool loop |
+| `generate_one_turn(prompt_ids)` | once per sampling request | one vLLM request with the config's sampling settings |
+| `compute_advantages(group)` | once per group, after the rewards are summed into `group.rewards` | reward standardized within the group |
+| `setup()`, `close()` | when the loops start and stop | nothing |
+
+For example, a curriculum that stops sampling prompts the policy already solves, with its threshold in a config subclass:
+
+```python
+from dataclasses import dataclass
+
+import numpy as np
+
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer, AsyncRolloutLoop
+
+
+@dataclass
+class CurriculumConfig(AsyncGRPOConfig):
+    pass_rate_cap: float = 0.9
+
+
+class CurriculumRolloutLoop(AsyncRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return self.pass_rates.get(row_index, 0.0) < self.config.pass_rate_cap
+
+    async def setup(self):
+        self.pass_rates = {}
+
+    def compute_advantages(self, group):
+        scored = group.rewards[~np.isnan(group.rewards)]
+        if len(scored):
+            self.pass_rates[group.row_index] = float(np.mean(scored > 0))
+        return super().compute_advantages(group)
+
+
+class CurriculumTrainer(AsyncGRPOTrainer):
+    loop_cls = CurriculumRolloutLoop
+```
+
+Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
+
 ## Design philosophy
 
 This trainer is intentionally kept minimal and is not meant to grow into a general-purpose solution. If you need a feature that is not supported, we recommend cloning the repository and adapting the trainer to your needs directly. New features will only be considered when there is significant community demand.
@@ -348,7 +395,7 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 
 | metric                                                             | meaning                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rollout/duration_s`                                               | wall time for one conversation, from dispatch to its last turn.                                                                                                                                                                              |
+| `rollout/duration_s`                                               | wall time for one rollout, from dispatch until the loop collects the finished rollout.                                                                                                                                                                              |
 | `rollout/generated_tok_s`                                          | generation throughput over the last interval (windowed), so a stall shows up                                                                                                                                                                 |
 | `rollout/concurrency`                                              | rollouts in flight to vLLM.                                                                                                                                                                                                             |
 | `rollout/turns_mean`, `rollout/turns_max`                          | mean and max turns per conversation                                                                                                                                                                                                          |
@@ -366,11 +413,11 @@ A **rollout** is **one full** conversation: a prompt generated to completion, in
 | `rollout/vllm_preemptions_total`                                   | requests the server preempted during the logging window (vLLM's `num_preemptions_total`, summed over engines). Reported only: a weight sync resets the server's caches, which preempts every running request, so it is not a pressure signal                                                                     |
 | `frac_reward_zero_std`, `reward_kept`                              | fraction of groups dropped because every scored reward was equal, or fewer than two rollouts were scorable (GRPO only counts the first case), and the mean reward of the groups that were trained on. `reward` is the policy's reward over every scored group, dropped ones included, so it is the one to track |
 
-A group whose rollouts all received the same reward (or fewer than two of which were scorable) has zero advantage everywhere, so the worker drops it instead of enqueuing it: it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
+A group whose rollouts all received the same reward (or fewer than two of which were scorable) is dropped instead of enqueued: with the default advantages it has zero advantage everywhere, so it would cost a forward and backward and move nothing. The batch is unaffected, it still fills its `samples_per_step` from the kept groups, so a step takes more generation when many groups are dropped. A dropped group still counts toward an epoch, which stays one pass over the prompts.
 
 ### Tools
 
-Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness worker (`HarnessRolloutWorker`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
+Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
 
 | metric                                                  | path                       | meaning                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -452,6 +499,28 @@ MFU is reported only when peak compute capacity is known for the local training 
 ## AsyncGRPOTrainer
 
 [[autodoc]] trl.experimental.async_grpo.AsyncGRPOTrainer
+
+## AsyncRolloutLoop
+
+[[autodoc]] trl.experimental.async_grpo.AsyncRolloutLoop
+    - filter_prompt
+    - generate_one
+    - generate_one_turn
+    - compute_advantages
+    - setup
+    - close
+
+## Rollout
+
+[[autodoc]] trl.experimental.async_grpo.Rollout
+
+## TurnRecord
+
+[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.TurnRecord
+
+## RolloutGroup
+
+[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
 
 ## RolloutWorkerProtocol
 
