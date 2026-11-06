@@ -72,7 +72,7 @@ model = DeepseekV3ForCausalLM(config).to(dtype=torch.bfloat16)
 init_weights_tiny_model(model)
 
 # FP8 weights, like the reference checkpoint: quantize every linear but lm_head in 128x128 blocks, each block scaled to
-# the e4m3 range, with the scale of each block stored in `weight_scale_inv` (needs a GPU with FP8 support to load)
+# the e4m3 range, with the scale of each block stored in `weight_scale_inv` (dequantized to bf16 on load without FP8 GPU support)
 config.quantization_config = {
     "activation_scheme": "dynamic",
     "fmt": "e4m3",
