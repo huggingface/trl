@@ -1992,6 +1992,8 @@ class AsyncDistillationTrainer(_BaseTrainer):
         metrics["batch/samples_per_step"].append(self._step_samples)
         if step_s is not None:
             metrics["perf/step_s"].append(step_s)
+        self.state.num_input_tokens_seen += int(self._step_forward_tokens)
+        metrics["num_tokens"] = [self.state.num_input_tokens_seen]
 
         if self.accelerator.is_main_process:
             metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)

@@ -58,12 +58,17 @@ For each function call, output the function name and arguments within the follow
         {%- set content = content.split('</think>')[-1].lstrip('\n') %}
     {%- endif %}
 {%- endif %}
-{% generation %}
 {%- if loop.index0 > ns.last_user_index and reasoning_content -%}
-{{ '\n<think>' + reasoning_content.strip() +  '</think>'}}
+{%- set think_block = '\n<think>' + reasoning_content.strip() + '</think>' -%}
 {%- else -%}
-{{ '\n<think></think>' }}
+{%- set think_block = '\n<think></think>' -%}
 {%- endif -%}
+{%- if enable_thinking is defined and not enable_thinking -%}
+{{ think_block }}
+{%- set think_block = '' -%}
+{%- endif -%}
+{% generation %}
+{{- think_block -}}
 {%- if content.strip() -%}
 {{ '\n' + content.strip() }}
 {%- endif -%}

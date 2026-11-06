@@ -267,6 +267,7 @@ So we split our metrics based on which stage (or _entity_) they are about:
 | `sample/`      | represents _one_ training sample, as it arrives in the queue                           |
 | `batch/`       | one micro-batch or one optimizer step (built from one or multiple samples)             |
 | `perf/`        | measured seconds and FLOPs                                                             |
+| `sampling/`    | how far the trained policy is from the sampler that generated the tokens               |
 
 Let's also define some terms to make token metrics unambiguous:
 
@@ -417,7 +418,7 @@ A group whose rollouts all received the same reward (or fewer than two of which 
 
 ### Tools
 
-Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
+Logged only when the model executes tools. `tools/<name>/*` repeats per tool name, the same way `rewards/<func>/*` repeats per reward function, because one failing tool is invisible in an average over all of them. The built-in tool loop and the OpenEnv harness trainer (`HarnessAsyncGRPOTrainer`, see [training on harnesses](openenv#training-on-harnesses-training-real-coding-agents-harbor)) log the same names, so one dashboard reads both; the `path` column says which produce each metric.
 
 | metric                                                  | path                       | meaning                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -447,8 +448,18 @@ Each sample is one `RolloutSample`: a reconciled sequence plus the group advanta
 | `sample/trained_tokens_mean`                                  | of those, how many the loss is taken over                                                                                                           |
 | `sample/rollout_queue_size`                                   | scored samples waiting in the queue                                                                                                                 |
 | `sample/time_in_queue_s`                                      | how long this sample sat in that queue before being trained on. Not the same as `perf/rollout_wait_s` — see [the rollout queue](#the-rollout-queue) |
-| `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `ratio` and `kl` show the _effect_ of off-policyness on the loss; this shows the cause                 |
-| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                     |
+| `sample/staleness_mean`, `sample/staleness_max`               | how many policy versions behind the data is. `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` show the _effect_ of off-policyness on the loss; this shows the cause                 |
+| `sample/dropped_stale_total`                                  | samples dropped for exceeding `max_staleness`                                                                                                       |
+
+### Rewards and off-policyness
+
+| metric | meaning |
+| --- | --- |
+| `reward_group_std` | std of the reward within each sample's group, averaged over the samples that were trained on. This is what the default `compute_advantages` divides by. GRPO's `reward_std` is the std over the whole batch, a different quantity: a batch of easy prompts all at 1 and hard prompts all at 0 has a batch std of 0.5 but a group std of 0 |
+| `rewards/<func>/mean`, `rewards/<func>/group_std` | each reward function's mean, and its std within each sample's group, averaged over the samples that were trained on. GRPO's `rewards/<func>/mean` is over every generated completion in the batch, and its `rewards/<func>/std` is the std over the batch |
+| `sampling/importance_sampling_ratio/mean`, `/min`, `/max` | `π_θ / π_sampler` per completion token, where `π_sampler` is the vLLM policy that generated it. It includes staleness, not only the train/inference mismatch |
+| `sampling/sampling_logp_difference/mean`, `/max` | `\|log π_θ − log π_sampler\|` per completion token |
+| `num_tokens` | tokens forwarded since the start of training. With tree packing, a prefix shared by several samples is counted once |
 
 ### Batches
 

@@ -261,7 +261,7 @@ def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[
             trackio.Trace(
                 messages=list(sample.prompt) + list(sample.completion),
                 metadata={
-                    **sample.metrics,  # reward, reward_std, rewards/<func>, tools/call_frequency, tools/failure_frequency
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
                     "advantage": float(sample.advantage),
                     "group_id": int(sample.group_id),
                     "model_version": int(sample.model_version),
@@ -1193,7 +1193,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
 
         # `add_fused_lm_head` computes logits from `lm_head.weight` directly. On a PEFT-wrapped head that is the
         # base layer's weight, so the adapter delta is never applied: the trainer scores a policy that does not exist
-        # while the server serves the real one, and `ratio` is wrong on every token with nothing raised. Checked on
+        # while the server serves the real one, and the importance ratio is wrong on every token with nothing raised. Checked on
         # the module rather than on `target_modules`, so a regex that happens to match the head is caught too.
         # `SFTTrainer` refuses the same configuration.
         if is_peft_model(model):
@@ -1589,8 +1589,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
         with torch.no_grad():
             local_ratio_sum = coef_1.sum()
             local_count = torch.full_like(local_ratio_sum, float(log_probs.numel()))
-            # Approx KL: http://joschu.net/blog/kl-approx.html
-            local_kl_sum = ((coef_1 - 1) - log_ratio).sum()
+            local_logp_diff_sum = log_ratio.abs().sum()
             local_entropy_sum = entropy.sum()
 
             # Compute the clipped probability ratios
@@ -1603,12 +1602,12 @@ class AsyncGRPOTrainer(_BaseTrainer):
             local_masked_sum = is_masked.float().sum()
             local_sampler_mass_sum = q.sum() if self.args.score_centering else torch.zeros_like(local_count)
 
-            # Batch all-reduce: [ratio_sum, kl_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum,
+            # Batch all-reduce: [ratio_sum, logp_diff_sum, entropy_sum, low_clip_sum, high_clip_sum, region_clip_sum,
             # masked_sum, sampler_mass_sum, count]
             stats = torch.stack(
                 [
                     local_ratio_sum,
-                    local_kl_sum,
+                    local_logp_diff_sum,
                     local_entropy_sum,
                     local_low_clip_sum,
                     local_high_clip_sum,
@@ -1621,7 +1620,7 @@ class AsyncGRPOTrainer(_BaseTrainer):
             stats = self.accelerator.reduce(stats, reduction="sum")
             (
                 global_ratio_sum,
-                global_kl_sum,
+                global_logp_diff_sum,
                 global_entropy_sum,
                 global_low_clip_sum,
                 global_high_clip_sum,
@@ -1630,8 +1629,20 @@ class AsyncGRPOTrainer(_BaseTrainer):
                 global_sampler_mass_sum,
                 global_count,
             ) = stats.unbind(0)
-            self._metrics["train"]["ratio"].append((global_ratio_sum / global_count).item())
-            self._metrics["train"]["kl"].append((global_kl_sum / global_count).item())
+            ratio_min, ratio_max, logp_diff_max = (
+                self.accelerator.gather(torch.stack([coef_1.min(), coef_1.max(), log_ratio.abs().max()]))
+                .view(-1, 3)
+                .unbind(1)
+            )
+            self._metrics["train"]["sampling/importance_sampling_ratio/min"].append(nanmin(ratio_min).item())
+            self._metrics["train"]["sampling/importance_sampling_ratio/mean"].append(
+                (global_ratio_sum / global_count).item()
+            )
+            self._metrics["train"]["sampling/importance_sampling_ratio/max"].append(nanmax(ratio_max).item())
+            self._metrics["train"]["sampling/sampling_logp_difference/mean"].append(
+                (global_logp_diff_sum / global_count).item()
+            )
+            self._metrics["train"]["sampling/sampling_logp_difference/max"].append(nanmax(logp_diff_max).item())
             self._metrics["train"]["entropy"].append((global_entropy_sum / global_count).item())
             self._metrics["train"]["clip_ratio/low_mean"].append((global_low_clip_sum / global_count).item())
             self._metrics["train"]["clip_ratio/high_mean"].append((global_high_clip_sum / global_count).item())
@@ -1699,6 +1710,8 @@ class AsyncGRPOTrainer(_BaseTrainer):
         metrics["batch/samples_per_step"].append(self._step_samples)
         if step_s is not None:
             metrics["perf/step_s"].append(step_s)
+        self.state.num_input_tokens_seen += int(self._step_forward_tokens)
+        metrics["num_tokens"] = [self.state.num_input_tokens_seen]
 
         if self.accelerator.is_main_process:
             metrics["perf/rollout_wait_s"].append(self._rollout_dataset.wait_s)
