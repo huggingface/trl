@@ -461,6 +461,18 @@ python trl/scripts/sft.py \
     --lora_alpha 16
 ```
 
+### Pre-quantized checkpoints
+
+Some checkpoints are released quantized, like [gpt-oss](https://huggingface.co/openai/gpt-oss-20b) in MXFP4 or [Mistral Medium 3.5](https://huggingface.co/mistralai/Mistral-Medium-3.5-128B) in FP8. These weights can't be trained in place, so when you pass such a checkpoint by name, the trainer loads it dequantized, with or without a `peft_config`. The model then takes the memory of its dequantized weights, for example about 42 GB in bfloat16 for gpt-oss-20b, against 13 GB for its MXFP4 checkpoint. To load it in bfloat16, as for any other model:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(model_init_kwargs={"dtype": "bfloat16"})
+```
+
+FP8 checkpoints require transformers 5.0.0 or later.
+
 ## Prompt Tuning
 
 Prompt tuning is another PEFT technique that learns soft prompts (continuous embeddings) prepended to the input, while keeping the entire model frozen. This is particularly effective for large models.

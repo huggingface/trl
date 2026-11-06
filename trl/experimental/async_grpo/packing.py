@@ -230,7 +230,7 @@ def _flash_attn():
         return get_kernel("kernels-community/aiter-flash-attn", version=2)
     # FlashAttention-3 has no kernels for Blackwell GPUs (compute capability 10 and above), FlashAttention-4 does
     if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
-        return get_kernel("kernels-community/flash-attn4", version=0)
+        return get_kernel("kernels-community/flash-attn4", version=1)
     return get_kernel("kernels-community/flash-attn3", version=1)
 
 
@@ -257,10 +257,10 @@ def tree_attention(
         query,
         key.index_select(0, tree_kv_index),
         value.index_select(0, tree_kv_index),
-        tree_cu_seqlens_q,
-        tree_cu_seqlens_k,
-        tree_max_seqlen_q,
-        tree_max_seqlen_k,
+        cu_seqlens_q=tree_cu_seqlens_q,
+        cu_seqlens_k=tree_cu_seqlens_k,
+        max_seqlen_q=tree_max_seqlen_q,
+        max_seqlen_k=tree_max_seqlen_k,
         softmax_scale=scaling,
         causal=True,
         window_size=(sliding_window - 1, 0) if sliding_window else (-1, -1),

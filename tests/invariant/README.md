@@ -41,7 +41,7 @@ Scalar series with absolute tolerance + zero-mean-residual. The residual check i
 
 ## Hardware
 
-Reference snapshots are recorded on **H100 80GB**, except `sft_fa2.json` (**H200**). The recording hardware is in each snapshot's `env` block.
+Reference snapshots are recorded on **H100 80GB**. The recording hardware is in each snapshot's `env` block.
 
 ## Running
 

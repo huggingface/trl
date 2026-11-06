@@ -380,8 +380,8 @@ You can test this function as follows:
 
 ```python
 >>> prompts = [
-...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
-...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+...     [{"role": "user", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "user", "content": "What is the result of (3 + 1) * 2?"}],
 ... ]
 >>> completions = [
 ...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
@@ -453,7 +453,7 @@ def math_reward_func(prompts, completions, task, **kwargs):
 def coding_reward_func(prompts, completions, task, **kwargs):
     rewards = []
     for prompt, completion, t in zip(prompts, completions, task):
-        if t == "coding":
+        if t == "code":
             # Calculate coding-specific reward
             works = test_code_solution(prompt, completion)
             reward = 1.0 if works else -1.0
