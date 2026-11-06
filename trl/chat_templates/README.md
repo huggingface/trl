@@ -339,14 +339,9 @@ Patched Gemma 3 template. Same diff as `gemma_training.jinja` (split the unified
 
 Patched GLM-4-MoE template. Diff vs `glm4moe.jinja`:
 
-Require both `<think>` and `</think>` to be present before parsing, to avoid incorrect splitting when the model generates only one tag:
+Close each assistant turn inside the generation block with the role marker that opens the next turn (`<|observation|>` after tool calls, otherwise `<|user|>` or `<|system|>`). GLM's original template has no end-of-turn token: a turn is ended by the next message's role marker, and GLM declares `<|user|>` and `<|observation|>` as end-of-sequence tokens, so the training template appends the marker to the assistant turn to keep the stop token in the loss mask, and the following message no longer renders its own marker.
 
-```diff
-- {%- if '</think>' in content %}
-+ {%- if '<think>' in content and '</think>' in content %}
-```
-
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. With `enable_thinking=False`, the thinking block stays outside the markers, since the generation prompt already ends with the empty `\n<think></think>`.
 
 ### `gptoss_training.jinja`
 
@@ -454,13 +449,6 @@ Split the assistant message into its own branch so the `&#123;% generation %&#12
 
 Patched Qwen3 template. Diff vs `qwen3.jinja`:
 
-Require both `<think>` and `</think>` to be present before parsing, to avoid incorrect splitting when the model generates only one tag:
-
-```diff
-- {%- if '</think>' in content %}
-+ {%- if '<think>' in content and '</think>' in content %}
-```
-
 Always include the thinking block regardless of message position. The original conditionally omits it based on `loop.last`, which changes the assistant rendering when a tool message is appended — breaking prefix-preservation:
 
 ```diff
@@ -476,7 +464,7 @@ Always include the thinking block regardless of message position. The original c
 + {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
 ```
 
-Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss.
+Wrap assistant message output with `{% generation %}` / `{% endgeneration %}` so that `return_assistant_tokens_mask=True` produces correct masks for SFT assistant-only loss. The part of the thinking block that the generation prompt pre-fills (`<think>\n\n</think>\n\n` with `enable_thinking=False`) stays outside the markers, since the prompt already ends with it. The other Qwen3 training templates do the same with what their own generation prompt pre-fills, such as `<think>\n`.
 
 ### `qwen3_v2_training.jinja`
 
@@ -500,15 +488,15 @@ Wrap assistant message output (both `content` and `tool_calls`) with `{% generat
 
 ### `qwen3_5_think_training.jinja` / `qwen3_5_nothink_training.jinja`
 
-Patched Qwen3.5 templates. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to each of the two Qwen3.5 base templates. The two training variants differ only in the default value of the `enable_thinking` flag, inherited from their respective base templates.
+Patched Qwen3.5 templates. Same diff as `qwen3_training.jinja` (drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to each of the two Qwen3.5 base templates. The two training variants differ only in the default value of the `enable_thinking` flag, inherited from their respective base templates.
 
 ### `qwen3_6_training.jinja`
 
-Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (require both `<think>` and `</think>` before parsing, drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
+Patched Qwen3.6 template. Same diff as `qwen3_training.jinja` (drop the `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted, wrap assistant output in `{% generation %}` / `{% endgeneration %}`), applied to the Qwen3.6 base template.
 
 ### `qwen3_8_training.jinja`
 
-Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss.
+Patched Qwen3.8 template. Diff vs `qwen3_8.jinja`: drop the `preserve_thinking` / `loop.index0 > ns.last_query_index` conditional so the thinking block is always emitted (prefix-preservation holds even when the caller passes `preserve_thinking=False`), and wrap assistant output in `{% generation %}` / `{% endgeneration %}` for SFT assistant-only loss, with the part of the thinking block that the generation prompt pre-fills left outside them.
 
 ### `smolvlm_training.jinja`
 

@@ -196,7 +196,7 @@ For more information on reward functions, see the [GRPO - Custom Reward Function
 
 A few things we've found helpful when working with OpenEnv environments and GRPO:
 
-- **Simple rewards work well.** In our experiments with Wordle and Sudoku, binary rewards (1.0 for success, 0.0 otherwise) gave cleaner training signals than shaped rewards with partial credit. GRPO compares completions within a group, so the relative ranking matters more than the absolute values.
+- **Make sure groups differ.** GRPO compares completions within a group, so the relative ranking matters more than the absolute values, and a group where every completion gets the same reward gives no signal. A binary reward (1.0 for success, 0.0 otherwise) is clean when the model succeeds some of the time. When it rarely does, add partial credit: the Sudoku example adds the fraction of cells filled to the solved reward, the Wordle example the greens of the best guess.
 - **Check the final state, not the path.** When possible, let the environment judge the outcome (e.g., "did the model solve the puzzle?") rather than checking if it followed a specific sequence of actions. This gives the model freedom to discover its own strategies.
 - **Test your reward before training.** Run a few episodes manually (see the [Wordle example notebook](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb)) to confirm the environment returns sensible rewards. If a capable model can't score higher than a random baseline, the reward signal may need adjustment.
 
@@ -212,6 +212,18 @@ args = GRPOConfig(
 ```
 
 If episodes are being cut short (model stops mid-game), this is likely the cause.
+
+### Long runs against a Space
+
+A Space can close WebSockets that stay open for hours (we saw it about every 2 hours). OpenEnv clients up to 0.11.0 then reconnect to a new environment session, and if a game was in progress, the next `step()` runs on a game the client never reset, with no error. Since OpenEnv 0.12.0, clients raise `SessionLostError` instead, so the game fails. To keep the drops away from training, open a new client in `reset()`, so each connection lasts one episode, and set `MAX_CONCURRENT_ENVS` a bit above the number of games played at once, since the old sessions are released asynchronously:
+
+```python
+def reset(self, **kwargs) -> str | None:
+    self.client.close()
+    self.client = TextArenaEnv(base_url=env_url).sync()
+    result = self.client.reset()
+    ...
+```
 
 ## Advanced example: Wordle
 
@@ -643,7 +655,7 @@ The integrations above are **white-box**: TRL drives the multi-turn loop itself.
 
 Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) or [`claude-code`](https://github.com/anthropics/claude-code) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` that drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
+For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
 
 > [!NOTE]
 > This path requires `openenv>=0.7.0`, the first release with the `TrainingTrace` capture API: `pip install "openenv>=0.7.0"`.
@@ -660,15 +672,15 @@ Each rollout runs in its own isolated session, with its own sandbox and its own 
 
 ### Wiring
 
-You pass a `HarnessRolloutWorker` to [`experimental.async_grpo.AsyncGRPOTrainer`] with `harness_adapter=None` to select loop-owning mode. The worker builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
+`HarnessAsyncGRPOTrainer` takes the model, config and dataset like [`experimental.async_grpo.AsyncGRPOTrainer`], with a session factory in place of `reward_funcs`, `tools` and `environment_factory`. Without a `harness_adapter`, the agent owns its loop. The trainer builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
 
 ```python
 from functools import partial
 
 from harbor_env.harness import HarborSessionFactory
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker
+from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer
 
 factory = partial(
     HarborSessionFactory,
@@ -680,18 +692,13 @@ factory = partial(
     model=model,
 )
 config = AsyncGRPOConfig(num_generations=8, max_concurrent_rollouts=8, vllm_server_base_url=vllm_url)
-worker = HarnessRolloutWorker(
-    config,                           # the worker reads its sampling and server settings from the config
-    harness_session_factory=factory,  # called by the worker with its sampling policy
-    harness_adapter=None,             # loop-owning: the agent runs its own loop
+trainer = HarnessAsyncGRPOTrainer(
+    model=model,
+    harness_session_factory=factory,  # called by the trainer with its sampling policy
+    args=config,
+    train_dataset=dataset,
     rollout_reward_fn=my_reward,      # outcome -> float | None
-    model_name=model,
-    dataset=dataset,
-    reward_funcs=[],
-    processing_class=tokenizer,
-    eos_token_ids=[tokenizer.eos_token_id],
 )
-trainer = AsyncGRPOTrainer(model=model, args=config, train_dataset=dataset, rollout_worker=worker)
 trainer.train()
 ```
 
@@ -725,7 +732,7 @@ For example, prompt `[10, 11]`, completion `[20, 21, 22]` and mask `[0, 0, 1, 0,
 
 The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. The task's verifier remains independent of token eligibility.
 
-Malformed captures fail at the OpenEnv boundary and stop the worker. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
+Malformed captures fail at the OpenEnv boundary and stop training. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
 ### Requirements
 
