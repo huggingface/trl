@@ -80,7 +80,7 @@ $$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 
 There is no `scale_rewards` option: the advantage is always scaled by the group's standard deviation. A completion for which every reward function returned `None` is left out of the group's mean and standard deviation and gets an advantage of zero.
 
-A group whose rewards are all equal has zero advantage everywhere, so the worker drops it instead of spending a forward and backward pass on it. The fraction of such groups is logged as `frac_reward_zero_std`. The step is filled from the groups that are kept, so many dropped groups means more generation per step. A dropped group still counts toward the epoch, which stays one pass over the prompts.
+A group whose rewards are all equal is dropped: with the default advantage it is zero everywhere, so training on it would cost a forward and backward pass and move nothing. The fraction of such groups is logged as `frac_reward_zero_std`. The step is filled from the groups that are kept, so many dropped groups means more generation per step. A dropped group still counts toward the epoch, which stays one pass over the prompts.
 
 ### Computing the loss
 
@@ -114,23 +114,28 @@ In both cases, the loss is normalized by the number of trained tokens in the mic
 
 While training, we record the following metrics:
 
+- `num_tokens`: The total number of tokens forwarded so far, prompts and completions. With tree packing, a prefix shared by several samples is counted once.
 - `completions/mean_length`: The average length of generated completions. When using tools, only non-tool tokens are counted.
 - `completions/min_length`: The minimum length of generated completions. When using tools, only non-tool tokens are counted.
 - `completions/max_length`: The maximum length of generated completions. When using tools, only non-tool tokens are counted.
 - `completions/clipped_ratio`: The ratio of truncated (clipped) completions, whose last turn does not end with an EOS token.
 - `tools/call_frequency`: The average number of tool calls per completion. Logged only when the model calls tools.
 - `tools/failure_frequency`: The fraction of tool calls that failed (the tool was not found or raised an exception). It is `0.0` for a completion with no tool call. Logged only when the model calls tools.
-- `rewards/{reward_func_name}`: The average reward from a specific reward function, over the trained samples. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
+- `rewards/{reward_func_name}/mean`: The average reward from a specific reward function, over the trained samples. When an environment owns the reward via `get_reward`, `{reward_func_name}` is the environment's class name.
+- `rewards/{reward_func_name}/group_std`: The standard deviation of the reward from a specific reward function, computed within each group and averaged over the trained samples.
 - `reward`: The overall average reward after summing rewards across functions, over every scored completion, including the groups that are then dropped. It is the policy's reward, so it is the one to track: `reward_kept` leaves out the groups whose rewards are all equal.
-- `reward_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples.
+- `reward_group_std`: The standard deviation of summed rewards across functions, computed within each group and averaged over the trained samples. It is what the advantage is divided by, unlike GRPO's `reward_std`, which is taken over the whole batch.
 - `reward_kept`: The average reward of the trained samples, which excludes the dropped groups.
 - `frac_reward_zero_std`: The fraction of groups with a reward std of zero (all answers are correct or incorrect), or with fewer than two scorable completions. These groups are dropped.
+- `sampling/sampling_logp_difference/mean`: The average absolute difference between the log probabilities returned by the sampler (vLLM) and the ones recomputed by the training model, over trained tokens.
+- `sampling/sampling_logp_difference/max`: The largest such absolute difference.
+- `sampling/importance_sampling_ratio/min`: The smallest importance sampling ratio  \\( r_{i,t}(\theta) \\) between the model and the sampler, over trained tokens, before the tokens outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]` are dropped.
+- `sampling/importance_sampling_ratio/mean`: The average such importance sampling ratio.
+- `sampling/importance_sampling_ratio/max`: The largest such importance sampling ratio.
 - `sampling/masked_mean`: The fraction of trained tokens dropped from the loss because their importance sampling ratio falls outside `[vllm_importance_sampling_clip_min, vllm_importance_sampling_clip_max]`.
 - `sampling/sampler_mass`: The average probability mass the sampler's `num_sampler_logprobs` most likely tokens cover. Logged only when `score_centering=True`.
-- `ratio`: The average importance sampling ratio  \\( r_{i,t}(\theta) \\) between the model and the sampler, over trained tokens.
 - `entropy`: Average entropy of token predictions across trained tokens.
 - `aux_loss`: The load-balancing auxiliary loss of a Mixture-of-Experts model, before it is scaled by `router_aux_loss_coef` and added to the loss. Logged only when the model is a MoE model and `router_aux_loss_coef` is nonzero.
-- `kl`: The average approximate KL divergence between the model and the sampler, over trained tokens, using the approximator of [Schulman et al. (2020)](http://joschu.net/blog/kl-approx.html). Unlike in GRPO, it is not measured against a reference model.
 - `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:  \\( \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right) \\). With `score_centering=True` the loss does not clip, so the `clip_ratio/*` metrics count the tokens outside the trust region.
 - `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
 - `clip_ratio/low_min`: The smallest per-completion fraction of tokens clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\).
@@ -139,7 +144,7 @@ While training, we record the following metrics:
 
 The other metrics describe the asynchronous pipeline. Metrics ending in `_total` count events during the logging window.
 
-- `rollout/duration_s`: The wall time of one rollout, from dispatch to its last turn.
+- `rollout/duration_s`: The wall time of one rollout, from dispatch until the rollout loop collects it.
 - `rollout/generated_tok_s`: The generation throughput, in generated tokens per second, since the previous report.
 - `rollout/concurrency`: The number of rollouts in flight to the vLLM server.
 - `rollout/concurrency_cap`: The current cap on rollouts in flight, which follows the server's load. See [Concurrency](#concurrency).
@@ -168,7 +173,7 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `sample/trained_tokens_mean`: The average number of trained tokens per sample.
 - `sample/rollout_queue_size`: The number of samples waiting in the rollout queue.
 - `sample/time_in_queue_s`: The time a sample waited in the rollout queue before being trained on.
-- `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. `ratio` and `kl` combine this staleness with the training-inference mismatch: `ratio` away from `1.0` or `kl` away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
+- `sample/staleness_mean`, `sample/staleness_max`: The number of weight updates between the policy that generated a sample and the one training on it. The `sampling/importance_sampling_ratio/*` and `sampling/sampling_logp_difference/*` metrics combine this staleness with the training-inference mismatch: a ratio away from `1.0` or a log-probability difference away from `0.0` at zero staleness points to the mismatch, for example a dtype difference with the server.
 - `sample/dropped_stale_total`: The number of samples dropped for exceeding `max_staleness`.
 - `batch/forwarded_tokens_per_step`, `batch/trained_tokens_per_step`: The number of forwarded and trained tokens per step, over all processes.
 - `batch/samples_per_step`, `batch/groups_per_step`: The number of samples and of distinct groups per step. They differ by the number of samples per group.
@@ -573,6 +578,53 @@ trainer = AsyncGRPOTrainer(
 
 and the reward will be computed as the sum of the rewards from each function.
 
+### Customizing the rollout loop
+
+Generation, rewards, advantages and filtering run in the rollout process, in [`experimental.async_grpo.AsyncRolloutLoop`]. To change one of them, subclass the loop, override the method for that step, and set the subclass as `loop_cls` on a trainer subclass. The trainer's constructor doesn't change.
+
+| Method | Called | Default |
+|---|---|---|
+| `filter_prompt(row_index, row, epoch)` | once per prompt, before generation | admits every prompt |
+| `generate_one(prompt, tools, group_id)` | once per rollout | the multi-turn tool loop |
+| `generate_one_turn(prompt_ids)` | once per sampling request | one vLLM request with the config's sampling settings |
+| `compute_advantages(group)` | once per group, after the rewards are summed into `group.rewards` | reward standardized within the group |
+| `setup()`, `close()` | when the loops start and stop | nothing |
+
+For example, a curriculum that stops sampling prompts the policy already solves, with its threshold in a config subclass:
+
+```python
+from dataclasses import dataclass
+
+import numpy as np
+
+from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer, AsyncRolloutLoop
+
+
+@dataclass
+class CurriculumConfig(AsyncGRPOConfig):
+    pass_rate_cap: float = 0.9
+
+
+class CurriculumRolloutLoop(AsyncRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return self.pass_rates.get(row_index, 0.0) < self.config.pass_rate_cap
+
+    async def setup(self):
+        self.pass_rates = {}
+
+    def compute_advantages(self, group):
+        scored = group.rewards[~np.isnan(group.rewards)]
+        if len(scored):
+            self.pass_rates[group.row_index] = float(np.mean(scored > 0))
+        return super().compute_advantages(group)
+
+
+class CurriculumTrainer(AsyncGRPOTrainer):
+    loop_cls = CurriculumRolloutLoop
+```
+
+Rewards are summed over `reward_funcs`, environments that define `get_reward`, and the `reward` a custom `generate_one` sets on its [`experimental.async_grpo.Rollout`]: to score with a judge, pass an async reward function, or score inside `generate_one`. `compute_advantages` runs for every group, including one that is then dropped because all its scored rewards are equal; the drop looks at the rewards, not at the advantages. The loop is built in a spawned process, so define the subclass at module level. Create clients in `setup`, which runs on the loop's event loop, rather than overriding `__init__`. A prompt that `filter_prompt` rejects is skipped for that epoch and counts toward it, like a dropped group. If it rejects every prompt of an epoch, the loop raises.
+
 ### Resuming from a checkpoint
 
 The base [`~transformers.Trainer`] resumes by skipping and replaying the batches it already trained on, which does not apply to a live rollout queue, so `ignore_data_skip` is always `True`. Instead, the index of the first prompt not yet trained on is saved to `rollout_state.json` alongside each checkpoint and restored on resume, so the worker fast-forwards to that prompt without replaying samples. It is the *trained* position, not the generator's: the worker runs ahead of training by the rollout queue depth, and those buffered samples are lost when the run ends, so resuming from the generator's position would skip prompts that were generated but never trained on. Streaming datasets ([`~datasets.IterableDataset`]) cannot be repositioned, so their worker restarts from the first prompt on resume.
@@ -843,6 +895,28 @@ Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, ...) can be trained on **tex
 ## AsyncGRPOConfig
 
 [[autodoc]] trl.experimental.async_grpo.AsyncGRPOConfig
+
+## AsyncRolloutLoop
+
+[[autodoc]] trl.experimental.async_grpo.AsyncRolloutLoop
+    - filter_prompt
+    - generate_one
+    - generate_one_turn
+    - compute_advantages
+    - setup
+    - close
+
+## Rollout
+
+[[autodoc]] trl.experimental.async_grpo.Rollout
+
+## TurnRecord
+
+[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.TurnRecord
+
+## RolloutGroup
+
+[[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
 
 ## RolloutWorkerProtocol
 
