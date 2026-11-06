@@ -1101,12 +1101,16 @@ class TestGRPOTrainer(TrlTestCase):
         assert trainer.ref_model.dtype == torch.bfloat16
         assert trainer.ref_model.config._attn_implementation == "eager"
 
+    @pytest.mark.skipif(
+        Version(transformers.__version__) < Version("5.0.0"),
+        reason="Qwen3-MoE experts are fused parameters since transformers-5.0.0",
+    )
     @require_peft
     def test_train_moe_peft_model(self):
         # Regression test for https://github.com/huggingface/trl/issues/5222. Before PEFT 0.20.0, only one adapter per
         # model was supported when the LoRA config uses `target_parameters` (see peft#3340, fixed in peft#3350), so no
         # "ref" adapter could be created and the reference log probs were computed with adapters disabled instead.
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM", dtype="float32")
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen3MoeForCausalLM", dtype="float32")
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         lora_config = LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"])
         model = get_peft_model(model, lora_config)
@@ -5239,6 +5243,7 @@ class TestGRPOTrainerVLM(TrlTestCase):
         not _SUPPORTS_RESPONSE_TEMPLATE,
         reason="DeepSeek-V3 response parsing is only provided as a new-style response template, which requires transformers>=5.13",
     )
+    @pytest.mark.xfail(reason="DeepSeek-V3's FP8 checkpoint fails to dequantize (see transformers#49873)")
     @require_response_parsing
     def test_train_with_tools_deepseekv3(self):
         # DeepSeek-V3's template only renders string tool-call arguments, so the trainer must swap in the training one
