@@ -768,6 +768,10 @@ def test_prepare_dataset_extended_uld_keeps_seam_token(tmp_path, qwen_tokenizer)
     assert teacher_completion_ids.count(qwen_tokenizer.eos_token_id) == 1
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_tokenizer, qwen_tokenizer):
     dataset = Dataset.from_dict({"text": ["Question: Answer."], "prompt": ["Question: "], "completion": ["Answer."]})
     row = _prepared_row(
@@ -798,6 +802,10 @@ def test_prepare_dataset_positional_uld_supports_sentencepiece(tmp_path, gemma4_
     assert qwen_tokenizer.decode(teacher_completion_ids) == "Answer." + qwen_tokenizer.eos_token
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_build_teacher_inputs_positional_uld_supports_sentencepiece(gemma4_tokenizer):
     input_ids, labels, _, byte_offsets = build_teacher_inputs_from_texts(
         gemma4_tokenizer,
@@ -827,6 +835,10 @@ class _NoBackendTokenizer:
         return self._tokenizer(*args, **kwargs)
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gemma4_tokenizer):
     slow_tokenizer = _NoBackendTokenizer(gemma4_tokenizer)
 
@@ -841,6 +853,10 @@ def test_build_teacher_inputs_positional_uld_works_without_backend_tokenizer(gem
     assert gemma4_tokenizer.decode(completion_ids) == "Answer." + gemma4_tokenizer.eos_token
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_prepare_dataset_positional_uld_works_without_backend_tokenizer(tmp_path, gemma4_tokenizer):
     dataset = Dataset.from_dict({"prompt": ["Question: "], "completion": ["Answer."]})
     trainer = GOLDTrainer(
@@ -939,6 +955,10 @@ def test_on_policy_completion_byte_offsets_match_encode_offsets(tmp_path, model_
     assert [tuple(offset) for offset in updated_slice["byte_offsets"][0, 1:].tolist()] == expected_offsets
 
 
+@pytest.mark.skipif(
+    Version(transformers.__version__) < Version("5.5.0"),
+    reason="Gemma4 models were introduced in transformers-5.5.0",
+)
 def test_encode_with_byte_offsets_drops_batch_padding(gemma4_tokenizer):
     # Gemma's tokenizer.json enables batch padding, so the shorter text would get pad tokens
     texts = ["a much longer first text", "short"]
