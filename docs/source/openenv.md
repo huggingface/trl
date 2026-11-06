@@ -36,7 +36,7 @@ This installs the **environment client** (e.g., `EchoEnv`) that communicates wit
 > You can find the install command for any environment on its HF Space page. Click the **⋮ (three dots)** menu and select **"Use this Space"** to see the install instructions.
 
 > [!TIP]
-> You can also install the core package from PyPI with `pip install "openenv[core]>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
+> You can also install the core package from PyPI with `pip install "openenv>=0.3.1"`, but note that environment-specific dependencies may need to be installed separately.
 
 For development, you can clone the OpenEnv repo and install locally:
 
@@ -196,7 +196,7 @@ For more information on reward functions, see the [GRPO - Custom Reward Function
 
 A few things we've found helpful when working with OpenEnv environments and GRPO:
 
-- **Simple rewards work well.** In our experiments with Wordle and Sudoku, binary rewards (1.0 for success, 0.0 otherwise) gave cleaner training signals than shaped rewards with partial credit. GRPO compares completions within a group, so the relative ranking matters more than the absolute values.
+- **Make sure groups differ.** GRPO compares completions within a group, so the relative ranking matters more than the absolute values, and a group where every completion gets the same reward gives no signal. A binary reward (1.0 for success, 0.0 otherwise) is clean when the model succeeds some of the time. When it rarely does, add partial credit: the Sudoku example adds the fraction of cells filled to the solved reward, the Wordle example the greens of the best guess.
 - **Check the final state, not the path.** When possible, let the environment judge the outcome (e.g., "did the model solve the puzzle?") rather than checking if it followed a specific sequence of actions. This gives the model freedom to discover its own strategies.
 - **Test your reward before training.** Run a few episodes manually (see the [Wordle example notebook](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb)) to confirm the environment returns sensible rewards. If a capable model can't score higher than a random baseline, the reward signal may need adjustment.
 
@@ -213,12 +213,24 @@ args = GRPOConfig(
 
 If episodes are being cut short (model stops mid-game), this is likely the cause.
 
+### Long runs against a Space
+
+A Space can close WebSockets that stay open for hours (we saw it about every 2 hours). OpenEnv clients up to 0.11.0 then reconnect to a new environment session, and if a game was in progress, the next `step()` runs on a game the client never reset, with no error. Since OpenEnv 0.12.0, clients raise `SessionLostError` instead, so the game fails. To keep the drops away from training, open a new client in `reset()`, so each connection lasts one episode, and set `MAX_CONCURRENT_ENVS` a bit above the number of games played at once, since the old sessions are released asynchronously:
+
+```python
+def reset(self, **kwargs) -> str | None:
+    self.client.close()
+    self.client = TextArenaEnv(base_url=env_url).sync()
+    result = self.client.reset()
+    ...
+```
+
 ## Advanced example: Wordle
 
-Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://huggingface.co/docs/openenv/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, and episode termination via exceptions.
+Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.html) using the [`TextArena`](https://huggingface.co/docs/openenv/environments/textarena) environment. This demonstrates multi-turn interaction, cumulative feedback handling, a reward split into several terms, and episode termination via exceptions.
 
 > [!NOTE]
-> You can explore the notebook version of this example in [the OpenEnv Wordle GRPO example](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb).
+> The [OpenEnv Wordle tutorial](https://huggingface.co/docs/openenv/tutorials/wordle-grpo) covers the whole pipeline: the SFT data, the SFT warmup, this GRPO step and the evaluation, with hardware and costs. The notebook version of this example is [`grpo_wordle.ipynb`](https://github.com/huggingface/trl/blob/main/examples/grpo_wordle/grpo_wordle.ipynb).
 
 ### The TextArena Environment
 
@@ -228,7 +240,7 @@ Let's train a model to play [Wordle](https://www.nytimes.com/games/wordle/index.
 
 ### Why Wordle?
 
-Wordle is a good benchmark for environment-based RL because it requires reasoning about feedback, is purely text-based, and models from 1B parameters can improve at it. Each guess is only 8 tokens, making it lightweight to experiment with.
+Wordle is a good benchmark for environment-based RL because it requires reasoning about feedback, is purely text-based, and models from 1B parameters can improve at it.
 
 > [!NOTE] How does Wordle work?
 > Wordle is a word guessing game where the player has to guess a 5-letter word in 6 attempts. After each guess, the environment provides letter-by-letter feedback:
@@ -240,22 +252,33 @@ Wordle is a good benchmark for environment-based RL because it requires reasonin
 >
 > X = not in the word, G = correct position (green), Y = wrong position (yellow). Here, "U" is correct and in place, "E" is in the word but misplaced.
 
+### Start from an SFT warmup
+
+Qwen3-1.7B almost never wins a game, so GRPO from the base model has little to learn from: a group of games where none is won gives no signal. The example starts from [`openenv/Qwen3-1.7B-Wordle-SFT`](https://huggingface.co/openenv/Qwen3-1.7B-Wordle-SFT), trained for one epoch on [1,000 games played by a solver](https://huggingface.co/datasets/openenv/wordle-tool-calls-sft) in the same tool-calling format, with a short reasoning before each guess.
+
 ### Environment class
 
-The `WordleEnv` class wraps the TextArena client and exposes `guess()` as the tool:
+The `WordleEnv` class wraps the TextArena client, exposes `guess()` as the tool and keeps what the reward needs:
 
 ```python
+import re
+
 from textarena_env import TextArenaAction, TextArenaEnv
+
+FEEDBACK = re.compile(r"Feedback:\n([A-Z ]+)\n([GYX ]+)")
 
 class WordleEnv:
     def __init__(self):
-        self.client = TextArenaEnv(base_url="https://openenv-wordle.hf.space")
+        self.client = TextArenaEnv(base_url="https://<user>-wordle.hf.space")
 
     def reset(self, **kwargs) -> str | None:
         result = self.client.reset()
         self._last_full_feedback = result.observation.messages[0].content
-        self.reward = 0.0
         self.done = False
+        self.won = False
+        self.num_guesses = 0
+        self.best_greens = 0
+        self.invalid_moves = 0
         return self._last_full_feedback
 
     def guess(self, guess: str) -> str:
@@ -274,10 +297,14 @@ class WordleEnv:
         _full_feedback = result.observation.messages[0].content
         feedback = _full_feedback[len(self._last_full_feedback):]
         self._last_full_feedback = _full_feedback
-        if "You attempted an invalid move" in feedback:
-            self.reward = 0.0
+        if "invalid move" in feedback.lower():
+            self.invalid_moves += 1
         else:
-            self.reward = result.reward
+            self.num_guesses += 1
+            match = FEEDBACK.search(feedback)
+            if match:
+                self.best_greens = max(self.best_greens, match.group(2).count("G"))
+            self.won = result.done and result.reward >= 1.0
         self.done = result.done
         return feedback
 ```
@@ -287,42 +314,58 @@ Key design choices:
 - **`reset()`** returns the initial game message as the first observation the model sees.
 - **`guess()`** is the only tool. The model calls it each turn with a 5-letter word.
 - **Cumulative feedback slicing**: TextArena returns the full game history each turn. We slice out only the new part to avoid repeating context.
-- **Exception on done**: If the model tries to guess after the game ends, `guess()` raises a `ValueError`. The trainer catches this and feeds `"Game over."` back to the model as a tool response. The model learns to stop calling tools after this signal.
+- **Exception on done**: If the model tries to guess after the game ends, `guess()` raises a `ValueError`. The trainer catches this and feeds `"Game over."` back to the model as a tool response, and counts it in `tools/failure_frequency`.
 
-### Reward function and training
+### Reward functions and training
+
+The environment's own reward pays a win the same after 1 guess or 6, and pays partial credit only at the end of a game. With thinking on, a policy can learn to think less and use all 6 guesses to reach the end. Three reward terms avoid that:
 
 ```python
 from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
 
-def reward_func(environments, **kwargs) -> list[float]:
-    return [env.reward for env in environments]
+def reward_win(environments, **kwargs) -> list[float]:
+    return [1.0 + 0.5 * (1 - env.num_guesses / 6) if env.won else 0.0 for env in environments]
+
+def reward_partial(environments, **kwargs) -> list[float]:
+    return [0.0 if env.won else 0.1 * env.best_greens for env in environments]
+
+def reward_invalid(environments, **kwargs) -> list[float]:
+    return [-0.1 * env.invalid_moves for env in environments]
 
 prompt = """You are an expert Wordle solver with deep knowledge of English vocabulary...
 Use the tool `guess` to make a guess."""
 
-dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}]] * 1000})
+dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": prompt}]] * 600})
 
 trainer = GRPOTrainer(
-    model="Qwen/Qwen3-1.7B",
-    reward_funcs=reward_func,
+    model="openenv/Qwen3-1.7B-Wordle-SFT",
+    reward_funcs=[reward_win, reward_partial, reward_invalid],
     train_dataset=dataset,
     args=GRPOConfig(
         use_vllm=True,
         vllm_mode="colocate",
-        chat_template_kwargs={"enable_thinking": False},
-        max_completion_length=1024,
-        num_generations=4,
-        gradient_accumulation_steps=64,
+        chat_template_kwargs={"enable_thinking": True},
+        max_completion_length=4096,
+        max_tool_calling_iterations=12,
+        vllm_importance_sampling_mode="token_truncate",
+        num_generations=16,
+        per_device_train_batch_size=8,
+        gradient_accumulation_steps=8,
+        learning_rate=1e-6,
+        lr_scheduler_type="constant",
+        max_steps=150,
     ),
     environment_factory=WordleEnv,
 )
 trainer.train()
 ```
 
-The environment returns `1.0` if the model wins and `0.0` otherwise.
+A win pays more the faster it comes (1.42 in one guess, 1.0 in six), a loss pays for the best guess of the game whether or not it ended, and each invalid move costs 0.1. TRL logs each term separately, so `rewards/reward_win/mean` goes up with the win rate.
 
 ### Running the example
+
+Each step plays 64 games, one environment session each. [Duplicate the `openenv/wordle` Space](https://huggingface.co/spaces/openenv/wordle?duplicate=true) and set the `MAX_CONCURRENT_ENVS=64` variable on your copy.
 
 <hfoptions id="wordle_vllm_mode">
 
@@ -331,10 +374,10 @@ The environment returns `1.0` if the model wins and `0.0` otherwise.
 **Colocate mode (1 GPU, recommended)**
 
 ```bash
-python examples/grpo_wordle/grpo_wordle.py --vllm-mode colocate
+python examples/grpo_wordle/grpo_wordle.py --vllm-mode colocate --env-url https://<user>-wordle.hf.space
 ```
 
-This runs vLLM in the same process as training, requiring only a single GPU.
+This runs vLLM in the same process as training, requiring only a single GPU. In our run, 150 steps took about 2 hours 15 minutes on one A100 80GB.
 
 </hfoption>
 
@@ -344,13 +387,14 @@ This runs vLLM in the same process as training, requiring only a single GPU.
 
 ```bash
 # Terminal 1: Start vLLM inference server
-CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve Qwen/Qwen3-1.7B --host 0.0.0.0 --port 8000 \
+CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 vllm serve openenv/Qwen3-1.7B-Wordle-SFT --host 0.0.0.0 --port 8000 \
     --weight-transfer-config '{"backend": "nccl"}' \
     --logprobs-mode processed_logprobs \
     --max-logprobs -1
 
 # Terminal 2: Run GRPO training with OpenEnv
-CUDA_VISIBLE_DEVICES=1 python examples/grpo_wordle/grpo_wordle.py --vllm-mode server --vllm-server-url http://localhost:8000
+CUDA_VISIBLE_DEVICES=1 python examples/grpo_wordle/grpo_wordle.py --vllm-mode server --vllm-server-url http://localhost:8000 \
+    --env-url https://<user>-wordle.hf.space
 ```
 
 </hfoption>
@@ -359,14 +403,15 @@ CUDA_VISIBLE_DEVICES=1 python examples/grpo_wordle/grpo_wordle.py --vllm-mode se
 
 ### Results
 
-The model improves its performance by reducing repetitions and increasing correct guesses. However, Qwen3-1.7B with `enable_thinking=False` is not able to consistently win the game.
+From our run, with one training run per model, on the same 30 words played greedily:
 
-<iframe src="https://burtenshaw-wordle-grpo.hf.space?project=group-Qwen-Qwen3-17B&metrics=reward&runs=run-2025-10-26_09-39-49,run-2025-10-26_08-04-49&sidebar=hidden&navbar=hidden" style="width:100%; max-width:800px; height:500px; border:0;"></iframe>
+| Model | Wins | Guesses per win | Invalid guesses |
+|---|---|---|---|
+| Qwen3-1.7B | 0/30 | - | 24 |
+| + SFT | 10/30 | 3.2 | 41 |
+| + SFT + GRPO ([model](https://huggingface.co/openenv/Qwen3-1.7B-Wordle-SFT-GRPO)) | 20/30 | 4.1 | 3 |
 
-> [!NOTE]
-> With `enable_thinking=False` (the default in these examples), small models like Qwen3-1.7B can learn to improve their guesses but should not be expected to consistently solve the game. For significantly better results, use larger models or enable thinking mode (`enable_thinking=True`), which allows the model to reason before making a guess at the cost of longer completions.
-
-We experimented with larger models like [`gpt-oss-20b`](https://huggingface.co/openai/gpt-oss-20b) and found that it was able to consistently win the game, though this requires significantly more compute.
+GRPO mostly removed repeated and made-up words and won more games. Most of the new wins took 4 to 6 guesses, so the guesses per win went up. The 30 words come from the 156 nouns TextArena draws its secrets from, which the models also saw in training, and a new run will land a few wins away (two SFT runs with the same recipe won 10 and 13 games). Watch the three models play in the [Wordle Arena](https://huggingface.co/spaces/openenv/wordle-arena) and see the training curves on [Trackio](https://huggingface.co/spaces/openenv/wordle-runs).
 
 ## Multi-environment training
 
@@ -610,7 +655,10 @@ The integrations above are **white-box**: TRL drives the multi-turn loop itself.
 
 Some agents cannot be driven this way because they own their own loop. A production coding agent harness like [`opencode`](https://opencode.ai) or [`claude-code`](https://github.com/anthropics/claude-code) has its own planner, tool set, context management, and stop condition. You want to train that exact agent, not a reimplementation of it.
 
-For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`] and a `HarnessRolloutWorker` that drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
+For this, TRL provides an experimental **black-box (loop-owning)** path built on [`experimental.async_grpo.AsyncGRPOTrainer`]: `HarnessAsyncGRPOTrainer` drives an OpenEnv session factory. The agents and their sandboxes come from [Harbor](https://huggingface.co/docs/openenv/environments/harbor), served through OpenEnv with `openenv harbor serve`, so every agent Harbor installs is trainable the same way: you pick one with `--harness`. See [`examples/async_grpo_harbor`](https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor) for a complete example, including a Hugging Face Jobs launcher.
+
+> [!NOTE]
+> This path requires `openenv>=0.7.0`, the first release with the `TrainingTrace` capture API: `pip install "openenv>=0.7.0"`.
 
 ### How it works
 
@@ -620,19 +668,19 @@ TRL does not sample each turn here. The agent runs to completion on its own, and
 2. When the agent stops, the task's own verifier scores the result, and TRL receives the validated `TrainingTrace` from OpenEnv and builds the training rows from its token ids and masks. TRL does not re-tokenize the captured prompts.
 3. GRPO trains on those rows. The reward is propagated to every trained token through the group-relative advantage, and the new weights are synced back into the same vLLM server.
 
-Each rollout runs in its own isolated session, with its own sandbox and its own capture session. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_inflight_tasks` setting controls how many rollouts run at the same time, and the server's `MAX_CONCURRENT_ENVS` must be at least `max_inflight_tasks + 1` (the factory keeps one extra connection for task metadata).
+Each rollout runs in its own isolated session, with its own sandbox and its own capture session. The isolation matters for two reasons: the proxy has to capture exactly that rollout's tokens, and one rollout must not interfere with another. The `max_concurrent_rollouts` setting controls how many rollouts run at the same time, and the server's `MAX_CONCURRENT_ENVS` must be at least `max_concurrent_rollouts + 1` (the factory keeps one extra connection for task metadata).
 
 ### Wiring
 
-You pass a `HarnessRolloutWorker` to [`experimental.async_grpo.AsyncGRPOTrainer`] with `harness_adapter=None` to select loop-owning mode. The worker builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
+`HarnessAsyncGRPOTrainer` takes the model, config and dataset like [`experimental.async_grpo.AsyncGRPOTrainer`], with a session factory in place of `reward_funcs`, `tools` and `environment_factory`. Without a `harness_adapter`, the agent owns its loop. The trainer builds the session factory with its own sampling policy, so you pass it a callable such as `partial(HarborSessionFactory, ...)` rather than a built factory. Each session returns an OpenEnv `TrainingTrace` containing exact engine tokens, behavior logprobs and prefilled masks. `rollout_reward_fn` is optional; without it, TRL uses the session's verifier reward.
 
 ```python
 from functools import partial
 
 from harbor_env.harness import HarborSessionFactory
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker
+from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer
 
 factory = partial(
     HarborSessionFactory,
@@ -643,19 +691,14 @@ factory = partial(
     llm_url=vllm_url,
     model=model,
 )
-worker = HarnessRolloutWorker(
-    harness_session_factory=factory,  # called by the worker with its sampling policy
-    harness_adapter=None,             # loop-owning: the agent runs its own loop
+config = AsyncGRPOConfig(num_generations=8, max_concurrent_rollouts=8, vllm_server_base_url=vllm_url)
+trainer = HarnessAsyncGRPOTrainer(
+    model=model,
+    harness_session_factory=factory,  # called by the trainer with its sampling policy
+    args=config,
+    train_dataset=dataset,
     rollout_reward_fn=my_reward,      # outcome -> float | None
-    model_name=model,
-    dataset=dataset,
-    reward_funcs=[],
-    processing_class=tokenizer,
-    num_generations=8,
-    max_inflight_tasks=8,
-    vllm_server_url=vllm_url,
 )
-trainer = AsyncGRPOTrainer(model=model, args=config, train_dataset=dataset, rollout_worker=worker)
 trainer.train()
 ```
 
@@ -689,7 +732,7 @@ For example, prompt `[10, 11]`, completion `[20, 21, 22]` and mask `[0, 0, 1, 0,
 
 The producer excludes auxiliary calls and discarded retries. There are no `train_turn_fn` or `agent_turn_fn` parameters in this API. Existing integrations must move selection into their OpenEnv masks. The task's verifier remains independent of token eligibility.
 
-Malformed captures fail at the OpenEnv boundary and stop the worker. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
+Malformed captures fail at the OpenEnv boundary and stop training. Transport failures remain unscorable. Rewritten histories start separate rows by default, preserving the sampled tokens and logprobs. Multiple rows still share the rollout reward; this API does not change GRPO's weighting.
 
 ### Requirements
 

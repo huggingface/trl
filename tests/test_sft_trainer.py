@@ -328,6 +328,9 @@ class TestSFTTrainer(TrlTestCase):
                 ),
             ),
             "trl-internal-testing/tiny-GptOssForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeForCausalLM",
+            "trl-internal-testing/tiny-GraniteMoeHybridForCausalLM",
+            "trl-internal-testing/tiny-PhimoeForCausalLM",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             "trl-internal-testing/tiny-Qwen2ForCausalLM-R1-Distill",
             "trl-internal-testing/tiny-Qwen3MoeForCausalLM",
@@ -456,11 +459,30 @@ class TestSFTTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    def test_train_model(self):
-        model = AutoModelForCausalLM.from_pretrained(
+    @pytest.mark.parametrize(
+        "model_id",
+        [
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            dtype="float32",
-        )
+            # Loaded with `AutoModelForCausalLM`, a Qwen3.5 checkpoint gives its language model alone
+            # (`Qwen3_5ForCausalLM`, model type `qwen3_5_text`), which is how Qwen3.5 is usually trained on text
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-NoThink",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+            pytest.param(
+                "trl-internal-testing/tiny-Qwen3_5MoeForConditionalGeneration-3.6",
+                marks=pytest.mark.skipif(
+                    Version(transformers.__version__) < Version("5.2.0"),
+                    reason="Qwen3.5 models were introduced in transformers-5.2.0",
+                ),
+            ),
+        ],
+    )
+    def test_train_model(self, model_id):
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="float32")
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
@@ -1126,20 +1148,6 @@ class TestSFTTrainer(TrlTestCase):
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
 
-    def test_padding_free_without_packing_and_max_length_raises(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train[:2]")
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            max_length=16,
-            padding_free=True,
-            report_to="none",
-        )
-
-        with pytest.raises(ValueError, match="`max_length` is not enforced"):
-            SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
-
     def test_train_with_iterable_dataset(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
@@ -1170,7 +1178,6 @@ class TestSFTTrainer(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             padding_free=True,
-            max_length=None,  # padding-free without packing doesn't enforce max_length
             model_init_kwargs={
                 "attn_implementation": (
                     "kernels-community/aiter-flash-attn@v2" if torch.version.hip else "kernels-community/flash-attn2"
@@ -1475,11 +1482,12 @@ class TestSFTTrainer(TrlTestCase):
 
         assert trainer.train_dataset[:]["labels"] == [[6, 7, 8]]
 
-    def test_dataset_truncated_to_max_length(self):
-        """Dataset preparation truncates every example to `max_length`."""
+    @pytest.mark.parametrize("padding_free", [False, True])
+    def test_dataset_truncated_to_max_length(self, padding_free):
+        """Dataset preparation truncates every example to `max_length`, with or without padding-free."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_length=4, padding_free=padding_free, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
