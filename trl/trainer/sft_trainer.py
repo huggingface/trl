@@ -978,7 +978,11 @@ class SFTTrainer(_BaseTrainer):
                     "to at least 2."
                 )
 
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
+        if (
+            args.assistant_only_loss
+            and not is_conversational(dataset_sample)
+            and not is_conversational_from_value(dataset_sample)
+        ):
             raise ValueError(
                 "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
                 "supported for conversational datasets."

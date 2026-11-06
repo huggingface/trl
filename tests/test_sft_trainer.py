@@ -1367,6 +1367,29 @@ class TestSFTTrainer(TrlTestCase):
             assert any(label != -100 for label in labels)  # assistant tokens contribute to the loss
             assert any(label == -100 for label in labels)  # non-assistant tokens are masked
 
+    def test_dataset_preparation_sharegpt_assistant_only_loss(self):
+        """ShareGPT roles ("human", "gpt") must reach the chat template as "user" and "assistant"."""
+        dataset = Dataset.from_dict(
+            {
+                "conversations": [
+                    [{"from": "human", "value": "What color is the sky?"}, {"from": "gpt", "value": "It is blue."}],
+                    [{"from": "human", "value": "Where is the sun?"}, {"from": "gpt", "value": "In the sky."}],
+                ]
+            }
+        )
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
+
+        assert len(trainer.train_dataset) == 2
+        tokenizer = trainer.processing_class
+        for example, reply in zip(trainer.train_dataset, ["It is blue.", "In the sky."], strict=True):
+            trained = tokenizer.decode([label for label in example["labels"] if label != -100])
+            assert reply in trained
+            assert "sky?" not in trained and "sun?" not in trained  # the user turn is masked
+
     @pytest.mark.skipif(
         Version(transformers.__version__) < Version("5.18.0.dev0"),
         reason="Processors return correct assistant masks for images since transformers 5.18.0",

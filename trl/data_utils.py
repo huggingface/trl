@@ -971,6 +971,7 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     This function modifies conversational data to align with OpenAI's ChatML format:
     - Replaces the key `"from"` with `"role"` in message dictionaries.
     - Replaces the key `"value"` with `"content"` in message dictionaries.
+    - Replaces the ShareGPT roles `"human"` and `"gpt"` with `"user"` and `"assistant"`.
     - Renames `"conversations"` to `"messages"` for consistency with ChatML.
 
     Args:
@@ -1003,7 +1004,9 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
             for message in messages:
                 if isinstance(message, dict):
                     if "from" in message:
-                        message["role"] = message.pop("from")
+                        # Chat templates don't know the ShareGPT roles: Qwen3 renders nothing for them
+                        role = message.pop("from")
+                        message["role"] = {"human": "user", "gpt": "assistant"}.get(role, role)
                     if "value" in message:
                         message["content"] = message.pop("value")
 
