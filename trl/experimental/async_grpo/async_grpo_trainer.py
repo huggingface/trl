@@ -614,8 +614,9 @@ class DataCollatorForRollout(DataCollatorMixin):
         compute a number rank 0 already had.
         """
         # A training row's tokens split in two: those the loss is taken over (`completion_mask == 1`) and those merely
-        # forwarded — the prompt, tool results, and any tail a realign demoted to context. FLOPs are spent on both, so
-        # both are worth a number, and their ratio is what says how much of the forward earns no gradient.
+        # forwarded — the prompt, tool results, masked tokens, and the earlier turns a fork re-sends as context. FLOPs
+        # are spent on both, so both are worth a number, and their ratio is what says how much of the forward earns no
+        # gradient.
         forwarded = [len(example["input_ids"]) for example in all_examples]
         trained = [int(example["completion_mask"].sum()) for example in all_examples]
         self.metrics["sample/forwarded_tokens_mean"].append(sum(forwarded) / len(forwarded))
