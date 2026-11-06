@@ -211,6 +211,40 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
                 assert master.is_pinned()
                 assert not torch.equal(master, master.bfloat16().float())
 
+    @pytest.mark.skipif("TRL_TEST_ZERO_SYNC_DP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
+    def test_train_replicas_body(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        training_args = ZeroSyncGRPOConfig(
+            output_dir=os.environ["TRL_TEST_ZERO_SYNC_DP_OUTPUT_DIR"],
+            learning_rate=0.1,  # use higher lr because gradients are tiny and default lr can stall updates
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            gradient_accumulation_steps=2,  # the replicas wait for every micro-batch of the step before pausing
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
+            max_steps=2,
+            report_to="none",
+        )
+        trainer = ZeroSyncGRPOTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=dummy_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        # Every parameter has moved, and the replicas, which each update a share of them, hold the same weights
+        params = {n: param.detach().cpu() for n, param in trainer.model.named_parameters()}
+        for n, param in previous_trainable_params.items():
+            assert not torch.equal(param.cpu(), params[n]), f"Parameter {n} has not changed."
+        gathered = [None] * int(os.environ["WORLD_SIZE"])
+        torch.distributed.all_gather_object(gathered, params)
+        for other in gathered[1:]:
+            for n, param in params.items():
+                assert torch.equal(param, other[n]), f"Parameter {n} differs between replicas."
+
     @pytest.mark.skipif("TRL_TEST_ZERO_SYNC_TP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
     def test_train_tensor_parallel_body(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")

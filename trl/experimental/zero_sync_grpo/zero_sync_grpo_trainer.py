@@ -746,20 +746,20 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._pause.__exit__(None, None, None)
             self._pause = None
 
-    def _drain(self, timeout: float) -> None:
-        # Collect and score every completion the engine has finished; a group's advantages are computed once its last
-        # completion lands. A dead background thread never raises from `get_result` (it returns None forever,
-        # transformers#48334), so poll `fatal_error` to fail fast instead of spinning.
-        while True:
-            result = self._manager.get_result(timeout=timeout)
-            if result is None:
-                fatal_error = self._manager.background_thread_status.fatal_error
-                if fatal_error is not None:
-                    raise RuntimeError("The continuous batching background thread died.") from fatal_error
-                return
-            self._advance_rollout(self._inflight.pop(result.request_id), result)
-            # A rollout that ended freed a slot; a rollout that called a tool took its own slot back
-            self._fill_slots()
+    def _receive(self, timeout: float) -> None:
+        # Read one finished completion, if one lands within `timeout`, and score it; a group's advantages are computed
+        # once its last completion lands. One at a time, so the caller sees the ready count after every completion. A
+        # dead background thread never raises from `get_result` (it returns None forever, transformers#48334), so
+        # poll `fatal_error` to fail fast instead of spinning.
+        result = self._manager.get_result(timeout=timeout)
+        if result is None:
+            fatal_error = self._manager.background_thread_status.fatal_error
+            if fatal_error is not None:
+                raise RuntimeError("The continuous batching background thread died.") from fatal_error
+            return
+        self._advance_rollout(self._inflight.pop(result.request_id), result)
+        # A rollout that ended freed a slot; a rollout that called a tool took its own slot back
+        self._fill_slots()
 
     def _advance_rollout(self, rollout: dict[str, Any], result) -> None:
         # One turn just finished: record it, and either spawn the next turn (the model called tools) or score the
@@ -967,18 +967,23 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         wait_start = time.perf_counter()
         if self._replica_group is None:
             while len(self._ready) < num_samples:
-                self._drain(timeout=1.0)
+                self._receive(timeout=1.0)
         else:
             # The replicas draw one pool between them. A replica whose completions come back short would otherwise
             # fill its batch early, train, and then sit at the gradient sum waiting for a replica still decoding,
             # and it would carry a lighter forward while that one carries the heavy tail alone. Waiting for the
-            # count to cover every replica, then handing the samples out, is what keeps the steps aligned.
-            while True:
+            # count to cover every replica, then handing the samples out, is what keeps the steps aligned. The sum of
+            # the ready counts travels while each replica keeps scoring, so one busy with a slow reward never holds up
+            # the other, and both see the same sums in the same order, so they stop on the same one.
+            total = 0
+            while total < num_samples * self.dp_size:
                 counts = torch.tensor([len(self._ready)])
-                torch.distributed.all_reduce(counts, group=self._replica_cpu_group)
-                if int(counts.item()) >= num_samples * self.dp_size:
-                    break
-                self._drain(timeout=0.2)
+                summed = torch.distributed.all_reduce(counts, group=self._replica_cpu_group, async_op=True)
+                self._receive(timeout=0.01)
+                while not summed.is_completed():
+                    self._receive(timeout=0.01)
+                summed.wait()
+                total = int(counts.item())
         # Logged once per optimizer step, in `training_step`
         self._step_generation_wait += time.perf_counter() - wait_start
         # Allocator retries are the allocator freeing its cache and asking the driver again: a sign that the KV pool
