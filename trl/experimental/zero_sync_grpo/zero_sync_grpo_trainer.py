@@ -487,8 +487,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._replica_group = None
         self._replica_cpu_group = None
         self._parameter_owner: dict[str, int] = {}
+        rank = int(os.environ.get("RANK", "0"))
         if self.dp_size > 1:
-            rank = int(os.environ.get("RANK", "0"))
             # Every rank builds every group, in the same order, and keeps the one it belongs to. The gradients and
             # the updated parameters travel over NCCL inside the pause; the sample counts the replicas exchange while
             # the engine is decoding travel over gloo, so that no NCCL work of the trainer's is ever in flight next
@@ -498,11 +498,20 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in ranks]
             self._replica_group = groups[rank % args.tp_size]
             self._replica_cpu_group = cpu_groups[rank % args.tp_size]
+        # The ranks of a tensor parallel group generate together and must train on the same batch, so one of them runs
+        # the rollouts: the first rank alone submits the requests, reads the completions, runs the tools and the reward
+        # functions, computes the advantages and picks the batch, which it sends to the others over gloo.
+        self._tp_driver = rank - rank % args.tp_size
+        self._is_tp_driver = rank == self._tp_driver
+        self._tp_cpu_group = None
+        if args.tp_size > 1:
+            tp_ranks = [list(range(start, start + args.tp_size)) for start in range(0, world_size, args.tp_size)]
+            tp_cpu_groups = [torch.distributed.new_group(group_ranks, backend="gloo") for group_ranks in tp_ranks]
+            self._tp_cpu_group = tp_cpu_groups[rank // args.tp_size]
         # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
         # step, see `_pause_generation`.
         self._pause = None
         self._step_generation_wait = 0.0
-        self._request_counter = 0
 
         # Tools
         self.tools = tools
@@ -709,28 +718,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         """
         while len(self._inflight) < self.rollouts_in_flight and self._pending:
             rollout = self._pending.popleft()
-            request_id = self._next_request_id()
-            self._manager.add_request(
-                rollout["prompt_ids"], request_id=request_id, max_new_tokens=self.max_completion_length
-            )
+            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
             self._inflight[request_id] = rollout
-
-    def _next_request_id(self) -> str:
-        """Name a request identically on every rank.
-
-        `add_request` only queues on the tensor parallel driver and returns nothing elsewhere, while the results come
-        back on every rank. Every rank submits the same rollouts in the same order, so a counter names them the same.
-        """
-        self._request_counter += 1
-        return f"zero-sync-{self._request_counter}"
 
     def _pause_generation(self, mode: str) -> None:
         """Park the engine for the training step that follows, until the next `_prepare_inputs` resumes it.
 
         Generation and training take turns: the forward, backward and optimizer step get the device to themselves, and
         under tensor parallelism the trainer's collectives never run next to the engine's. The engine grants the pause
-        at the same step on every rank of a tensor parallel group, whichever rank asked first, so once it is granted
-        every rank of the group holds the same completions; what each rank had read by then can differ.
+        at the same step on every rank of a tensor parallel group, and resumes only once every rank of the group has
+        released it: the group's first rank asks, and the others join once it has sent them the batch.
         """
         if self._pause is not None:
             return
@@ -788,10 +785,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             rollout["completion"].extend(tool_messages)
             rollout["iterations"] += 1
             rollout["prompt_ids"] = self._tokenize_conversation(rollout["messages"])
-            request_id = self._next_request_id()
-            self._manager.add_request(
-                rollout["prompt_ids"], request_id=request_id, max_new_tokens=self.max_completion_length
-            )
+            request_id = self._manager.add_request(rollout["prompt_ids"], max_new_tokens=self.max_completion_length)
             self._inflight[request_id] = rollout
             return
 
@@ -886,7 +880,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
         A sample is data: nothing ties it to the replica that generated it. Pooling them lets the batches be built for
         balance instead of for locality, so the replicas reach their forward together and carry the same load. Every
-        rank runs the same assignment over the same pool, so no one has to be told the result.
+        replica's first rank runs the same assignment over the same pool, so no one has to be told the result.
         """
         pool: list[Any] = [None] * self.dp_size
         torch.distributed.all_gather_object(pool, list(self._ready), group=self._replica_group)
@@ -937,6 +931,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             self._init_manager()
         self._resume_generation()
 
+        if not self._is_tp_driver:
+            # The group's first rank runs the rollouts and sends the batch once it has paused the engine. This rank
+            # then joins the pause: the engine leaves it only once every rank of the group has released it.
+            wait_start = time.perf_counter()
+            batch = [None]
+            torch.distributed.broadcast_object_list(batch, src=self._tp_driver, group=self._tp_cpu_group)
+            self._step_generation_wait += time.perf_counter() - wait_start
+            samples = batch[0]
+            if samples:
+                self._pause_generation(mode)
+                # The engine delivers every completion on every rank of the group, and only the first rank reads them
+                while self._manager.get_result(timeout=0) is not None:
+                    pass
+            return samples
+
         # Prompts arrive a batch at a time while rollouts finish one at a time, so the queue is kept a batch deeper
         # than the slots: without that spare a burst of completions would leave slots idle until the next batch.
         exhausted = False
@@ -948,6 +957,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 break
         self._fill_slots()
         if exhausted and not self._pending and not self._inflight and len(self._ready) < num_samples:
+            if self._tp_cpu_group is not None:
+                torch.distributed.broadcast_object_list([[]], src=self._tp_driver, group=self._tp_cpu_group)
             return []
 
         # Time spent waiting for the engine. Near zero means the samples were ready before the trainer asked; a large
@@ -974,10 +985,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # and the training step are fighting over memory, which slows both.
         self._metrics[mode]["memory/alloc_retries"].append(torch.cuda.memory_stats().get("num_alloc_retries", 0))
         self._pause_generation(mode)
-        # The engine paused at the same step on every rank of a tensor parallel group and delivered the same results
-        # to each, but the loop above stops on a count, so one rank may have read a result its peer has not yet. The
-        # ranks of a group must train on the same samples: read everything delivered before taking any.
-        self._drain(timeout=0)
         if self._replica_group is not None:
             pool_start = time.perf_counter()
             samples = self._take_from_pool(num_samples)
@@ -987,14 +994,16 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
             # the length cap is over twice the tokens of a mixed one). Arrival order keeps the mix.
             samples = [self._ready.popleft() for _ in range(num_samples)]
+        if self._tp_cpu_group is not None:
+            torch.distributed.broadcast_object_list([samples], src=self._tp_driver, group=self._tp_cpu_group)
         return samples
 
     def _prepare_inputs(self, samples: list[dict[str, Any]]) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        # Metrics of the rollouts this step trains on. They are per process: groups are formed and scored locally,
-        # and `Trainer.log` reports process zero.
+        # Metrics of the rollouts this step trains on. They are per replica: the replica's first rank forms and scores
+        # the groups and sends the metrics along with the samples, and `Trainer.log` reports process zero.
         rollout_metrics = [sample["metrics"] for sample in samples if sample["metrics"] is not None]
         rewards = torch.stack([metrics["reward"] for metrics in rollout_metrics])
         rewards_per_func = torch.stack([metrics["rewards_per_func"] for metrics in rollout_metrics])

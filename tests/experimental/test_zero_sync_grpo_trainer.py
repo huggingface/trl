@@ -214,10 +214,17 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
     @pytest.mark.skipif("TRL_TEST_ZERO_SYNC_TP_OUTPUT_DIR" not in os.environ, reason="launched by tests/distributed")
     def test_train_tensor_parallel_body(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        scored = []
+
+        def counting_reward_func(completions, **kwargs):
+            scored.extend(completions)
+            return dummy_reward_func(completions, **kwargs)
+
         training_args = ZeroSyncGRPOConfig(
             output_dir=os.environ["TRL_TEST_ZERO_SYNC_TP_OUTPUT_DIR"],
             learning_rate=1e-6,  # a step bf16 rounds away on most weights
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            gradient_accumulation_steps=2,  # the batch the first rank sends holds every micro-batch of the step
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             rollouts_in_flight=3,  # keep few rollouts generating, the test model is tiny
@@ -229,12 +236,18 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
         )
         trainer = ZeroSyncGRPOTrainer(
             model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
-            reward_funcs=dummy_reward_func,
+            reward_funcs=counting_reward_func,
             args=training_args,
             train_dataset=dataset,
         )
 
         trainer.train()
+
+        # The group's first rank runs the rollouts and scores them; the others train on the batch it sends them
+        if int(os.environ["RANK"]) == 0:
+            assert len(scored) >= 2 * 3 * 2  # two steps of two micro-batches of three samples
+        else:
+            assert scored == []
 
         # Each rank's shard of the fp32 copies goes back to host memory after the step
         for group in trainer.optimizer.param_groups:

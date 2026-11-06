@@ -106,11 +106,16 @@ resident NCCL kernel and so prevents the other communicator's kernel from ever l
 So the two take turns, at every `tp_size`. The engine keeps decoding in its own thread while the
 trainer collects and scores completions; once a step's samples are in, the trainer pauses the engine
 (`ContinuousBatchingManager.pause`), runs its forward, backward and optimizer step, and resumes it.
+It pauses once per optimizer step, whatever `gradient_accumulation_steps` is: the `Trainer` collects
+every micro-batch of a step before it trains on the first.
 The pause is agreed on by every rank at the same engine step, and the engine finishes the step it had
 in flight on the device before it reports itself paused, so the trainer's collectives never share the
 device with the engine's, and the forward and backward have the device to themselves. Nothing is drained and no request is lost: the rollouts in flight keep their
-cache and carry on after the step. Every rank receives every completion, so every rank reaches the
-pause on the same sample count without any signal between them.
+cache and carry on after the step. The ranks of a group generate together and train on the same
+batch, so the rollouts run on the group's first rank only: it submits the requests, reads the
+completions, runs the tools and the reward functions, computes the advantages and picks the batch,
+then sends it to the other ranks of its group, which join the pause and train on it. A tool or a
+reward function therefore runs once per completion, not once per rank.
 
 Interleaving generation through the step instead, a decode step at every layer boundary, was measured
 and is not worth it: identical throughput on short completions (1.55 against 1.54 s/step) and about 7%
@@ -127,9 +132,9 @@ does 8220 trained tokens/s against 3280 for `tp_size=8` with two.
 ZeroSyncGRPOConfig(tp_size=4)  # on 16 processes: four replicas of a model split four ways
 ```
 
-The replicas draw their training batches from one pool. A sample is data, and nothing ties it to the
-replica that generated it, so waiting until the replicas together have enough and then handing them
-out to whoever carries the least, by sum of squared lengths, keeps their forwards aligned and their
+The replicas draw their training batches from one pool, exchanged between their first ranks. A
+sample is data, and nothing ties it to the replica that generated it, so waiting until the replicas
+together have enough and then handing them out to whoever carries the least, by sum of squared lengths, keeps their forwards aligned and their
 memory peaks alike. Otherwise a replica whose completions came back short trains first and then sits
 at the gradient sum waiting for one still decoding. `batch/row_imbalance` logs how even the result
 is, 1.0 being even, and `batch/from_other_replicas` how much of the batch came from elsewhere.
