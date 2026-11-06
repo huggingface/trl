@@ -400,14 +400,26 @@ class TransformersVLLMServer:
     Args:
         model_id (`str`):
             The model to serve, the trainer's.
+
+    Attributes:
+        script (`Callable[[list[int]], list[int]]`, *optional*):
+            Set it to answer each request with the completion `script(prompt_ids)` returns instead of sampling one, for
+            the tests whose rollouts must follow a fixed path, like a tool call.
     """
 
     def __init__(self, model_id: str):
         self.model_id = model_id
-        self.model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
-        self.max_model_len = self.model.config.max_position_embeddings  # the default of `vllm serve --max-model-len`
+        config = AutoConfig.from_pretrained(model_id)
+        loader = AutoModelForImageTextToText if config.get_text_config() is not config else AutoModelForCausalLM
+        self.model = loader.from_pretrained(model_id, dtype=torch.bfloat16).to(torch_device)
+        self.script = None
+        # As `vllm serve --max-model-len 512`. The trainer sizes its micro-batches from it, and at the model's context
+        # length, one would wait for about a thousand samples
+        self.max_model_len = 512
         self.generate_lock = threading.Lock()  # the requests share one model
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        # `server_close` then joins the request threads: one still generating when the process exits aborts it
+        self.httpd.daemon_threads = False
         self.url = f"http://127.0.0.1:{self.httpd.server_port}"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
@@ -416,6 +428,8 @@ class TransformersVLLMServer:
         self.httpd.server_close()
 
     def get(self, path: str):
+        if path == "/health":
+            return {}
         if path == "/v1/models":
             return {"data": [{"id": self.model_id, "max_model_len": self.max_model_len}]}
         if path == "/metrics":
@@ -429,48 +443,97 @@ class TransformersVLLMServer:
                     'vllm:num_preemptions_total{engine="0"} 0.0',
                 ]
             )
+        # With top-k or top-p, the worker first checks that the server returns the candidate set of each sampled token
+        if path == "/version":
+            return {"version": "0.28.0"}  # the first vLLM that returns it
+        if path == "/server_info":
+            return {"vllm_config": {"model_config": {"return_sampling_mask": True}}}
+        if path == "/openapi.json":
+            return {"paths": {"/inference/v1/generate": {}}}
         return None
 
     def post(self, path: str, body: dict):
         if path == "/v1/completions":
-            return self.complete(body)
+            completion_ids, logprobs = self.generate(body["prompt"], body)
+            top = logprobs.topk(body["logprobs"])
+            return {
+                "choices": [
+                    {
+                        "token_ids": completion_ids.tolist(),
+                        "logprobs": {
+                            "token_logprobs": logprobs.gather(-1, completion_ids[:, None]).squeeze(-1).tolist(),
+                            "top_logprobs": [
+                                {f"token_id:{i}": logprob for i, logprob in zip(ids, values, strict=True)}
+                                for ids, values in zip(top.indices.tolist(), top.values.tolist(), strict=True)
+                            ],
+                        },
+                    }
+                ]
+            }
+        if path == "/inference/v1/generate":
+            completion_ids, logprobs = self.generate(body["token_ids"], body["sampling_params"])
+            top = logprobs.topk(body["sampling_params"]["logprobs"])
+            return {
+                "choices": [
+                    {
+                        "token_ids": completion_ids.tolist(),
+                        "logprobs": {
+                            "content": [
+                                {
+                                    "logprob": logprob,
+                                    "top_logprobs": [
+                                        {"token": f"token_id:{i}", "logprob": value}
+                                        for i, value in zip(ids, values, strict=True)
+                                        if value > -math.inf
+                                    ],
+                                }
+                                for logprob, ids, values in zip(
+                                    logprobs.gather(-1, completion_ids[:, None]).squeeze(-1).tolist(),
+                                    top.indices.tolist(),
+                                    top.values.tolist(),
+                                    strict=True,
+                                )
+                            ]
+                        },
+                        # The candidate set of each token: the ids the truncation kept
+                        "sampling_mask": [row.isfinite().nonzero().squeeze(-1).tolist() for row in logprobs],
+                    }
+                ]
+            }
         return None
 
-    def complete(self, request: dict) -> dict:
-        prompt_ids = torch.tensor([request["prompt"]], device=self.model.device)
+    def generate(self, prompt_ids: list[int], sampling_params: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample a completion of `prompt_ids`.
+
+        Returns:
+            `tuple[torch.Tensor, torch.Tensor]`:
+                The completion's token ids, and the log-probs over the vocabulary at each of its positions, after the
+                penalty, the temperature and the truncation, as `vllm serve --logprobs-mode processed_logprobs` returns
+                them.
+        """
+        prompt_ids = torch.tensor([prompt_ids], device=self.model.device)
+        if self.script is not None:
+            with self.generate_lock, torch.no_grad():
+                completion_ids = torch.tensor(self.script(prompt_ids[0].tolist()), device=self.model.device)
+                logits = self.model(torch.cat([prompt_ids[0], completion_ids])[None]).logits[
+                    0, prompt_ids.shape[1] - 1 : -1
+                ]
+            return completion_ids, (logits.float() / sampling_params["temperature"]).log_softmax(-1)
         with self.generate_lock:
             output = self.model.generate(
                 prompt_ids,
                 attention_mask=torch.ones_like(prompt_ids),
                 do_sample=True,
-                max_new_tokens=min(request["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
-                temperature=request["temperature"],
-                top_p=request["top_p"],
-                top_k=request["top_k"],
-                min_p=request.get("min_p"),
-                repetition_penalty=request["repetition_penalty"],
+                max_new_tokens=min(sampling_params["max_tokens"], self.max_model_len - prompt_ids.shape[1]),
+                temperature=sampling_params["temperature"],
+                top_p=sampling_params["top_p"],
+                top_k=sampling_params["top_k"],
+                min_p=sampling_params.get("min_p"),
+                repetition_penalty=sampling_params["repetition_penalty"],
                 output_scores=True,
                 return_dict_in_generate=True,
             )
-        completion_ids = output.sequences[0, prompt_ids.shape[1] :]
-        # The scores are the logits after the penalty, the temperature and the truncation, so these log-probs are the
-        # ones `vllm serve --logprobs-mode processed_logprobs` returns
-        logprobs = torch.cat(output.scores).float().log_softmax(-1)
-        top = logprobs.topk(request["logprobs"])
-        return {
-            "choices": [
-                {
-                    "token_ids": completion_ids.tolist(),
-                    "logprobs": {
-                        "token_logprobs": logprobs.gather(-1, completion_ids[:, None]).squeeze(-1).tolist(),
-                        "top_logprobs": [
-                            {f"token_id:{token_id}": logprob for token_id, logprob in zip(ids, values, strict=True)}
-                            for ids, values in zip(top.indices.tolist(), top.values.tolist(), strict=True)
-                        ],
-                    },
-                }
-            ]
-        }
+        return output.sequences[0, prompt_ids.shape[1] :], torch.cat(output.scores).float().log_softmax(-1)
 
     # The interface of `WeightTransferClient`, which the trainer calls on each weight sync
     def init_weight_transfer(self):
@@ -521,15 +584,25 @@ class TransformersVLLMServer:
 
 @pytest.fixture
 def vllm_server(monkeypatch):
-    """A [`TransformersVLLMServer`] serving the tests' model and taking the trainer's weight syncs, shut down when the
-    test ends."""
-    server = TransformersVLLMServer("trl-internal-testing/small-Qwen2ForCausalLM-2.5")
-    # Overrides `stub_weight_transfer`, which pytest runs first as an autouse fixture
-    monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", lambda **kwargs: server)
-    yield server
-    server.close()
+    """Starts a [`TransformersVLLMServer`], as `vllm serve <model_id>` would, and hands it the trainer's weight syncs.
+
+    Call it with the model id. The server shuts down when the test ends.
+    """
+    servers = []
+
+    def serve(model_id: str) -> TransformersVLLMServer:
+        server = TransformersVLLMServer(model_id)
+        servers.append(server)
+        # Overrides `stub_weight_transfer`, which pytest runs first as an autouse fixture
+        monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", lambda **kwargs: server)
+        return server
+
+    yield serve
+    for server in servers:
+        server.close()
 
 
+@pytest.fixture(autouse=True)
 @pytest.fixture(autouse=True)
 def stub_weight_transfer(monkeypatch):
     monkeypatch.setattr(async_grpo_trainer_module, "WeightTransferClient", _StubWeightTransfer)
@@ -558,8 +631,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            token_budget=64,  # reduce the tokens per micro-batch, which default to the server's 32768-token context
-            vllm_server_base_url=vllm_server.url,
+            vllm_server_base_url=vllm_server("trl-internal-testing/small-Qwen2ForCausalLM-2.5").url,
             report_to="none",
         )
         trainer = AsyncGRPOTrainer(
