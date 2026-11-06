@@ -33,7 +33,7 @@ On one GPU, with vLLM colocated:
 
 On one 8-GPU node (each GPU runs its own vLLM engine and trains on its own slice of the batch):
 
-    accelerate launch --num_processes 8 examples/lfm2_5_moe_research_agent/3_grpo.py
+    torchrun --nproc_per_node 8 examples/lfm2_5_moe_research_agent/3_grpo.py
 
 Evaluate the base model with `2_evaluate.py`, and the trained model on the same held-out questions after merging its
 last checkpoint into the base model (see README.md): vLLM serves merged weights, not an adapter directory.
