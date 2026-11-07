@@ -37,15 +37,13 @@ MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 generation_config = GenerationConfig.from_pretrained(MODEL_ID)
 
-# The text attention derives its head size from hidden_size // num_attention_heads, so the width sets it: 32 // 4 = 8, the
-# smallest multiple of 8 Flash Attention accepts. The mrope sections sum to head_dim // 2.
 text_config = {
     "num_hidden_layers": 2,
-    "hidden_size": 32,
+    "hidden_size": 32,  # head size 32 // 4 = 8, as Flash Attention requires
     "num_attention_heads": 4,
     "num_key_value_heads": 2,
     "layer_types": None,
-    "rope_scaling": {"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},
+    "rope_scaling": {"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},  # sums to head_dim // 2
 }
 vision_config = {
     "hidden_size": 16,
@@ -59,9 +57,9 @@ config = AutoConfig.from_pretrained(
     MODEL_ID,
     text_config=text_config,
     vision_config=vision_config,
-    rope_scaling={"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},
+    rope_scaling={"type": "default", "mrope_section": [2, 1, 1], "rope_type": "default"},  # sums to head_dim // 2
     num_hidden_layers=2,
-    hidden_size=32,
+    hidden_size=32,  # head size 32 // 4 = 8, as Flash Attention requires
     num_attention_heads=4,
 )
 model = Qwen2_5_VLForConditionalGeneration(config).to(dtype=torch.bfloat16)
