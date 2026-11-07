@@ -150,8 +150,8 @@ The other metrics describe the asynchronous pipeline. Metrics ending in `_total`
 - `rollout/concurrency_cap`: The current cap on rollouts in flight, which follows the server's load. See [Concurrency](#concurrency).
 - `rollout/turns_mean`, `rollout/turns_max`: The average and maximum number of turns per rollout.
 - `rollout/samples_per_rollout`: The number of training samples per rollout. Above `1.0`, some rollouts were forked; below `1.0`, some produced no trained token. See [Multi-turn rollouts](#multi-turn-rollouts).
-- `rollout/fork_frac`, `rollout/realign_frac`: The fraction of turn transitions whose re-tokenization drift forked a new sample or was realigned as context.
-- `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`: The number of held tokens a turn's re-tokenization invalidated, to compare against `fork_threshold_tokens`.
+- `rollout/fork_frac`: The fraction of turn transitions whose prompt does not start with the held tokens, so the turn started a new sample.
+- `rollout/drift_tokens_mean`, `rollout/drift_tokens_max`: The number of held tokens a fork re-rendered, averaged over turn transitions (one that does not fork counts as `0`). The new sample shares the tokens before the divergence, so this is what each fork adds to the forward.
 - `rollout/score_queue_size`: The number of completed groups waiting to be scored.
 - `rollout/score_s`: The time to score a group.
 - `rollout/score_wait_s`: The time a completed group waited before being scored.
@@ -297,7 +297,7 @@ Judge tree packing on throughput, `batch/trained_tokens_per_step / perf/fwd_bwd_
 The batch metrics compose: one step holds `gradient_accumulation_steps × num_processes` rows, so `batch/samples_per_step` is about that many times `batch/samples_per_row`, and likewise for tokens. The two sides agree only up to the variation between the micro-batches of a step, since the per-step metrics are sums and the per-row ones are means.
 
 > [!TIP]
-> Anything that makes rows longer or fewer removes the sharing. Check `fork_threshold_tokens` first: a turn only starts a new sample when its re-tokenization drifts by that many tokens, and agentic drift is typically tens of tokens against a default of `1024`, so nothing forks and a conversation collapses into one row per process. `rollout/fork_frac` says which regime you are in.
+> Anything that makes rows longer or fewer removes the sharing. A multi-turn conversation that never forks is one long sample, and `rollout/samples_per_rollout` says how many samples a conversation gives.
 
 ### Top-k and top-p sampling
 
@@ -864,13 +864,9 @@ Environment instances are reused across steps (reset between episodes), so an ex
 
 ### Multi-turn rollouts
 
-Every turn renders the whole conversation through the chat template and generates from it. A chat template does not always render a growing conversation the same way (some drop the reasoning of earlier turns, for example), so a turn's prompt tokens can differ from the tokens held so far. At the end of the rollout, the worker reconciles the turns into training samples:
+Every turn renders the whole conversation through the chat template and generates from it. A chat template does not always render a growing conversation the same way (some drop the reasoning of earlier turns, for example), so a turn's prompt tokens can differ from the tokens held so far. At the end of the rollout, the worker reconciles the turns into training samples: a turn whose prompt starts with the held tokens is appended to the same sample, and any other turn starts a new one. Every generated token is trained in exactly one sample, so a fork costs forward tokens but no training signal.
 
-- when a turn's prompt starts with the held tokens, the turn is appended to the same sample.
-- when it differs inside the last generated answer by fewer than `fork_threshold_tokens` tokens, the worker realigns: the drifted tokens are replaced by the new prompt's and become context, so they lose their training signal.
-- otherwise, the turn starts a new sample, and the tokens of the previous one keep their training signal.
-
-Every sample of a rollout gets the rollout's advantage. `rollout/fork_frac`, `rollout/realign_frac` and `rollout/drift_tokens_*` show how the turns were reconciled.
+Every sample of a rollout gets the rollout's advantage. `rollout/fork_frac` and `rollout/drift_tokens_*` show how the turns were reconciled.
 
 ### Environment Integrations
 
@@ -918,6 +914,3 @@ Vision-language models (Qwen3.5, Qwen3.6, Qwen3-VL, ...) can be trained on **tex
 
 [[autodoc]] trl.experimental.async_grpo.async_rollout_worker.RolloutGroup
 
-## RolloutWorkerProtocol
-
-[[autodoc]] trl.experimental.async_grpo.async_grpo_trainer.RolloutWorkerProtocol
