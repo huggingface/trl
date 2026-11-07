@@ -511,6 +511,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
         # step, see `_pause_generation`.
         self._pause = None
+        self._loan = None  # (sublet loan of the KV cache, mode) during a step, with lend_kv_cache_during_step
         self._step_generation_wait = 0.0
 
         # Tools
@@ -654,6 +655,8 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
+        if self.args.lend_kv_cache_during_step:
+            cb_kwargs["lendable_cache"] = True
         if self.tp_size > 1:
             # The engine turns NCCL's graph-mixing support off, which fits a pure-decode server but slows the
             # training collectives here (measured 3.62 against 3.71 s/step at batch 128). Generation is paused while
@@ -743,13 +746,27 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         pause_start = time.perf_counter()
         self._pause = self._manager.pause()
         self._pause.__enter__()
-        if self.args.release_kv_cache_during_step:
+        if self.args.release_kv_cache_during_step and not self.args.lend_kv_cache_during_step:
             self._manager.release_memory()
         self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
+        if self.args.lend_kv_cache_during_step:
+            # The step allocates from the cache's memory until the loan ends in `_resume_generation`
+            lend_start = time.perf_counter()
+            loan = self._manager.lend_memory()
+            loan.__enter__()
+            self._loan = (loan, mode)
+            self._metrics[mode]["generation/lend_s"].append(time.perf_counter() - lend_start)
 
     def _resume_generation(self) -> None:
+        if self._loan is not None:
+            (loan, mode), self._loan = self._loan, None
+            give_back_start = time.perf_counter()
+            loan.__exit__(None, None, None)  # the rollouts' blocks the step overwrote come back from the host
+            self._metrics[mode]["generation/give_back_s"].append(time.perf_counter() - give_back_start)
+            self._metrics[mode]["generation/lent_copied_gib"].append(loan.copied_bytes / 2**30)
+            self._metrics[mode]["generation/lent_beyond_gib"].append(loan.extra_bytes / 2**30)
         if self._pause is not None:
-            if self.args.release_kv_cache_during_step:
+            if self.args.release_kv_cache_during_step and not self.args.lend_kv_cache_during_step:
                 self._manager.restore_memory()
             self._pause.__exit__(None, None, None)
             self._pause = None

@@ -83,6 +83,11 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             back before generation resumes, so the rollouts in flight carry on where they were, and the forward and
             backward get its memory. This copies the cache to the host and back at every step: disable it for small
             models or short completions, where memory is not the limit.
+        lend_kv_cache_during_step (`bool`, *optional*, defaults to `False`):
+            Whether to lend the KV cache's GPU memory to the training step with `sublet` instead of releasing it. The
+            step takes the cache's free blocks first, then free GPU memory, then the blocks of rollouts in flight,
+            which are copied to the host and back. Only what the step overwrites moves. Takes over from
+            `release_kv_cache_during_step`. Needs `pip install sublet`.
 
         > Parameters that control the training
 
@@ -205,6 +210,16 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "and comes back before generation resumes, so the rollouts in flight carry on where they were, and the "
             "forward and backward get its memory. This copies the cache to the host and back at every step: disable it "
             "for small models or short completions, where memory is not the limit."
+        },
+    )
+
+    lend_kv_cache_during_step: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to lend the KV cache's GPU memory to the training step with `sublet` instead of releasing "
+            "it. The step takes the cache's free blocks first, then free GPU memory, then the blocks of rollouts in "
+            "flight, which are copied to the host and back. Only what the step overwrites moves. Takes over from "
+            "`release_kv_cache_during_step`. Needs `pip install sublet`."
         },
     )
 
