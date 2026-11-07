@@ -140,6 +140,7 @@ def make_loop():
             eos_token_ids=[0],
             rollout_buffer=queue.Queue(),
             model_version_value=mp.Value("i", 0),
+            token_allowance=mp.Value("q", 10**12),
             heartbeat_value=mp.Value("d", 0.0),
             failed_event=threading.Event(),
             exception_info_queue=queue.Queue(),

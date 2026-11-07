@@ -106,6 +106,7 @@ class _StubRolloutWorker:
         **kwargs,
     ):
         self.rollout_buffer = queue.Queue()
+        self.token_allowance = mp.Value("q", 0)
         self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
         self._candidate_sets = config.top_k > 0
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
@@ -436,6 +437,7 @@ class TestAsyncGRPOTrainer(TrlTestCase):
         ]:
             assert key in logged
         assert logged["num_tokens"] > 0
+        assert trainer.rollout_worker.token_allowance.value > trainer._rollout_dataset.consumed_tokens > 0
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
@@ -930,6 +932,7 @@ def _rollout_loop(loop_cls=AsyncRolloutLoop, **kwargs):
         "eos_token_ids": [tokenizer.eos_token_id],
         "rollout_buffer": mp.Queue(),
         "model_version_value": mp.Value("i", 0),
+        "token_allowance": mp.Value("q", 10**12),
         "heartbeat_value": mp.Value("d", 0.0),
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
@@ -1017,8 +1020,8 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         finally:
             loop._loop.close()
 
-    def test_concurrency_cap_follows_vllm_load(self):
-        # The concurrency cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
+    def test_kv_cap_follows_vllm_load(self):
+        # The KV cap starts at `KV cache tokens / max_model_len`, grows while the server reads clear, is cut
         # when KV usage passes 0.8 and holds until the pool has drained below it.
         import aiohttp
         from aiohttp import web
@@ -1047,6 +1050,7 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
         app.router.add_get("/v1/models", models)
         loop = _rollout_loop(num_generations=2, max_concurrent_rollouts=8, score_queue_maxsize=1000)
         loop._metrics_poll_s = 0.02
+        loop._tokens_per_rollout = 1.0
         running = {"now": 0, "peak": 0}
 
         async def fake_generate_one(prompt, tools, group_id=0):
@@ -1068,26 +1072,26 @@ class TestAsyncRolloutWorkerEnvironments(TrlTestCase):
             async with TestServer(app) as server, aiohttp.ClientSession() as session:
                 loop.vllm_server_url = str(server.make_url("")).rstrip("/")
                 loop.session = session
-                await loop._init_concurrency_cap()
-                assert loop._concurrency_cap == 4
+                await loop._init_kv_cap()
+                assert loop._kv_cap == 4
                 stop_event = asyncio.Event()
                 tasks = [
                     asyncio.create_task(loop._generate_loop(stop_event)),
                     asyncio.create_task(loop._control_loop(stop_event)),
                 ]
-                await wait_until(lambda: loop._concurrency_cap == 8)
+                await wait_until(lambda: loop._kv_cap == 8)
                 await wait_until(lambda: running["peak"] == 8 and load["polls"] >= 2)
                 load["usage"] = 0.7
                 load["spike"] = 0.9
-                await wait_until(lambda: loop._concurrency_cap < 8)
-                assert loop._concurrency_cap == 5
+                await wait_until(lambda: loop._kv_cap < 8)
+                assert loop._kv_cap == 5
                 await wait_until(lambda: running["now"] <= 5)
                 running["peak"] = 0
                 await asyncio.sleep(0.3)
                 assert running["peak"] <= 5
-                assert loop._concurrency_cap == 5
+                assert loop._kv_cap == 5
                 load["usage"] = 0.1
-                await wait_until(lambda: loop._concurrency_cap == 8)
+                await wait_until(lambda: loop._kv_cap == 8)
                 stop_event.set()
                 await asyncio.gather(*tasks)
 
@@ -1771,6 +1775,90 @@ class TestWorkerMetricPush(TrlTestCase):
         loop = _rollout_loop(metrics_queue=mp.Queue(maxsize=1))
         for _ in range(50):
             loop._push_metrics({"rollout/score_s": 1.0})  # drops instead of blocking generation
+
+
+def alternating_reward(completions, **kwargs):
+    return [float(i % 2) for i in range(len(completions))]
+
+
+class TestTokenAllowance(TrlTestCase):
+    def test_generation_waits_for_the_trainer_to_raise_the_allowance(self):
+        PartialState()
+        loop = _rollout_loop(num_generations=2, reward_funcs=[alternating_reward], token_allowance=mp.Value("q", 30))
+
+        async def fake_generate_one(prompt, tools, group_id=0):
+            await asyncio.sleep(0.01)
+            return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [TurnRecord([1], [2, 3], [-0.1, -0.1])])
+
+        loop.generate_one = fake_generate_one
+        queued = []
+
+        def drain():
+            with contextlib.suppress(queue.Empty):
+                while True:
+                    item = loop.rollout_buffer.get(timeout=0.2)
+                    if isinstance(item, RolloutSample):
+                        queued.append(len(item.input_ids))
+
+        async def run():
+            stop_event = asyncio.Event()
+            tasks = [
+                asyncio.create_task(loop._generate_loop(stop_event)),
+                asyncio.create_task(loop._score_loop(stop_event)),
+            ]
+            await asyncio.sleep(0.5)
+            drain()
+            held = sum(queued)
+            assert 24 <= held <= 36
+            await asyncio.sleep(0.3)
+            drain()
+            assert sum(queued) == held
+            loop._token_allowance.value += 30
+            await asyncio.sleep(0.5)
+            drain()
+            assert 54 <= sum(queued) <= 66
+            stop_event.set()
+            await asyncio.gather(*tasks)
+
+        try:
+            loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
+
+
+class TestTokenAllowanceGroups(TrlTestCase):
+    def test_a_started_group_is_admitted_whole(self):
+        PartialState()
+        loop = _rollout_loop(num_generations=4, reward_funcs=[alternating_reward], token_allowance=mp.Value("q", 6))
+        loop._tokens_per_rollout = 3.0
+
+        async def fake_generate_one(prompt, tools, group_id=0):
+            await asyncio.sleep(0.01)
+            return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [TurnRecord([1], [2, 3], [-0.1, -0.1])])
+
+        loop.generate_one = fake_generate_one
+
+        async def run():
+            stop_event = asyncio.Event()
+            tasks = [
+                asyncio.create_task(loop._generate_loop(stop_event)),
+                asyncio.create_task(loop._score_loop(stop_event)),
+            ]
+            deadline = time.monotonic() + 5
+            while loop._produced_tokens < 12:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+            loop._token_allowance.value += 12
+            while loop._produced_tokens < 24:
+                assert time.monotonic() < deadline, "a partly admitted group never completed"
+                await asyncio.sleep(0.01)
+            stop_event.set()
+            await asyncio.gather(*tasks)
+
+        try:
+            loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
 
 
 class TestToolExecution(TrlTestCase):

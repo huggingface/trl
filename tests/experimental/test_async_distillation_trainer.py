@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import contextlib
 import itertools
 import json
 import math
@@ -100,6 +101,7 @@ class _StubRolloutWorker:
 
     def __init__(self, *, dataset, processing_class, samples_per_weight_sync: int = 10, **kwargs):
         self.rollout_buffer = queue.Queue()
+        self.token_allowance = mp.Value("q", 0)
         self._loop_kwargs = {"dataset_start_index": 0, **kwargs}
         self.metrics_queue = queue.Queue()  # drained by the trainer in `log()`; this stub measures nothing
         self._samples_per_weight_sync = samples_per_weight_sync
@@ -492,6 +494,7 @@ def _rollout_loop(**kwargs):
         "eos_token_ids": [tokenizer.eos_token_id],
         "rollout_buffer": mp.Queue(),
         "model_version_value": mp.Value("i", 0),
+        "token_allowance": mp.Value("q", 10**12),
         "heartbeat_value": mp.Value("d", 0.0),
         "failed_event": mp.Event(),
         "exception_info_queue": mp.Queue(),
@@ -499,6 +502,57 @@ def _rollout_loop(**kwargs):
         **kwargs,
     }
     return _AsyncRolloutLoop(**kwargs)
+
+
+class TestTokenAllowance:
+    def test_generation_waits_for_the_trainer_to_raise_the_allowance(self):
+        PartialState()
+        loop = _rollout_loop(token_allowance=mp.Value("q", 30))
+
+        async def fake_generate_and_score_one(prompt_id, row):
+            await asyncio.sleep(0.01)
+            return RolloutSample(
+                prompt=[],
+                completion=[],
+                input_ids=np.array([1, 2, 3]),
+                completion_mask=np.array([0, 1, 1]),
+                teacher_topk_ids=np.full((3, 1), -1),
+                teacher_topk_logprobs=np.full((3, 1), -np.inf),
+                model_version=0,
+                metrics={},
+                teacher_id="default",
+                prompt_id=prompt_id,
+            )
+
+        loop._generate_and_score_one = fake_generate_and_score_one
+        queued = []
+
+        def drain():
+            with contextlib.suppress(queue.Empty):
+                while True:
+                    queued.append(len(loop.rollout_buffer.get(timeout=0.2).input_ids))
+
+        async def run():
+            stop_event = asyncio.Event()
+            task = asyncio.create_task(loop._generate_loop(stop_event))
+            await asyncio.sleep(0.5)
+            drain()
+            held = sum(queued)
+            assert 27 <= held <= 30
+            await asyncio.sleep(0.3)
+            drain()
+            assert sum(queued) == held
+            loop._token_allowance.value += 30
+            await asyncio.sleep(0.5)
+            drain()
+            assert 57 <= sum(queued) <= 60
+            stop_event.set()
+            await task
+
+        try:
+            loop._loop.run_until_complete(run())
+        finally:
+            loop._loop.close()
 
 
 def _scoring_loop(tokenizer, teacher_server_urls, teacher_max_model_lens=None):
@@ -1032,6 +1086,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
         trainer.train()
 
         assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert trainer.rollout_worker.token_allowance.value > trainer._rollout_dataset.consumed_tokens > 0
         if "Moe" in model_id:
             # The MoE config declares a `router_aux_loss_coef`, so the load-balancing loss is on by default
             aux_losses = [log["aux_loss"] for log in trainer.state.log_history if "aux_loss" in log]
