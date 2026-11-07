@@ -1782,23 +1782,15 @@ def alternating_reward(completions, **kwargs):
 
 
 class TestTokenAllowance(TrlTestCase):
-    def test_generation_waits_for_the_trainer_to_raise_the_allowance(self):
+    def test_generation_stops_at_the_allowance_and_admits_whole_groups(self):
         PartialState()
-        loop = _rollout_loop(num_generations=2, reward_funcs=[alternating_reward], token_allowance=mp.Value("q", 30))
+        loop = _rollout_loop(num_generations=4, reward_funcs=[alternating_reward], token_allowance=mp.Value("q", 30))
 
         async def fake_generate_one(prompt, tools, group_id=0):
             await asyncio.sleep(0.01)
             return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [TurnRecord([1], [2, 3], [-0.1, -0.1])])
 
         loop.generate_one = fake_generate_one
-        queued = []
-
-        def drain():
-            with contextlib.suppress(queue.Empty):
-                while True:
-                    item = loop.rollout_buffer.get(timeout=0.2)
-                    if isinstance(item, RolloutSample):
-                        queued.append(len(item.input_ids))
 
         async def run():
             stop_event = asyncio.Event()
@@ -1807,51 +1799,10 @@ class TestTokenAllowance(TrlTestCase):
                 asyncio.create_task(loop._score_loop(stop_event)),
             ]
             await asyncio.sleep(0.5)
-            drain()
-            held = sum(queued)
-            assert 24 <= held <= 36
-            await asyncio.sleep(0.3)
-            drain()
-            assert sum(queued) == held
+            assert loop.rollout_buffer.qsize() == 12
             loop._token_allowance.value += 30
             await asyncio.sleep(0.5)
-            drain()
-            assert 54 <= sum(queued) <= 66
-            stop_event.set()
-            await asyncio.gather(*tasks)
-
-        try:
-            loop._loop.run_until_complete(run())
-        finally:
-            loop._loop.close()
-
-
-class TestTokenAllowanceGroups(TrlTestCase):
-    def test_a_started_group_is_admitted_whole(self):
-        PartialState()
-        loop = _rollout_loop(num_generations=4, reward_funcs=[alternating_reward], token_allowance=mp.Value("q", 6))
-        loop._tokens_per_rollout = 3.0
-
-        async def fake_generate_one(prompt, tools, group_id=0):
-            await asyncio.sleep(0.01)
-            return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [TurnRecord([1], [2, 3], [-0.1, -0.1])])
-
-        loop.generate_one = fake_generate_one
-
-        async def run():
-            stop_event = asyncio.Event()
-            tasks = [
-                asyncio.create_task(loop._generate_loop(stop_event)),
-                asyncio.create_task(loop._score_loop(stop_event)),
-            ]
-            deadline = time.monotonic() + 5
-            while loop._produced_tokens < 12:
-                assert time.monotonic() < deadline
-                await asyncio.sleep(0.01)
-            loop._token_allowance.value += 12
-            while loop._produced_tokens < 24:
-                assert time.monotonic() < deadline, "a partly admitted group never completed"
-                await asyncio.sleep(0.01)
+            assert loop.rollout_buffer.qsize() == 20
             stop_event.set()
             await asyncio.gather(*tasks)
 

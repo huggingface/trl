@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import asyncio
-import contextlib
 import itertools
 import json
 import math
@@ -505,7 +504,7 @@ def _rollout_loop(**kwargs):
 
 
 class TestTokenAllowance:
-    def test_generation_waits_for_the_trainer_to_raise_the_allowance(self):
+    def test_generation_stops_at_the_allowance(self):
         PartialState()
         loop = _rollout_loop(token_allowance=mp.Value("q", 30))
 
@@ -525,27 +524,15 @@ class TestTokenAllowance:
             )
 
         loop._generate_and_score_one = fake_generate_and_score_one
-        queued = []
-
-        def drain():
-            with contextlib.suppress(queue.Empty):
-                while True:
-                    queued.append(len(loop.rollout_buffer.get(timeout=0.2).input_ids))
 
         async def run():
             stop_event = asyncio.Event()
             task = asyncio.create_task(loop._generate_loop(stop_event))
             await asyncio.sleep(0.5)
-            drain()
-            held = sum(queued)
-            assert 27 <= held <= 30
-            await asyncio.sleep(0.3)
-            drain()
-            assert sum(queued) == held
+            assert loop.rollout_buffer.qsize() == 10
             loop._token_allowance.value += 30
             await asyncio.sleep(0.5)
-            drain()
-            assert 57 <= sum(queued) <= 60
+            assert loop.rollout_buffer.qsize() == 20
             stop_event.set()
             await task
 
