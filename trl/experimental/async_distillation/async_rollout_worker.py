@@ -106,18 +106,23 @@ def _scrub_child_env() -> None:
         os.environ.pop(k, None)
 
 
-def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> None:
+def _spawn_stop_watcher(rollout_loop: "_AsyncRolloutLoop", stop_event: MPEvent) -> threading.Thread:
     # Daemon thread that translates the parent's mp.Event into the child's
     # asyncio.Event so _run_loops breaks out of its gather.
     def _watch():
-        stop_event.wait()
+        # Poll instead of `stop_event.wait()`: a thread still blocked in `wait()` when this process dies is never
+        # woken, and the parent's `stop_event.set()` in `stop()` then waits for it forever
+        while not stop_event.is_set():
+            time.sleep(0.1)
         try:
             rollout_loop._loop.call_soon_threadsafe(rollout_loop._stop_event.set)
         except RuntimeError:
             # Loop already closed (run() returned before stop fired). Nothing to do.
             pass
 
-    threading.Thread(target=_watch, daemon=True, name="distillation-mp-stop-watcher").start()
+    watcher = threading.Thread(target=_watch, daemon=True, name="distillation-mp-stop-watcher")
+    watcher.start()
+    return watcher
 
 
 def _child_main(
@@ -147,12 +152,18 @@ def _child_main(
         metrics_queue=metrics_queue,
     )
     child_ready_event.set()
-    _spawn_stop_watcher(rollout_loop, stop_event)
+    watcher = _spawn_stop_watcher(rollout_loop, stop_event)
     try:
         rollout_loop.run()
     except Exception:
         traceback.print_exc()
         raise
+    finally:
+        # The worker is stopping either way: release the watcher so it does not outlive `run()`
+        stop_event.set()
+        watcher.join(timeout=1.0)
+        if watcher.is_alive():
+            logger.warning("Stop watcher did not exit within 1s.")
 
 
 def _parse_teacher_logprobs_at_position(position_logprobs: dict[str, dict] | None) -> tuple[list[int], list[float]]:
@@ -468,7 +479,7 @@ class _AsyncRolloutLoop:
 
         A rollout yields exactly one training sample here — one turn, no group baseline, no re-tokenization forking —
         so unlike [`~trl.experimental.async_grpo.async_rollout_worker.AsyncRolloutLoop._push_rollout_metrics`] there is
-        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift tally or tool tally to report.
+        no `rollout/samples_per_rollout`, `rollout/turns_*`, drift or tool metrics to report.
         """
         completion_tokens = len(completion_ids)
         self._rates["completions/mean_length"][0] += completion_tokens
