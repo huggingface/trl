@@ -24,7 +24,7 @@ import torch.nn.functional as F
 import transformers
 from datasets import IterableDataset
 from packaging.version import Version
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, Qwen2Config
 from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available
 
@@ -2238,7 +2238,7 @@ class TestComputeFlopsPerToken(TrlTestCase):
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
         # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
         derived = compute_flops_per_token(cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert compute_flops_per_token(cfg, 16384) == derived
@@ -2334,7 +2334,7 @@ class TestAdjustedMfu(TrlTestCase):
     def test_config_without_head_dim(self):
         # `head_dim` is optional on configs: Qwen2 doesn't declare it. Falling back to `hidden_size //
         # num_attention_heads` must give the same result as setting it explicitly.
-        cfg = AutoConfig.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        cfg = Qwen2Config(hidden_size=8, num_attention_heads=4, num_key_value_heads=2)
         derived = adjusted_mfu(100.0, cfg, 16384)
         cfg.head_dim = cfg.hidden_size // cfg.num_attention_heads
         assert adjusted_mfu(100.0, cfg, 16384) == pytest.approx(derived)
