@@ -110,15 +110,11 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
         harness_session_factory: Callable[..., ResourceSessionFactory],
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
-        lossless_capture: bool = True,
         max_session_failures_per_slot: int = 10,
         max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
         super().__init__(**loop_kwargs)
-        # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
-        if harness_adapter is None and lossless_capture:
-            self._fork_threshold_tokens = 0
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
         if harness_adapter is None and (self.config.top_p < 1.0 or self.config.top_k > 0):
@@ -307,7 +303,10 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
-            return Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward), metrics
+            return (
+                Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward, rollout_id),
+                metrics,
+            )
         except CaptureContractError:
             raise
         except Exception:
