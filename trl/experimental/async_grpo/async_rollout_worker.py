@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import asyncio
-import enum
 import functools
 import inspect
 import math
@@ -131,40 +130,17 @@ def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
     return matched
 
 
-class DriftKind(enum.Enum):
-    CLEAN = "clean"  # new prompt starts exactly with held tokens -> append the new part
-    REALIGN = "realign"  # small change in the last answer -> overwrite it as context
-    FORK = "fork"  # bigger change -> start a new row
-
-
 class _SampleBuilder:
-    def __init__(self, fork_threshold: int):
-        self._fork_threshold = fork_threshold
+    def __init__(self, rollout_id: RolloutId):
+        self.rollout_id = rollout_id
         self.tokens: list[int] = []
         self.loss_mask: list[int] = []
         self.logprobs: list[float] = []
         self.sampling_mask: list[list[int]] = []
         self.sampler_logprobs: list[dict[int, float]] = []
-        self.last_response_start_idx: int | None = None
 
-    def classify_token_drift(self, turn: TurnRecord) -> tuple[DriftKind, int]:
-        """Classify this turn's re-tokenization against the held tokens, and report by how many tokens it drifted."""
-        matched = _common_prefix_len(self.tokens, turn.prompt_ids)
-        drift = len(self.tokens) - matched
-        if drift == 0:
-            return DriftKind.CLEAN, 0
-        start = self.last_response_start_idx
-        if start is not None and matched >= start and drift < self._fork_threshold:
-            return DriftKind.REALIGN, drift
-        return DriftKind.FORK, drift
-
-    def append_turn(self, turn: TurnRecord, kind: DriftKind) -> None:
-        assert kind is not DriftKind.FORK
-        if kind is DriftKind.REALIGN:
-            self._align_to_prompt(turn.prompt_ids)  # overwrite drifted tail as context
-        else:  # CLEAN: held tokens are a prefix of the new prompt; append the tail as context
-            self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
-        self.last_response_start_idx = len(self.tokens)
+    def append_turn(self, turn: TurnRecord) -> None:
+        self._append(turn.prompt_ids[len(self.tokens) :], mask=0)
         self._append(
             turn.output_ids,
             mask=turn.output_mask if turn.output_mask is not None else 1,
@@ -172,15 +148,6 @@ class _SampleBuilder:
             sampling_mask=turn.output_sampling_mask,
             sampler_logprobs=turn.output_sampler_logprobs,
         )
-
-    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
-        matched = _common_prefix_len(self.tokens, prompt_ids)
-        tail = prompt_ids[matched:]
-        self.tokens[matched:] = tail
-        self.loss_mask[matched:] = [0] * len(tail)
-        self.logprobs[matched:] = [0.0] * len(tail)
-        self.sampling_mask[matched:] = [[] for _ in tail]
-        self.sampler_logprobs[matched:] = [{} for _ in tail]
 
     def _append(
         self,
@@ -210,45 +177,34 @@ class _SampleBuilder:
     def has_trained_token(self) -> bool:
         return any(self.loss_mask)
 
-    def to_training_sequence(self, rollout_id: RolloutId) -> TrainingSequence:
+    def to_training_sequence(self) -> TrainingSequence:
         return TrainingSequence(
             list(self.tokens),
             list(self.loss_mask),
             list(self.logprobs),
             list(self.sampling_mask),
             list(self.sampler_logprobs),
-            rollout_id,
+            self.rollout_id,
         )
 
 
-def _chain_to_sequences(
-    turns: list[TurnRecord], rollout_id: RolloutId, fork_threshold: int
-) -> tuple[list[TrainingSequence], dict[str, float]]:
-    """Reconcile one conversation's turns (in order) into training rows; fork when re-tokenization drifts.
+def _chain_to_sequences(rollout: "Rollout") -> tuple[list[TrainingSequence], list[int]]:
+    """Reconcile a rollout's turns (in order) into training rows, and report how many held tokens each fork
+    re-rendered.
 
-    Also returns the drift tally over the T-1 turn *transitions*: how many appended cleanly, realigned or forked, and
-    the total and largest drift in tokens. That tally is the only observability on `fork_threshold_tokens`, which is
-    otherwise a threshold tuned blind.
+    A turn whose prompt starts with the tokens held so far extends the current row. Otherwise the chat template
+    rendered an earlier turn differently (dropped reasoning, summarized history, a re-tokenization wobble), and the
+    turn starts a new row, so every generated token keeps its training signal.
     """
-    builders: list[_SampleBuilder] = []
-    tally = {"clean": 0.0, "realign": 0.0, "fork": 0.0, "transitions": 0.0, "drift_tokens": 0.0, "drift_max": 0.0}
-    for turn in turns:
-        if not builders:
-            builders.append(_SampleBuilder(fork_threshold))
-            builders[-1].append_turn(turn, DriftKind.CLEAN)
-            continue
-        kind, drift = builders[-1].classify_token_drift(turn)
-        tally[kind.value] += 1
-        tally["transitions"] += 1
-        tally["drift_tokens"] += drift
-        tally["drift_max"] = max(tally["drift_max"], drift)
-        if kind is DriftKind.FORK:
-            builder = _SampleBuilder(fork_threshold)
-            builder.append_turn(turn, DriftKind.CLEAN)
-            builders.append(builder)
-        else:
-            builders[-1].append_turn(turn, kind)
-    return [b.to_training_sequence(rollout_id) for b in builders if b.has_trained_token()], tally
+    builders = [_SampleBuilder(rollout.rollout_id)]
+    drifts = []
+    for turn in rollout.turns:
+        held = builders[-1].tokens
+        if turn.prompt_ids[: len(held)] != held:
+            drifts.append(len(held) - _common_prefix_len(held, turn.prompt_ids))
+            builders.append(_SampleBuilder(rollout.rollout_id))
+        builders[-1].append_turn(turn)
+    return [b.to_training_sequence() for b in builders if b.has_trained_token()], drifts
 
 
 @dataclass(frozen=True)
@@ -272,6 +228,8 @@ class Rollout:
         reward (`float`, *optional*):
             Reward computed while generating, for example by an external grader. It is added to the rewards of the
             reward functions and environments. If `None`, this rollout gets no reward from this source.
+        rollout_id (`str`, *optional*):
+            Identifies the rollout in its training rows, for debugging. Defaults to a new random hex id.
     """
 
     completion: Messages
@@ -280,6 +238,7 @@ class Rollout:
     tool_call_count: int = 0
     tool_failure_count: int = 0
     reward: float | None = None
+    rollout_id: RolloutId = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 @dataclass(slots=True)
@@ -527,7 +486,6 @@ class AsyncRolloutLoop:
         self.sampling_replay = config.top_p < 1.0 or config.top_k > 0
         self.num_sampler_logprobs = config.num_sampler_logprobs if config.score_centering else 0
         self.chat_template_kwargs = config.chat_template_kwargs or {}
-        self._fork_threshold_tokens = config.fork_threshold_tokens  # reconciler fork/realign threshold
         self.vllm_server_url = config.vllm_server_base_url.rstrip("/")
 
         tools = tools or []
@@ -914,16 +872,13 @@ class AsyncRolloutLoop:
                     self._total_rollouts += 1
 
                     rollout = task.result()
-                    # >= 1 row per conversation; `tally` is the drift bookkeeping over the turn transitions.
-                    sequences, tally = _chain_to_sequences(
-                        rollout.turns, uuid.uuid4().hex, self._fork_threshold_tokens
-                    )
+                    sequences, drifts = _chain_to_sequences(rollout)
                     if rollout.turns:
                         self._push_rollout_metrics(
                             turns=len(rollout.turns),
                             sequences=len(sequences),
                             completion_ids=rollout.completion_ids,
-                            tally=tally,
+                            drifts=drifts,
                             duration_s=time.monotonic() - t_dispatch,
                         )
                     group = pending_groups[group_id]
@@ -1104,11 +1059,10 @@ class AsyncRolloutLoop:
         turns: int,
         sequences: int,
         completion_ids: list[int],
-        tally: dict[str, float],
+        drifts: list[int],
         duration_s: float,
     ) -> None:
         """One conversation's structure and its completion, aggregated per rollout."""
-        transitions = tally["transitions"]
         completion_tokens = len(completion_ids)
         self._rates["completions/mean_length"][0] += completion_tokens
         self._rates["completions/mean_length"][1] += 1
@@ -1124,18 +1078,16 @@ class AsyncRolloutLoop:
             eos_and_pad = (*self.eos_token_ids, self.tokenizer.pad_token_id)
             self._rates["completions/clipped_ratio"][0] += completion_ids[-1] not in eos_and_pad
             self._rates["completions/clipped_ratio"][1] += 1
-        if transitions:
-            self._rates["rollout/fork_frac"][0] += tally["fork"]
-            self._rates["rollout/fork_frac"][1] += transitions
-            self._rates["rollout/realign_frac"][0] += tally["realign"]
-            self._rates["rollout/realign_frac"][1] += transitions
-            self._rates["rollout/drift_tokens_mean"][0] += tally["drift_tokens"]
-            self._rates["rollout/drift_tokens_mean"][1] += transitions
+        if turns > 1:
+            self._rates["rollout/fork_frac"][0] += len(drifts)
+            self._rates["rollout/fork_frac"][1] += turns - 1
+            self._rates["rollout/drift_tokens_mean"][0] += sum(drifts)
+            self._rates["rollout/drift_tokens_mean"][1] += turns - 1
         self._push_metrics(
             {
                 "rollout/duration_s": duration_s,
                 "rollout/turns_max": float(turns),
-                "rollout/drift_tokens_max": tally["drift_max"],
+                "rollout/drift_tokens_max": float(max(drifts, default=0)),
                 "completions/max_length": float(completion_tokens),
                 "completions/min_length": float(completion_tokens),
             }
@@ -1485,6 +1437,7 @@ class AsyncRolloutLoop:
         # reward) is not logged, rather than logged as NaN.
         used_columns = ~np.all(np.isnan(per_func_rewards), axis=1)
 
+        per_func_std = [float(np.nanstd(r)) if not np.isnan(r).all() else float("nan") for r in per_func_rewards]
         # Option 3 advantage: one advantage per conversation, stamped on every training row it produced.
         # Under TRL's global token-mean loss a fork is invisible to the loss (see slime_research.md B.5),
         # so we do not split the reward or the advantage across a conversation's rows.
@@ -1502,12 +1455,17 @@ class AsyncRolloutLoop:
         ):
             metrics = {
                 "reward_kept": float(reward),
-                "reward_std": reward_std,
+                "reward_group_std": reward_std,
                 **{
-                    f"rewards/{name}": float(func_reward)
+                    f"rewards/{name}/mean": float(func_reward)
                     for name, func_reward, used in zip(
                         self.reward_func_names, per_func_rewards[:, i], used_columns, strict=True
                     )
+                    if used
+                },
+                **{
+                    f"rewards/{name}/group_std": std
+                    for name, std, used in zip(self.reward_func_names, per_func_std, used_columns, strict=True)
                     if used
                 },
                 **tm,
