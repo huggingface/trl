@@ -962,7 +962,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,
-            token_budget=256,
+            token_budget=160,
             report_to="none",
         )
         trainer = AsyncDistillationTrainer(
@@ -1013,7 +1013,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,  # short timeout so test fails fast if queue runs dry
-            token_budget=256,
+            token_budget=160,
             logging_steps=1,
             report_to="none",
         )
@@ -1064,7 +1064,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
                 per_device_train_batch_size=3,
                 teacher_top_k=TEACHER_TOP_K,
                 max_completion_length=8,
-                token_budget=256,
+                token_budget=160,
                 vllm_server_timeout=5.0,
                 report_to="none",
                 **overrides,
@@ -1101,7 +1101,7 @@ class TestAsyncDistillationTrainer(TrlTestCase):
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
             vllm_server_timeout=5.0,
-            token_budget=256,
+            token_budget=160,
             beta=beta,
             report_to="none",
         )
@@ -1328,7 +1328,7 @@ class TestAsyncDistillationTrainerPeft(TrlTestCase):
             per_device_train_batch_size=3,
             teacher_top_k=TEACHER_TOP_K,
             max_completion_length=8,
-            token_budget=256,
+            token_budget=160,
             vllm_server_base_url=fake.url,
             vllm_server_timeout=5.0,
             report_to="none",

@@ -2499,7 +2499,7 @@ class TestEpochStop(TrlTestCase):
             per_device_train_batch_size=3,
             num_generations=3,
             max_completion_length=8,
-            token_budget=64,
+            token_budget=160,
             vllm_server_timeout=5.0,
             report_to="none",
         )
