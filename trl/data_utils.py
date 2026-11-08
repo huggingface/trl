@@ -972,6 +972,7 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     - Replaces the key `"from"` with `"role"` in message dictionaries.
     - Replaces the key `"value"` with `"content"` in message dictionaries.
     - Renames `"conversations"` to `"messages"` for consistency with ChatML.
+    - Maps ShareGPT role names to ChatML roles: `"human"` becomes `"user"` and `"gpt"` becomes `"assistant"`.
 
     Args:
         example (`dict[str, list]`):
@@ -1003,7 +1004,9 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
             for message in messages:
                 if isinstance(message, dict):
                     if "from" in message:
-                        message["role"] = message.pop("from")
+                        role = message.pop("from")
+                        # ShareGPT uses "human" and "gpt" as role names, which chat templates don't recognize
+                        message["role"] = {"human": "user", "gpt": "assistant"}.get(role, role)
                     if "value" in message:
                         message["content"] = message.pop("value")
 

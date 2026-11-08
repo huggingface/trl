@@ -1320,3 +1320,22 @@ class TestMaybeConvertToChatML(TrlTestCase):
             ]
         }
         assert maybe_convert_to_chatml(example) == example
+
+    def test_sharegpt_roles(self):
+        # ShareGPT datasets use "human" and "gpt" as role names, which chat templates
+        # don't recognize: they must be converted to "user" and "assistant"
+        example = {
+            "conversations": [
+                {"from": "system", "value": "You are a helpful assistant."},
+                {"from": "human", "value": "What color is the sky?"},
+                {"from": "gpt", "value": "It is blue."},
+            ]
+        }
+        expected_output = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ]
+        }
+        assert maybe_convert_to_chatml(example) == expected_output
