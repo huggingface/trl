@@ -1122,6 +1122,8 @@ class ZeroSyncRolloutLoop:
         request_id = self.manager.add_request(prompt_ids, max_new_tokens=self.config.max_completion_length)
         self._turn_results[request_id] = self._loop.create_future()
         output = await self._turn_results[request_id]
+        if output.error is not None:
+            raise RuntimeError(f"The continuous batching engine failed the request: {output.error}")
         output_ids = list(output.generated_tokens)
         return TurnRecord(prompt_ids, output_ids, list(output.logprobs[: len(output_ids)]))
 
