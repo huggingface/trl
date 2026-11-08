@@ -13,11 +13,14 @@
 # limitations under the License.
 
 import asyncio
+import contextvars
 import functools
 import inspect
 import math
 import os
+import queue
 import textwrap
+import threading
 import time
 import uuid
 import warnings
@@ -66,6 +69,7 @@ from ...trainer.utils import (
     get_peak_flops_per_device,
     identity,
     is_async_callable,
+    is_trackio_available,
     nanmax,
     nanmin,
     print_prompt_completions_sample,
@@ -74,6 +78,9 @@ from .zero_sync_grpo_config import ZeroSyncGRPOConfig
 
 
 logger = get_logger(__name__)
+
+if is_trackio_available():
+    import trackio
 
 
 # A reward function is a callable that returns a list of floats (the rewards). The callable receives prompts,
@@ -625,6 +632,9 @@ class ZeroSyncRolloutLoop:
         `fatal_error` to fail fast instead of spinning.
         """
         while not stop_event.is_set():
+            if not self._turn_results:  # no request in flight
+                await asyncio.sleep(0.001)
+                continue
             output = self.manager.get_result(timeout=0)
             if output is None:
                 fatal_error = self.manager.background_thread_status.fatal_error
@@ -1278,6 +1288,46 @@ class ZeroSyncRolloutLoop:
         return samples
 
 
+def log_rollout_traces(samples: list[RolloutSample], step: int, report_to: list[str], max_traces: int = 16) -> None:
+    """Log rollout samples to trackio as inspectable traces (prompt + completion + reward/advantage per sample).
+
+    Call from rank 0 during training, where the HF trackio callback has already initialised the run; the traces then
+    show up under the run's Traces tab so rollouts can be read directly instead of grepping logs. No-op unless trackio
+    is the active logging backend (installed and listed in `report_to`). Best-effort: a trackio hiccup must never break
+    training.
+
+    Args:
+        samples (`list[RolloutSample]`):
+            Consumed rollout samples to log; the first `max_traces` are recorded.
+        step (`int`):
+            Step value the traces are logged under (e.g. the policy version, so the UI groups by policy).
+        report_to (`list[str]`):
+            The training args' `report_to`; logging happens only when it contains `"trackio"`.
+        max_traces (`int`, *optional*, defaults to `16`):
+            Maximum number of traces to log per call.
+    """
+    if not samples or "trackio" not in report_to or not is_trackio_available():
+        return
+    try:
+        traces = [
+            trackio.Trace(
+                messages=list(sample.prompt) + list(sample.completion),
+                metadata={
+                    **sample.metrics,  # reward_kept, reward_group_std, rewards/<func>/{mean,group_std}, tools/*_frequency
+                    "advantage": float(sample.advantage),
+                    "group_id": int(sample.group_id),
+                    "model_version": int(sample.model_version),
+                    "prompt_tokens": len(sample.input_ids) - int(sample.completion_mask.sum()),
+                    "completion_tokens": int(sample.completion_mask.sum()),
+                },
+            )
+            for sample in samples[:max_traces]
+        ]
+        trackio.log({"rollouts": traces}, step=step)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"rollout trace logging skipped: {type(e).__name__}: {e}")
+
+
 class _RolloutStream(torch.utils.data.IterableDataset):
     """Prompts in, finished rollouts out: what the training loop iterates.
 
@@ -1443,7 +1493,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
 
     def __init__(
         self,
-        model: str | PreTrainedModel,
+        model: "str | PreTrainedModel",
         reward_funcs: RewardFunc | list[RewardFunc] | None = None,
         args: ZeroSyncGRPOConfig | None = None,
         train_dataset: Dataset | IterableDataset | None = None,
@@ -1669,10 +1719,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             optimizers=optimizers,
         )
 
-        # The continuous batching manager and the rollout loop that feeds it are created on the first generation (the
-        # model must be on its final device first), the loop on the ranks that run the rollouts
-        self._manager = None
-        self.rollout_loop = None
+        precision = self.accelerator.mixed_precision
+        self.compute_dtype = {
+            "bf16": "bfloat16",
+            "fp16": "float16",
+            "no": str(self.model.dtype).removeprefix("torch."),
+        }.get(precision, precision)
+        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)
 
         # The base Trainer's data-skip replay loop doesn't apply to ZeroSyncGRPO's live rollout stream;
         # force it off regardless of what the user passed.
@@ -1682,14 +1735,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 "loop does not apply to a live rollout stream."
             )
         self.args.ignore_data_skip = True
-
-        precision = self.accelerator.mixed_precision
-        self.compute_dtype = {
-            "bf16": "bfloat16",
-            "fp16": "float16",
-            "no": str(self.model.dtype).removeprefix("torch."),
-        }.get(precision, precision)
-        self._peak_flops_per_device = get_peak_flops_per_device(self.accelerator, self.compute_dtype)
 
         # The metric sink. Values are floats, or `(numerator, denominator)` pairs for rates
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1703,18 +1748,29 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._step_trained_tokens = 0.0
         self._step_seq_len_weighted = 0.0
         self._step_samples = 0.0
+        self._trace_buf: list = []
+        # Traces exist to be read, not to cover the run: a handful per sampled policy version is enough to eyeball
+        # what the generator produced. Both numbers are therefore per *policy version* — `_traces_per_log` samples,
+        # once every `_trace_log_interval` versions. Flushing every `_trace_log_interval` *samples* instead fired
+        # ~60x per optimizer step at 484 samples/step, and since trackio writes a `metrics` row for every `log()`
+        # call — empty, because the payload is all traces — the real per-step metrics ended up buried under ~60x
+        # their own number of `{}` rows, which is what made the dashboard slow to query.
+        self._traces_per_log = 8
+        self._trace_log_interval = 8
+        self._last_traced_version = -1
+        # Log traces off the training path: __iter__ enqueues, a daemon thread drains. Bounded + drop-on-full so a
+        # slow trackio backend never blocks sample delivery.
+        self._trace_queue: queue.Queue = queue.Queue(maxsize=4)
+        threading.Thread(target=self._drain_traces, name="rollout-trace-logger", daemon=True).start()
+
+        # The continuous batching manager and the rollout loop that feeds it are created on the first generation (the
+        # model must be on its final device first), the loop on the ranks that run the rollouts
+        self._manager = None
+        self.rollout_loop = None
 
         # Add callbacks
         self.add_callback(_OptimizerTimeCallback(self))
         self.add_callback(StepIntervalCallback(self._log_step_metrics, 1))
-
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
-        # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
-        if self._signature_columns is None:
-            self._signature_columns = ["prompt"]
 
     def get_train_dataloader(self):
         return self._build_train_dataloader()
@@ -1740,23 +1796,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             num_workers=0,  # the engine lives in this process
         )
 
-    def train(self, *args, **kwargs):
-        try:
-            return super().train(*args, **kwargs)
-        finally:
-            if self._manager is not None:
-                # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
-                # the process would never exit. A flush would wait for every rollout still in flight, and there are
-                # always some, since the trainer keeps `max_concurrent_rollouts` rollouts generating; none of them will
-                # be trained on now. The engine cannot stop while it is paused, so generation resumes first.
-                try:
-                    self._resume_generation()
-                finally:
-                    if self.rollout_loop is not None:
-                        self.rollout_loop.stop()
-                        self.rollout_loop = None
-                    self._manager.stop(block=True, timeout=30, hard_stop=True)
-                    self._manager = None
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask"). In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't
+        # work. Instead, we set them to the columns expected by the `training_step` method, hence the override.
+        if self._signature_columns is None:
+            self._signature_columns = ["prompt"]
 
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
@@ -1889,6 +1935,13 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._pause.__exit__(None, None, None)
                 self._pause = None
 
+    def _drain_traces(self):
+        while True:
+            samples, step, ctx = self._trace_queue.get()
+            # Replay the main-thread context captured at enqueue: trackio's run lives in a ContextVar this daemon
+            # thread wouldn't otherwise inherit, so trackio.log() would raise "call init() first".
+            ctx.run(log_rollout_traces, samples, step=step, report_to=self.args.report_to)
+
     def _take_from_pool(self, num_samples: int) -> list[RolloutSample]:
         """Hand this replica its share of the samples every replica has ready.
 
@@ -2013,9 +2066,24 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             if sample.enqueued_at is not None:
                 self._metrics[mode]["sample/time_in_queue_s"].append(now - sample.enqueued_at)
             # Freshness
-            staleness = self.state.global_step - sample.model_version
+            version = self.state.global_step
+            staleness = version - sample.model_version
             self._metrics[mode]["sample/staleness_mean"].append(float(staleness))
             self._metrics[mode]["sample/staleness_max"].append(float(staleness))
+
+            # Traces are logged by the run's process, see `log_rollout_traces`
+            if not self.accelerator.is_main_process:
+                continue
+            if version % self._trace_log_interval == 0 and version != self._last_traced_version:
+                self._trace_buf.append(sample)
+                if len(self._trace_buf) >= self._traces_per_log:
+                    try:
+                        # Capture the main-thread context (holds trackio's run) so the drain thread can replay it.
+                        self._trace_queue.put_nowait((self._trace_buf, version, contextvars.copy_context()))
+                    except queue.Full:
+                        pass
+                    self._trace_buf = []
+                    self._last_traced_version = version
         if self._tp_cpu_group is not None:
             torch.distributed.broadcast_object_list([samples], src=self._tp_driver, group=self._tp_cpu_group)
         return samples
@@ -2198,26 +2266,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 local = param.data.to_local() if isinstance(param.data, DTensor) else param.data
                 torch.distributed.broadcast(local, src=owner * self.tp_size + shard, group=self._replica_group)
 
-    def training_step(self, model, inputs, num_items_in_batch):
-        time_before = time.perf_counter()
-        output = super().training_step(model, inputs, num_items_in_batch)
-        # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
-        # optimizer step rather than one per accumulation micro-step.
-        # Without tensor parallelism the model is a plain DDP one and accelerate already reduced the gradients;
-        # DDP cannot wrap a tensor-parallel model, which is why the reduction is done here instead.
-        if self.tp_size > 1 and self._replica_group is not None and self.accelerator.sync_gradients:
-            for param in self.accelerator.unwrap_model(self.model).parameters():
-                if param.grad is None:
-                    continue
-                # A sharded gradient is summed shard by shard: every rank in the group holds the same shard of the
-                # model, so summing their local views is the same as summing the whole gradients.
-                grad = param.grad.to_local() if isinstance(param.grad, DTensor) else param.grad
-                torch.distributed.all_reduce(grad, group=self._replica_group)
-                grad /= self.dp_size
-        self._step_microbatches += 1
-        self._current_train_step_time += time.perf_counter() - time_before
-        return output
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         completion_mask = inputs["completion_mask"]
 
@@ -2366,7 +2414,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._metrics["train"]["aux_loss"].append((gathered_aux / world_size).item())
 
         # Per-step accounting, accumulated across the micro-batches of one optimizer step and flushed in
-        # `_log_step_metrics`. The counts are batch-wide, each replica counted once.
+        # `training_step`. The counts are batch-wide, each replica counted once.
         n_forward_tokens = float(global_counts[1]) / self.tp_size
         mean_seq_len = float(global_counts[1] / global_counts[2])
         self._step_forward_tokens += n_forward_tokens
@@ -2375,6 +2423,26 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._step_samples += n_forward_tokens / mean_seq_len
         self._step_forward_s += self._last_forward_time_s
         return loss
+
+    def training_step(self, model, inputs, num_items_in_batch):
+        time_before = time.perf_counter()
+        output = super().training_step(model, inputs, num_items_in_batch)
+        # `sync_gradients` is true only on the last micro-step, so the replicas exchange one summed gradient per
+        # optimizer step rather than one per accumulation micro-step.
+        # Without tensor parallelism the model is a plain DDP one and accelerate already reduced the gradients;
+        # DDP cannot wrap a tensor-parallel model, which is why the reduction is done here instead.
+        if self.tp_size > 1 and self._replica_group is not None and self.accelerator.sync_gradients:
+            for param in self.accelerator.unwrap_model(self.model).parameters():
+                if param.grad is None:
+                    continue
+                # A sharded gradient is summed shard by shard: every rank in the group holds the same shard of the
+                # model, so summing their local views is the same as summing the whole gradients.
+                grad = param.grad.to_local() if isinstance(param.grad, DTensor) else param.grad
+                torch.distributed.all_reduce(grad, group=self._replica_group)
+                grad /= self.dp_size
+        self._step_microbatches += 1
+        self._current_train_step_time += time.perf_counter() - time_before
+        return output
 
     def _log_step_metrics(self) -> None:
         """Flush one optimizer step's worth of accounting: the time budget, what the batch held, and throughput.
@@ -2454,3 +2522,21 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
+
+    def _inner_training_loop(self, *args, **kwargs):
+        try:
+            return super()._inner_training_loop(*args, **kwargs)
+        finally:
+            if self._manager is not None:
+                # The generation thread is not a daemon, and Python joins those before it runs any atexit hook, so
+                # the process would never exit. A flush would wait for every rollout still in flight, and there are
+                # always some, since the trainer keeps `max_concurrent_rollouts` rollouts generating; none of them will
+                # be trained on now. The engine cannot stop while it is paused, so generation resumes first.
+                try:
+                    self._resume_generation()
+                finally:
+                    if self.rollout_loop is not None:
+                        self.rollout_loop.stop()
+                        self.rollout_loop = None
+                    self._manager.stop(block=True, timeout=30, hard_stop=True)
+                    self._manager = None

@@ -16,13 +16,14 @@ import asyncio
 import dataclasses
 import math
 import os
+import threading
 import time
 from collections import defaultdict
 
 import pytest
 import torch
 from accelerate import PartialState
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from torch.distributed.tensor import DTensor
 from transformers import AutoTokenizer
 
@@ -37,7 +38,7 @@ from trl.experimental.zero_sync_grpo.zero_sync_grpo_trainer import (
     _reduce_metric,
 )
 
-from ..testing_utils import TrlTestCase, require_torch_accelerator
+from ..testing_utils import TrlTestCase, require_response_parsing, require_torch_accelerator
 
 
 def dummy_reward_func(completions, **kwargs):
@@ -328,6 +329,297 @@ class TestRolloutLoop(TrlTestCase):
         assert rollout.tool_call_count == 0
 
 
+class TestRolloutLoopEnvironments(TrlTestCase):
+    """Unit tests for the rollout loop's environment/tool wiring (no engine required)."""
+
+    def _make_loop(self, environment_factory, dataset=None):
+        if dataset is None:
+            dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        loop = _rollout_loop(environment_factory=environment_factory, num_generations=2, max_concurrent_rollouts=4)
+        loop.prompts = iter([list(dataset)])
+        return loop
+
+    def test_multiple_environments_expose_only_their_own_tools(self):
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        class EchoEnvironment:
+            def reset(self, **kwargs): ...
+
+            def shout(self, text: str) -> str:
+                """Shout the text.
+
+                Args:
+                    text: Text to shout.
+
+                Returns:
+                    The text in upper case.
+                """
+                return text.upper()
+
+        loop = self._make_loop({"counter": CounterEnvironment, "echo": EchoEnvironment})
+        try:
+            assert loop._multi_environment is True
+            # `self.tools` is the union, used only to decide whether a training chat template is needed.
+            assert sorted(tool.__name__ for tool in loop.tools) == ["increment", "shout"]
+            # The probe instances seed the reuse pool, so they are not wasted.
+            assert len(loop._environment_pool["counter"]) == 1
+            assert len(loop._environment_pool["echo"]) == 1
+        finally:
+            loop._loop.close()
+
+    def test_tool_discovery_does_not_evaluate_properties(self):
+        # The init-time probe lists an environment's tool methods. `inspect.getmembers` calls `getattr` on every name
+        # before applying the predicate, so listing the instance would evaluate this property; listing the class
+        # leaves it inert.
+        class PropertyEnvironment:
+            def reset(self, **kwargs): ...
+
+            @property
+            def reward(self) -> float:
+                raise RuntimeError("`reward` must not be evaluated while discovering tools")
+
+            def echo(self, text: str) -> str:
+                """Echo the text back.
+
+                Args:
+                    text: Text to echo.
+
+                Returns:
+                    The text, unchanged.
+                """
+                return text
+
+        loop = self._make_loop(PropertyEnvironment)
+        try:
+            assert [tool.__name__ for tool in loop.tools] == ["echo"]
+        finally:
+            loop._loop.close()
+
+    @require_response_parsing
+    def test_environment_calls_run_off_the_event_loop_and_are_timed(self):
+        reset_threads = []
+
+        class SlowEnvironment:
+            def reset(self, **kwargs):
+                reset_threads.append(threading.current_thread())
+                time.sleep(0.02)
+
+            def step(self) -> str:
+                """
+                Take a step.
+                """
+                time.sleep(0.02)
+                return "ok"
+
+            def get_reward(self):
+                time.sleep(0.02)
+                loop._loop.call_soon_threadsafe(loop._stop_event.set)
+                return 1.0
+
+        loop = self._make_loop(SlowEnvironment)
+        tool_call = loop.tokenizer.encode(_TOOL_CALL.replace('"t"', '"step"'), add_special_tokens=False)
+        final = loop.tokenizer.encode(_FINAL, add_special_tokens=False)
+
+        async def generate_one_turn(prompt_ids):
+            ids = final if "<tool_response>" in loop.tokenizer.decode(prompt_ids) else tool_call
+            return TurnRecord(prompt_ids, ids, [-0.1] * len(ids))
+
+        loop.generate_one_turn = generate_one_turn
+        PartialState()
+        try:
+            loop._loop.run_until_complete(loop._run_loops(stop_event=loop._stop_event))
+        finally:
+            loop._loop.close()
+
+        rates = defaultdict(lambda: [0.0, 0.0])
+        for key, values in loop.metrics.items():
+            for value in values:
+                if isinstance(value, tuple):
+                    rates[key][0] += value[0]
+                    rates[key][1] += value[1]
+        assert reset_threads and all(t is not threading.main_thread() for t in reset_threads)
+        for key in ("env/reset_s", "env/reward_s", "tools/step/latency_s"):
+            assert rates[key][0] / rates[key][1] >= 0.02
+
+    def test_unknown_environment_raises(self):
+        # An example whose `environment` field doesn't match any configured environment should fail with a clear error
+        # rather than a bare KeyError mid-rollout. The check fires before any generation, so no engine is needed here.
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        dataset = dataset.map(lambda example: {"environment": "unknown"})
+
+        loop = self._make_loop({"counter": CounterEnvironment}, dataset=dataset)
+        try:
+            with pytest.raises(ValueError, match="not among the environments"):
+                loop._loop.run_until_complete(loop._generate_loop(stop_event=loop._stop_event))
+        finally:
+            loop._loop.close()
+
+
+class _FixedRolloutLoop(ZeroSyncRolloutLoop):
+    """Answers every prompt with the same tokens, without the engine."""
+
+    async def generate_one(self, prompt, tools, group_id=0):
+        return Rollout([{"role": "assistant", "content": "x"}], [2, 3], [TurnRecord([1], [2, 3], [-0.1, -0.1])])
+
+
+class _EvenRowsLoop(_FixedRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        self.prompt_calls.append((row_index, epoch))
+        return row_index % 2 == 0
+
+    async def generate_one(self, prompt, tools, group_id=0):
+        self.generated_rows.append(prompt[-1]["content"])
+        return await super().generate_one(prompt, tools, group_id)
+
+
+class _RejectAllLoop(_FixedRolloutLoop):
+    def filter_prompt(self, row_index, row, epoch):
+        return False
+
+
+class _SelfScoredLoop(_FixedRolloutLoop):
+    async def generate_one(self, prompt, tools, group_id=0):
+        rollout = await super().generate_one(prompt, tools, group_id)
+        self.calls += 1
+        return dataclasses.replace(rollout, reward=float(self.calls % 2))
+
+
+class _LifecycleLoop(_FixedRolloutLoop):
+    async def setup(self):
+        self.events.append("setup")
+
+    async def generate_one(self, prompt, tools, group_id=0):
+        self.events.append("generate")
+        return await super().generate_one(prompt, tools, group_id)
+
+    async def close(self):
+        self.events.append("close")
+
+
+class TestCustomRolloutLoop(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
+    def _run(self, loop, num_samples, dataset=None):
+        """Run the loop as the trainer does until `num_samples` samples reach the rollout buffer, over one epoch of
+        `dataset`; return everything the buffer received."""
+        if dataset is None:
+            dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        loop.prompts = iter([list(dataset)])
+        loop.run_until(lambda: len(loop.rollout_buffer) >= num_samples)
+        loop.stop()
+        return list(loop.rollout_buffer)
+
+    def test_filter_prompt_skips_rows(self):
+        dataset = Dataset.from_dict({"prompt": [[{"role": "user", "content": f"row_{i}"}] for i in range(4)]})
+        loop = _rollout_loop(_EvenRowsLoop, num_generations=2, reward_funcs=[two_reward])
+        loop.prompt_calls, loop.generated_rows = [], []
+        samples = self._run(loop, 4, dataset)
+        assert loop.prompt_calls == [(0, 0), (1, 0), (2, 0), (3, 0)]
+        assert set(loop.generated_rows) == {"row_0", "row_2"}
+        assert {sample.group_id for sample in samples} == {0, 2}
+
+    def test_filter_prompt_rejecting_a_whole_epoch_raises(self):
+        loop = _rollout_loop(_RejectAllLoop, reward_funcs=[two_reward])
+        loop.prompts = iter(
+            [list(load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train"))]
+        )
+        with pytest.raises(RuntimeError, match="rejected every prompt of epoch 0"):
+            loop.run_until(lambda: False)
+
+    def test_the_built_in_generate_one_needs_a_reward_source(self):
+        with pytest.raises(ValueError, match="No reward source provided"):
+            _rollout_loop(reward_funcs=[])
+
+    def test_generate_one_can_score_its_own_rollouts(self):
+        loop = _rollout_loop(_SelfScoredLoop, num_generations=2, reward_funcs=[])
+        loop.calls = 0
+        samples = self._run(loop, 4)
+        assert {sample.metrics["rewards/rollout/mean"] for sample in samples} == {0.0, 1.0}
+        assert {round(sample.advantage, 4) for sample in samples} == {-1.0, 1.0}
+
+    def test_setup_runs_before_generation_and_close_after(self):
+        loop = _rollout_loop(_LifecycleLoop, num_generations=2, reward_funcs=[two_reward])
+        loop.events = []
+        self._run(loop, 2)
+        assert loop.events[0] == "setup"
+        assert loop.events[-1] == "close"
+        assert "generate" in loop.events[1:-1]
+
+    def test_each_rollout_gets_the_tools_of_its_environment(self):
+        class CounterEnvironment:
+            def reset(self, **kwargs): ...
+
+            def increment(self, step: int) -> int:
+                """Increment the counter.
+
+                Args:
+                    step: Value to add.
+
+                Returns:
+                    The updated value.
+                """
+                return step
+
+        class EchoEnvironment:
+            def reset(self, **kwargs): ...
+
+            def shout(self, text: str) -> str:
+                """Shout the text.
+
+                Args:
+                    text: Text to shout.
+
+                Returns:
+                    The text in upper case.
+                """
+                return text.upper()
+
+        class ToolsLoop(_FixedRolloutLoop):
+            async def generate_one(self, prompt, tools, group_id=0):
+                self.seen_tools.append(tuple(tool.__name__ for tool in tools))
+                return await super().generate_one(prompt, tools, group_id)
+
+        prompt = [{"role": "user", "content": "hi"}]
+        dataset = Dataset.from_dict({"prompt": [prompt, prompt], "environment": ["counter", "echo"]})
+        loop = _rollout_loop(
+            ToolsLoop,
+            environment_factory={"counter": CounterEnvironment, "echo": EchoEnvironment},
+            num_generations=2,
+            reward_funcs=[two_reward],
+        )
+        loop.seen_tools = []
+        self._run(loop, 4, dataset)
+        assert set(loop.seen_tools) == {("increment",), ("shout",)}
+
+
 def two_reward(completions, **kwargs):
     # Deterministic per-conversation reward: two conversations get rewards 1.0 and 3.0.
     return [1.0, 3.0]
@@ -517,6 +809,26 @@ class TestZeroSyncGRPOTrainer(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
+
+    def test_train_with_a_custom_loop_cls(self):
+        class FixedTrainer(ZeroSyncGRPOTrainer):
+            loop_cls = _FixedRolloutLoop
+
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        trainer = FixedTrainer(
+            model="trl-internal-testing/small-Qwen2ForCausalLM-2.5",
+            reward_funcs=two_reward,
+            args=ZeroSyncGRPOConfig(
+                output_dir=self.tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_steps=1,
+                report_to="none",
+            ),
+            train_dataset=dataset,
+        )
+        trainer.train()
+        assert trainer.state.global_step == 1
 
     def test_train_bf16_steps_fp32_copies(self):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
