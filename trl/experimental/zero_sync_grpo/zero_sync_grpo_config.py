@@ -78,16 +78,17 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         continuous_batching_config (`dict`, *optional*):
             Keyword arguments for [`~transformers.generation.ContinuousBatchingConfig`]. `return_logprobs` is always
             forced to `True`: the engine's logprobs are the behavior-policy logprobs of the completions.
-        release_kv_cache_during_step (`bool`, *optional*, defaults to `True`):
-            Whether to free the KV cache's GPU memory for the training step. The cache waits in host memory and comes
-            back before generation resumes, so the rollouts in flight carry on where they were, and the forward and
-            backward get its memory. This copies the cache to the host and back at every step: disable it for small
-            models or short completions, where memory is not the limit.
-        lend_kv_cache_during_step (`bool`, *optional*, defaults to `False`):
-            Whether to lend the KV cache's GPU memory to the training step with `sublet` instead of releasing it. The
-            step takes the cache's free blocks first, then free GPU memory, then the blocks of rollouts in flight,
-            which are copied to the host and back. Only what the step overwrites moves. Takes over from
-            `release_kv_cache_during_step`. Needs `pip install 'sublet>=0.2'`.
+        kv_cache_during_step (`str`, *optional*, defaults to `"release"`):
+            What happens to the KV cache's GPU memory during the training step. Supported values are:
+
+            - `"keep"`: the cache stays on the device, for small models or short completions, where memory is not the
+              limit.
+            - `"release"` (default): the cache waits in host memory and comes back before generation resumes, so the
+              rollouts in flight carry on where they were, and the forward and backward get its memory. This copies the
+              cache to the host and back at every step.
+            - `"lend"`: the cache's memory is lent to the step with `sublet`. The step takes the cache's free blocks
+              first, then free GPU memory, then the blocks of rollouts in flight, which are copied to the host and
+              back. Only what the step overwrites moves. Needs `pip install 'sublet>=0.2'`.
 
         > Parameters that control the training
 
@@ -203,23 +204,17 @@ class ZeroSyncGRPOConfig(_BaseConfig):
         },
     )
 
-    release_kv_cache_during_step: bool = field(
-        default=True,
+    kv_cache_during_step: str = field(
+        default="release",
         metadata={
-            "help": "Whether to free the KV cache's GPU memory for the training step. The cache waits in host memory "
-            "and comes back before generation resumes, so the rollouts in flight carry on where they were, and the "
-            "forward and backward get its memory. This copies the cache to the host and back at every step: disable it "
-            "for small models or short completions, where memory is not the limit."
-        },
-    )
-
-    lend_kv_cache_during_step: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to lend the KV cache's GPU memory to the training step with `sublet` instead of releasing "
-            "it. The step takes the cache's free blocks first, then free GPU memory, then the blocks of rollouts in "
-            "flight, which are copied to the host and back. Only what the step overwrites moves. Takes over from "
-            "`release_kv_cache_during_step`. Needs `pip install 'sublet>=0.2'`."
+            "help": "What happens to the KV cache's GPU memory during the training step. 'keep': the cache stays on "
+            "the device, for small models or short completions, where memory is not the limit. 'release' (default): "
+            "the cache waits in host memory and comes back before generation resumes, so the rollouts in flight carry "
+            "on where they were, and the forward and backward get its memory. This copies the cache to the host and "
+            "back at every step. 'lend': the cache's memory is lent to the step with `sublet`. The step takes the "
+            "cache's free blocks first, then free GPU memory, then the blocks of rollouts in flight, which are copied "
+            "to the host and back. Only what the step overwrites moves. Needs `pip install 'sublet>=0.2'`.",
+            "choices": ["keep", "release", "lend"],
         },
     )
 

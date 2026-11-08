@@ -511,7 +511,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # The engine decodes through the training model itself; the trainer pauses it for the duration of its own
         # step, see `_pause_generation`.
         self._pause = None
-        self._loan = None  # (sublet loan of the KV cache, mode) during a step, with lend_kv_cache_during_step
+        self._loan = None  # (sublet loan of the KV cache, mode) during a step, when lending the KV cache
         self._step_generation_wait = 0.0
 
         # Tools
@@ -680,7 +680,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._manager = model.init_continuous_batching(
             generation_config=generation_config, continuous_batching_config=continuous_batching_config
         )
-        if self.args.lend_kv_cache_during_step:
+        if self.args.kv_cache_during_step == "lend":
             import sublet
 
             # The engine creates its KV cache as it starts, unless it has one already. It is created here, as the
@@ -763,10 +763,10 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         pause_start = time.perf_counter()
         self._pause = self._manager.pause()
         self._pause.__enter__()
-        if self.args.release_kv_cache_during_step and not self.args.lend_kv_cache_during_step:
+        if self.args.kv_cache_during_step == "release":
             self._manager.release_memory()
         self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
-        if self.args.lend_kv_cache_during_step:
+        if self.args.kv_cache_during_step == "lend":
             # The step allocates from the cache's memory until the loan ends in `_resume_generation`, which gives back
             # all of it but the free memory: the rollouts in flight, and the zeros padding tokens read
             import sublet
@@ -800,7 +800,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 self._metrics[mode]["generation/lent_beyond_gib"].append(loan.extra_bytes / 2**30)
         finally:  # the loan gives the cache back intact even when it raises
             if self._pause is not None:
-                if self.args.release_kv_cache_during_step and not self.args.lend_kv_cache_during_step:
+                if self.args.kv_cache_during_step == "release":
                     self._manager.restore_memory()
                 self._pause.__exit__(None, None, None)
                 self._pause = None
