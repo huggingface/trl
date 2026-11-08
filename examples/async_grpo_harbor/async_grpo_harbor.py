@@ -110,8 +110,8 @@ from harbor_env.harness import HarborSessionFactory
 from peft import LoraConfig
 from transformers import AutoTokenizer
 
-from trl.experimental.async_grpo import AsyncGRPOConfig, AsyncGRPOTrainer
-from trl.experimental.async_grpo.openenv_harness import HarnessRolloutOutcome, HarnessRolloutWorker
+from trl.experimental.async_grpo import AsyncGRPOConfig
+from trl.experimental.async_grpo.openenv_harness import HarnessAsyncGRPOTrainer, HarnessRolloutOutcome
 
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -240,7 +240,6 @@ def main() -> None:
     print(f"output    {output_dir}")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    eos_token_ids = [tokenizer.eos_token_id]
 
     config = AsyncGRPOConfig(
         output_dir=output_dir,
@@ -276,18 +275,6 @@ def main() -> None:
         seed=0,
     )
 
-    worker = HarnessRolloutWorker(
-        config,
-        harness_session_factory=factory,
-        harness_adapter=None,
-        rollout_reward_fn=harbor_reward,
-        model_name=args.model,
-        dataset=dataset,
-        reward_funcs=[],  # the reward is the task's own verifier, via `rollout_reward_fn`
-        processing_class=tokenizer,
-        eos_token_ids=eos_token_ids,
-    )
-
     peft_config = None
     if args.lora_r:
         # PEFT reads `all-linear` only as a string, and anything else as module names
@@ -298,12 +285,13 @@ def main() -> None:
             r=args.lora_r, lora_alpha=args.lora_alpha or 2 * args.lora_r, target_modules=target_modules
         )
 
-    trainer = AsyncGRPOTrainer(
+    trainer = HarnessAsyncGRPOTrainer(
         model=args.model,
+        harness_session_factory=factory,
         args=config,
         train_dataset=dataset,
         processing_class=tokenizer,
-        rollout_worker=worker,
+        rollout_reward_fn=harbor_reward,
         peft_config=peft_config,
     )
     trainer.train()

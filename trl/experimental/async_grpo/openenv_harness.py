@@ -23,9 +23,10 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from accelerate.logging import get_logger
+from datasets import Dataset, IterableDataset
 from openenv.core.harness import (
     HarnessAdapter,
     HarnessRunLimits,
@@ -37,15 +38,16 @@ from openenv.core.harness import (
 )
 from openenv.core.harness.capture.upstream import training_sampling
 from openenv.core.llm_client import LLMResponse, ToolCall
+from transformers import PreTrainedModel, PreTrainedTokenizerBase, TrainerCallback
 
 from ...chat_template_utils import parse_response
 from .async_grpo_config import AsyncGRPOConfig
-from .async_rollout_worker import (
-    AsyncRolloutLoop,
-    AsyncRolloutWorker,
-    Rollout,
-    TurnRecord,
-)
+from .async_grpo_trainer import AsyncGRPOTrainer
+from .async_rollout_worker import AsyncRolloutLoop, Rollout, TurnRecord
+
+
+if TYPE_CHECKING:
+    from peft import PeftConfig
 
 
 logger = get_logger(__name__)
@@ -108,15 +110,11 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
         harness_session_factory: Callable[..., ResourceSessionFactory],
         harness_adapter: HarnessAdapter | None = None,
         rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
-        lossless_capture: bool = True,
         max_session_failures_per_slot: int = 10,
         max_session_backoff_s: float = 16,
         **loop_kwargs,
     ):
         super().__init__(**loop_kwargs)
-        # Fork rewritten captures so reconciliation preserves eligible sampled tokens.
-        if harness_adapter is None and lossless_capture:
-            self._fork_threshold_tokens = 0
         # An adapter lets TRL sample each turn; otherwise the agent owns the loop.
         self._adapter = harness_adapter
         if harness_adapter is None and (self.config.top_p < 1.0 or self.config.top_k > 0):
@@ -305,7 +303,10 @@ class _HarnessRolloutLoop(AsyncRolloutLoop):
             )
             if self._rollout_reward_fn is not None and env_reward is not None:
                 metrics["correctness"] = env_reward
-            return Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward), metrics
+            return (
+                Rollout(completion, completion_ids, turns, tool_call_count, tool_failure_count, reward, rollout_id),
+                metrics,
+            )
         except CaptureContractError:
             raise
         except Exception:
@@ -407,18 +408,75 @@ def _messages_from_trace(entries: list[TraceEntry]) -> list[Message]:
     return list(last["request"].get("messages") or []) + [{"role": "assistant", "content": content}]
 
 
-class HarnessRolloutWorker(AsyncRolloutWorker):
-    """AsyncGRPO rollout worker that drives an OpenEnv `ResourceSessionFactory`.
+class HarnessAsyncGRPOTrainer(AsyncGRPOTrainer):
+    """
+    [`experimental.async_grpo.AsyncGRPOTrainer`] whose rollouts are OpenEnv harness sessions, for example an agent
+    served by Harbor that runs its own loop.
 
-    Pass `harness_session_factory` as a callable returning an OpenEnv `ResourceSessionFactory`, for example
-    `functools.partial(HarborSessionFactory, server_url, ...)`. In loop-owning mode, the worker calls it with
-    `sampling=` from its training policy. With `harness_adapter`, it calls it without arguments and samples turns
-    itself. Inject the worker via `AsyncGRPOTrainer(rollout_worker=...)`.
+    Each rollout creates a session from the factory and lets it run to completion. Without `harness_adapter`, the agent
+    owns its loop and TRL trains on the `TrainingTrace` the session captured; with one, TRL samples each turn itself.
+    The reward is the session's verifier reward, or `rollout_reward_fn` applied to the outcome. A failed session is
+    unscorable, and the next one waits first, doubling the wait up to 16 seconds. After 10 × `max_concurrent_rollouts`
+    unscorable sessions in a row, across all rollout slots, training stops with an error.
 
-    A failed session is unscorable, and the worker waits before the next one, doubling the wait up to
-    `max_session_backoff_s` seconds (defaults to `16`). After `max_session_failures_per_slot` (defaults to `10`)
-    unscorable sessions in a row per in-flight slot, the worker stops with an error.
+    Args:
+        model (`str` or [`~transformers.PreTrainedModel`]):
+            Model to be trained, as in [`experimental.async_grpo.AsyncGRPOTrainer`].
+        harness_session_factory (`Callable[..., ResourceSessionFactory]`):
+            Callable returning an OpenEnv `ResourceSessionFactory`, for example
+            `functools.partial(HarborSessionFactory, server_url, ...)`. Without `harness_adapter`, it is called with
+            `sampling=` built from the config's sampling parameters, so the agent samples with the training policy.
+            With `harness_adapter`, it is called without arguments. It is called in the rollout process, so it must be
+            picklable: a module-level function, a `functools.partial` or a callable class instance, not a lambda.
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+            Dataset of prompts. Each prompt is passed to the factory's `create` to start a session on its task.
+        args ([`experimental.async_grpo.AsyncGRPOConfig`], *optional*):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
+            Processing class used to process the data, as in [`experimental.async_grpo.AsyncGRPOTrainer`].
+        harness_adapter (`HarnessAdapter`, *optional*):
+            Adapter that lets TRL sample each turn of the session. If `None`, the agent owns its loop and TRL trains on
+            what the session captured, which requires sampling the full vocabulary (`top_p=1.0`, `top_k=0`). Used in
+            the rollout process, so it must be picklable.
+        rollout_reward_fn (`Callable[[HarnessRolloutOutcome], float | None]`, *optional*):
+            Turns a finished session into a reward. Return `None` to mark the rollout unscorable. If `None`, the
+            session's verifier reward is used. Called in the rollout process, so it must be picklable, like
+            `harness_session_factory`.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
+            List of callbacks to customize the training loop.
+        optimizers (`tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
-    def __init__(self, config: AsyncGRPOConfig, **kwargs):
-        super().__init__(config, loop_cls=_HarnessRolloutLoop, **kwargs)
+    loop_cls = _HarnessRolloutLoop
+
+    def __init__(
+        self,
+        model: str | PreTrainedModel,
+        harness_session_factory: Callable[..., ResourceSessionFactory],
+        train_dataset: Dataset | IterableDataset,
+        args: AsyncGRPOConfig | None = None,
+        processing_class: PreTrainedTokenizerBase | None = None,
+        *,
+        harness_adapter: HarnessAdapter | None = None,
+        rollout_reward_fn: Callable[[HarnessRolloutOutcome], float | None] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple = (None, None),
+        peft_config: PeftConfig | None = None,
+    ):
+        self._rollout_loop_kwargs = {
+            "harness_session_factory": harness_session_factory,
+            "harness_adapter": harness_adapter,
+            "rollout_reward_fn": rollout_reward_fn,
+        }
+        super().__init__(
+            model=model,
+            args=args,
+            train_dataset=train_dataset,
+            processing_class=processing_class,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            peft_config=peft_config,
+        )
