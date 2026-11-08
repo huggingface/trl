@@ -101,6 +101,53 @@ class TrainingSequence:
     rollout_id: RolloutId  # which conversation this row came from
 
 
+def _make_kv_cache_lendable(cache) -> None:
+    """Moves the engine's KV cache onto a tensor made by `sublet`, whose memory `sublet.lend` can lend. Must run before
+    the engine uses the cache: the cache allocators rebuild their views of the new tensor."""
+    import sublet
+
+    nbytes = cache.cache_tensor.numel()
+    # Two caches would not fit on the device: the engine's tensor goes first
+    cache.cache_tensor.untyped_storage().resize_(0)
+    torch.cuda.empty_cache()
+    cache.cache_tensor = sublet.empty(nbytes, dtype=torch.uint8, device=cache.device).zero_()
+    non_trash_bytes = nbytes - 2 * cache.bytes_per_sector  # the cache starts with two trash sectors
+    for allocator in cache.cache_allocators.values():
+        allocator.register_cache_tensor(cache.bytes_per_sector, non_trash_bytes, cache.cache_tensor, cache.pool)
+
+
+def _live_kv_cache_views(cache) -> list[torch.Tensor]:
+    """Views of the engine's KV cache tensor that hold what the engine still needs: the blocks of every allocated
+    sector but its free ones, and the read trash sector, whose zeros padding tokens read. Adjacent ranges are merged."""
+    pool, bytes_per_sector = cache.pool, cache.bytes_per_sector
+    free_sectors = set(pool.free_sectors)
+    free_ranges: dict[int, list[tuple[int, int]]] = {}  # sector -> byte ranges of its free blocks
+    for allocator in cache.cache_allocators.values():
+        bytes_per_block = allocator.bytes_per_block
+        for leaves in pool._free_blocks[allocator.index].trees.values():
+            for leaf in leaves:
+                start = leaf * bytes_per_block
+                free_ranges.setdefault(start // bytes_per_sector, []).append((start, start + bytes_per_block))
+    ranges = [(0, bytes_per_sector)]
+    for sector in range(pool.num_reserved_sectors, pool.num_reserved_sectors + pool.num_sectors):
+        if sector in free_sectors:
+            continue
+        start, end = sector * bytes_per_sector, (sector + 1) * bytes_per_sector
+        for free_start, free_end in sorted(free_ranges.get(sector, [])):
+            ranges.append((start, free_start))
+            start = free_end
+        ranges.append((start, end))
+    merged = []
+    for start, end in ranges:
+        if start == end:
+            continue
+        if merged and merged[-1][1] == start:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return [cache.cache_tensor[start:end] for start, end in merged]
+
+
 def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
     """How many tokens at the start are identical in `a` and `b`."""
     limit = min(len(a), len(b))
@@ -512,6 +559,7 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # step, see `_pause_generation`.
         self._pause = None
         self._loan = None  # (sublet loan of the KV cache, mode) during a step, with lend_kv_cache_during_step
+        self._lendable_kv_cache = None  # the engine's KV cache, once moved onto a lendable tensor
         self._step_generation_wait = 0.0
 
         # Tools
@@ -657,8 +705,6 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         # Generation and training share the device, so the KV cache must leave room for gradients, optimizer states
         # and activations; the engine's own default claims most of the free memory.
         cb_kwargs.setdefault("max_memory_percent", 0.2)
-        if self.args.lend_kv_cache_during_step:
-            cb_kwargs["lendable_cache"] = True
         if self.tp_size > 1:
             # The engine turns NCCL's graph-mixing support off, which fits a pure-decode server but slows the
             # training collectives here (measured 3.62 against 3.71 s/step at batch 128). Generation is paused while
@@ -682,6 +728,19 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._manager = model.init_continuous_batching(
             generation_config=generation_config, continuous_batching_config=continuous_batching_config
         )
+        if self.args.lend_kv_cache_during_step:
+            # The engine creates its KV cache in its own thread, as it starts; it gets moved onto a lendable tensor
+            # there, before the engine ever uses it
+            create_batch_processor = self._manager._create_batch_processor
+
+            def create_lendable_batch_processor():
+                batch_processor = create_batch_processor()
+                if batch_processor.cache is not self._lendable_kv_cache:  # the engine reuses its processor on restart
+                    _make_kv_cache_lendable(batch_processor.cache)
+                    self._lendable_kv_cache = batch_processor.cache
+                return batch_processor
+
+            self._manager._create_batch_processor = create_lendable_batch_processor
         self._manager.start()
 
     def _tokenize_conversation(self, messages: list[dict[str, Any]]) -> list[int]:
@@ -753,8 +812,12 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         self._metrics[mode]["generation/pause_s"].append(time.perf_counter() - pause_start)
         if self.args.lend_kv_cache_during_step:
             # The step allocates from the cache's memory until the loan ends in `_resume_generation`
+            import sublet
+
             lend_start = time.perf_counter()
-            self._loan = (self._manager.lend_memory(), mode)
+            cache = self._manager.batch_processor.cache
+            cache.evict_cached_blocks()  # blocks kept only to share prefixes: the step may write over them
+            self._loan = (sublet.lend(cache.cache_tensor, keep=_live_kv_cache_views(cache)), mode)
             self._metrics[mode]["generation/lend_s"].append(time.perf_counter() - lend_start)
 
     def _resume_generation(self) -> None:
