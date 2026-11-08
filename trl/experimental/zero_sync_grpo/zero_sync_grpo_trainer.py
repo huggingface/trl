@@ -631,9 +631,11 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
                 # the process would never exit. A flush would wait for every rollout still in flight, and there are
                 # always some, since the trainer keeps `rollouts_in_flight` rollouts generating; none of them will be
                 # trained on now. The engine cannot stop while it is paused, so generation resumes first.
-                self._resume_generation()
-                self._manager.stop(block=True, timeout=30, hard_stop=True)
-                self._manager = None
+                try:
+                    self._resume_generation()
+                finally:
+                    self._manager.stop(block=True, timeout=30, hard_stop=True)
+                    self._manager = None
 
     def _init_manager(self):
         # The manager is attached to the unwrapped training model: decoding reads the same parameter tensors the
@@ -752,24 +754,24 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
         if self.args.lend_kv_cache_during_step:
             # The step allocates from the cache's memory until the loan ends in `_resume_generation`
             lend_start = time.perf_counter()
-            loan = self._manager.lend_memory()
-            loan.__enter__()
-            self._loan = (loan, mode)
+            self._loan = (self._manager.lend_memory(), mode)
             self._metrics[mode]["generation/lend_s"].append(time.perf_counter() - lend_start)
 
     def _resume_generation(self) -> None:
-        if self._loan is not None:
-            (loan, mode), self._loan = self._loan, None
-            give_back_start = time.perf_counter()
-            loan.__exit__(None, None, None)  # the rollouts' blocks the step overwrote come back from the host
-            self._metrics[mode]["generation/give_back_s"].append(time.perf_counter() - give_back_start)
-            self._metrics[mode]["generation/lent_copied_gib"].append(loan.copied_bytes / 2**30)
-            self._metrics[mode]["generation/lent_beyond_gib"].append(loan.extra_bytes / 2**30)
-        if self._pause is not None:
-            if self.args.release_kv_cache_during_step and not self.args.lend_kv_cache_during_step:
-                self._manager.restore_memory()
-            self._pause.__exit__(None, None, None)
-            self._pause = None
+        try:
+            if self._loan is not None:
+                (loan, mode), self._loan = self._loan, None
+                give_back_start = time.perf_counter()
+                loan.end()  # the rollouts' blocks the step overwrote come back from the host
+                self._metrics[mode]["generation/give_back_s"].append(time.perf_counter() - give_back_start)
+                self._metrics[mode]["generation/lent_copied_gib"].append(loan.copied_bytes / 2**30)
+                self._metrics[mode]["generation/lent_beyond_gib"].append(loan.extra_bytes / 2**30)
+        finally:  # the loan gives the cache back intact even when it raises
+            if self._pause is not None:
+                if self.args.release_kv_cache_during_step and not self.args.lend_kv_cache_during_step:
+                    self._manager.restore_memory()
+                self._pause.__exit__(None, None, None)
+                self._pause = None
 
     def _receive(self, timeout: float) -> None:
         # Read one finished completion, if one lands within `timeout`, and score it; a group's advantages are computed
