@@ -87,7 +87,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             Whether to lend the KV cache's GPU memory to the training step with `sublet` instead of releasing it. The
             step takes the cache's free blocks first, then free GPU memory, then the blocks of rollouts in flight,
             which are copied to the host and back. Only what the step overwrites moves. Takes over from
-            `release_kv_cache_during_step`. Needs `pip install sublet`.
+            `release_kv_cache_during_step`. Needs `pip install 'sublet>=0.2'`.
 
         > Parameters that control the training
 
@@ -219,7 +219,7 @@ class ZeroSyncGRPOConfig(_BaseConfig):
             "help": "Whether to lend the KV cache's GPU memory to the training step with `sublet` instead of releasing "
             "it. The step takes the cache's free blocks first, then free GPU memory, then the blocks of rollouts in "
             "flight, which are copied to the host and back. Only what the step overwrites moves. Takes over from "
-            "`release_kv_cache_during_step`. Needs `pip install sublet`."
+            "`release_kv_cache_during_step`. Needs `pip install 'sublet>=0.2'`."
         },
     )
 
