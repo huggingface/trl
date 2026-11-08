@@ -2008,6 +2008,14 @@ class ZeroSyncGRPOTrainer(_BaseTrainer):
             # ones into a single batch, whose activations then blow past memory (a batch of 256 samples all near
             # the length cap is over twice the tokens of a mixed one). Arrival order keeps the mix.
             samples = [buffer.popleft() for _ in range(num_samples)]
+        now = time.time()
+        for sample in samples:
+            if sample.enqueued_at is not None:
+                self._metrics[mode]["sample/time_in_queue_s"].append(now - sample.enqueued_at)
+            # Freshness
+            staleness = self.state.global_step - sample.model_version
+            self._metrics[mode]["sample/staleness_mean"].append(float(staleness))
+            self._metrics[mode]["sample/staleness_max"].append(float(staleness))
         if self._tp_cpu_group is not None:
             torch.distributed.broadcast_object_list([samples], src=self._tp_driver, group=self._tp_cpu_group)
         return samples

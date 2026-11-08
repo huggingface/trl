@@ -12,19 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import dataclasses
+import math
 import os
+import time
+from collections import defaultdict
 
 import pytest
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
 from torch.distributed.tensor import DTensor
+from transformers import AutoTokenizer
 
-from trl.experimental.zero_sync_grpo import ZeroSyncGRPOConfig, ZeroSyncGRPOTrainer
+from trl.experimental.zero_sync_grpo import ZeroSyncGRPOConfig, ZeroSyncGRPOTrainer, ZeroSyncRolloutLoop
 from trl.experimental.zero_sync_grpo.zero_sync_grpo_trainer import (
     Rollout,
+    RolloutGroup,
+    TrainingSequence,
     TurnRecord,
     _chain_to_sequences,
     _common_prefix_len,
+    _reduce_metric,
 )
 
 from ..testing_utils import TrlTestCase, require_torch_accelerator
@@ -118,6 +128,362 @@ class TestReconciler(TrlTestCase):
         assert rows[1].input_ids == [1, 2, 3, 10, 12, 30, 31]
         assert rows[1].completion_mask == [0, 0, 0, 0, 0, 1, 1]
         assert rows[1].old_log_probs == [0.0, 0.0, 0.0, 0.0, 0.0, -0.3, -0.4]
+
+
+def _rollout_loop(loop_cls=ZeroSyncRolloutLoop, **kwargs):
+    # `ZeroSyncRolloutLoop.__init__` only sets up state (no engine request / generation happens here).
+    model_id = "trl-internal-testing/tiny-Qwen3MoeForCausalLM"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config_fields = {f.name for f in dataclasses.fields(ZeroSyncGRPOConfig)}
+    config_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in config_fields}
+    config_kwargs.setdefault("max_completion_length", 32)
+    config_kwargs.setdefault("max_concurrent_rollouts", 128)
+    config = ZeroSyncGRPOConfig(report_to="none", **config_kwargs)
+    kwargs = {
+        "manager": None,
+        "reward_funcs": [dummy_reward_func],
+        "processing_class": tokenizer,
+        "eos_token_ids": [tokenizer.eos_token_id],
+        "metrics": defaultdict(list),
+        "model_version_fn": lambda: 7,
+        **kwargs,
+    }
+    return loop_cls(config, **kwargs)
+
+
+class TestMetricReduction(TrlTestCase):
+    """The value's shape and the key's suffix are the whole reduction API; nothing is registered or configured."""
+
+    def test_gauge_is_meaned(self):
+        assert _reduce_metric("perf/fwd_bwd_s", [1.0, 2.0, 6.0]) == 3.0
+
+    def test_counter_is_summed(self):
+        assert _reduce_metric("sample/dropped_stale_total", [1.0, 1.0, 1.0]) == 3.0
+
+    def test_extrema(self):
+        assert _reduce_metric("sample/forwarded_tokens_max", [3.0, 9.0, 5.0]) == 9.0
+        assert _reduce_metric("clip_ratio/low_min", [3.0, 9.0, 5.0]) == 3.0
+        # A `max`/`min` WORD, not a suffix, so the upstream spellings reduce correctly too.
+        assert _reduce_metric("completions/max_length", [3.0, 9.0, 5.0]) == 9.0
+        assert _reduce_metric("completions/min_length", [3.0, 9.0, 5.0]) == 3.0
+        # ... and a name that merely contains those letters is still a gauge.
+        assert _reduce_metric("perf/maximal_s", [2.0, 4.0]) == 3.0
+
+    def test_rate_is_sum_over_sum_not_mean_of_ratios(self):
+        # The two windows have rates 1 tok/s and 100 tok/s. Meaning the ratios would give 50.5; the honest rate is
+        # total tokens over total seconds. This is the defect that made `training_tok/s` unusable.
+        assert _reduce_metric("perf/forwarded_tok_s_e2e", [(100.0, 100.0), (100.0, 1.0)]) == pytest.approx(200 / 101)
+
+    def test_rate_with_zero_denominator_is_nan(self):
+        assert math.isnan(_reduce_metric("perf/forwarded_tok_s_e2e", [(0.0, 0.0)]))
+
+
+class TestMetricPush(TrlTestCase):
+    """The loop's payload has the same shape as the trainer's sink, so pushing it is an append."""
+
+    def test_counters_and_rates_ride_along_and_reset(self):
+        loop = _rollout_loop()
+        loop._counters["tools/search/call_total"] += 2
+        loop._rates["tools/latency_s"][0] += 3.0
+        loop._rates["tools/latency_s"][1] += 2
+        loop._push_metrics({"rollout/score_s": 0.5})
+
+        assert loop.metrics == {
+            "rollout/score_s": [0.5],
+            "tools/search/call_total": [2.0],
+            "tools/latency_s": [(3.0, 2.0)],
+        }
+        # Counters carry deltas: whatever was pushed must not be pushed again.
+        loop._push_metrics({})
+        assert loop.metrics == {
+            "rollout/score_s": [0.5],
+            "tools/search/call_total": [2.0],
+            "tools/latency_s": [(3.0, 2.0)],
+        }
+
+
+class TestToolExecution(TrlTestCase):
+    @staticmethod
+    def _call(name, **arguments):
+        return {"type": "function", "function": {"name": name, "arguments": arguments}}
+
+    def test_every_tool_shape_runs_and_calls_keep_their_order(self):
+        def sync_tool(value: int) -> str:
+            return f"sync:{value}"
+
+        async def async_tool(value: int) -> str:
+            await asyncio.sleep(0)
+            return f"async:{value}"
+
+        async def failing_tool(value: int) -> str:
+            raise RuntimeError(f"boom:{value}")
+
+        loop = _rollout_loop(max_concurrent_rollouts=4)
+        tool_dict = {
+            "sync_tool": sync_tool,
+            "async_tool": async_tool,
+            "failing_tool": failing_tool,
+        }
+        calls = [
+            self._call("sync_tool", value=1),
+            self._call("async_tool", value=2),
+            self._call("failing_tool", value=3),
+            self._call("missing_tool", value=4),
+        ]
+        messages, n_calls, n_failures = asyncio.run(loop._execute_tool_calls(calls, tool_dict))
+
+        assert n_calls == 4
+        assert n_failures == 2
+        assert [m["name"] for m in messages] == ["sync_tool", "async_tool", "failing_tool", "missing_tool"]
+        assert messages[0]["content"] == "sync:1"
+        assert messages[1]["content"] == "async:2"
+        assert "boom:3" in messages[2]["content"]
+        assert "unknown tool" in messages[3]["content"]
+        assert loop._counters["tools/failing_tool/failure_total"] == 1
+        assert loop._counters["tools/unknown_name_total"] == 1
+        assert loop._rates["tools/latency_s"][1] == 3
+
+    def test_slow_sync_tool_does_not_block_the_event_loop(self):
+        def slow_tool() -> str:
+            time.sleep(0.5)
+            return "done"
+
+        loop = _rollout_loop(max_concurrent_rollouts=4)
+
+        async def scenario():
+            ticks = 0
+
+            async def ticker():
+                nonlocal ticks
+                while True:
+                    ticks += 1
+                    await asyncio.sleep(0.01)
+
+            task = asyncio.create_task(ticker())
+            messages, _, _ = await loop._execute_tool_calls([self._call("slow_tool")], {"slow_tool": slow_tool})
+            task.cancel()
+            return messages, ticks
+
+        messages, ticks = asyncio.run(scenario())
+        assert messages[0]["content"] == "done"
+        assert ticks > 2  # inline, the ticker would have advanced once at most
+
+
+# The engine's turns, opened by Qwen3's empty thinking block: a tool call continues the loop, an answer ends it
+_TOOL_CALL = '<think>\n\n</think>\n\n<tool_call>\n{"name": "t", "arguments": {}}\n</tool_call><|im_end|>'
+_FINAL = "<think>\n\n</think>\n\ndone<|im_end|>"
+
+
+def t() -> str:
+    """
+    Return ok.
+    """
+    return "ok"
+
+
+def _run(*, turns, max_iters=None):
+    """
+    Drive `ZeroSyncRolloutLoop.generate_one` with the real tokenizer, chat template and response parser, scripting only
+    the engine, which generates the text of `turns` one turn after the other. Returns the rollout and the training rows
+    the loop builds from it.
+    """
+    loop = _rollout_loop(tools=[t], max_tool_calling_iterations=max_iters)
+    outputs = [loop.tokenizer.encode(text, add_special_tokens=False) for text in turns]
+
+    async def generate_one_turn(prompt_ids):
+        ids = outputs.pop(0)
+        return TurnRecord(prompt_ids, ids, [-0.1] * len(ids))
+
+    loop.generate_one_turn = generate_one_turn
+    rollout = asyncio.run(loop.generate_one([{"role": "user", "content": "hi"}], [t]))
+    rows, _drifts = _chain_to_sequences(rollout)
+    return rollout, rows
+
+
+class TestRolloutLoop(TrlTestCase):
+    def test_single_turn_no_tool_call(self):
+        rollout, rows = _run(turns=[_FINAL])
+        assert len(rows) == 1
+        n = len(rollout.completion_ids)
+        assert rows[0].input_ids[-n:] == rollout.completion_ids
+        assert rows[0].completion_mask == [0] * (len(rows[0].input_ids) - n) + [1] * n
+        assert rows[0].old_log_probs[-n:] == [-0.1] * n
+        assert [m["role"] for m in rollout.completion] == ["assistant"]
+        assert rollout.tool_call_count == 0 and rollout.tool_failure_count == 0
+
+    def test_clean_two_turns_stay_one_row(self):
+        # The training chat template is prefix-preserving, so turn 2's re-tokenized prompt extends turn 1 -> one row
+        rollout, rows = _run(turns=[_TOOL_CALL, _FINAL])
+        assert len(rows) == 1
+        assert sum(rows[0].completion_mask) == len(rollout.completion_ids)  # every generated token is trained once
+        assert [m["role"] for m in rollout.completion] == ["assistant", "tool", "assistant"]
+        assert rollout.completion[1]["content"] == "ok"
+        assert rollout.tool_call_count == 1 and rollout.tool_failure_count == 0
+
+    def test_max_tool_calling_iterations_caps_turns(self):
+        # max_iters=0: even though turn 1 is a tool call, the loop breaks before executing it.
+        rollout, rows = _run(turns=[_TOOL_CALL], max_iters=0)
+        assert len(rows) == 1
+        assert [m["role"] for m in rollout.completion] == ["assistant"]  # no tool message appended
+        assert rollout.tool_call_count == 0
+
+
+def two_reward(completions, **kwargs):
+    # Deterministic per-conversation reward: two conversations get rewards 1.0 and 3.0.
+    return [1.0, 3.0]
+
+
+class AsyncTwoReward:
+    # Same reward as `two_reward`, as an async callable class: the picklable form the docs recommend, and the one
+    # `inspect.iscoroutinefunction` does not see as asynchronous on its own.
+    async def __call__(self, completions, **kwargs):
+        return [1.0, 3.0]
+
+
+def _group(completions_sequences, completions_ids):
+    n = len(completions_sequences)
+    return RolloutGroup(
+        prompts=[[{"role": "user", "content": "hi"}] for _ in range(n)],
+        reward_kwargs={},
+        completions=[[{"role": "assistant", "content": f"c{i}"}] for i in range(n)],
+        completions_ids=completions_ids,
+        completions_sequences=completions_sequences,
+        tool_call_counts=[0] * n,
+        tool_failure_counts=[0] * n,
+        model_version=7,
+        group_id=0,
+        row_index=0,
+        env_rewards=[None] * n,
+        rollout_rewards=[None] * n,
+    )
+
+
+class TestScoreGroupOptionThree(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        # _score_group logs via accelerate's logger, which requires PartialState() to be initialized (the trainer
+        # does this before it builds the loop).
+        PartialState()
+
+    def test_one_advantage_per_conversation_stamped_on_every_row(self):
+        # conv 0: one row; conv 1: two rows (a fork).
+        seq_a = TrainingSequence([1, 2, 3, 10, 11], [0, 0, 0, 1, 1], [0, 0, 0, -0.1, -0.2], [[]] * 5, [{}] * 5, "c0")
+        seq_b1 = TrainingSequence([1, 2, 3, 20, 21], [0, 0, 0, 1, 1], [0, 0, 0, -0.3, -0.4], [[]] * 5, [{}] * 5, "c1")
+        seq_b2 = TrainingSequence(
+            [1, 2, 3, 20, 99, 30], [0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, -0.5], [[]] * 6, [{}] * 6, "c1"
+        )
+        group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10, 11], [20, 21, 30]])
+
+        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
+
+        # 1 row for conv 0 + 2 rows for conv 1 = 3 samples.
+        assert len(samples) == 3
+
+        # rewards [1, 3] -> mean 2, std 1 -> advantages [-1, +1].
+        assert samples[0].advantage == pytest.approx(-1.0)
+        assert samples[1].advantage == pytest.approx(1.0)
+        assert samples[2].advantage == pytest.approx(1.0)
+        # The fork's two rows carry the identical (conversation-level) advantage — no split.
+        assert samples[1].advantage == samples[2].advantage
+
+        # Each sample maps 1:1 onto its source TrainingSequence.
+        assert (
+            samples[0].input_ids.tolist() == seq_a.input_ids
+            and samples[0].completion_mask.tolist() == seq_a.completion_mask
+        )
+        assert samples[0].old_log_probs.tolist() == pytest.approx(seq_a.old_log_probs)
+        assert samples[1].input_ids.tolist() == seq_b1.input_ids
+        assert samples[2].input_ids.tolist() == seq_b2.input_ids
+
+        assert all(s.model_version == 7 for s in samples)
+
+    def test_async_callable_class_reward_func_is_awaited(self):
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
+        group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+
+        samples = asyncio.run(_rollout_loop(reward_funcs=[AsyncTwoReward()])._score_group(group))
+
+        # Run as a synchronous function, the reward is an un-awaited coroutine and never a number.
+        assert samples[0].metrics["rewards/AsyncTwoReward/mean"] == 1.0
+        assert samples[1].metrics["rewards/AsyncTwoReward/mean"] == 3.0
+        assert samples[0].advantage == pytest.approx(-1.0)
+        assert samples[1].advantage == pytest.approx(1.0)
+
+    def test_metrics_are_per_conversation_and_independent(self):
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+        seq_b1 = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
+        seq_b2 = TrainingSequence([1, 2, 20, 30], [0, 0, 0, 1], [0, 0, 0, -0.3], [[]] * 4, [{}] * 4, "c1")
+        group = _group([[seq_a], [seq_b1, seq_b2]], completions_ids=[[10], [20, 30]])
+
+        samples = asyncio.run(_rollout_loop(reward_funcs=[two_reward])._score_group(group))
+
+        assert samples[0].metrics["reward_kept"] == 1.0
+        assert samples[1].metrics["reward_kept"] == 3.0 and samples[2].metrics["reward_kept"] == 3.0
+        assert samples[0].metrics["reward_group_std"] == pytest.approx(1.0)
+        assert samples[1].metrics["rewards/two_reward/mean"] == 3.0
+        assert samples[1].metrics["rewards/two_reward/group_std"] == pytest.approx(1.0)
+        # The fork's two rows must not share a metrics dict (the score loop mutates it per sample).
+        assert samples[1].metrics is not samples[2].metrics
+
+    def test_all_none_reward_conversation_is_unscorable(self):
+        # A conversation for which every reward func returns None gets advantage 0 and NaN reward.
+        def maybe_none(completions, **kwargs):
+            return [None, 2.0, 4.0]
+
+        seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+        seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
+        seq_c = TrainingSequence([1, 2, 30], [0, 0, 1], [0, 0, -0.3], [[]] * 3, [{}] * 3, "c2")
+        group = _group([[seq_a], [seq_b], [seq_c]], completions_ids=[[10], [20], [30]])
+
+        samples = asyncio.run(_rollout_loop(reward_funcs=[maybe_none])._score_group(group))
+
+        assert len(samples) == 3
+        assert samples[0].advantage == 0.0  # unscorable -> advantage 0
+        assert math.isnan(samples[0].metrics["reward_kept"])
+        assert samples[1].advantage < 0 < samples[2].advantage  # advantage over the scorable rows only
+        assert samples[1].metrics["reward_kept"] == 2.0
+
+
+def constant_reward(completions, **kwargs):
+    return [1.0] * len(completions)
+
+
+def all_none_reward(completions, **kwargs):
+    return [None] * len(completions)
+
+
+def one_scored_reward(completions, **kwargs):
+    return [None, 1.0]
+
+
+class TestDropZeroAdvantageGroups(TrlTestCase):
+    @pytest.fixture(autouse=True)
+    def _init_accelerate_state(self):
+        PartialState()
+
+    def _score(self, loop, reward_funcs):
+        for group_id, reward_func in enumerate(reward_funcs):
+            seq_a = TrainingSequence([1, 2, 10], [0, 0, 1], [0, 0, -0.1], [[]] * 3, [{}] * 3, "c0")
+            seq_b = TrainingSequence([1, 2, 20], [0, 0, 1], [0, 0, -0.2], [[]] * 3, [{}] * 3, "c1")
+            group = _group([[seq_a], [seq_b]], completions_ids=[[10], [20]])
+            group.group_id = group_id
+            group.queued_at = time.monotonic()
+            loop.reward_funcs = [reward_func]
+            loop._groups_to_score.put_nowait(group)
+            loop._groups_to_score.put_nowait(None)
+            loop._loop.run_until_complete(loop._score_loop(asyncio.Event()))
+        return list(loop.rollout_buffer), loop.metrics
+
+    @pytest.mark.parametrize(
+        "reward_func, reward",
+        [(constant_reward, (2.0, 2)), (all_none_reward, (0.0, 0)), (one_scored_reward, (1.0, 1))],
+    )
+    def test_dropped_group_puts_nothing_in_the_buffer(self, reward_func, reward):
+        items, metrics = self._score(_rollout_loop(), [reward_func, two_reward])
+        assert [s.group_id for s in items] == [1, 1]
+        assert metrics["frac_reward_zero_std"] == [(1.0, 1), (0.0, 1)]
+        assert metrics["reward"] == [reward, (4.0, 2)]  # the dropped group still counts in the policy's reward
 
 
 @require_torch_accelerator
